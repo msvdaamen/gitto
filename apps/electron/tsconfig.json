@@ -1,11 +1,10 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "lib": ["ES2024"],
+    // DOM for the preload script.
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "types": ["node"],
     "allowImportingTsExtensions": true
   },
-  "include": ["src", "*.config.ts"],
-  // Checked by tsconfig.preload.json, which adds the DOM types it needs.
-  "exclude": ["src/preload.ts"]
+  "include": ["src", "*.config.ts"]
 }
