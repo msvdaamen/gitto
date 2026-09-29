@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#17131d" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://localhost:*"
+    />
+    <link rel="icon" type="image/svg+xml" href="/src/assets/logo.svg" />
+    <title>Gitto — Git, shaped your way</title>
+  </head>
+
+  <body
+    class="m-0 h-full w-full min-w-0 overflow-hidden bg-bg font-sans text-[13px] text-text antialiased"
+  >
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div id="root" class="h-full w-full min-w-0 overflow-hidden"></div>
+
+    <script src="/src/index.tsx" type="module"></script>
+  </body>
+</html>

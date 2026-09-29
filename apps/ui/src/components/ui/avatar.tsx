@@ -1,0 +1,10 @@
+export function Avatar(props: { initials: string; color?: string; size?: "sm" | "md" }) {
+  return (
+    <span
+      class={`grid shrink-0 place-items-center rounded-full text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,.15)] ${props.size === "md" ? "size-[34px] text-[10px]" : "size-[23px] text-[8px]"} font-[720]`}
+      style={{ "background-color": props.color ?? "#8c65cf" }}
+    >
+      {props.initials}
+    </span>
+  );
+}

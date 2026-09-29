@@ -1,0 +1,19 @@
+packages:
+  - apps/*
+
+# pnpm's default, set explicitly so Electron Forge's package manager check passes.
+# The Electron app is fully bundled by tsdown, so it ships no node_modules and
+# doesn't need `nodeLinker: hoisted`.
+hoistPattern:
+  - "*"
+
+allowBuilds:
+  electron-winstaller: true
+
+overrides:
+  # Forge 7 depends on @electron/rebuild@3, which pulls node-gyp from a git repo
+  # (blocked by pnpm's blockExoticSubdeps). v4 uses the npm-published node-gyp.
+  "@electron/rebuild": ^4.2.0
+  # extract-zip@2 (yauzl@2) silently stops mid-extraction on Node 26, which makes
+  # `electron-forge package` exit early. Electron's own drop-in replacement works.
+  extract-zip: npm:@electron-internal/extract-zip@^1.0.5

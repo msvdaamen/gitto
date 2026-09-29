@@ -1,0 +1,53 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["eslint", "typescript", "unicorn", "oxc", "import", "promise"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn",
+    "perf": "warn"
+  },
+  "rules": {
+    "import/no-cycle": "error",
+    "import/no-unassigned-import": [
+      "warn",
+      {
+        "allow": ["**/*.css"]
+      }
+    ],
+    "typescript/consistent-type-imports": "error",
+    "no-unused-vars": [
+      "error",
+      {
+        "varsIgnorePattern": "^_",
+        "argsIgnorePattern": "^_"
+      }
+    ],
+    "no-restricted-imports": [
+      "error",
+      {
+        "paths": [
+          {
+            "name": "lucide-solid",
+            "allowTypeImports": true,
+            "message": "Import icons from \"lucide-solid/icons/<name>\" instead. The barrel loads all ~4000 icon modules in dev."
+          }
+        ]
+      }
+    ]
+  },
+  "ignorePatterns": ["**/dist/**", "**/out/**", "**/.vite/**", "**/routeTree.gen.ts"],
+  "overrides": [
+    {
+      "files": ["apps/ui/src/**"],
+      "env": {
+        "browser": true
+      }
+    },
+    {
+      "files": ["apps/electron/**", "**/*.config.ts"],
+      "env": {
+        "node": true
+      }
+    }
+  ]
+}

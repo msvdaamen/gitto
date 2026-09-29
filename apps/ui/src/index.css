@@ -1,0 +1,98 @@
+@import "tailwindcss";
+
+/* Theme values remain global so the same Tailwind utilities follow the active theme. */
+:root {
+  color-scheme: dark;
+  --bg: #151119;
+  --bg-soft: #1a151f;
+  --panel: #211b27;
+  --panel-raised: #292130;
+  --panel-hover: #30273a;
+  --panel-active: #382c45;
+  --border: #3b3044;
+  --border-soft: #2e2635;
+  --text: #f2edf6;
+  --text-soft: #c5b9ce;
+  --muted: #8e8198;
+  --faint: #6e6278;
+  --primary: #a879df;
+  --primary-strong: #bc8cf0;
+  --primary-soft: rgba(168, 121, 223, 0.15);
+  --blue: #71c9e8;
+  --blue-soft: rgba(113, 201, 232, 0.14);
+  --mint: #67d4b3;
+  --mint-soft: rgba(103, 212, 179, 0.13);
+  --amber: #e8b75d;
+  --amber-soft: rgba(232, 183, 93, 0.13);
+  --coral: #ef7b80;
+  --coral-soft: rgba(239, 123, 128, 0.12);
+  --app-shadow: 0 18px 48px rgba(4, 2, 7, 0.3);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f5f3f7;
+  --bg-soft: #eeebf1;
+  --panel: #ffffff;
+  --panel-raised: #f8f6fa;
+  --panel-hover: #f1edf5;
+  --panel-active: #eae2f1;
+  --border: #d8d1de;
+  --border-soft: #e8e3eb;
+  --text: #241d2a;
+  --text-soft: #544b5c;
+  --muted: #746a7d;
+  --faint: #94899d;
+  --primary: #7d4fba;
+  --primary-strong: #693ca9;
+  --primary-soft: rgba(125, 79, 186, 0.11);
+  --blue: #2588ae;
+  --blue-soft: rgba(37, 136, 174, 0.1);
+  --mint: #218d70;
+  --mint-soft: rgba(33, 141, 112, 0.09);
+  --amber: #a66e12;
+  --amber-soft: rgba(166, 110, 18, 0.1);
+  --coral: #c24f58;
+  --coral-soft: rgba(194, 79, 88, 0.09);
+  --app-shadow: 0 18px 48px rgba(46, 33, 58, 0.12);
+}
+
+@theme inline {
+  --font-sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --color-bg: var(--bg);
+  --color-bg-soft: var(--bg-soft);
+  --color-panel: var(--panel);
+  --color-panel-raised: var(--panel-raised);
+  --color-panel-hover: var(--panel-hover);
+  --color-panel-active: var(--panel-active);
+  --color-border: var(--border);
+  --color-border-soft: var(--border-soft);
+  --color-text: var(--text);
+  --color-text-soft: var(--text-soft);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-primary: var(--primary);
+  --color-primary-strong: var(--primary-strong);
+  --color-primary-soft: var(--primary-soft);
+  --color-blue: var(--blue);
+  --color-blue-soft: var(--blue-soft);
+  --color-mint: var(--mint);
+  --color-mint-soft: var(--mint-soft);
+  --color-amber: var(--amber);
+  --color-amber-soft: var(--amber-soft);
+  --color-coral: var(--coral);
+  --color-coral-soft: var(--coral-soft);
+  --shadow-app: var(--app-shadow);
+  --animate-toast-in: toast-in 0.2s ease-out;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(7px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}

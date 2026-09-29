@@ -1,0 +1,25 @@
+{
+  "name": "gitto",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --filter @gitto/electron start",
+    "dev:ui": "pnpm --filter @gitto/ui dev",
+    "package": "pnpm --filter @gitto/electron package",
+    "make": "pnpm --filter @gitto/electron make",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check"
+  },
+  "devDependencies": {
+    "oxfmt": "^0.71.0",
+    "oxlint": "^1.86.0",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@12.0.0"
+}
