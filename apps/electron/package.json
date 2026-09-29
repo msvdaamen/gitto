@@ -21,6 +21,7 @@
     "@electron-forge/plugin-vite": "7.11.2",
     "@electron-forge/shared-types": "^7.11.2",
     "@electron/fuses": "^1.8.0",
+    "@gitto/rpc": "workspace:*",
     "@types/node": "^26.6.3",
     "electron": "^44.4.5",
     "typescript": "^7.0.2",
