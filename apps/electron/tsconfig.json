@@ -5,5 +5,7 @@
     "types": ["node"],
     "allowImportingTsExtensions": true
   },
-  "include": ["src", "*.config.ts"]
+  "include": ["src", "*.config.ts"],
+  // Checked by tsconfig.preload.json, which adds the DOM types it needs.
+  "exclude": ["src/preload.ts"]
 }

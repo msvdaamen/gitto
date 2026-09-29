@@ -2,7 +2,9 @@ import { stat } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { app, BrowserWindow, nativeImage, net, protocol, shell } from "electron";
+import { RPC_CONNECT_CHANNEL } from "@gitto/rpc";
+import { createRpcHandler } from "@gitto/rpc/server";
+import { app, BrowserWindow, ipcMain, nativeImage, net, protocol, shell } from "electron";
 
 import iconDataUrl from "../assets/icon.png?inline";
 
@@ -61,6 +63,18 @@ function registerAppProtocol() {
   });
 }
 
+function registerRpc() {
+  const handler = createRpcHandler();
+
+  // Each renderer connection sends one end of a MessageChannel (see the preload).
+  ipcMain.on(RPC_CONNECT_CHANNEL, (event) => {
+    const [port] = event.ports;
+    if (!port) return;
+    handler.upgrade(port);
+    port.start();
+  });
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1200,
@@ -105,5 +119,6 @@ app.on("activate", () => {
 // Not `await app.whenReady()`: top-level await in the ESM entry blocks Electron's startup.
 app.on("ready", () => {
   registerAppProtocol();
+  registerRpc();
   createWindow();
 });
