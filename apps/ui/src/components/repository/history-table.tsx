@@ -3,7 +3,7 @@ import LoaderCircle from "lucide-solid/icons/loader-circle";
 import PencilLine from "lucide-solid/icons/pencil-line";
 import Search from "lucide-solid/icons/search";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
-import { createMemo, For, Show, Suspense, type JSX } from "solid-js";
+import { createMemo, For, Index, Show, Suspense, type JSX } from "solid-js";
 
 import { Avatar } from "@/components/ui/avatar";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -78,26 +78,28 @@ function HistoryRows(props: {
           </EmptyState>
         }
       >
-        <For each={visibleRows()}>
+        {/* By position rather than `<For>`'s object identity: the rows are rebuilt whenever the log
+            or status is refetched, and re-creating them would restart their queries. */}
+        <Index each={visibleRows()}>
           {(commit) => (
             <Show
-              when={commit.isWip}
+              when={commit().isWip}
               fallback={
                 <HistoryRow
-                  commit={commit}
-                  selected={history.selected()?.id === commit.id}
-                  onSelect={() => props.onSelect(commit.id)}
+                  commit={commit()}
+                  selected={history.selected()?.id === commit().id}
+                  onSelect={() => props.onSelect(commit().id)}
                 />
               }
             >
               <WipRow
-                commit={commit}
-                selected={history.selected()?.id === commit.id}
-                onSelect={() => props.onSelect(commit.id)}
+                commit={commit()}
+                selected={history.selected()?.id === commit().id}
+                onSelect={() => props.onSelect(commit().id)}
               />
             </Show>
           )}
-        </For>
+        </Index>
       </Show>
     </Show>
   );

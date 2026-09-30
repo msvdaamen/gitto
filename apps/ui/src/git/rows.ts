@@ -60,19 +60,6 @@ export function toCommitRows(
   ];
 }
 
-/**
- * `next`, but with each row that hasn't changed swapped for its object in `previous`. `<For>` keys
- * rows by identity, so without this every refetch would re-create every row, and the queries they
- * start on mount.
- */
-export function reuseRows(previous: Commit[], next: Commit[]): Commit[] {
-  const byId = new Map(previous.map((row) => [row.id, row]));
-  return next.map((row) => {
-    const old = byId.get(row.id);
-    return old && JSON.stringify(old) === JSON.stringify(row) ? old : row;
-  });
-}
-
 function initials(name: string): string {
   const words = name.split(/[\s._-]+/).filter(Boolean);
   const letters = words.length > 1 ? words[0]![0]! + words.at(-1)![0]! : name.slice(0, 2);
