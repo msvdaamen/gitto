@@ -1,3 +1,4 @@
+import { cn } from "cn";
 import { createUniqueId, splitProps, type JSX } from "solid-js";
 
 type GittoIconProps = JSX.SvgSVGAttributes<SVGSVGElement> & {
@@ -11,7 +12,7 @@ export function GittoIcon(props: GittoIconProps) {
   return (
     <svg
       {...others}
-      class={`block overflow-visible ${local.class ?? ""}`}
+      class={cn("block overflow-visible", local.class)}
       width={local.width ?? "100%"}
       height={local.height ?? "100%"}
       viewBox="0 0 27 23"

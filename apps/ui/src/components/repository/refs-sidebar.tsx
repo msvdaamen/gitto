@@ -1,4 +1,5 @@
 import type { Ref } from "@gitto/git/types";
+import { cn } from "cn";
 import type { LucideIcon } from "lucide-solid";
 import Archive from "lucide-solid/icons/archive";
 import ChevronDown from "lucide-solid/icons/chevron-down";
@@ -18,7 +19,9 @@ import type { JSX } from "solid-js";
 import { Dynamic } from "solid-js/web";
 
 import { EmptyState } from "@/components/ui/empty-state";
+import { Mascot } from "@/components/ui/mascot";
 import { SegmentedControl } from "@/components/ui/segmented-control";
+import { toneClasses } from "@/components/ui/tone";
 import { useRefs } from "@/git/refs";
 import { useStatus } from "@/git/status";
 
@@ -27,7 +30,10 @@ export function RefsSidebar(props: { repositoryId: string; open: boolean }) {
 
   return (
     <aside
-      class={`relative flex min-h-0 min-w-0 flex-col overflow-hidden border-r border-border bg-panel transition-opacity duration-150 motion-reduce:transition-none max-[900px]:w-[52px] ${props.open ? "" : "pointer-events-none opacity-0"}`}
+      class={cn(
+        "relative flex min-h-0 min-w-0 flex-col overflow-hidden border-r border-border bg-panel transition-opacity duration-150 motion-reduce:transition-none max-[900px]:w-[52px]",
+        !props.open && "pointer-events-none opacity-0",
+      )}
     >
       <div class="pt-[9px] pr-2.5 pb-1.5 pl-2.5 max-[900px]:px-[7px] max-[900px]:py-2">
         <SegmentedControl value={mode()} options={["List", "Agents"]} onChange={setMode} />
@@ -207,7 +213,10 @@ function SidebarRow(props: {
 }) {
   return (
     <button
-      class={`grid h-7 w-full cursor-pointer grid-cols-[16px_minmax(0,1fr)_auto_auto] items-center gap-[5px] rounded-[5px] border-0 bg-transparent pr-[7px] pl-[25px] text-left text-muted hover:bg-panel-hover hover:text-text-soft ${props.active ? "bg-primary-soft text-text [&>svg]:text-primary-strong" : ""}`}
+      class={cn(
+        "grid h-7 w-full cursor-pointer grid-cols-[16px_minmax(0,1fr)_auto_auto] items-center gap-[5px] rounded-[5px] border-0 bg-transparent pr-[7px] pl-[25px] text-left text-muted hover:bg-panel-hover hover:text-text-soft",
+        props.active && "bg-primary-soft text-text [&>svg]:text-primary-strong",
+      )}
       title={props.label}
     >
       <Dynamic component={props.icon} size={13} />
@@ -215,7 +224,10 @@ function SidebarRow(props: {
       {props.meta && <small class="text-[8px] text-blue">{props.meta}</small>}
       {props.count !== undefined && (
         <em
-          class={`min-w-[17px] rounded-lg bg-panel-raised px-1 py-0.5 text-center text-[8px] not-italic ${props.tone === "amber" ? "bg-amber-soft text-amber" : "text-muted"}`}
+          class={cn(
+            "min-w-[17px] rounded-lg px-1 py-0.5 text-center text-[8px] not-italic",
+            toneClasses[props.tone ?? "neutral"],
+          )}
         >
           {props.count}
         </em>
@@ -227,10 +239,7 @@ function SidebarRow(props: {
 function AgentPlaceholder() {
   return (
     <div class="flex flex-col items-center px-[18px] py-[65px] text-center">
-      <span class="relative inline-flex h-8 w-[38px] items-center justify-center rounded-[45%_55%_53%_47%/59%_43%_57%_41%] bg-[linear-gradient(145deg,#bc8aef,#7861e6)] before:size-[3px] before:rounded-full before:bg-[#2b2032] before:shadow-[11px_0_#2b2032] before:content-['']">
-        <i />
-        <i />
-      </span>
+      <Mascot size={38} />
       <strong class="mt-3 text-[11px]">No agents running</strong>
       <p class="mt-1.5 mb-3 text-[9px] leading-1.5 text-muted">
         Agent sessions will appear here alongside their worktrees.

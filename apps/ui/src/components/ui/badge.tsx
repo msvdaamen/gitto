@@ -1,20 +1,25 @@
+import { cn } from "cn";
 import type { JSX } from "solid-js";
 
-export function Badge(props: {
-  children: JSX.Element;
-  tone?: "purple" | "blue" | "mint" | "amber" | "neutral";
-}) {
-  const tones = {
-    neutral: "border-border bg-panel-raised text-muted",
-    purple:
-      "border-[color-mix(in_srgb,var(--primary)_30%,transparent)] bg-primary-soft text-primary-strong",
-    blue: "border-[color-mix(in_srgb,var(--blue)_30%,transparent)] bg-blue-soft text-blue",
-    mint: "border-border bg-mint-soft text-mint",
-    amber: "border-[color-mix(in_srgb,var(--amber)_30%,transparent)] bg-amber-soft text-amber",
-  };
+import { toneClasses, type Tone } from "./tone";
+
+const borders: Record<Tone, string> = {
+  neutral: "border-border",
+  purple: "border-[color-mix(in_srgb,var(--primary)_30%,transparent)]",
+  blue: "border-[color-mix(in_srgb,var(--blue)_30%,transparent)]",
+  mint: "border-border",
+  amber: "border-[color-mix(in_srgb,var(--amber)_30%,transparent)]",
+  coral: "border-[color-mix(in_srgb,var(--coral)_30%,transparent)]",
+};
+
+export function Badge(props: { children: JSX.Element; tone?: Tone }) {
   return (
     <span
-      class={`inline-flex min-h-[18px] items-center rounded-full border px-1.5 py-px text-[9px] leading-none font-[680] ${tones[props.tone ?? "neutral"]}`}
+      class={cn(
+        "inline-flex min-h-[18px] items-center rounded-full border px-1.5 py-px text-[9px] leading-none font-[680]",
+        toneClasses[props.tone ?? "neutral"],
+        borders[props.tone ?? "neutral"],
+      )}
     >
       {props.children}
     </span>

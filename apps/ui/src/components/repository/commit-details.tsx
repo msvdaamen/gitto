@@ -7,9 +7,10 @@ import TriangleAlert from "lucide-solid/icons/triangle-alert";
 import { Show, Suspense } from "solid-js";
 
 import { Avatar } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
 import { IconButton } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
+import { LineStats } from "@/components/ui/line-stats";
+import { SectionHeader } from "@/components/ui/section-header";
 import { useCommitFiles } from "@/git/diff";
 import { useHistory } from "@/git/history";
 import type { Commit } from "@/types/git";
@@ -67,11 +68,12 @@ function CommitFiles(props: { commit: Commit }) {
         totals={changes.totals()}
       />
       <div class="border-b border-border px-2.5 py-3">
-        <div class="flex items-center gap-1.5 pt-0 pr-1 pb-2 pl-1">
-          <File size={15} />
-          <strong class="text-[10px]">Changed files</strong>
-          <Badge>{changes.files().length}</Badge>
-        </div>
+        <SectionHeader
+          icon={File}
+          title="Changed files"
+          count={changes.files().length}
+          class="px-1 pb-2"
+        />
         <Show when={changes.query.error}>
           {(error) => (
             <EmptyState
@@ -121,8 +123,7 @@ function CommitSummary(props: {
         <span class="mr-auto">
           <strong>{props.fileCount}</strong> files changed
         </span>
-        <em class="text-mint not-italic">+{props.totals.additions}</em>
-        <b class="font-medium text-coral">−{props.totals.deletions}</b>
+        <LineStats additions={props.totals.additions} deletions={props.totals.deletions} />
       </div>
     </div>
   );

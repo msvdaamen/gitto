@@ -1,3 +1,4 @@
+import { cn } from "cn";
 import LoaderCircle from "lucide-solid/icons/loader-circle";
 import PencilLine from "lucide-solid/icons/pencil-line";
 import Search from "lucide-solid/icons/search";
@@ -6,6 +7,8 @@ import { createMemo, For, Show, Suspense, type JSX } from "solid-js";
 
 import { Avatar } from "@/components/ui/avatar";
 import { EmptyState } from "@/components/ui/empty-state";
+import { LineStats } from "@/components/ui/line-stats";
+import { toneClasses, type Tone } from "@/components/ui/tone";
 import { useCommitFiles } from "@/git/diff";
 import { useHistory } from "@/git/history";
 import { useStatus } from "@/git/status";
@@ -105,14 +108,26 @@ function HistoryRow(props: { commit: Commit; selected: boolean; onSelect: () => 
     <button
       role="option"
       aria-selected={props.selected ? "true" : "false"}
-      class={`group grid h-[47px] w-full min-w-[642px] cursor-pointer grid-cols-[minmax(105px,.8fr)_82px_minmax(240px,2.2fr)_minmax(115px,.85fr)_100px] items-center border-0 border-b border-border-soft bg-transparent p-0 text-left text-muted hover:bg-panel-hover [&>span]:min-w-0 [&>span]:px-[9px] ${props.selected ? "bg-[linear-gradient(90deg,var(--primary-soft),color-mix(in_srgb,var(--primary-soft)_35%,transparent))] text-text-soft shadow-[inset_2px_0_var(--primary)]" : ""}`}
+      class={cn(
+        "group grid h-[47px] w-full min-w-[642px] cursor-pointer grid-cols-[minmax(105px,.8fr)_82px_minmax(240px,2.2fr)_minmax(115px,.85fr)_100px] items-center border-0 border-b border-border-soft bg-transparent p-0 text-left text-muted hover:bg-panel-hover [&>span]:min-w-0 [&>span]:px-[9px]",
+        props.selected &&
+          "bg-[linear-gradient(90deg,var(--primary-soft),color-mix(in_srgb,var(--primary-soft)_35%,transparent))] text-text-soft shadow-[inset_2px_0_var(--primary)]",
+      )}
       onClick={props.onSelect}
     >
       <span class="flex gap-1 overflow-hidden">
         <For each={props.commit.refs.slice(0, 2)}>
           {(ref) => (
             <span
-              class={`max-w-[78px] truncate rounded-sm border border-border bg-panel px-[5px] py-[3px] text-[8px] text-text-soft ${ref === "HEAD" ? "border-[color-mix(in_srgb,var(--primary)_40%,var(--border))] bg-primary-soft text-primary-strong" : ref.startsWith("origin") ? "bg-blue-soft text-blue" : ""}`}
+              class={cn(
+                "max-w-[78px] truncate rounded-sm border border-border bg-panel px-[5px] py-[3px] text-[8px] text-text-soft",
+                ref === "HEAD" &&
+                  cn(
+                    toneClasses.purple,
+                    "border-[color-mix(in_srgb,var(--primary)_40%,var(--border))]",
+                  ),
+                ref.startsWith("origin") && toneClasses.blue,
+              )}
             >
               {ref}
             </span>
@@ -172,11 +187,21 @@ function WipRow(props: { commit: Commit; selected: boolean; onSelect: () => void
     <button
       role="option"
       aria-selected={props.selected ? "true" : "false"}
-      class={`grid h-[47px] w-full min-w-[642px] cursor-pointer grid-cols-[minmax(105px,.8fr)_82px_minmax(240px,2.2fr)_minmax(115px,.85fr)_100px] items-center border-0 border-b border-dashed border-[color-mix(in_srgb,var(--amber)_45%,var(--border))] p-0 text-left text-muted shadow-[inset_2px_0_var(--amber)] [&>span]:min-w-0 [&>span]:px-[9px] ${props.selected ? "bg-[linear-gradient(90deg,color-mix(in_srgb,var(--amber)_24%,transparent),color-mix(in_srgb,var(--amber)_8%,transparent))]" : "bg-[color-mix(in_srgb,var(--amber-soft)_70%,transparent)] hover:bg-amber-soft"}`}
+      class={cn(
+        "grid h-[47px] w-full min-w-[642px] cursor-pointer grid-cols-[minmax(105px,.8fr)_82px_minmax(240px,2.2fr)_minmax(115px,.85fr)_100px] items-center border-0 border-b border-dashed border-[color-mix(in_srgb,var(--amber)_45%,var(--border))] p-0 text-left text-muted shadow-[inset_2px_0_var(--amber)] [&>span]:min-w-0 [&>span]:px-[9px]",
+        props.selected
+          ? "bg-[linear-gradient(90deg,color-mix(in_srgb,var(--amber)_24%,transparent),color-mix(in_srgb,var(--amber)_8%,transparent))]"
+          : "bg-[color-mix(in_srgb,var(--amber-soft)_70%,transparent)] hover:bg-amber-soft",
+      )}
       onClick={props.onSelect}
     >
       <span class="flex">
-        <span class="inline-flex items-center gap-1 rounded-sm border border-[color-mix(in_srgb,var(--amber)_40%,var(--border))] bg-amber-soft px-[5px] py-[3px] text-[8px] font-[680] text-amber">
+        <span
+          class={cn(
+            "inline-flex items-center gap-1 rounded-sm border border-[color-mix(in_srgb,var(--amber)_40%,var(--border))] px-[5px] py-[3px] text-[8px] font-[680]",
+            toneClasses.amber,
+          )}
+        >
           <PencilLine size={9} strokeWidth={2.4} />
           WIP
         </span>
@@ -194,13 +219,13 @@ function WipRow(props: { commit: Commit; selected: boolean; onSelect: () => void
           {props.commit.message}
         </strong>
         <Show when={counts().staged}>
-          <WipCount class="bg-mint-soft text-mint">{counts().staged} staged</WipCount>
+          <WipCount tone="mint">{counts().staged} staged</WipCount>
         </Show>
         <Show when={counts().unstaged}>
-          <WipCount class="bg-amber-soft text-amber">{counts().unstaged} unstaged</WipCount>
+          <WipCount tone="amber">{counts().unstaged} unstaged</WipCount>
         </Show>
         <Show when={counts().conflicted}>
-          <WipCount class="bg-coral-soft text-coral">{counts().conflicted} conflicted</WipCount>
+          <WipCount tone="coral">{counts().conflicted} conflicted</WipCount>
         </Show>
         <span class="ml-auto shrink-0 text-[9px] text-faint">
           on {status.data?.branch ?? "detached HEAD"}
@@ -210,9 +235,14 @@ function WipRow(props: { commit: Commit; selected: boolean; onSelect: () => void
   );
 }
 
-function WipCount(props: { class: string; children: JSX.Element }) {
+function WipCount(props: { tone: Tone; children: JSX.Element }) {
   return (
-    <small class={`shrink-0 rounded-full px-1.5 py-0.5 text-[8px] font-[680] ${props.class}`}>
+    <small
+      class={cn(
+        "shrink-0 rounded-full px-1.5 py-0.5 text-[8px] font-[680]",
+        toneClasses[props.tone],
+      )}
+    >
       {props.children}
     </small>
   );
@@ -222,9 +252,10 @@ function WipCount(props: { class: string; children: JSX.Element }) {
 function CommitTotals(props: { commit: Commit }) {
   const { totals } = useCommitFiles(() => props.commit);
   return (
-    <small class="flex items-center gap-[5px] text-[8px]">
-      <span class="text-mint">+{totals().additions}</span>
-      <span class="text-coral">−{totals().deletions}</span>
-    </small>
+    <LineStats
+      additions={totals().additions}
+      deletions={totals().deletions}
+      class="shrink-0 text-[8px]"
+    />
   );
 }

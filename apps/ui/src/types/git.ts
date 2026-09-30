@@ -50,6 +50,7 @@ export interface Commit {
 
 export interface ActivityEntry {
   id: string;
+  kind: "push" | "merge" | "branch";
   action: string;
   repository: string;
   branch: string;

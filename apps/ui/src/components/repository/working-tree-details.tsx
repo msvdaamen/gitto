@@ -6,10 +6,12 @@ import Minus from "lucide-solid/icons/minus";
 import Plus from "lucide-solid/icons/plus";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
 import { Show, type JSX } from "solid-js";
-import { Dynamic } from "solid-js/web";
 
 import { Badge } from "@/components/ui/badge";
+import { LinkButton } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Mascot } from "@/components/ui/mascot";
+import { SectionHeader } from "@/components/ui/section-header";
 import { useWorkingTreeChanges } from "@/git/diff";
 import { stagingPaths, useStage, useUnstage } from "@/git/staging";
 import { useStatus } from "@/git/status";
@@ -32,10 +34,7 @@ export function WorkingTreeDetails(props: { repositoryId: string }) {
   return (
     <div class="flex min-h-0 flex-1 flex-col">
       <div class="flex shrink-0 items-center gap-[13px] border-b border-border p-4">
-        <span class="relative inline-flex h-11 w-[52px] shrink-0 items-center justify-center rounded-[51%_49%_43%_57%/57%_42%_58%_43%] bg-[linear-gradient(145deg,#bc8aef,#7861e6)] shadow-[0_8px_20px_rgba(122,76,170,.2)] before:size-1 before:rounded-full before:bg-[#2b2032] before:shadow-[14px_0_#2b2032] before:content-['']">
-          <i />
-          <i />
-        </span>
+        <Mascot size={52} class="shadow-[0_8px_20px_rgba(122,76,170,.2)]" />
         <div>
           <Badge tone="amber">WIP</Badge>
           <h2 class="mt-[7px] mb-1.5 text-sm leading-[1.35] tracking-[-.2px]">
@@ -112,20 +111,17 @@ function FileSection(props: {
 }) {
   return (
     <section class="flex min-h-[130px] flex-1 basis-0 flex-col border-b border-border pt-3">
-      <div class="flex shrink-0 items-center justify-between pt-0 pr-3.5 pb-2 pl-3.5">
-        <div class={`flex items-center gap-1.5 ${props.tone === "mint" ? "text-mint" : ""}`}>
-          <Dynamic component={props.icon} size={15} />
-          <strong class="text-[10px] text-text">{props.title}</strong>
-          <Badge tone={props.tone}>{props.files.length}</Badge>
-        </div>
-        <button
-          class="cursor-pointer border-0 bg-transparent text-[9px] text-primary-strong disabled:cursor-default disabled:opacity-50"
-          disabled={props.busy || props.files.length === 0}
-          onClick={props.onBulk}
-        >
+      <SectionHeader
+        icon={props.icon}
+        title={props.title}
+        count={props.files.length}
+        tone={props.tone}
+        class="px-3.5 pb-2"
+      >
+        <LinkButton disabled={props.busy || props.files.length === 0} onClick={props.onBulk}>
           {props.bulkLabel}
-        </button>
-      </div>
+        </LinkButton>
+      </SectionHeader>
       <div class="min-h-0 flex-1 overflow-y-auto px-2.5 pb-3">
         <Show
           when={props.files.length}

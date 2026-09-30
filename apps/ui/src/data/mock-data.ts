@@ -62,6 +62,7 @@ export const repositories: RepositorySummary[] = [
 export const activities: ActivityEntry[] = [
   {
     id: "a1",
+    kind: "push",
     action: "Pushed 3 commits",
     repository: "gitto",
     branch: "main",
@@ -70,6 +71,7 @@ export const activities: ActivityEntry[] = [
   },
   {
     id: "a2",
+    kind: "merge",
     action: "Merged pull request #42",
     repository: "shape-shifter",
     branch: "develop",
@@ -78,6 +80,7 @@ export const activities: ActivityEntry[] = [
   },
   {
     id: "a3",
+    kind: "branch",
     action: "Created branch",
     repository: "pocket-api",
     branch: "feat/auth",
