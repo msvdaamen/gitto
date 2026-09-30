@@ -2,8 +2,6 @@
 export interface GraphEdge {
   from: number;
   to: number;
-  /** The lane whose colour the line takes. */
-  color: number;
 }
 
 /**
@@ -15,9 +13,15 @@ export interface GraphRow {
   column: number;
   /** Lanes passing by the node, top to bottom. */
   through: number[];
-  /** Lines from the top of the row into the node: its own lane, and branches forked from it. */
+  /**
+   * Lines from the top of the row into the node: its own lane, and branches forked from it. Each
+   * takes the colour of the lane it comes from.
+   */
   top: GraphEdge[];
-  /** Lines from the node to the bottom of the row: to its first parent, and to merged parents. */
+  /**
+   * Lines from the node to the bottom of the row: to its first parent, and to merged parents. Each
+   * takes the colour of the lane it goes to, so a merge is drawn in the merged branch's colour.
+   */
   bottom: GraphEdge[];
   /** How many lanes the row uses. */
   width: number;
@@ -37,7 +41,7 @@ export function computeGraph(commits: { sha: string; parents: string[] }[]): Gra
     // A branch tip nothing leads to yet starts in the first free lane.
     const column = incoming[0] ?? freeLane(lanes);
     const through = lanes.flatMap((lane, i) => (lane !== null && lane !== sha ? [i] : []));
-    const top = incoming.map((lane) => ({ from: lane, to: column, color: lane }));
+    const top = incoming.map((lane) => ({ from: lane, to: column }));
 
     // Branches forked from this commit end here. Their lanes free up only after this row, so a
     // merged parent below doesn't reuse a lane that is still drawn above the node.
@@ -46,7 +50,7 @@ export function computeGraph(commits: { sha: string; parents: string[] }[]): Gra
     const [first, ...merged] = parents;
     if (first !== undefined) {
       lanes[column] = first;
-      bottom.push({ from: column, to: column, color: column });
+      bottom.push({ from: column, to: column });
     }
     for (const parent of merged) {
       let lane = lanes.indexOf(parent);
@@ -54,7 +58,7 @@ export function computeGraph(commits: { sha: string; parents: string[] }[]): Gra
         lane = freeLane(lanes, incoming);
         lanes[lane] = parent;
       }
-      bottom.push({ from: column, to: lane, color: lane });
+      bottom.push({ from: column, to: lane });
     }
     while (lanes.length > 0 && lanes.at(-1) === null) lanes.pop();
 

@@ -11,15 +11,15 @@ describe("computeGraph", () => {
     ]);
 
     expect(graph).toEqual([
-      { column: 0, through: [], top: [], bottom: [{ from: 0, to: 0, color: 0 }], width: 1 },
+      { column: 0, through: [], top: [], bottom: [{ from: 0, to: 0 }], width: 1 },
       {
         column: 0,
         through: [],
-        top: [{ from: 0, to: 0, color: 0 }],
-        bottom: [{ from: 0, to: 0, color: 0 }],
+        top: [{ from: 0, to: 0 }],
+        bottom: [{ from: 0, to: 0 }],
         width: 1,
       },
-      { column: 0, through: [], top: [{ from: 0, to: 0, color: 0 }], bottom: [], width: 1 },
+      { column: 0, through: [], top: [{ from: 0, to: 0 }], bottom: [], width: 1 },
     ]);
   });
 
@@ -33,8 +33,8 @@ describe("computeGraph", () => {
 
     // The merge opens a lane for the merged branch.
     expect(merge!.bottom).toEqual([
-      { from: 0, to: 0, color: 0 },
-      { from: 0, to: 1, color: 1 },
+      { from: 0, to: 0 },
+      { from: 0, to: 1 },
     ]);
     expect(main).toMatchObject({ column: 0, through: [1] });
     expect(side).toMatchObject({ column: 1, through: [0] });
@@ -42,8 +42,8 @@ describe("computeGraph", () => {
     expect(base).toMatchObject({
       column: 0,
       top: [
-        { from: 0, to: 0, color: 0 },
-        { from: 1, to: 0, color: 1 },
+        { from: 0, to: 0 },
+        { from: 1, to: 0 },
       ],
       width: 2,
     });
@@ -59,8 +59,8 @@ describe("computeGraph", () => {
     expect(feature).toMatchObject({ column: 0, top: [] });
     expect(main).toMatchObject({ column: 1, top: [], through: [0] });
     expect(base!.top).toEqual([
-      { from: 0, to: 0, color: 0 },
-      { from: 1, to: 0, color: 1 },
+      { from: 0, to: 0 },
+      { from: 1, to: 0 },
     ]);
   });
 
@@ -75,8 +75,8 @@ describe("computeGraph", () => {
     expect(feature).toMatchObject({ column: 0 });
     expect(merge).toMatchObject({ column: 1, through: [0] });
     expect(merge!.bottom).toEqual([
-      { from: 1, to: 1, color: 1 },
-      { from: 1, to: 0, color: 0 },
+      { from: 1, to: 1 },
+      { from: 1, to: 0 },
     ]);
   });
 
@@ -90,6 +90,6 @@ describe("computeGraph", () => {
     ]);
 
     // Lane 1 ends at `m`, so its merged parent `y` goes to lane 2, not lane 1.
-    expect(rows[2]!.bottom).toContainEqual({ from: 0, to: 2, color: 2 });
+    expect(rows[2]!.bottom).toContainEqual({ from: 0, to: 2 });
   });
 });

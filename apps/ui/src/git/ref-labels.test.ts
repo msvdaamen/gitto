@@ -43,6 +43,12 @@ describe("toRefLabels", () => {
     ]);
   });
 
+  it("keeps the whole name of a remote ref without a remote prefix", () => {
+    expect(toRefLabels([{ kind: "remote", name: "backup" }])).toEqual([
+      { kind: "branch", name: "backup", local: false, remotes: [], current: false },
+    ]);
+  });
+
   it("shows a detached HEAD on its own", () => {
     expect(
       toRefLabels([

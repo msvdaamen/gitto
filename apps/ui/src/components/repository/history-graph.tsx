@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { For, Index, Show } from "solid-js";
 
 import type { GraphEdge, GraphRow } from "@/git/graph";
 
@@ -80,18 +80,20 @@ export function HistoryGraph(props: {
       <For each={props.row.through}>
         {(lane) => <path d={`M${x(lane)} 0V${HEIGHT + 1}`} stroke={laneColor(lane)} />}
       </For>
-      <For each={props.row.top}>
-        {(edge) => <path d={topPath(edge)} stroke={laneColor(edge.color)} />}
-      </For>
-      <For each={props.row.bottom}>
+      {/* By position: the edges are new objects whenever the history is refetched, and `<For>`
+          would re-create every path for them. */}
+      <Index each={props.row.top}>
+        {(edge) => <path d={topPath(edge())} stroke={laneColor(edge().from)} />}
+      </Index>
+      <Index each={props.row.bottom}>
         {(edge) => (
           <path
-            d={bottomPath(edge)}
-            stroke={props.wip ? "var(--amber)" : laneColor(edge.color)}
+            d={bottomPath(edge())}
+            stroke={props.wip ? "var(--amber)" : laneColor(edge().to)}
             stroke-dasharray={props.wip ? "3 3" : undefined}
           />
         )}
-      </For>
+      </Index>
       <Show
         when={!props.wip}
         fallback={

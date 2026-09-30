@@ -1,11 +1,7 @@
 import { cn } from "cn";
-import Check from "lucide-solid/icons/check";
-import Cloud from "lucide-solid/icons/cloud";
-import Laptop from "lucide-solid/icons/laptop";
 import LoaderCircle from "lucide-solid/icons/loader-circle";
 import PencilLine from "lucide-solid/icons/pencil-line";
 import Search from "lucide-solid/icons/search";
-import Tag from "lucide-solid/icons/tag";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
 import { createEffect, createMemo, createSignal, Index, Show, Suspense, type JSX } from "solid-js";
 
@@ -15,15 +11,19 @@ import { LineStats } from "@/components/ui/line-stats";
 import { toneClasses, type Tone } from "@/components/ui/tone";
 import { useCommitFiles } from "@/git/diff";
 import { useHistory } from "@/git/history";
-import { toRefLabels, type RefLabel } from "@/git/ref-labels";
 import { headLabel, useStatus } from "@/git/status";
 import type { Commit, CommitRef } from "@/types/git";
 
 import { graphWidth, HistoryGraph, laneColor } from "./history-graph";
+import { HistoryRefLabels } from "./history-ref-labels";
 
-/** The table's columns; the graph's is as wide as its lanes (see `graphWidth`). */
-const COLUMNS =
-  "min-w-[calc(560px+var(--graph-width))] grid-cols-[minmax(105px,.8fr)_var(--graph-width)_minmax(240px,2.2fr)_minmax(115px,.85fr)_100px]";
+/** The table's minimum width: its other columns', plus the graph's (see `graphWidth`). */
+const MIN_WIDTH = "min-w-[calc(560px+var(--graph-width))]";
+/** The table's columns: branch / tag, graph, message, author and date. */
+const COLUMNS = cn(
+  MIN_WIDTH,
+  "grid-cols-[minmax(105px,.8fr)_var(--graph-width)_minmax(240px,2.2fr)_minmax(115px,.85fr)_100px]",
+);
 
 export function HistoryTable(props: {
   repositoryId: string;
@@ -42,7 +42,7 @@ export function HistoryTable(props: {
         class={cn(
           "sticky top-0 z-10 grid h-[31px] items-center",
           COLUMNS,
-          " border-b border-border bg-bg-soft text-[8px] font-[720] tracking-[.055em] text-faint uppercase [&>span]:flex [&>span]:h-full [&>span]:items-center [&>span]:border-r [&>span]:border-border-soft [&>span]:px-[9px]",
+          "border-b border-border bg-bg-soft text-[8px] font-[720] tracking-[.055em] text-faint uppercase [&>span]:flex [&>span]:h-full [&>span]:items-center [&>span]:border-r [&>span]:border-border-soft [&>span]:px-[9px]",
         )}
       >
         <span>Branch / tag</span>
@@ -51,11 +51,7 @@ export function HistoryTable(props: {
         <span>Author</span>
         <span>Date</span>
       </div>
-      <div
-        class="min-w-[calc(560px+var(--graph-width))]"
-        role="listbox"
-        aria-label="Commit history"
-      >
+      <div class={MIN_WIDTH} role="listbox" aria-label="Commit history">
         <Suspense fallback={<EmptyState icon={LoaderCircle} title="Loading history…" />}>
           <HistoryRows {...props} onLanes={setLanes} />
         </Suspense>
@@ -157,7 +153,10 @@ function HistoryRow(props: { commit: Commit; selected: boolean; onSelect: () => 
       )}
       onClick={props.onSelect}
     >
-      <RefLabels refs={props.commit.refs} color={laneColor(props.commit.graph?.column ?? 0)} />
+      <HistoryRefLabels
+        refs={props.commit.refs}
+        color={laneColor(props.commit.graph?.column ?? 0)}
+      />
       <div class="h-full overflow-x-clip">
         <Show when={props.commit.graph}>
           {(row) => (
@@ -195,59 +194,6 @@ function HistoryRow(props: { commit: Commit; selected: boolean; onSelect: () => 
 
 function refLabel(ref: CommitRef): string {
   return ref.kind === "tag" ? `tag: ${ref.name}` : ref.name;
-}
-
-/**
- * The commit's branches and tags, tinted in its lane's colour like GitKraken: the first one, with
- * a count of the rest. A branch shows whether it's local (laptop), on a remote (cloud) or both.
- */
-function RefLabels(props: { refs: CommitRef[]; color: string }) {
-  const labels = createMemo(() => toRefLabels(props.refs));
-
-  return (
-    <span class="flex items-center gap-1 overflow-hidden" style={{ "--lane": props.color }}>
-      <Show when={labels()[0]}>{(label) => <RefPill label={label()} />}</Show>
-      <Show when={labels().length > 1}>
-        <span
-          class="shrink-0 rounded-sm border border-[color-mix(in_srgb,var(--lane)_45%,var(--border))] px-[4px] py-[3px] text-[8px] font-[680] text-text-soft"
-          title={labels()
-            .slice(1)
-            .map((label) => label.name)
-            .join("\n")}
-        >
-          +{labels().length - 1}
-        </span>
-      </Show>
-    </span>
-  );
-}
-
-function RefPill(props: { label: RefLabel }) {
-  const branch = () => (props.label.kind === "branch" ? props.label : undefined);
-
-  return (
-    <span
-      class={cn(
-        "flex min-w-0 items-center gap-[3px] rounded-sm border border-[color-mix(in_srgb,var(--lane)_45%,var(--border))] bg-[color-mix(in_srgb,var(--lane)_16%,transparent)] px-[5px] py-[3px] text-[8px] text-text-soft [&>svg]:shrink-0",
-        branch()?.current && "font-[720] text-text",
-      )}
-      title={props.label.name}
-    >
-      <Show when={branch()?.current}>
-        <Check size={9} strokeWidth={3} />
-      </Show>
-      <Show when={props.label.kind === "tag"}>
-        <Tag size={9} strokeWidth={2.4} />
-      </Show>
-      <span class="truncate">{props.label.name}</span>
-      <Show when={branch()?.local}>
-        <Laptop size={9} strokeWidth={2.4} aria-label="Local" />
-      </Show>
-      <Show when={branch()?.remotes.length}>
-        <Cloud size={9} strokeWidth={2.4} aria-label={`On ${branch()!.remotes.join(", ")}`} />
-      </Show>
-    </span>
-  );
 }
 
 /**
