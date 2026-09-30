@@ -7,6 +7,7 @@ import ChevronRight from "lucide-solid/icons/chevron-right";
 import Cloud from "lucide-solid/icons/cloud";
 import File from "lucide-solid/icons/file";
 import Folder from "lucide-solid/icons/folder";
+import FolderOpen from "lucide-solid/icons/folder-open";
 import GitBranch from "lucide-solid/icons/git-branch";
 import GitMerge from "lucide-solid/icons/git-merge";
 import Inbox from "lucide-solid/icons/inbox";
@@ -22,8 +23,11 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Mascot } from "@/components/ui/mascot";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { toneClasses } from "@/components/ui/tone";
+import { buildRefTree } from "@/git/ref-tree";
+import type { RefTreeNode } from "@/git/ref-tree";
 import { useRefs } from "@/git/refs";
 import { useStatus } from "@/git/status";
+import { useCollapsed } from "@/hooks/collapsed";
 
 export function RefsSidebar(props: { repositoryId: string; open: boolean }) {
   const [mode, setMode] = createSignal("List");
@@ -67,16 +71,13 @@ function RefList(props: { repositoryId: string }) {
   const ofKind = (kind: Ref["kind"]) => (refs.data ?? []).filter((ref) => ref.kind === kind);
   const localBranches = createMemo(() => ofKind("local"));
   const remoteBranches = createMemo(() => ofKind("remote"));
+  const localTree = createMemo(() => buildRefTree(localBranches()));
+  const remoteTree = createMemo(() => buildRefTree(remoteBranches()));
   const tags = createMemo(() => ofKind("tag"));
 
-  const [collapsed, setCollapsed] = createSignal({
-    remotes: false,
-    pullRequests: false,
-    tags: true,
-    stashes: true,
-  });
-  const toggleSection = (id: keyof ReturnType<typeof collapsed>) =>
-    setCollapsed((current) => ({ ...current, [id]: !current[id] }));
+  // Sections and ref folders share one saved state; folder ids are full ref paths like
+  // `refs/heads/feature`, so they can't clash with the section ids.
+  const collapsed = useCollapsed(() => props.repositoryId, { tags: true, stashes: true });
 
   return (
     <>
@@ -116,36 +117,40 @@ function RefList(props: { repositoryId: string }) {
         onToggle={() => undefined}
         locked
       >
-        <For each={localBranches()}>
-          {(branch) => (
+        <RefTree nodes={localTree()} collapsed={collapsed}>
+          {(branch, label, depth) => (
             <SidebarRow
               icon={GitBranch}
-              label={branch.name}
+              label={label}
+              title={branch.name}
+              depth={depth}
               active={branch.current}
               meta={
                 branch.ahead ? `↑${branch.ahead}` : branch.behind ? `↓${branch.behind}` : undefined
               }
             />
           )}
-        </For>
+        </RefTree>
       </SidebarSection>
       <SidebarSection
         title="Remotes"
         icon={Cloud}
         count={remoteBranches().length}
-        collapsed={collapsed().remotes}
-        onToggle={() => toggleSection("remotes")}
+        collapsed={collapsed.isCollapsed("remotes")}
+        onToggle={() => collapsed.toggle("remotes")}
       >
-        <For each={remoteBranches()}>
-          {(branch) => <SidebarRow icon={GitBranch} label={branch.name} />}
-        </For>
+        <RefTree nodes={remoteTree()} collapsed={collapsed}>
+          {(branch, label, depth) => (
+            <SidebarRow icon={GitBranch} label={label} title={branch.name} depth={depth} />
+          )}
+        </RefTree>
       </SidebarSection>
       <SidebarSection
         title="Pull requests"
         icon={GitMerge}
         count={2}
-        collapsed={collapsed().pullRequests}
-        onToggle={() => toggleSection("pullRequests")}
+        collapsed={collapsed.isCollapsed("pullRequests")}
+        onToggle={() => collapsed.toggle("pullRequests")}
       >
         <SidebarRow icon={GitMerge} label="#24 Polish desktop shell" meta="open" />
         <SidebarRow icon={GitMerge} label="#18 Theme tokens" meta="merged" />
@@ -154,8 +159,8 @@ function RefList(props: { repositoryId: string }) {
         title="Tags"
         icon={Tag}
         count={tags().length}
-        collapsed={collapsed().tags}
-        onToggle={() => toggleSection("tags")}
+        collapsed={collapsed.isCollapsed("tags")}
+        onToggle={() => collapsed.toggle("tags")}
       >
         <For each={tags()}>{(tag) => <SidebarRow icon={Tag} label={tag.name} />}</For>
       </SidebarSection>
@@ -163,8 +168,8 @@ function RefList(props: { repositoryId: string }) {
         title="Stashes"
         icon={Inbox}
         count={1}
-        collapsed={collapsed().stashes}
-        onToggle={() => toggleSection("stashes")}
+        collapsed={collapsed.isCollapsed("stashes")}
+        onToggle={() => collapsed.toggle("stashes")}
       >
         <SidebarRow icon={Archive} label="WIP: layout experiment" />
       </SidebarSection>
@@ -203,9 +208,69 @@ function SidebarSection(props: {
   );
 }
 
+/** Refs grouped into collapsible folders on `/`. Folders start expanded. */
+function RefTree(props: {
+  nodes: RefTreeNode[];
+  collapsed: ReturnType<typeof useCollapsed>;
+  children: (ref: Ref, label: string, depth: number) => JSX.Element;
+}) {
+  const Nodes = (nodesProps: { nodes: RefTreeNode[]; depth: number }) => (
+    <For each={nodesProps.nodes}>
+      {(node) =>
+        node.type === "folder" ? (
+          <>
+            <SidebarFolder
+              name={node.name}
+              count={node.count}
+              depth={nodesProps.depth}
+              collapsed={props.collapsed.isCollapsed(node.path)}
+              onToggle={() => props.collapsed.toggle(node.path)}
+            />
+            <Show when={!props.collapsed.isCollapsed(node.path)}>
+              <Nodes nodes={node.children} depth={nodesProps.depth + 1} />
+            </Show>
+          </>
+        ) : (
+          props.children(node.ref, node.name, nodesProps.depth)
+        )
+      }
+    </For>
+  );
+
+  return <Nodes nodes={props.nodes} depth={0} />;
+}
+
+/** Indentation per tree level, in pixels. */
+const DEPTH_INDENT = 12;
+
+function SidebarFolder(props: {
+  name: string;
+  count: number;
+  depth: number;
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      class="grid h-7 w-full cursor-pointer grid-cols-[12px_16px_minmax(0,1fr)_auto] items-center gap-[5px] rounded-[5px] border-0 bg-transparent pr-[7px] text-left text-muted hover:bg-panel-hover hover:text-text-soft"
+      style={{ "padding-left": `${8 + props.depth * DEPTH_INDENT}px` }}
+      aria-expanded={!props.collapsed ? "true" : "false"}
+      title={props.name}
+      onClick={props.onToggle}
+    >
+      {props.collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+      {props.collapsed ? <Folder size={13} /> : <FolderOpen size={13} />}
+      <span class="truncate text-[10px]">{props.name}</span>
+      <small class="text-[8px] text-faint">{props.count}</small>
+    </button>
+  );
+}
+
 function SidebarRow(props: {
   icon: LucideIcon;
   label: string;
+  title?: string;
+  depth?: number;
   active?: boolean;
   count?: number;
   meta?: string;
@@ -214,10 +279,11 @@ function SidebarRow(props: {
   return (
     <button
       class={cn(
-        "grid h-7 w-full cursor-pointer grid-cols-[16px_minmax(0,1fr)_auto_auto] items-center gap-[5px] rounded-[5px] border-0 bg-transparent pr-[7px] pl-[25px] text-left text-muted hover:bg-panel-hover hover:text-text-soft",
+        "grid h-7 w-full cursor-pointer grid-cols-[16px_minmax(0,1fr)_auto_auto] items-center gap-[5px] rounded-[5px] border-0 bg-transparent pr-[7px] text-left text-muted hover:bg-panel-hover hover:text-text-soft",
         props.active && "bg-primary-soft text-text [&>svg]:text-primary-strong",
       )}
-      title={props.label}
+      style={{ "padding-left": `${25 + (props.depth ?? 0) * DEPTH_INDENT}px` }}
+      title={props.title ?? props.label}
     >
       <Dynamic component={props.icon} size={13} />
       <span class="truncate text-[10px]">{props.label}</span>
