@@ -1,4 +1,4 @@
-import type { Ref } from "./schema";
+import type { Ref, RefKind } from "./schema";
 
 // Ref names can't contain newlines or NUL, so one line per ref with NUL-separated fields is safe.
 export const REFS_ARGS = [
@@ -15,6 +15,19 @@ const PREFIXES = [
   ["refs/tags/", "tag"],
 ] as const;
 
+/**
+ * The kind and short name of a full ref name, e.g. `refs/remotes/origin/main` → remote
+ * `origin/main`. `null` for refs that aren't branches or tags, like `refs/stash`, and for
+ * `refs/remotes/<remote>/HEAD`: a symbolic ref to the remote's default branch, not a branch.
+ */
+export function parseRefName(fullName: string): { kind: RefKind; name: string } | null {
+  const prefix = PREFIXES.find(([p]) => fullName.startsWith(p));
+  if (!prefix) return null;
+  const [start, kind] = prefix;
+  if (kind === "remote" && fullName.endsWith("/HEAD")) return null;
+  return { kind, name: fullName.slice(start.length) };
+}
+
 export function parseRefs(output: string): Ref[] {
   const refs: Ref[] = [];
 
@@ -22,15 +35,12 @@ export function parseRefs(output: string): Ref[] {
     if (!line) continue;
     const [fullName = "", sha = "", upstream = "", track = "", head = ""] = line.split("\0");
 
-    const prefix = PREFIXES.find(([p]) => fullName.startsWith(p));
-    if (!prefix) continue;
-    // `refs/remotes/origin/HEAD` is a symbolic ref to the remote's default branch, not a branch.
-    if (prefix[1] === "remote" && fullName.endsWith("/HEAD")) continue;
+    const ref = parseRefName(fullName);
+    if (!ref) continue;
 
     refs.push({
-      name: fullName.slice(prefix[0].length),
+      ...ref,
       fullName,
-      kind: prefix[1],
       sha,
       current: head === "*",
       upstream: upstream || null,

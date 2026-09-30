@@ -19,8 +19,7 @@ const output = [
 describe("parseStatus", () => {
   it("reads the branch headers", () => {
     expect(parseStatus(output)).toMatchObject({
-      branch: "main",
-      head: "1111111111111111111111111111111111111111",
+      head: { kind: "branch", name: "main", sha: "1111111111111111111111111111111111111111" },
       upstream: "origin/main",
       ahead: 2,
       behind: 1,
@@ -37,12 +36,20 @@ describe("parseStatus", () => {
     ]);
   });
 
-  it("handles a detached HEAD and a branch without commits", () => {
-    expect(parseStatus("# branch.oid (initial)\0# branch.head (detached)\0")).toMatchObject({
-      branch: null,
-      head: null,
+  it("handles a detached HEAD", () => {
+    expect(parseStatus("# branch.oid 2222\0# branch.head (detached)\0")).toEqual({
+      head: { kind: "detached", sha: "2222" },
       upstream: null,
+      ahead: 0,
+      behind: 0,
       files: [],
+    });
+  });
+
+  it("handles a branch without commits", () => {
+    expect(parseStatus("# branch.oid (initial)\0# branch.head main\0").head).toEqual({
+      kind: "unborn",
+      name: "main",
     });
   });
 });

@@ -1,9 +1,8 @@
 import { stat } from "node:fs/promises";
 
 import type { RepositoryService } from "@gitto/repository/server";
-import { ORPCError } from "@orpc/server";
 
-import { toApiError } from "./errors";
+import { FolderNotFoundError, RepositoryNotFoundError } from "./errors";
 import { runGit, WriteQueue, type RunOptions } from "./runner";
 
 /** A repository on disk, with git commands bound to it. */
@@ -29,7 +28,7 @@ export class GitReposImpl implements GitRepos {
 
   async open(repositoryId: string): Promise<Repo> {
     const repository = await this.repositories.getRepository(repositoryId);
-    if (!repository) throw new ORPCError("NOT_FOUND", { message: "Repository not found." });
+    if (!repository) throw new RepositoryNotFoundError(repositoryId);
 
     const path = repository.path;
     // Checked up front: git can't start in a missing folder, and spawn reports that with the same
@@ -38,14 +37,9 @@ export class GitReposImpl implements GitRepos {
       (stats) => stats.isDirectory(),
       () => false,
     );
-    if (!isFolder) {
-      throw new ORPCError("NOT_FOUND", { message: `${path} no longer exists.` });
-    }
+    if (!isFolder) throw new FolderNotFoundError(path);
 
-    const run = (args: string[], options?: RunOptions) =>
-      runGit(path, args, options).catch((error: unknown) => {
-        throw toApiError(error, path);
-      });
+    const run = (args: string[], options?: RunOptions) => runGit(path, args, options);
 
     return {
       path,

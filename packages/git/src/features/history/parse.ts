@@ -1,4 +1,5 @@
-import type { Commit } from "./schema";
+import { parseRefName } from "../refs/parse";
+import type { Commit, CommitRef } from "./schema";
 
 const FIELDS = ["%H", "%P", "%an", "%ae", "%at", "%D", "%s", "%b"];
 
@@ -31,8 +32,18 @@ export function parseLog(output: string): Commit[] {
   return commits;
 }
 
-/** `HEAD -> main, origin/main, tag: v1` → `["HEAD", "main", "origin/main", "tag: v1"]` */
-function parseDecorations(decorations: string): string[] {
+/**
+ * `HEAD -> refs/heads/main, refs/remotes/origin/main, tag: refs/tags/v1` → HEAD, local `main`,
+ * remote `origin/main` and tag `v1`. Needs `--decorate=full`: short names can't tell a remote
+ * branch from a local one named like it (`origin/main`).
+ */
+function parseDecorations(decorations: string): CommitRef[] {
   if (!decorations) return [];
-  return decorations.split(", ").flatMap((ref) => ref.split(" -> "));
+  return decorations
+    .split(", ")
+    .flatMap((decoration) => decoration.split(" -> "))
+    .flatMap<CommitRef>((ref) => {
+      if (ref === "HEAD") return [{ kind: "head", name: "HEAD" }];
+      return parseRefName(ref.replace(/^tag: /, "")) ?? [];
+    });
 }

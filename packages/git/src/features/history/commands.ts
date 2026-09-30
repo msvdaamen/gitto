@@ -21,7 +21,7 @@ export async function getLog(
       "-z",
       LOG_FORMAT,
       "--topo-order",
-      "--decorate=short",
+      "--decorate=full",
       `--max-count=${page.limit}`,
       `--skip=${page.skip}`,
       ...revisions,

@@ -1,16 +1,6 @@
 import { spawn } from "node:child_process";
 
-export class GitError extends Error {
-  constructor(
-    message: string,
-    readonly args: readonly string[],
-    readonly exitCode: number | null,
-    readonly stderr: string,
-  ) {
-    super(message);
-    this.name = "GitError";
-  }
-}
+import { commandError, GitError } from "./errors";
 
 export interface RunOptions {
   signal?: AbortSignal;
@@ -41,7 +31,8 @@ const ENV = {
   GIT_PAGER: "cat",
 };
 
-/** Runs `git` in `cwd` and resolves to its stdout; rejects with a `GitError` on a non-zero exit. */
+/** Runs `git` in `cwd` and resolves to its stdout; rejects with a `GitError` (or a more specific
+ * subclass, see `commandError`) on a non-zero exit. */
 export function runGit(cwd: string, args: string[], options: RunOptions = {}): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn("git", [...CONFIG, ...args], {
@@ -73,9 +64,7 @@ export function runGit(cwd: string, args: string[], options: RunOptions = {}): P
       if (code === 0) {
         resolve(out);
       } else {
-        // Some failures, like "nothing to commit", are only explained on stdout.
-        const message = err.trim() || out.trim() || `git ${args[0]} exited with code ${code}`;
-        reject(new GitError(message, args, code, err));
+        reject(commandError(cwd, args, code, out, err));
       }
     });
 

@@ -5,8 +5,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { RepositoryService } from "@gitto/repository/server";
+import { call, ORPCError } from "@orpc/server";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import {
+  FolderNotFoundError,
+  GitError,
+  IndexLockedError,
+  NotARepositoryError,
+  RepositoryNotFoundError,
+} from "./core/errors";
 import { GitReposImpl, type Repo } from "./core/repo";
 import { createCommit } from "./features/commit/commands";
 import { getCommitFiles, getWorkingTreeFiles } from "./features/diff/commands";
@@ -15,6 +23,7 @@ import { listRefs } from "./features/refs/commands";
 import { stage, unstage } from "./features/staging/commands";
 import { getStatus } from "./features/status/commands";
 import { watchChanges } from "./features/watch/commands";
+import { gitRouter } from "./router";
 
 let root: string;
 const paths = new Map<string, string>();
@@ -40,6 +49,20 @@ function createRepo(name: string): string {
 }
 
 const page = { limit: 50, skip: 0 };
+
+/** What `promise` rejects with; fails if it resolves. */
+function rejection(promise: Promise<unknown>): Promise<unknown> {
+  return promise.then(
+    () => expect.fail("expected a rejection"),
+    (reason: unknown) => reason,
+  );
+}
+
+async function apiError(promise: Promise<unknown>): Promise<unknown> {
+  const error = await rejection(promise);
+  expect(error).toBeInstanceOf(ORPCError);
+  return error;
+}
 
 beforeAll(() => {
   root = mkdtempSync(join(tmpdir(), "gitto-git-"));
@@ -86,7 +109,12 @@ describe("a repository with history", () => {
 
   it("reads the status", async () => {
     const status = await getStatus(repo);
-    expect(status).toMatchObject({ branch: "main", upstream: null, ahead: 0, behind: 0 });
+    expect(status).toMatchObject({
+      head: { kind: "branch", name: "main" },
+      upstream: null,
+      ahead: 0,
+      behind: 0,
+    });
     expect(status.files).toEqual([
       { path: "a file.txt", origPath: null, staged: null, unstaged: "modified" },
       { path: "new file.txt", origPath: null, staged: null, unstaged: "untracked" },
@@ -102,7 +130,14 @@ describe("a repository with history", () => {
       "main commit",
       "side commit",
     ]);
-    expect(log[0]).toMatchObject({ refs: ["HEAD", "main", "tag: v1"], authorName: "Test User" });
+    expect(log[0]).toMatchObject({
+      refs: [
+        { kind: "head", name: "HEAD" },
+        { kind: "local", name: "main" },
+        { kind: "tag", name: "v1" },
+      ],
+      authorName: "Test User",
+    });
     expect(log[0]!.parents).toHaveLength(2);
   });
 
@@ -162,13 +197,10 @@ describe("a repository with history", () => {
     });
   });
 
-  it("reports an unknown commit as an API error", async () => {
-    await expect(
-      getCommitFiles(repo, "0123456789abcdef0123456789abcdef01234567"),
-    ).rejects.toMatchObject({
-      code: "INTERNAL_SERVER_ERROR",
-      message: expect.stringContaining("bad object"),
-    });
+  it("explains why a command failed", async () => {
+    const error = await rejection(getCommitFiles(repo, "0123456789abcdef0123456789abcdef01234567"));
+    expect(error).toBeInstanceOf(GitError);
+    expect(error).toMatchObject({ message: expect.stringContaining("bad object") });
   });
 });
 
@@ -182,7 +214,10 @@ describe("a repository without commits", () => {
   });
 
   it("has an empty status, log and ref list", async () => {
-    expect(await getStatus(repo)).toMatchObject({ branch: "main", head: null, files: [] });
+    expect(await getStatus(repo)).toMatchObject({
+      head: { kind: "unborn", name: "main" },
+      files: [],
+    });
     expect(await getLog(repo, page)).toEqual([]);
     expect(await listRefs(repo)).toEqual([]);
     expect(await getWorkingTreeFiles(repo)).toEqual({ staged: [], unstaged: [] });
@@ -211,7 +246,10 @@ describe("a repository without commits", () => {
       expect.objectContaining({
         subject: "Initial commit",
         body: "With body",
-        refs: ["HEAD", "main"],
+        refs: [
+          { kind: "head", name: "HEAD" },
+          { kind: "local", name: "main" },
+        ],
       }),
     ]);
   });
@@ -223,17 +261,80 @@ describe("a repository without commits", () => {
   });
 });
 
-describe("opening repositories", () => {
+describe("errors", () => {
   it("rejects unknown repositories", async () => {
-    await expect(repos.open("missing")).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(repos.open("missing")).rejects.toBeInstanceOf(RepositoryNotFoundError);
   });
 
   it("rejects repositories whose folder was deleted", async () => {
     const path = createRepo("deleted");
     rmSync(path, { recursive: true });
-    await expect(repos.open("deleted")).rejects.toMatchObject({
-      code: "NOT_FOUND",
-      message: `${path} no longer exists.`,
+    const error = await rejection(repos.open("deleted"));
+    expect(error).toBeInstanceOf(FolderNotFoundError);
+    expect(error).toMatchObject({ message: `${path} no longer exists.` });
+  });
+
+  it("recognises a folder that's no longer a repository", async () => {
+    const path = createRepo("unrepo");
+    const repo = await repos.open("unrepo");
+    rmSync(join(path, ".git"), { recursive: true });
+    const error = await rejection(getStatus(repo));
+    expect(error).toBeInstanceOf(NotARepositoryError);
+    expect(error).toMatchObject({ message: `${path} is no longer a git repository.` });
+  });
+
+  it("recognises another git process holding the index", async () => {
+    const path = createRepo("locked");
+    const repo = await repos.open("locked");
+    writeFileSync(join(path, "file.txt"), "x");
+    writeFileSync(join(path, ".git", "index.lock"), "");
+    await expect(stage(repo, ["file.txt"])).rejects.toBeInstanceOf(IndexLockedError);
+  });
+});
+
+describe("the router", () => {
+  // Procedures only take UUIDv7 repository ids.
+  const ids = {
+    history: "01920000-0000-7000-8000-000000000001",
+    locked: "01920000-0000-7000-8000-000000000002",
+    missing: "01920000-0000-7000-8000-000000000003",
+  };
+  const context = { gitRepos: repos };
+
+  beforeAll(() => {
+    paths.set(ids.history, paths.get("history")!);
+    paths.set(ids.locked, paths.get("locked")!);
+  });
+
+  it("reports git errors as API errors the renderer can show", async () => {
+    expect(
+      await apiError(call(gitRouter.status.get, { repositoryId: ids.missing }, { context })),
+    ).toMatchObject({ code: "NOT_FOUND", message: "Repository not found." });
+
+    expect(
+      await apiError(
+        call(
+          gitRouter.staging.stage,
+          { repositoryId: ids.locked, paths: ["file.txt"] },
+          { context },
+        ),
+      ),
+    ).toMatchObject({
+      code: "CONFLICT",
+      message: "Another git process is running in this repository.",
+    });
+
+    expect(
+      await apiError(
+        call(
+          gitRouter.diff.commitFiles,
+          { repositoryId: ids.history, sha: "0123456789abcdef0123456789abcdef01234567" },
+          { context },
+        ),
+      ),
+    ).toMatchObject({
+      code: "INTERNAL_SERVER_ERROR",
+      message: expect.stringContaining("bad object"),
     });
   });
 });

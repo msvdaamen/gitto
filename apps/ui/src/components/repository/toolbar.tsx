@@ -17,7 +17,7 @@ import { Dynamic } from "solid-js/web";
 import { IconButton } from "@/components/ui/button";
 import { Divider } from "@/components/ui/divider";
 import { TextInput } from "@/components/ui/text-input";
-import { useStatus } from "@/git/status";
+import { headLabel, useStatus } from "@/git/status";
 import { useRepository } from "@/hooks/repository";
 
 const toolbarActions: { icon: LucideIcon; label: string; accent?: boolean }[] = [
@@ -108,7 +108,7 @@ function RepositoryName(props: { repositoryId: string }) {
     <>
       <strong class="truncate text-[11px]">{repository()?.name}</strong>
       <span class="truncate text-[8.5px] text-faint">
-        {status.data ? (status.data.branch ?? "detached HEAD") : ""}
+        {status.data ? headLabel(status.data.head) : ""}
       </span>
     </>
   );
