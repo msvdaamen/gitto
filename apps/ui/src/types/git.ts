@@ -1,5 +1,7 @@
 import type { CommitRef } from "@gitto/git/types";
 
+import type { GraphRow } from "@/git/graph";
+
 export type { ChangedFile, CommitRef, FileStatus } from "@gitto/git/types";
 
 export type AppView = "home" | "repository";
@@ -39,7 +41,8 @@ export interface Commit {
   repositoryId: string;
   id: string;
   sha: string;
-  graph: string[];
+  /** Its row in the history graph; only rows in the history table have one. */
+  graph?: GraphRow;
   message: string;
   description?: string;
   author: string;

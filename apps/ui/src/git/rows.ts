@@ -2,7 +2,7 @@ import type { Commit as GitCommit, Status } from "@gitto/git/types";
 
 import type { Commit } from "@/types/git";
 
-import { computeGraph } from "./graph";
+import { computeGraph, type GraphRow } from "./graph";
 
 /** Row id of the uncommitted changes, shown above the history when there are any. */
 export const WIP_ID = "wip";
@@ -35,8 +35,7 @@ export function toCommitRows(
       repositoryId,
       id: WIP_ID,
       sha: "working",
-      // Hollow, as it isn't a commit (yet).
-      graph: graph[0]!.map((cell) => (cell === "●" ? "○" : cell)),
+      graph: graph[0],
       message: "Uncommitted changes",
       description: "Uncommitted changes in your working directory.",
       author: "You",
@@ -50,8 +49,8 @@ export function toCommitRows(
   ];
 }
 
-/** A commit as the UI shows it; `graph` is its cells in the history table's graph column. */
-export function toCommitRow(repositoryId: string, commit: GitCommit, graph: string[] = []): Commit {
+/** A commit as the UI shows it; `graph` is its row in the history table's graph column. */
+export function toCommitRow(repositoryId: string, commit: GitCommit, graph?: GraphRow): Commit {
   return {
     repositoryId,
     id: commit.sha,
