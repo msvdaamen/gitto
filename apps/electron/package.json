@@ -11,7 +11,8 @@
     "package": "electron-forge package",
     "make": "electron-forge make",
     "typecheck": "tsc --noEmit",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "test": "vitest run"
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.11.2",
@@ -28,7 +29,8 @@
     "drizzle-kit": "catalog:",
     "electron": "^44.4.5",
     "typescript": "^7.0.2",
-    "vite": "^8.3.1"
+    "vite": "^8.3.1",
+    "vitest": "catalog:"
   },
   "productName": "Gitto"
 }
