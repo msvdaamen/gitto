@@ -12,61 +12,76 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { LineStats } from "@/components/ui/line-stats";
 import { SectionHeader } from "@/components/ui/section-header";
 import { useCommitFiles } from "@/git/diff";
-import { useHistory } from "@/git/history";
+import { useCommit } from "@/git/history";
+import { WIP_ID } from "@/git/rows";
 import type { Commit } from "@/types/git";
 
 import { ChangedFileList } from "./changed-file-list";
 import { WorkingTreeDetails } from "./working-tree-details";
 
-/** Details of the selected history row: a commit, or the uncommitted changes. */
+/**
+ * Details of the selected history row: a commit, or the uncommitted changes. Loads what it shows by
+ * itself, so it only needs the row's id from the history table.
+ */
 export function CommitDetails(props: { repositoryId: string; selectedId: string | undefined }) {
   return (
-    <Suspense fallback={<EmptyState icon={LoaderCircle} title="Loading details…" />}>
-      <SelectedCommit {...props} />
-    </Suspense>
-  );
-}
-
-function SelectedCommit(props: { repositoryId: string; selectedId: string | undefined }) {
-  const history = useHistory(
-    () => props.repositoryId,
-    () => props.selectedId,
-  );
-
-  return (
     <Show
-      when={history.selected()}
+      when={props.selectedId}
       fallback={<EmptyState icon={GitCommitHorizontal} title="Nothing selected" />}
     >
-      {(commit) => <Details commit={commit()} />}
+      {(selectedId) => (
+        <div class="flex h-full min-w-[280px] flex-col overflow-y-auto">
+          <div class="flex h-[38px] shrink-0 items-center justify-between border-b border-border py-0 pr-[9px] pl-[13px] text-[9px] font-[720] tracking-[.07em] text-muted uppercase">
+            <span>{selectedId() === WIP_ID ? "Working directory" : "Commit details"}</span>
+            <IconButton label="More commit actions" icon={Ellipsis} />
+          </div>
+          <Suspense fallback={<EmptyState icon={LoaderCircle} title="Loading details…" />}>
+            <Show
+              when={selectedId() === WIP_ID}
+              fallback={<SelectedCommit repositoryId={props.repositoryId} sha={selectedId()} />}
+            >
+              <WorkingTreeDetails repositoryId={props.repositoryId} />
+            </Show>
+          </Suspense>
+        </div>
+      )}
     </Show>
   );
 }
 
-function Details(props: { commit: Commit }) {
-  return (
-    <div class="flex h-full min-w-[280px] flex-col overflow-y-auto">
-      <div class="flex h-[38px] shrink-0 items-center justify-between border-b border-border py-0 pr-[9px] pl-[13px] text-[9px] font-[720] tracking-[.07em] text-muted uppercase">
-        <span>{props.commit.isWip ? "Working directory" : "Commit details"}</span>
-        <IconButton label="More commit actions" icon={Ellipsis} />
-      </div>
-      <Show when={props.commit.isWip} fallback={<CommitFiles commit={props.commit} />}>
-        <WorkingTreeDetails repositoryId={props.commit.repositoryId} />
-      </Show>
-    </div>
+function SelectedCommit(props: { repositoryId: string; sha: string }) {
+  const details = useCommit(
+    () => props.repositoryId,
+    () => props.sha,
   );
-}
-
-function CommitFiles(props: { commit: Commit }) {
-  const changes = useCommitFiles(() => props.commit);
+  const changes = useCommitFiles(
+    () => props.repositoryId,
+    () => props.sha,
+  );
 
   return (
     <>
-      <CommitSummary
-        commit={props.commit}
-        fileCount={changes.files().length}
-        totals={changes.totals()}
-      />
+      <Show when={details.query.error ?? changes.query.error}>
+        {(error) => (
+          <EmptyState
+            icon={TriangleAlert}
+            title="Couldn't load the commit"
+            tone="error"
+            class="h-auto border-b border-border py-4"
+          >
+            {error().message}
+          </EmptyState>
+        )}
+      </Show>
+      <Show when={details.commit()}>
+        {(commit) => (
+          <CommitSummary
+            commit={commit()}
+            fileCount={changes.files().length}
+            totals={changes.totals()}
+          />
+        )}
+      </Show>
       <div class="border-b border-border px-2.5 py-3">
         <SectionHeader
           icon={File}
@@ -74,18 +89,6 @@ function CommitFiles(props: { commit: Commit }) {
           count={changes.files().length}
           class="px-1 pb-2"
         />
-        <Show when={changes.query.error}>
-          {(error) => (
-            <EmptyState
-              icon={TriangleAlert}
-              title="Couldn't load changed files"
-              tone="error"
-              class="h-auto py-4"
-            >
-              {error().message}
-            </EmptyState>
-          )}
-        </Show>
         <ChangedFileList files={changes.files()} />
       </div>
     </>

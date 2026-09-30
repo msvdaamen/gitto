@@ -1,6 +1,6 @@
 // Runs every feature's commands against real repositories in a temp directory.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -18,7 +18,7 @@ import {
 import { GitReposImpl, type Repo } from "./core/repo";
 import { createCommit } from "./features/commit/commands";
 import { getCommitFiles, getWorkingTreeFiles } from "./features/diff/commands";
-import { getLog } from "./features/history/commands";
+import { getCommit, getLog } from "./features/history/commands";
 import { listRefs } from "./features/refs/commands";
 import { stage, unstage } from "./features/staging/commands";
 import { getStatus } from "./features/status/commands";
@@ -139,6 +139,16 @@ describe("a repository with history", () => {
       authorName: "Test User",
     });
     expect(log[0]!.parents).toHaveLength(2);
+  });
+
+  it("reads a single commit", async () => {
+    const [head] = await getLog(repo, page);
+    expect(await getCommit(repo, head!.sha.slice(0, 7))).toEqual(head);
+
+    const tree = git(repo.path, "rev-parse", "HEAD^{tree}");
+    const error = await rejection(getCommit(repo, tree));
+    expect(error).toBeInstanceOf(GitError);
+    expect(error).toMatchObject({ message: `${tree} is not a commit.` });
   });
 
   it("lists refs", async () => {
@@ -348,6 +358,11 @@ describe("cancelling", () => {
   });
 });
 
+/** Whether `next` stays pending for longer than the watcher's debounce: resolves to "quiet" if so. */
+function quiet(next: Promise<unknown>): Promise<unknown> {
+  return Promise.race([next, new Promise((resolve) => setTimeout(() => resolve("quiet"), 700))]);
+}
+
 describe("watching", () => {
   it("emits after a change and stops when aborted", async () => {
     const path = createRepo("watched");
@@ -361,5 +376,68 @@ describe("watching", () => {
 
     controller.abort();
     expect(await changes.next()).toEqual({ value: undefined, done: true });
+  });
+
+  it("skips ignored directories and follows new ones", { timeout: 10_000 }, async () => {
+    const path = createRepo("watched-tree");
+    writeFileSync(join(path, ".gitignore"), "build/\n");
+    mkdirSync(join(path, "build"));
+    const repo = await repos.open("watched-tree");
+    const controller = new AbortController();
+    const changes = watchChanges(repo, controller.signal);
+
+    let next = changes.next();
+    setTimeout(() => writeFileSync(join(path, "file.txt"), "x"), 200);
+    expect(await next).toEqual({ value: null, done: false });
+
+    // Ignored.
+    next = changes.next();
+    writeFileSync(join(path, "build", "out.txt"), "x");
+    expect(await quiet(next)).toBe("quiet");
+
+    // Created (and reported) afterwards; changes in it are reported too.
+    mkdirSync(join(path, "src"));
+    expect(await next).toEqual({ value: null, done: false });
+    next = changes.next();
+    writeFileSync(join(path, "src", "a.txt"), "x");
+    expect(await next).toEqual({ value: null, done: false });
+
+    controller.abort();
+  });
+
+  it("follows changes to the ignore rules", { timeout: 10_000 }, async () => {
+    const path = createRepo("watched-rules");
+    writeFileSync(join(path, ".gitignore"), "build/\n");
+    mkdirSync(join(path, "build"));
+    mkdirSync(join(path, "src"));
+    const repo = await repos.open("watched-rules");
+    const controller = new AbortController();
+    const changes = watchChanges(repo, controller.signal);
+
+    let next = changes.next();
+    setTimeout(() => writeFileSync(join(path, "file.txt"), "x"), 200);
+    expect(await next).toEqual({ value: null, done: false });
+
+    // `build` is no longer ignored, `src` now is.
+    next = changes.next();
+    writeFileSync(join(path, ".gitignore"), "src/\n");
+    expect(await next).toEqual({ value: null, done: false });
+
+    next = changes.next();
+    writeFileSync(join(path, "build", "out.txt"), "x");
+    expect(await next).toEqual({ value: null, done: false });
+
+    next = changes.next();
+    writeFileSync(join(path, "src", "a.txt"), "x");
+    expect(await quiet(next)).toBe("quiet");
+
+    // Rules in .git/info/exclude count too.
+    writeFileSync(join(path, ".git", "info", "exclude"), "build/\n");
+    expect(await next).toEqual({ value: null, done: false });
+    next = changes.next();
+    writeFileSync(join(path, "build", "out.txt"), "y");
+    expect(await quiet(next)).toBe("quiet");
+
+    controller.abort();
   });
 });

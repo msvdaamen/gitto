@@ -1,3 +1,4 @@
+import { GitError } from "../../core/errors";
 import type { Repo } from "../../core/repo";
 import { LOG_FORMAT, parseLog } from "./parse";
 import type { Commit } from "./schema";
@@ -30,4 +31,12 @@ export async function getLog(
     { signal },
   );
   return parseLog(output);
+}
+
+export async function getCommit(repo: Repo, sha: string, signal?: AbortSignal): Promise<Commit> {
+  const args = ["log", "-z", LOG_FORMAT, "--decorate=full", "--max-count=1", sha, "--"];
+  const [commit] = parseLog(await repo.read(args, { signal }));
+  // `sha` names a tree or blob, say, rather than a commit.
+  if (!commit) throw new GitError(`${sha} is not a commit.`, args, 0, "");
+  return commit;
 }

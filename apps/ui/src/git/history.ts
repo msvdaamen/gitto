@@ -1,10 +1,10 @@
-import { useQuery } from "@tanstack/solid-query";
+import { keepPreviousData, useQuery } from "@tanstack/solid-query";
 import { createMemo } from "solid-js";
 
 import { rpc } from "@/lib/rpc";
 
 import { gitKeys } from "./keys";
-import { toCommitRows } from "./rows";
+import { toCommitRow, toCommitRows } from "./rows";
 import { useStatus } from "./status";
 
 export function useLog(repositoryId: () => string) {
@@ -35,4 +35,24 @@ export function useHistory(repositoryId: () => string, selectedId: () => string 
   const selected = createMemo(() => rows().find((row) => row.id === selectedId()) ?? rows()[0]);
 
   return { log, rows, selected };
+}
+
+/** A single commit, loaded on its own, e.g. for the details of the selected one. */
+export function useCommit(repositoryId: () => string, sha: () => string) {
+  const query = useQuery(() => {
+    const id = repositoryId();
+    const commitSha = sha();
+    return {
+      queryKey: gitKeys.commit(id, commitSha),
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        rpc.git.history.commit({ repositoryId: id, sha: commitSha }, { signal }),
+      staleTime: Infinity,
+      // Keep showing the previous selection while the next one loads, instead of suspending.
+      placeholderData: keepPreviousData,
+    };
+  });
+
+  const commit = createMemo(() => query.data && toCommitRow(repositoryId(), query.data));
+
+  return { query, commit };
 }

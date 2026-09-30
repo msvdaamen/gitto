@@ -3,18 +3,18 @@ import { keepPreviousData, useQuery } from "@tanstack/solid-query";
 import { createMemo } from "solid-js";
 
 import { rpc } from "@/lib/rpc";
-import type { Commit } from "@/types/git";
 
 import { gitKeys } from "./keys";
 
 /** Files changed by a commit, compared to its first parent. */
-export function useCommitFiles(commit: () => Commit) {
+export function useCommitFiles(repositoryId: () => string, sha: () => string) {
   const query = useQuery(() => {
-    const { repositoryId, id } = commit();
+    const id = repositoryId();
+    const commitSha = sha();
     return {
-      queryKey: gitKeys.commitFiles(repositoryId, id),
+      queryKey: gitKeys.commitFiles(id, commitSha),
       queryFn: ({ signal }: { signal: AbortSignal }) =>
-        rpc.git.diff.commitFiles({ repositoryId, sha: id }, { signal }),
+        rpc.git.diff.commitFiles({ repositoryId: id, sha: commitSha }, { signal }),
       staleTime: Infinity,
       // Keep showing the previous selection's files while the next ones load, instead of suspending.
       placeholderData: keepPreviousData,
