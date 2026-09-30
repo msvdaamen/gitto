@@ -13,6 +13,8 @@ const config: ForgeConfig = {
     executableName: "gitto",
     // Extension is picked per platform (icon.ico on Windows, icon.icns on macOS).
     icon: "assets/icon",
+    // Copied to Resources/migrations; the main process applies them on startup.
+    extraResource: ["migrations"],
   },
   rebuildConfig: {},
   makers: [

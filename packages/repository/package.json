@@ -1,5 +1,5 @@
 {
-  "name": "@gitto/system",
+  "name": "@gitto/repository",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -13,6 +13,8 @@
   "dependencies": {
     "@orpc/contract": "catalog:",
     "@orpc/server": "catalog:",
+    "drizzle-orm": "catalog:",
+    "uuid": "^14.0.2",
     "zod": "catalog:"
   },
   "devDependencies": {

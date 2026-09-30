@@ -1,19 +1,18 @@
 {
-  "name": "@gitto/system",
+  "name": "@gitto/db",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "exports": {
-    "./contract": "./src/contract.ts",
-    "./server": "./src/server.ts"
+    ".": "./src/index.ts",
+    "./schema": "./src/schema.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@orpc/contract": "catalog:",
-    "@orpc/server": "catalog:",
-    "zod": "catalog:"
+    "@gitto/repository": "workspace:*",
+    "drizzle-orm": "catalog:"
   },
   "devDependencies": {
     "@types/node": "^26.6.3",

@@ -2,9 +2,18 @@ import { useParams, useRouter } from "@tanstack/solid-router";
 import { cn } from "cn";
 import GitBranch from "lucide-solid/icons/git-branch";
 import Plus from "lucide-solid/icons/plus";
-import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import X from "lucide-solid/icons/x";
+import {
+  createEffect,
+  createMemo,
+  createResource,
+  createSignal,
+  For,
+  onCleanup,
+  Show,
+} from "solid-js";
 
-import { repositories } from "@/data/mock-data";
+import { rpc } from "@/lib/rpc";
 
 import { IconButton } from "./ui/button";
 import { GittoIcon } from "./ui/gitto-icon";
@@ -16,16 +25,27 @@ type TabItem = {
   name: string;
 };
 
+const HOME_TAB: TabItem = { id: HOME_PAGE, name: "Home" };
+
 export function Tabs() {
   const params = useParams({ strict: false });
   const router = useRouter();
   const [selectedTab, setSelectedTab] = createSignal<string>(params().repoId ?? HOME_PAGE);
-  const tabs = createMemo<TabItem[]>(() => {
-    return [
-      { id: HOME_PAGE, name: "Home" },
-      ...repositories.map((r) => ({ id: r.id, name: r.name })),
-    ];
+  const [repositories, { refetch }] = createResource(() => rpc.repository.list(), {
+    initialValue: [],
   });
+  // `.latest` doesn't suspend during a refetch, which would blank the layout. Unchanged tabs keep
+  // their previous object so `<For>` doesn't remount them (and the underline) on every fetch.
+  const tabs = createMemo<TabItem[]>((previous) => {
+    const previousById = new Map(previous.map((tab) => [tab.id, tab]));
+    return [
+      HOME_TAB,
+      ...repositories.latest.map((r) => {
+        const tab = previousById.get(r.id);
+        return tab?.name === r.name ? tab : { id: r.id, name: r.name };
+      }),
+    ];
+  }, []);
 
   // Measure the active tab so the underline can slide to it.
   const tabRefs = new Map<string, HTMLElement>();
@@ -65,6 +85,28 @@ export function Tabs() {
     });
   }
 
+  async function addRepository() {
+    try {
+      const path = await rpc.system.selectFolder();
+      if (!path) return;
+      const repository = await rpc.repository.add({ path });
+      await refetch();
+      setTab(repository);
+    } catch (error) {
+      console.error("Failed to add repository", error);
+    }
+  }
+
+  async function removeRepository(tab: TabItem) {
+    try {
+      await rpc.repository.remove({ id: tab.id });
+      if (selectedTab() === tab.id) setTab(HOME_TAB);
+      await refetch();
+    } catch (error) {
+      console.error("Failed to remove repository", error);
+    }
+  }
+
   return (
     <div class="flex">
       <div class="relative flex">
@@ -82,11 +124,17 @@ export function Tabs() {
                 tab={tab}
                 isActive={selectedTab() === tab.id}
                 onClick={() => setTab(tab)}
+                onRemove={() => void removeRepository(tab)}
               />
             )
           }
         </For>
-        <IconButton label="Open new repository" icon={Plus} class="ml-1.25 shrink-0 self-center" />
+        <IconButton
+          label="Open new repository"
+          icon={Plus}
+          class="ml-1.25 shrink-0 self-center"
+          onClick={() => void addRepository()}
+        />
 
         {/* Only mounted once measured, so it doesn't slide in from the left on first render. */}
         <Show when={underline()}>
@@ -107,12 +155,13 @@ function Tab(props: {
   tab: TabItem;
   isActive: boolean;
   onClick: () => void;
+  onRemove: () => void;
 }) {
   return (
     <div
       ref={props.ref}
       class={cn(
-        "flex h-12 min-w-30 max-w-45 cursor-pointer items-center gap-2 border-0 border-r border-border-soft bg-transparent px-2.5 text-muted hover:text-text-soft max-[700px]:min-w-26.25",
+        "group flex h-12 min-w-30 max-w-45 cursor-pointer items-center gap-2 border-0 border-r border-border-soft bg-transparent px-2.5 text-muted hover:text-text-soft max-[700px]:min-w-26.25",
         props.isActive && "bg-bg text-text",
         !props.isActive && "hover:bg-panel-hover",
       )}
@@ -122,6 +171,20 @@ function Tab(props: {
         <GitBranch size={14} />
       </span>
       <span class="flex-1 truncate text-left font-[590]">{props.tab.name}</span>
+      <button
+        class={cn(
+          "grid size-5 shrink-0 cursor-pointer place-items-center rounded-md border-0 bg-transparent p-0 text-muted opacity-0 group-hover:opacity-100 hover:bg-panel-hover hover:text-text focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-primary",
+          props.isActive && "opacity-100",
+        )}
+        aria-label={`Remove ${props.tab.name}`}
+        title={`Remove ${props.tab.name}`}
+        onClick={(event) => {
+          event.stopPropagation();
+          props.onRemove();
+        }}
+      >
+        <X size={13} />
+      </button>
     </div>
   );
 }

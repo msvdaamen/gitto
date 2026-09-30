@@ -1,9 +1,9 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    // DOM for the renderer-side client.
+    // DOM for the renderer-side client; node for the domain servers the router pulls in.
     "lib": ["ES2024", "DOM", "DOM.Iterable"],
-    "types": []
+    "types": ["node"]
   },
   "include": ["src"]
 }

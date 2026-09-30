@@ -8,6 +8,7 @@
     "package": "pnpm --filter @gitto/electron package",
     "make": "pnpm --filter @gitto/electron make",
     "typecheck": "pnpm -r typecheck",
+    "db:generate": "pnpm --filter @gitto/electron db:generate",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "format": "oxfmt",
@@ -21,5 +22,5 @@
   "engines": {
     "node": ">=24"
   },
-  "packageManager": "pnpm@12.0.0"
+  "packageManager": "pnpm@12.8.1"
 }

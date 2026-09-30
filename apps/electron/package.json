@@ -10,7 +10,8 @@
     "start": "electron-forge start",
     "package": "electron-forge package",
     "make": "electron-forge make",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate"
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.11.2",
@@ -21,8 +22,10 @@
     "@electron-forge/plugin-vite": "7.11.2",
     "@electron-forge/shared-types": "^7.11.2",
     "@electron/fuses": "^1.8.0",
+    "@gitto/db": "workspace:*",
     "@gitto/rpc": "workspace:*",
     "@types/node": "^26.6.3",
+    "drizzle-kit": "catalog:",
     "electron": "^44.4.5",
     "typescript": "^7.0.2",
     "vite": "^8.3.1"

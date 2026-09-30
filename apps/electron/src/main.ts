@@ -2,9 +2,10 @@ import { stat } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { createDb } from "@gitto/db";
 import { RPC_CONNECT_CHANNEL } from "@gitto/rpc";
-import { createRpcHandler } from "@gitto/rpc/server";
-import { app, BrowserWindow, ipcMain, nativeImage, net, protocol, shell } from "electron";
+import { createContainer, createRpcHandler } from "@gitto/rpc/server";
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, protocol, shell } from "electron";
 
 import iconDataUrl from "../assets/icon.png?inline";
 
@@ -63,14 +64,33 @@ function registerAppProtocol() {
   });
 }
 
+function openDatabase() {
+  // Packaged builds ship the migrations as an extra resource (see forge.config.ts).
+  const migrationsFolder = app.isPackaged
+    ? join(process.resourcesPath, "migrations")
+    : resolve(app.getAppPath(), "migrations");
+  const db = createDb(join(app.getPath("userData"), "gitto.db"), migrationsFolder);
+  app.on("will-quit", () => db.$client.close());
+  return db;
+}
+
+async function selectFolder() {
+  // The picker is opened from a click, so the focused window is the one that asked.
+  const win = BrowserWindow.getFocusedWindow();
+  const options: Electron.OpenDialogOptions = { properties: ["openDirectory"] };
+  const result = await (win ? dialog.showOpenDialog(win, options) : dialog.showOpenDialog(options));
+  return result.canceled ? null : (result.filePaths[0] ?? null);
+}
+
 function registerRpc() {
   const handler = createRpcHandler();
+  const context = createContainer(openDatabase(), { selectFolder });
 
   // Each renderer connection sends one end of a MessageChannel (see the preload).
   ipcMain.on(RPC_CONNECT_CHANNEL, (event) => {
     const [port] = event.ports;
     if (!port) return;
-    handler.upgrade(port);
+    handler.upgrade(port, { context });
     port.start();
   });
 }

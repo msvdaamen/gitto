@@ -3,5 +3,5 @@
   "printWidth": 100,
   "sortImports": true,
   "sortPackageJson": true,
-  "ignorePatterns": ["pnpm-lock.yaml", "**/routeTree.gen.ts"]
+  "ignorePatterns": ["pnpm-lock.yaml", "**/routeTree.gen.ts", "apps/electron/migrations"]
 }

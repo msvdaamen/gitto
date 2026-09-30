@@ -12,12 +12,15 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@gitto/db": "workspace:*",
+    "@gitto/repository": "workspace:*",
     "@gitto/system": "workspace:*",
     "@orpc/client": "catalog:",
     "@orpc/contract": "catalog:",
     "@orpc/server": "catalog:"
   },
   "devDependencies": {
+    "@types/node": "^26.6.3",
     "typescript": "^7.0.2"
   }
 }
