@@ -9,6 +9,7 @@ export default mergeConfig(
   defineProject({
     test: {
       name: "ui",
+      setupFiles: ["./vitest.setup.ts"],
     },
   }),
 );

@@ -12,8 +12,8 @@ describe("EmptyState", () => {
       </EmptyState>
     ));
 
-    expect(screen.getByText("No changes")).toBeTruthy();
-    expect(screen.getByText("Your working tree is clean.")).toBeTruthy();
+    expect(screen.getByText("No changes")).toBeInTheDocument();
+    expect(screen.getByText("Your working tree is clean.")).toBeInTheDocument();
   });
 
   it("highlights errors", () => {
@@ -23,6 +23,6 @@ describe("EmptyState", () => {
       </EmptyState>
     ));
 
-    expect(screen.getByText("fatal: not a git repository").classList).toContain("text-coral");
+    expect(screen.getByText("fatal: not a git repository")).toHaveClass("text-coral");
   });
 });
