@@ -2,9 +2,10 @@ import { useQuery } from "@tanstack/solid-query";
 import { createMemo } from "solid-js";
 
 import { rpc } from "@/lib/rpc";
+import type { Commit } from "@/types/git";
 
 import { gitKeys } from "./keys";
-import { toCommitRows } from "./rows";
+import { reuseRows, toCommitRows } from "./rows";
 import { useStatus } from "./status";
 
 export function useLog(repositoryId: () => string) {
@@ -29,8 +30,13 @@ export function useHistory(repositoryId: () => string, selectedId: () => string 
   const log = useLog(repositoryId);
   const status = useStatus(repositoryId);
 
-  const rows = createMemo(() =>
-    log.data ? toCommitRows(log.data.repositoryId, log.data.commits, status.data) : [],
+  const rows = createMemo<Commit[]>(
+    (previous) =>
+      reuseRows(
+        previous,
+        log.data ? toCommitRows(log.data.repositoryId, log.data.commits, status.data) : [],
+      ),
+    [],
   );
   const selected = createMemo(() => rows().find((row) => row.id === selectedId()) ?? rows()[0]);
 
