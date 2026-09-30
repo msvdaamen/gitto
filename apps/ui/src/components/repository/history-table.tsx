@@ -3,7 +3,7 @@ import LoaderCircle from "lucide-solid/icons/loader-circle";
 import PencilLine from "lucide-solid/icons/pencil-line";
 import Search from "lucide-solid/icons/search";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
-import { createMemo, For, Index, Show, Suspense, type JSX } from "solid-js";
+import { createEffect, createMemo, For, Index, Show, Suspense, type JSX } from "solid-js";
 
 import { Avatar } from "@/components/ui/avatar";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -48,6 +48,14 @@ function HistoryRows(props: {
     () => props.repositoryId,
     () => props.selectedId,
   );
+  // Nothing selected yet, or the selected row is gone (e.g. the uncommitted changes, once
+  // committed): report the row the table falls back to, so the details show it too.
+  createEffect(() => {
+    const row = history.selected();
+    if (row && row.repositoryId === props.repositoryId && row.id !== props.selectedId) {
+      props.onSelect(row.id);
+    }
+  });
   const visibleRows = createMemo(() => {
     const needle = props.search.trim().toLowerCase();
     return needle
@@ -256,7 +264,10 @@ function WipCount(props: { tone: Tone; children: JSX.Element }) {
 
 /** Line totals are only known for the selected commit, whose files are loaded anyway. */
 function CommitTotals(props: { commit: Commit }) {
-  const { totals } = useCommitFiles(() => props.commit);
+  const { totals } = useCommitFiles(
+    () => props.commit.repositoryId,
+    () => props.commit.id,
+  );
   return (
     <LineStats
       additions={totals().additions}

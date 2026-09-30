@@ -18,7 +18,7 @@ import {
 import { GitReposImpl, type Repo } from "./core/repo";
 import { createCommit } from "./features/commit/commands";
 import { getCommitFiles, getWorkingTreeFiles } from "./features/diff/commands";
-import { getLog } from "./features/history/commands";
+import { getCommit, getLog } from "./features/history/commands";
 import { listRefs } from "./features/refs/commands";
 import { stage, unstage } from "./features/staging/commands";
 import { getStatus } from "./features/status/commands";
@@ -139,6 +139,16 @@ describe("a repository with history", () => {
       authorName: "Test User",
     });
     expect(log[0]!.parents).toHaveLength(2);
+  });
+
+  it("reads a single commit", async () => {
+    const [head] = await getLog(repo, page);
+    expect(await getCommit(repo, head!.sha.slice(0, 7))).toEqual(head);
+
+    const tree = git(repo.path, "rev-parse", "HEAD^{tree}");
+    const error = await rejection(getCommit(repo, tree));
+    expect(error).toBeInstanceOf(GitError);
+    expect(error).toMatchObject({ message: `${tree} is not a commit.` });
   });
 
   it("lists refs", async () => {

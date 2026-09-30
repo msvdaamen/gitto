@@ -1,7 +1,7 @@
 import { oc } from "@orpc/contract";
 import * as z from "zod";
 
-import { RepositoryInput } from "../../input";
+import { RepositoryInput, Sha } from "../../input";
 import { CommitSchema } from "./schema";
 
 export const HistoryContract = {
@@ -14,4 +14,6 @@ export const HistoryContract = {
       }),
     )
     .output(z.array(CommitSchema)),
+  /** A single commit, e.g. the one selected in the history. */
+  commit: oc.input(RepositoryInput.extend({ sha: Sha })).output(CommitSchema),
 };

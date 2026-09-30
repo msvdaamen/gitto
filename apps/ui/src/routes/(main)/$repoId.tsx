@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/solid-router";
 import { cn } from "cn";
-import { createEffect, createSignal, on } from "solid-js";
+import { createSignal } from "solid-js";
 
 import { CommitDetails } from "@/components/repository/commit-details";
 import { HistoryTable } from "@/components/repository/history-table";
@@ -18,12 +18,15 @@ function RouteComponent() {
   useRepositoryWatcher(repositoryId);
 
   const [search, setSearch] = createSignal("");
-  const [selectedId, setSelectedId] = createSignal<string>();
+  // Tagged with its repository: the route component is reused when switching repositories, and the
+  // new one starts without a selection.
+  const [selection, setSelection] = createSignal<{ repositoryId: string; id: string }>();
+  const selectedId = () => {
+    const current = selection();
+    return current?.repositoryId === repositoryId() ? current.id : undefined;
+  };
   const [sidebarOpen, setSidebarOpen] = createSignal(true);
   const [detailsOpen, setDetailsOpen] = createSignal(true);
-
-  // The route component is reused when switching repositories; start at the top of the new one.
-  createEffect(on(repositoryId, () => setSelectedId(undefined), { defer: true }));
 
   return (
     <div class="grid h-full grid-rows-[49px_minmax(0,1fr)] overflow-hidden">
@@ -55,7 +58,7 @@ function RouteComponent() {
           repositoryId={repositoryId()}
           search={search()}
           selectedId={selectedId()}
-          onSelect={setSelectedId}
+          onSelect={(id) => setSelection({ repositoryId: repositoryId(), id })}
         />
 
         <aside

@@ -5,7 +5,7 @@ import type { Commit } from "@/types/git";
 import { computeGraph } from "./graph";
 
 /** Row id of the uncommitted changes, shown above the history when there are any. */
-const WIP_ID = "wip";
+export const WIP_ID = "wip";
 
 const AVATAR_COLORS = ["#7c5ce7", "#38bda9", "#a978dd", "#e2a646", "#5b9be6", "#e0707a"];
 
@@ -25,19 +25,9 @@ export function toCommitRows(
   const graph = computeGraph(hasChanges ? [wip, ...log] : log);
   const offset = hasChanges ? 1 : 0;
 
-  const rows = log.map<Commit>((commit, index) => ({
-    repositoryId,
-    id: commit.sha,
-    sha: commit.sha.slice(0, 7),
-    graph: graph[index + offset]!,
-    message: commit.subject,
-    description: commit.body || undefined,
-    author: commit.authorName,
-    initials: initials(commit.authorName),
-    avatarColor: avatarColor(commit.authorEmail),
-    timestamp: relativeTime(commit.authoredAt),
-    refs: commit.refs,
-  }));
+  const rows = log.map((commit, index) =>
+    toCommitRow(repositoryId, commit, graph[index + offset]!),
+  );
   if (!hasChanges) return rows;
 
   return [
@@ -58,6 +48,23 @@ export function toCommitRows(
     },
     ...rows,
   ];
+}
+
+/** A commit as the UI shows it; `graph` is its cells in the history table's graph column. */
+export function toCommitRow(repositoryId: string, commit: GitCommit, graph: string[] = []): Commit {
+  return {
+    repositoryId,
+    id: commit.sha,
+    sha: commit.sha.slice(0, 7),
+    graph,
+    message: commit.subject,
+    description: commit.body || undefined,
+    author: commit.authorName,
+    initials: initials(commit.authorName),
+    avatarColor: avatarColor(commit.authorEmail),
+    timestamp: relativeTime(commit.authoredAt),
+    refs: commit.refs,
+  };
 }
 
 function initials(name: string): string {

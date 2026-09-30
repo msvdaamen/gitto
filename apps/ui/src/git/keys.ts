@@ -6,7 +6,8 @@ export const gitKeys = {
   refs: (repositoryId: string) => [...gitKeys.repository(repositoryId), "refs"] as const,
   workingTreeFiles: (repositoryId: string) =>
     [...gitKeys.repository(repositoryId), "workingTreeFiles"] as const,
-  /** A commit never changes, so its files are kept outside `repository(id)`. */
+  /** A commit never changes, so it and its files are kept outside `repository(id)`. */
+  commit: (repositoryId: string, sha: string) => ["git-commit", repositoryId, sha] as const,
   commitFiles: (repositoryId: string, sha: string) =>
-    ["git-commit", repositoryId, sha, "files"] as const,
+    [...gitKeys.commit(repositoryId, sha), "files"] as const,
 };

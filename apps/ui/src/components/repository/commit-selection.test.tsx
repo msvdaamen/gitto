@@ -12,7 +12,11 @@ const rpc = vi.hoisted(() => {
   return {
     statusCalls: () => statusCalls,
     git: {
-      history: { log: async () => [commit("b1", "Second", ["a1"]), commit("a1", "First", [])] },
+      history: {
+        log: async () => [commit("b1", "Second", ["a1"]), commit("a1", "First", [])],
+        commit: async ({ sha }: { sha: string }) =>
+          sha === "a1" ? commit("a1", "First", []) : commit("b1", "Second", ["a1"]),
+      },
       status: {
         get: async () => {
           // Fails instead of hanging the test if the status is refetched in a loop.
@@ -78,6 +82,8 @@ describe("selecting a commit", () => {
 
     expect(await screen.findByText("first.txt")).toBeInTheDocument();
     expect(screen.getByText("Commit details")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "First" })).toBeInTheDocument();
+    expect(selectedId()).toBe("a1");
     expect(rpc.statusCalls()).toBeLessThan(20);
   });
 });
