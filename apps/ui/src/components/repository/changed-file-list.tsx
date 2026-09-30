@@ -1,7 +1,11 @@
 import type { ChangedFile, FileStatus } from "@gitto/git/types";
+import { cn } from "cn";
 import type { LucideIcon } from "lucide-solid";
 import { For, Show } from "solid-js";
 import { Dynamic } from "solid-js/web";
+
+import { LineStats } from "@/components/ui/line-stats";
+import { toneClasses, type Tone } from "@/components/ui/tone";
 
 const fileStatusLabel: Record<FileStatus, string> = {
   modified: "M",
@@ -12,6 +16,17 @@ const fileStatusLabel: Record<FileStatus, string> = {
   typechange: "T",
   untracked: "U",
   conflicted: "!",
+};
+
+const fileStatusTone: Record<FileStatus, Tone> = {
+  modified: "amber",
+  added: "mint",
+  deleted: "coral",
+  renamed: "blue",
+  copied: "blue",
+  typechange: "amber",
+  untracked: "mint",
+  conflicted: "coral",
 };
 
 /** An action shown on each file when it's hovered, like staging it. */
@@ -29,15 +44,10 @@ export function ChangedFileList(props: { files: ChangedFile[]; action?: FileActi
         {(file) => (
           <div class="group grid w-full grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-[7px] rounded-md p-[7px] text-left hover:bg-panel-hover">
             <span
-              class={`grid size-[17px] place-items-center rounded-sm font-mono text-[8px] font-bold ${
-                file.status === "added" || file.status === "untracked"
-                  ? "bg-mint-soft text-mint"
-                  : file.status === "deleted" || file.status === "conflicted"
-                    ? "bg-coral-soft text-coral"
-                    : file.status === "renamed" || file.status === "copied"
-                      ? "bg-blue-soft text-blue"
-                      : "bg-amber-soft text-amber"
-              }`}
+              class={cn(
+                "grid size-[17px] place-items-center rounded-sm font-mono text-[8px] font-bold",
+                toneClasses[fileStatusTone[file.status]],
+              )}
               title={file.status}
             >
               {fileStatusLabel[file.status]}
@@ -59,8 +69,7 @@ export function ChangedFileList(props: { files: ChangedFile[]; action?: FileActi
                   </em>
                 }
               >
-                <em class="text-mint not-italic">+{file.additions}</em>
-                <b class="font-medium text-coral">−{file.deletions}</b>
+                <LineStats additions={file.additions ?? 0} deletions={file.deletions ?? 0} />
               </Show>
               <Show when={props.action}>
                 {(action) => (

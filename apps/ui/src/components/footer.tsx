@@ -2,6 +2,7 @@ import Cloud from "lucide-solid/icons/cloud";
 import GitBranch from "lucide-solid/icons/git-branch";
 import { Show } from "solid-js";
 
+import { Divider } from "./ui/divider";
 import { GittoIcon } from "./ui/gitto-icon";
 import { StatusDot } from "./ui/status-dot";
 
@@ -13,7 +14,7 @@ export function Footer() {
         <StatusDot color="var(--mint)" />
         <span>Ready</span>
         <Show when={true}>
-          <span class="mx-1 h-3 w-px bg-border" />
+          <Divider />
           <span>
             <GitBranch size={12} />
             BRANCHNAME
@@ -29,7 +30,7 @@ export function Footer() {
           <span class="text-mint">
             <StatusDot color="var(--mint)" /> Repository healthy
           </span>
-          <span class="mx-1 h-3 w-px bg-border" />
+          <Divider />
         </Show>
         <span>Gitto Preview</span>
         <span class="font-mono text-faint">v0.1.0</span>

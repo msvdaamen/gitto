@@ -1,3 +1,4 @@
+import { cn } from "cn";
 import type { LucideIcon } from "lucide-solid";
 import Archive from "lucide-solid/icons/archive";
 import ArchiveRestore from "lucide-solid/icons/archive-restore";
@@ -14,6 +15,7 @@ import { For, Suspense } from "solid-js";
 import { Dynamic } from "solid-js/web";
 
 import { IconButton } from "@/components/ui/button";
+import { Divider } from "@/components/ui/divider";
 import { TextInput } from "@/components/ui/text-input";
 import { useStatus } from "@/git/status";
 import { useRepository } from "@/hooks/repository";
@@ -62,9 +64,14 @@ export function RepositoryToolbar(props: {
         <For each={toolbarActions}>
           {(action, index) => (
             <>
-              {index() === 2 && <span class="mx-1 h-6 w-px bg-border" />}
+              {index() === 2 && <Divider class="h-6" />}
               <button
-                class={`flex h-[38px] min-w-[43px] cursor-pointer flex-col items-center justify-center gap-0.5 rounded-md border-0 bg-transparent px-1.5 text-muted hover:bg-panel-hover hover:text-text max-[900px]:min-w-9 max-[900px]:[&>span]:hidden ${action.accent ? "text-blue" : ""} ${[0, 1, 5, 6].includes(index()) ? "max-[1100px]:hidden" : ""} ${index() >= 4 ? "max-[700px]:hidden" : ""}`}
+                class={cn(
+                  "flex h-[38px] min-w-[43px] cursor-pointer flex-col items-center justify-center gap-0.5 rounded-md border-0 bg-transparent px-1.5 text-muted hover:bg-panel-hover hover:text-text max-[900px]:min-w-9 max-[900px]:[&>span]:hidden",
+                  action.accent && "text-blue",
+                  [0, 1, 5, 6].includes(index()) && "max-[1100px]:hidden",
+                  index() >= 4 && "max-[700px]:hidden",
+                )}
                 title={action.label}
               >
                 <Dynamic component={action.icon} size={16} />
