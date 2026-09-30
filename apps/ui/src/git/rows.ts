@@ -20,7 +20,8 @@ export function toCommitRows(
   status: Status | undefined,
 ): Commit[] {
   const hasChanges = !!status && status.files.length > 0;
-  const wip = { sha: WIP_ID, parents: status?.head ? [status.head] : [] };
+  const head = status?.head;
+  const wip = { sha: WIP_ID, parents: head && head.kind !== "unborn" ? [head.sha] : [] };
   const graph = computeGraph(hasChanges ? [wip, ...log] : log);
   const offset = hasChanges ? 1 : 0;
 
@@ -52,7 +53,7 @@ export function toCommitRows(
       initials: "YO",
       avatarColor: "#a978dd",
       timestamp: "Now",
-      refs: ["WIP"],
+      refs: [],
       isWip: true,
     },
     ...rows,

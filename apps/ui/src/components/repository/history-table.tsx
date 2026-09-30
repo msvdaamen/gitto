@@ -11,8 +11,8 @@ import { LineStats } from "@/components/ui/line-stats";
 import { toneClasses, type Tone } from "@/components/ui/tone";
 import { useCommitFiles } from "@/git/diff";
 import { useHistory } from "@/git/history";
-import { useStatus } from "@/git/status";
-import type { Commit } from "@/types/git";
+import { headLabel, useStatus } from "@/git/status";
+import type { Commit, CommitRef } from "@/types/git";
 
 export function HistoryTable(props: {
   repositoryId: string;
@@ -54,7 +54,7 @@ function HistoryRows(props: {
       ? history
           .rows()
           .filter((commit) =>
-            `${commit.message} ${commit.author} ${commit.id} ${commit.refs.join(" ")}`
+            `${commit.message} ${commit.author} ${commit.id} ${commit.refs.map(refLabel).join(" ")}`
               .toLowerCase()
               .includes(needle),
           )
@@ -121,15 +121,15 @@ function HistoryRow(props: { commit: Commit; selected: boolean; onSelect: () => 
             <span
               class={cn(
                 "max-w-[78px] truncate rounded-sm border border-border bg-panel px-[5px] py-[3px] text-[8px] text-text-soft",
-                ref === "HEAD" &&
+                ref.kind === "head" &&
                   cn(
                     toneClasses.purple,
                     "border-[color-mix(in_srgb,var(--primary)_40%,var(--border))]",
                   ),
-                ref.startsWith("origin") && toneClasses.blue,
+                ref.kind === "remote" && toneClasses.blue,
               )}
             >
-              {ref}
+              {refLabel(ref)}
             </span>
           )}
         </For>
@@ -166,6 +166,10 @@ function HistoryRow(props: { commit: Commit; selected: boolean; onSelect: () => 
       <span class="truncate text-[9px]">{props.commit.timestamp}</span>
     </button>
   );
+}
+
+function refLabel(ref: CommitRef): string {
+  return ref.kind === "tag" ? `tag: ${ref.name}` : ref.name;
 }
 
 /**
@@ -228,7 +232,7 @@ function WipRow(props: { commit: Commit; selected: boolean; onSelect: () => void
           <WipCount tone="coral">{counts().conflicted} conflicted</WipCount>
         </Show>
         <span class="ml-auto shrink-0 text-[9px] text-faint">
-          on {status.data?.branch ?? "detached HEAD"}
+          on {status.data && headLabel(status.data.head)}
         </span>
       </span>
     </button>

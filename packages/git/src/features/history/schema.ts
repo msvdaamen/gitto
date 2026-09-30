@@ -1,5 +1,16 @@
 import { z } from "zod";
 
+import { RefKindSchema } from "../refs/schema";
+
+/** A ref pointing at a commit: `HEAD`, or a branch or tag, e.g. local `main` or tag `v1`. */
+export const CommitRefSchema = z.object({
+  kind: z.enum(["head", ...RefKindSchema.options]),
+  /** Short name, e.g. `main`, `origin/main`, `v1`; `HEAD` for the head. */
+  name: z.string(),
+});
+
+export type CommitRef = z.infer<typeof CommitRefSchema>;
+
 export const CommitSchema = z.object({
   sha: z.string(),
   parents: z.array(z.string()),
@@ -7,8 +18,8 @@ export const CommitSchema = z.object({
   authorEmail: z.string(),
   /** Author date in milliseconds since the epoch. */
   authoredAt: z.number(),
-  /** Short ref names pointing at this commit, e.g. `HEAD`, `main`, `origin/main`, `tag: v1`. */
-  refs: z.array(z.string()),
+  /** Refs pointing at this commit. When a branch is checked out, `HEAD` comes right before it. */
+  refs: z.array(CommitRefSchema),
   subject: z.string(),
   body: z.string(),
 });

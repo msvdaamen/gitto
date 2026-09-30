@@ -1,17 +1,61 @@
-import { ORPCError } from "@orpc/server";
+// Errors the git package throws. They describe what went wrong in git terms and carry a message a
+// user can read; `toApiError` (in the middleware) decides how each one reaches the renderer.
 
-import { GitError } from "./runner";
+/** A git command that failed, or couldn't start. */
+export class GitError extends Error {
+  constructor(
+    message: string,
+    readonly args: readonly string[],
+    readonly exitCode: number | null,
+    readonly stderr: string,
+  ) {
+    super(message);
+    this.name = new.target.name;
+  }
+}
 
-/** Turns a failed git command into an error the renderer can show. */
-export function toApiError(error: unknown, cwd: string): unknown {
-  if (!(error instanceof GitError)) return error;
-  if (/not a git repository/i.test(error.stderr)) {
-    return new ORPCError("NOT_FOUND", { message: `${cwd} is no longer a git repository.` });
+/** The repository's folder is no longer a git repository, e.g. its `.git` was deleted. */
+export class NotARepositoryError extends GitError {}
+
+/** Another git process holds `index.lock`, e.g. one running in the user's terminal. */
+export class IndexLockedError extends GitError {}
+
+/** No repository with that id has been added to Gitto. */
+export class RepositoryNotFoundError extends Error {
+  constructor(readonly repositoryId: string) {
+    super("Repository not found.");
+    this.name = new.target.name;
   }
-  if (/index\.lock/.test(error.stderr)) {
-    return new ORPCError("CONFLICT", {
-      message: "Another git process is running in this repository.",
-    });
+}
+
+/** The repository's folder has been moved or deleted. */
+export class FolderNotFoundError extends Error {
+  constructor(readonly path: string) {
+    super(`${path} no longer exists.`);
+    this.name = new.target.name;
   }
-  return new ORPCError("INTERNAL_SERVER_ERROR", { message: error.message, cause: error });
+}
+
+/** The most specific error for a command that exited with `exitCode`, going by what git printed. */
+export function commandError(
+  cwd: string,
+  args: readonly string[],
+  exitCode: number | null,
+  stdout: string,
+  stderr: string,
+): GitError {
+  if (/not a git repository/i.test(stderr)) {
+    return new NotARepositoryError(`${cwd} is no longer a git repository.`, args, exitCode, stderr);
+  }
+  if (/index\.lock/.test(stderr)) {
+    return new IndexLockedError(
+      "Another git process is running in this repository.",
+      args,
+      exitCode,
+      stderr,
+    );
+  }
+  // Some failures, like "nothing to commit", are only explained on stdout.
+  const message = stderr.trim() || stdout.trim() || `git ${args[0]} exited with code ${exitCode}`;
+  return new GitError(message, args, exitCode, stderr);
 }

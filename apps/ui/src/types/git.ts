@@ -1,4 +1,6 @@
-export type { ChangedFile, FileStatus } from "@gitto/git/types";
+import type { CommitRef } from "@gitto/git/types";
+
+export type { ChangedFile, CommitRef, FileStatus } from "@gitto/git/types";
 
 export type AppView = "home" | "repository";
 
@@ -44,7 +46,7 @@ export interface Commit {
   initials: string;
   avatarColor: string;
   timestamp: string;
-  refs: string[];
+  refs: CommitRef[];
   isWip?: boolean;
 }
 

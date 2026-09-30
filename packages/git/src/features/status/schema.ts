@@ -25,11 +25,20 @@ export const StatusFileSchema = z.object({
 
 export type StatusFile = z.infer<typeof StatusFileSchema>;
 
+/** What HEAD points at. */
+export const HeadSchema = z.discriminatedUnion("kind", [
+  /** A branch, at commit `sha`. */
+  z.object({ kind: z.literal("branch"), name: z.string(), sha: z.string() }),
+  /** A branch without commits yet, e.g. in a new repository. */
+  z.object({ kind: z.literal("unborn"), name: z.string() }),
+  /** A commit, with no branch checked out. */
+  z.object({ kind: z.literal("detached"), sha: z.string() }),
+]);
+
+export type Head = z.infer<typeof HeadSchema>;
+
 export const StatusSchema = z.object({
-  /** Current branch name; `null` when HEAD is detached. */
-  branch: z.string().nullable(),
-  /** HEAD commit; `null` on a branch without commits yet. */
-  head: z.string().nullable(),
+  head: HeadSchema,
   upstream: z.string().nullable(),
   ahead: z.number(),
   behind: z.number(),

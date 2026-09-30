@@ -1,4 +1,4 @@
-import type { FileStatus, Status, StatusFile } from "./schema";
+import type { FileStatus, Head, Status, StatusFile } from "./schema";
 
 // `git status --porcelain=v2 -z --branch`; see "Porcelain Format Version 2" in git-status(1).
 export const STATUS_ARGS = ["status", "--porcelain=v2", "-z", "--branch", "--untracked-files=all"];
@@ -13,14 +13,9 @@ const CODES: Record<string, FileStatus> = {
 };
 
 export function parseStatus(output: string): Status {
-  const status: Status = {
-    branch: null,
-    head: null,
-    upstream: null,
-    ahead: 0,
-    behind: 0,
-    files: [],
-  };
+  // `# <key> <value>` lines, e.g. `branch.head` → `main`.
+  const headers = new Map<string, string>();
+  const files: StatusFile[] = [];
 
   const records = output.split("\0");
   for (let i = 0; i < records.length; i++) {
@@ -28,26 +23,28 @@ export function parseStatus(output: string): Status {
     if (!record) continue;
 
     switch (record[0]) {
-      case "#":
-        parseHeader(record, status);
+      case "#": {
+        const [, key = "", ...value] = record.split(" ");
+        headers.set(key, value.join(" "));
         break;
+      }
       // Ordinary change: 1 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <path>
       case "1": {
         const fields = splitFields(record, 9);
-        status.files.push(file(fields[8]!, null, fields[1]!));
+        files.push(file(fields[8]!, null, fields[1]!));
         break;
       }
       // Rename or copy: 2 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <X><score> <path>, then <origPath>
       case "2": {
         const fields = splitFields(record, 10);
         const origPath = records[++i] ?? null;
-        status.files.push(file(fields[9]!, origPath, fields[1]!));
+        files.push(file(fields[9]!, origPath, fields[1]!));
         break;
       }
       // Unmerged: u <XY> <sub> <m1> <m2> <m3> <mW> <h1> <h2> <h3> <path>
       case "u": {
         const fields = splitFields(record, 11);
-        status.files.push({
+        files.push({
           path: fields[10]!,
           origPath: null,
           staged: "conflicted",
@@ -56,7 +53,7 @@ export function parseStatus(output: string): Status {
         break;
       }
       case "?":
-        status.files.push({
+        files.push({
           path: record.slice(2),
           origPath: null,
           staged: null,
@@ -67,31 +64,21 @@ export function parseStatus(output: string): Status {
     }
   }
 
-  return status;
+  const ab = /^\+(\d+) -(\d+)$/.exec(headers.get("branch.ab") ?? "");
+  return {
+    head: toHead(headers.get("branch.oid") ?? "", headers.get("branch.head") ?? ""),
+    upstream: headers.get("branch.upstream") ?? null,
+    ahead: ab ? Number(ab[1]) : 0,
+    behind: ab ? Number(ab[2]) : 0,
+    files,
+  };
 }
 
-function parseHeader(record: string, status: Status) {
-  const [, key, ...rest] = record.split(" ");
-  const value = rest.join(" ");
-  switch (key) {
-    case "branch.oid":
-      status.head = value === "(initial)" ? null : value;
-      break;
-    case "branch.head":
-      status.branch = value === "(detached)" ? null : value;
-      break;
-    case "branch.upstream":
-      status.upstream = value;
-      break;
-    case "branch.ab": {
-      const match = /^\+(\d+) -(\d+)$/.exec(value);
-      if (match) {
-        status.ahead = Number(match[1]);
-        status.behind = Number(match[2]);
-      }
-      break;
-    }
-  }
+/** HEAD from the `branch.oid` and `branch.head` headers. */
+function toHead(oid: string, name: string): Head {
+  if (name === "(detached)") return { kind: "detached", sha: oid };
+  if (oid === "(initial)") return { kind: "unborn", name };
+  return { kind: "branch", name, sha: oid };
 }
 
 function file(path: string, origPath: string | null, xy: string): StatusFile {

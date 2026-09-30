@@ -1,11 +1,15 @@
 import { z } from "zod";
 
+export const RefKindSchema = z.enum(["local", "remote", "tag"]);
+
+export type RefKind = z.infer<typeof RefKindSchema>;
+
 export const RefSchema = z.object({
   /** Short name, e.g. `main`, `origin/main`, `v1.0.0`. */
   name: z.string(),
   /** Full ref name, e.g. `refs/heads/main`. */
   fullName: z.string(),
-  kind: z.enum(["local", "remote", "tag"]),
+  kind: RefKindSchema,
   sha: z.string(),
   current: z.boolean(),
   upstream: z.string().nullable(),

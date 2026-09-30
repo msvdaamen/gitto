@@ -14,7 +14,7 @@ import { Mascot } from "@/components/ui/mascot";
 import { SectionHeader } from "@/components/ui/section-header";
 import { useWorkingTreeChanges } from "@/git/diff";
 import { stagingPaths, useStage, useUnstage } from "@/git/staging";
-import { useStatus } from "@/git/status";
+import { headLabel, useStatus } from "@/git/status";
 
 import { ChangedFileList, type FileAction } from "./changed-file-list";
 import { CommitForm } from "./commit-form";
@@ -41,7 +41,7 @@ export function WorkingTreeDetails(props: { repositoryId: string }) {
             Uncommitted changes
           </h2>
           <p class="m-0 text-[9.5px] leading-[1.55] text-muted">
-            On <strong class="text-text-soft">{status.data?.branch ?? "detached HEAD"}</strong>
+            On <strong class="text-text-soft">{status.data && headLabel(status.data.head)}</strong>
             {" · "}
             {changes.staged().length} staged, {changes.unstaged().length} unstaged
           </p>

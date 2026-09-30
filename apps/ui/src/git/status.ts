@@ -1,3 +1,4 @@
+import type { Head } from "@gitto/git/types";
 import { useQuery } from "@tanstack/solid-query";
 
 import { rpc } from "@/lib/rpc";
@@ -12,4 +13,9 @@ export function useStatus(repositoryId: () => string) {
       queryFn: ({ signal }) => rpc.git.status.get({ repositoryId: id }, { signal }),
     };
   });
+}
+
+/** What to call HEAD: the branch name, or "detached HEAD". */
+export function headLabel(head: Head): string {
+  return head.kind === "detached" ? "detached HEAD" : head.name;
 }
