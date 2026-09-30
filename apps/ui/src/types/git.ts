@@ -1,3 +1,5 @@
+export type { ChangedFile, FileStatus } from "@gitto/git/types";
+
 export type AppView = "home" | "repository";
 
 export interface RepositoryTab {
@@ -29,24 +31,10 @@ export interface RepositorySummary {
   description: string;
 }
 
-export interface Branch {
-  name: string;
-  current?: boolean;
-  ahead?: number;
-  behind?: number;
-  remote?: boolean;
-}
-
-export type FileStatus = "modified" | "added" | "deleted" | "renamed";
-
-export interface ChangedFile {
-  path: string;
-  status: FileStatus;
-  additions: number;
-  deletions: number;
-}
-
+/** A row in the history table: a commit, or the uncommitted changes in the working directory. */
 export interface Commit {
+  /** The repository the commit is in. */
+  repositoryId: string;
   id: string;
   sha: string;
   graph: string[];
@@ -57,9 +45,6 @@ export interface Commit {
   avatarColor: string;
   timestamp: string;
   refs: string[];
-  files: ChangedFile[];
-  additions: number;
-  deletions: number;
   isWip?: boolean;
 }
 

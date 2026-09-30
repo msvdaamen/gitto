@@ -1,0 +1,12 @@
+/** Query keys for git data. Everything under `repository(id)` is refetched when it changes on disk. */
+export const gitKeys = {
+  repository: (repositoryId: string) => ["git", repositoryId] as const,
+  status: (repositoryId: string) => [...gitKeys.repository(repositoryId), "status"] as const,
+  log: (repositoryId: string) => [...gitKeys.repository(repositoryId), "log"] as const,
+  refs: (repositoryId: string) => [...gitKeys.repository(repositoryId), "refs"] as const,
+  workingTreeFiles: (repositoryId: string) =>
+    [...gitKeys.repository(repositoryId), "workingTreeFiles"] as const,
+  /** A commit never changes, so its files are kept outside `repository(id)`. */
+  commitFiles: (repositoryId: string, sha: string) =>
+    ["git-commit", repositoryId, sha, "files"] as const,
+};

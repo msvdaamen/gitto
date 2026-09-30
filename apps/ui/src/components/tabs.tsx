@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/solid-query";
 import { useParams, useRouter } from "@tanstack/solid-router";
 import { cn } from "cn";
 import GitBranch from "lucide-solid/icons/git-branch";
@@ -13,6 +14,7 @@ import {
   Show,
 } from "solid-js";
 
+import { REPOSITORIES_KEY } from "@/hooks/repository";
 import { rpc } from "@/lib/rpc";
 
 import { IconButton } from "./ui/button";
@@ -30,6 +32,7 @@ const HOME_TAB: TabItem = { id: HOME_PAGE, name: "Home" };
 export function Tabs() {
   const params = useParams({ strict: false });
   const router = useRouter();
+  const queryClient = useQueryClient();
   const [selectedTab, setSelectedTab] = createSignal<string>(params().repoId ?? HOME_PAGE);
   const [repositories, { refetch }] = createResource(() => rpc.repository.list(), {
     initialValue: [],
@@ -90,6 +93,7 @@ export function Tabs() {
       const path = await rpc.system.selectFolder();
       if (!path) return;
       const repository = await rpc.repository.add({ path });
+      void queryClient.invalidateQueries({ queryKey: REPOSITORIES_KEY });
       await refetch();
       setTab(repository);
     } catch (error) {
@@ -101,6 +105,7 @@ export function Tabs() {
     try {
       await rpc.repository.remove({ id: tab.id });
       if (selectedTab() === tab.id) setTab(HOME_TAB);
+      void queryClient.invalidateQueries({ queryKey: REPOSITORIES_KEY });
       await refetch();
     } catch (error) {
       console.error("Failed to remove repository", error);

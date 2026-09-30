@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@gitto/db": "workspace:*",
+    "@gitto/git": "workspace:*",
     "@gitto/repository": "workspace:*",
     "@gitto/system": "workspace:*",
     "@orpc/client": "catalog:",

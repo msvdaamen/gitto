@@ -1,3 +1,4 @@
+import { GitContract } from "@gitto/git/contract";
 import { RepositoryContract } from "@gitto/repository/contract";
 import { systemContract } from "@gitto/system/contract";
 
@@ -5,4 +6,5 @@ import { systemContract } from "@gitto/system/contract";
 export const contract = {
   system: systemContract,
   repository: RepositoryContract,
+  git: GitContract,
 };

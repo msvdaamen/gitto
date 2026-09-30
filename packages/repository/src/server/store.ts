@@ -6,6 +6,7 @@ import { repositories } from "./schema";
 
 export interface RepositoryStore {
   getAll(): Promise<Repository[]>;
+  getById(id: string): Promise<Repository | undefined>;
   getByPath(path: string): Promise<Repository | undefined>;
   create(repository: Repository): Promise<void>;
   delete(id: string): Promise<void>;
@@ -16,6 +17,15 @@ export class RepositoryStoreImpl implements RepositoryStore {
 
   async getAll(): Promise<Repository[]> {
     return this.db.select().from(repositories);
+  }
+
+  async getById(id: string): Promise<Repository | undefined> {
+    const [repository] = await this.db
+      .select()
+      .from(repositories)
+      .where(eq(repositories.id, id))
+      .limit(1);
+    return repository;
   }
 
   async getByPath(path: string): Promise<Repository | undefined> {

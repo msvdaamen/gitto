@@ -9,6 +9,7 @@ import type { RepositoryStore } from "./store";
 
 export interface RepositoryService {
   getRepositories(): Promise<Repository[]>;
+  getRepository(id: string): Promise<Repository | undefined>;
   addRepository(path: string): Promise<Repository>;
   removeRepository(id: string): Promise<void>;
 }
@@ -18,6 +19,10 @@ export class RepositoryServiceImpl implements RepositoryService {
 
   async getRepositories(): Promise<Repository[]> {
     return this.store.getAll();
+  }
+
+  async getRepository(id: string): Promise<Repository | undefined> {
+    return this.store.getById(id);
   }
 
   async addRepository(path: string): Promise<Repository> {
