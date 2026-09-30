@@ -2,7 +2,7 @@ packages:
   - apps/*
   - packages/*
 
-# oRPC packages must stay on the same version; packages reference these with "catalog:".
+# Versions shared across packages (oRPC must stay in lockstep); packages reference these with "catalog:".
 catalog:
   "@orpc/client": "^1.15.4"
   "@orpc/contract": "^1.15.4"
@@ -10,6 +10,7 @@ catalog:
   zod: "^4.6.5"
   drizzle-orm: "1.0.0-rc.4"
   drizzle-kit: "1.0.0-rc.4"
+  vitest: "^5.0.2"
 
 # pnpm's default, set explicitly so Electron Forge's package manager check passes.
 # The Electron app is fully bundled by Vite (Forge only packages the .vite folder),

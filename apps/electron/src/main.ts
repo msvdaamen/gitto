@@ -1,5 +1,5 @@
 import { stat } from "node:fs/promises";
-import { join, relative, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { createDb } from "@gitto/db";
@@ -8,6 +8,7 @@ import { createContainer, createRpcHandler } from "@gitto/rpc/server";
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, protocol, shell } from "electron";
 
 import iconDataUrl from "../assets/icon.png?inline";
+import { resolveRendererPath } from "./renderer-path";
 
 // Production builds are served from a custom protocol instead of file:// so the UI can use
 // regular browser history routing (e.g. app://gitto/about).
@@ -44,11 +45,8 @@ protocol.registerSchemesAsPrivileged([
 function registerAppProtocol() {
   protocol.handle(APP_SCHEME, async (request) => {
     const { pathname } = new URL(request.url);
-    const filePath = resolve(RENDERER_DIR, `.${decodeURIComponent(pathname)}`);
-
-    if (relative(RENDERER_DIR, filePath).startsWith("..")) {
-      return new Response("Not found", { status: 404 });
-    }
+    const filePath = resolveRendererPath(RENDERER_DIR, pathname);
+    if (!filePath) return new Response("Not found", { status: 404 });
 
     const isFile = await stat(filePath).then(
       (s) => s.isFile(),

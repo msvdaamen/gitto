@@ -26,6 +26,7 @@ history URLs.
 | `pnpm package`   | Package the app into `apps/electron/out`                    |
 | `pnpm make`      | Create distributables (zip, deb, squirrel)                  |
 | `pnpm typecheck` | Typecheck all apps                                          |
+| `pnpm test`      | Run all tests with Vitest                                   |
 | `pnpm lint`      | Lint with oxlint                                            |
 | `pnpm format`    | Format with oxfmt                                           |
 
