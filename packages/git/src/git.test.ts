@@ -51,6 +51,13 @@ afterAll(() => {
 
 describe("a repository with history", () => {
   let repo: Repo;
+  const untrackedFile = {
+    path: "new file.txt",
+    status: "untracked",
+    origPath: null,
+    additions: null,
+    deletions: null,
+  };
 
   beforeAll(async () => {
     const path = createRepo("history");
@@ -123,10 +130,36 @@ describe("a repository with history", () => {
     ]);
   });
 
-  it("diffs the working tree against HEAD", async () => {
-    expect(await getWorkingTreeFiles(repo)).toEqual([
-      { path: "a file.txt", status: "modified", origPath: null, additions: 1, deletions: 2 },
-    ]);
+  it("diffs the working tree against the index", async () => {
+    expect(await getWorkingTreeFiles(repo)).toEqual({
+      staged: [],
+      unstaged: [
+        { path: "a file.txt", status: "modified", origPath: null, additions: 1, deletions: 2 },
+        untrackedFile,
+      ],
+    });
+  });
+
+  it("moves staged changes between the working tree and the index", async () => {
+    const change = {
+      path: "a file.txt",
+      status: "modified",
+      origPath: null,
+      additions: 1,
+      deletions: 2,
+    };
+
+    await stage(repo, ["a file.txt"]);
+    expect(await getWorkingTreeFiles(repo)).toEqual({
+      staged: [change],
+      unstaged: [untrackedFile],
+    });
+
+    await unstage(repo, ["a file.txt"]);
+    expect(await getWorkingTreeFiles(repo)).toEqual({
+      staged: [],
+      unstaged: [change, untrackedFile],
+    });
   });
 
   it("reports an unknown commit as an API error", async () => {
@@ -152,7 +185,7 @@ describe("a repository without commits", () => {
     expect(await getStatus(repo)).toMatchObject({ branch: "main", head: null, files: [] });
     expect(await getLog(repo, page)).toEqual([]);
     expect(await listRefs(repo)).toEqual([]);
-    expect(await getWorkingTreeFiles(repo)).toEqual([]);
+    expect(await getWorkingTreeFiles(repo)).toEqual({ staged: [], unstaged: [] });
   });
 
   it("stages, unstages and commits", async () => {
@@ -162,6 +195,10 @@ describe("a repository without commits", () => {
     expect((await getStatus(repo)).files).toEqual([
       { path: "x y.txt", origPath: null, staged: "added", unstaged: null },
     ]);
+    expect(await getWorkingTreeFiles(repo)).toEqual({
+      staged: [{ path: "x y.txt", status: "added", origPath: null, additions: 1, deletions: 0 }],
+      unstaged: [],
+    });
 
     await unstage(repo, ["x y.txt"]);
     expect((await getStatus(repo)).files).toEqual([

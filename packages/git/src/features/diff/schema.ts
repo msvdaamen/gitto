@@ -12,3 +12,12 @@ export const ChangedFileSchema = z.object({
 });
 
 export type ChangedFile = z.infer<typeof ChangedFileSchema>;
+
+export const WorkingTreeFilesSchema = z.object({
+  /** Changes in the index, compared to HEAD: what the next commit will contain. */
+  staged: z.array(ChangedFileSchema),
+  /** Changes in the working tree, compared to the index, followed by the untracked files. */
+  unstaged: z.array(ChangedFileSchema),
+});
+
+export type WorkingTreeFiles = z.infer<typeof WorkingTreeFilesSchema>;

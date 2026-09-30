@@ -1,3 +1,4 @@
+import type { ChangedFile } from "@gitto/git/types";
 import { useMutation, useQueryClient } from "@tanstack/solid-query";
 
 import { rpc } from "@/lib/rpc";
@@ -22,4 +23,9 @@ export function useUnstage(repositoryId: () => string) {
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: gitKeys.repository(repositoryId()) }),
   }));
+}
+
+/** Paths to stage or unstage for files; renames need their old path too, for the deletion side. */
+export function stagingPaths(files: ChangedFile[]): string[] {
+  return files.flatMap((file) => (file.origPath ? [file.path, file.origPath] : [file.path]));
 }

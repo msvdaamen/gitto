@@ -4,13 +4,15 @@ import { createSignal, Show } from "solid-js";
 import { useCommit } from "@/git/commit";
 
 /** Commits what's staged in the repository. */
-export function CommitForm(props: { repositoryId: string }) {
+export function CommitForm(props: { repositoryId: string; stagedCount: number }) {
   const commit = useCommit(() => props.repositoryId);
   const [summary, setSummary] = createSignal("");
   const [description, setDescription] = createSignal("");
 
+  const canCommit = () => !!summary().trim() && props.stagedCount > 0 && !commit.isPending;
+
   function submit() {
-    if (!summary().trim() || commit.isPending) return;
+    if (!canCommit()) return;
     const body = description().trim();
     commit.mutate(body ? `${summary().trim()}\n\n${body}` : summary(), {
       onSuccess: () => {
@@ -22,7 +24,7 @@ export function CommitForm(props: { repositoryId: string }) {
 
   return (
     <form
-      class="p-3.5"
+      class="shrink-0 p-3.5"
       onSubmit={(event) => {
         event.preventDefault();
         submit();
@@ -54,11 +56,14 @@ export function CommitForm(props: { repositoryId: string }) {
       </label>
       <button
         type="submit"
-        disabled={!summary().trim() || commit.isPending}
+        disabled={!canCommit()}
         class="flex h-8 w-full cursor-pointer items-center justify-center gap-[7px] rounded-[7px] border border-[color-mix(in_srgb,var(--primary)_50%,var(--border))] bg-[linear-gradient(135deg,#c18deb,#9d72d7)] text-[10px] font-[680] text-[#21152a] disabled:cursor-default disabled:opacity-50 [&>kbd]:ml-auto [&>kbd]:pr-[7px] [&>kbd]:text-[8px] [&>kbd]:text-[rgba(34,20,42,.65)]"
       >
         <GitCommitHorizontal size={15} />
-        Commit changes <kbd>⌘ ↵</kbd>
+        {props.stagedCount > 0
+          ? `Commit ${props.stagedCount} ${props.stagedCount === 1 ? "file" : "files"}`
+          : "Nothing staged"}{" "}
+        <kbd>⌘ ↵</kbd>
       </button>
       <Show when={commit.error}>
         {(error) => (

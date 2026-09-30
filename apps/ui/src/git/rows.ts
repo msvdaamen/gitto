@@ -44,8 +44,9 @@ export function toCommitRows(
       repositoryId,
       id: WIP_ID,
       sha: "working",
-      graph: graph[0]!,
-      message: "Working directory changes",
+      // Hollow, as it isn't a commit (yet).
+      graph: graph[0]!.map((cell) => (cell === "●" ? "○" : cell)),
+      message: "Uncommitted changes",
       description: "Uncommitted changes in your working directory.",
       author: "You",
       initials: "YO",
