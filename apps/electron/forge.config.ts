@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+
 import { MakerDeb } from "@electron-forge/maker-deb";
 import { MakerSquirrel } from "@electron-forge/maker-squirrel";
 import { MakerZIP } from "@electron-forge/maker-zip";
@@ -6,9 +8,15 @@ import { VitePlugin } from "@electron-forge/plugin-vite";
 import type { ForgeConfig } from "@electron-forge/shared-types";
 import { FuseV1Options, FuseVersion } from "@electron/fuses";
 
+import { copyDependencies, findDependencies } from "./src/native-deps";
+
+/** Native modules: left out of the bundle (see vite.main.config.ts), so they're copied in. */
+const NATIVE_DEPENDENCIES = ["@parcel/watcher"];
+
 const config: ForgeConfig = {
   packagerConfig: {
-    asar: true,
+    // Native binaries can't be loaded from inside the archive.
+    asar: { unpack: "**/*.node" },
     // The package name is scoped (@gitto/electron), so set a plain binary name explicitly.
     executableName: "gitto",
     // Extension is picked per platform (icon.ico on Windows, icon.icns on macOS).
@@ -16,7 +24,24 @@ const config: ForgeConfig = {
     // Copied to Resources/migrations; the main process applies them on startup.
     extraResource: ["migrations"],
   },
-  rebuildConfig: {},
+  // Prebuilt for Node-API, which Electron supports as is; rebuilding would need a compiler.
+  rebuildConfig: { ignoreModules: NATIVE_DEPENDENCIES },
+  hooks: {
+    async packageAfterCopy(_config, buildPath, _electronVersion, platform, arch) {
+      const packages = await findDependencies(
+        NATIVE_DEPENDENCIES,
+        fileURLToPath(new URL(".", import.meta.url)),
+      );
+      // Only this machine's prebuilt binary is installed, so another platform would crash on start.
+      const binary = `@parcel/watcher-${platform}-${arch}`;
+      if (![...packages.keys()].some((name) => name.startsWith(binary))) {
+        throw new Error(
+          `${binary} isn't installed, so Gitto can't be packaged for ${platform}-${arch} here.`,
+        );
+      }
+      await copyDependencies(packages, buildPath);
+    },
+  },
   makers: [
     new MakerSquirrel({ setupIcon: "assets/icon.ico" }),
     new MakerZIP({}, ["darwin", "linux"]),

@@ -16,6 +16,7 @@
     "@gitto/repository": "workspace:*",
     "@orpc/contract": "catalog:",
     "@orpc/server": "catalog:",
+    "@parcel/watcher": "^2.6.0",
     "zod": "catalog:"
   },
   "devDependencies": {
