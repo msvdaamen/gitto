@@ -26,3 +26,12 @@ export function statusCounts(status: Status | undefined) {
     conflicted: files.filter((file) => file.staged === "conflicted").length,
   };
 }
+
+/** How HEAD compares to its upstream: "synced", or how many commits ahead and behind, e.g. "↑2 ↓1". */
+export function syncLabel(status: Pick<Status, "ahead" | "behind">): string {
+  const parts = [
+    ...(status.ahead ? [`↑${status.ahead}`] : []),
+    ...(status.behind ? [`↓${status.behind}`] : []),
+  ];
+  return parts.length ? parts.join(" ") : "synced";
+}

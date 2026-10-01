@@ -42,14 +42,15 @@ function RouteComponent() {
 
       <div
         class={cn(
-          "relative grid min-h-0 min-w-0 overflow-hidden",
+          "relative grid min-h-0 min-w-0 grid-cols-[var(--sidebar-width)_minmax(0,1fr)_var(--details-width)] overflow-hidden",
+          // Below `md` the open sidebar is a rail of icons.
           sidebarOpen()
-            ? detailsOpen()
-              ? "grid-cols-[220px_minmax(0,1fr)_326px] max-lg:grid-cols-[210px_minmax(0,1fr)] max-md:grid-cols-[52px_minmax(0,1fr)]"
-              : "grid-cols-[220px_minmax(0,1fr)_0] max-lg:grid-cols-[210px_minmax(0,1fr)] max-md:grid-cols-[52px_minmax(0,1fr)]"
-            : detailsOpen()
-              ? "grid-cols-[0_minmax(0,1fr)_326px] max-lg:grid-cols-[0_minmax(0,1fr)]"
-              : "grid-cols-[0_minmax(0,1fr)_0] max-lg:grid-cols-[0_minmax(0,1fr)]",
+            ? "[--sidebar-width:220px] max-lg:[--sidebar-width:210px] max-md:[--sidebar-width:52px]"
+            : "[--sidebar-width:0px]",
+          // Below `lg` the details slide over the history instead of taking a column.
+          detailsOpen()
+            ? "[--details-width:326px] max-lg:[--details-width:0px]"
+            : "[--details-width:0px]",
         )}
       >
         <RefsSidebar repositoryId={repositoryId()} open={sidebarOpen()} />

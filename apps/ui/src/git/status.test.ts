@@ -1,7 +1,7 @@
 import type { Status } from "@gitto/git/types";
 import { describe, expect, it } from "vitest";
 
-import { hasUncommittedChanges, headLabel, headSha, statusCounts } from "./status";
+import { hasUncommittedChanges, headLabel, headSha, statusCounts, syncLabel } from "./status";
 
 const status: Status = {
   head: { kind: "branch", name: "main", sha: "abc" },
@@ -41,5 +41,13 @@ describe("hasUncommittedChanges", () => {
   it("is true when any file changed", () => {
     expect(hasUncommittedChanges(status)).toBe(true);
     expect(hasUncommittedChanges({ ...status, files: [] })).toBe(false);
+  });
+});
+
+describe("syncLabel", () => {
+  it("says synced, or how far ahead and behind HEAD is", () => {
+    expect(syncLabel({ ahead: 0, behind: 0 })).toBe("synced");
+    expect(syncLabel({ ahead: 2, behind: 0 })).toBe("↑2");
+    expect(syncLabel({ ahead: 2, behind: 1 })).toBe("↑2 ↓1");
   });
 });
