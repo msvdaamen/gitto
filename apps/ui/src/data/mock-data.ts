@@ -1,4 +1,30 @@
-import type { ActivityEntry, RepositorySummary } from "../types/git";
+// Placeholder content for the home page, until it shows real repositories and activity.
+
+export interface RepositorySummary {
+  id: string;
+  name: string;
+  owner: string;
+  path: string;
+  provider: "GitHub" | "GitLab" | "Local";
+  branch: string;
+  language: string;
+  languageColor: string;
+  /** Files with uncommitted changes, by kind. */
+  status: { modified: number; added: number; deleted: number };
+  pinned: boolean;
+  lastOpened: string;
+  description: string;
+}
+
+export interface ActivityEntry {
+  id: string;
+  kind: "push" | "merge" | "branch";
+  action: string;
+  repository: string;
+  branch: string;
+  time: string;
+  tone: "purple" | "blue" | "mint" | "amber";
+}
 
 export const repositories: RepositorySummary[] = [
   {

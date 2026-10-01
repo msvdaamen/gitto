@@ -26,10 +26,10 @@ import { Mascot } from "@/components/ui/mascot";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { toneClasses } from "@/components/ui/tone";
 import { VirtualList } from "@/components/ui/virtual-list";
+import { useRefs } from "@/git/queries/refs";
+import { useStatus } from "@/git/queries/status";
 import { buildRefTree, flattenRefTree } from "@/git/ref-tree";
 import type { RefTreeRow } from "@/git/ref-tree";
-import { useRefs } from "@/git/refs";
-import { useStatus } from "@/git/status";
 import { useCollapsed } from "@/hooks/collapsed";
 
 const MODES = [

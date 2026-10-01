@@ -2,7 +2,7 @@ import Search from "lucide-solid/icons/search";
 import { createMemo, createSignal, For, Show } from "solid-js";
 
 import { TextInput } from "@/components/ui/text-input";
-import type { RepositorySummary } from "@/types/git";
+import type { RepositorySummary } from "@/data/mock-data";
 
 import { RepositoryCard } from "./repository-card";
 

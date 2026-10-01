@@ -8,7 +8,7 @@ import { Show } from "solid-js";
 import { Badge } from "@/components/ui/badge";
 import { StatusDot } from "@/components/ui/status-dot";
 import type { Tone } from "@/components/ui/tone";
-import type { RepositorySummary } from "@/types/git";
+import type { RepositorySummary } from "@/data/mock-data";
 
 const providerTone: Record<RepositorySummary["provider"], Tone> = {
   GitHub: "purple",

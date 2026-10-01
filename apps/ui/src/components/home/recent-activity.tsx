@@ -10,7 +10,7 @@ import { Dynamic } from "solid-js/web";
 import { LinkButton } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { toneClasses } from "@/components/ui/tone";
-import type { ActivityEntry } from "@/types/git";
+import type { ActivityEntry } from "@/data/mock-data";
 
 const activityIcons: Record<ActivityEntry["kind"], LucideIcon> = {
   push: Upload,

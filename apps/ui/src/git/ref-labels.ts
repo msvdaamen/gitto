@@ -1,4 +1,4 @@
-import type { CommitRef } from "@/types/git";
+import type { CommitRef } from "@gitto/git/types";
 
 /** A branch in the history's branch / tag column: local, on remotes, or both. */
 export interface BranchLabel {

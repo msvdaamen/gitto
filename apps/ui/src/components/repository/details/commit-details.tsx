@@ -11,10 +11,9 @@ import { IconButton } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LineStats } from "@/components/ui/line-stats";
 import { SectionHeader } from "@/components/ui/section-header";
-import { useCommitFiles } from "@/git/diff";
-import { useCommit } from "@/git/history";
-import { WIP_ID } from "@/git/rows";
-import type { Commit } from "@/types/git";
+import { useCommitFiles } from "@/git/queries/diff";
+import { useCommitDetails } from "@/git/queries/history";
+import { WIP_ID, type CommitRow } from "@/git/rows";
 
 import { ChangedFileList } from "./changed-file-list";
 import { WorkingTreeDetails } from "./working-tree-details";
@@ -62,7 +61,7 @@ function SelectedCommit(props: {
   /** The details' scroll container, which scrolls the files along with the commit's message. */
   scrollElement: HTMLElement | undefined;
 }) {
-  const details = useCommit(
+  const details = useCommitDetails(
     () => props.repositoryId,
     () => props.sha,
   );
@@ -109,7 +108,7 @@ function SelectedCommit(props: {
 }
 
 function CommitSummary(props: {
-  commit: Commit;
+  commit: CommitRow;
   fileCount: number;
   totals: { additions: number; deletions: number };
 }) {
@@ -127,7 +126,7 @@ function CommitSummary(props: {
         <p class="m-0 text-[9.5px] leading-[1.55] text-muted">{props.commit.description}</p>
       )}
       <div class="mt-3 flex w-max items-center overflow-hidden rounded-[5px] border border-border-soft">
-        <code class="bg-bg px-[7px] py-1 text-[8.5px] text-text-soft">{props.commit.sha}</code>
+        <code class="bg-bg px-[7px] py-1 text-[8.5px] text-text-soft">{props.commit.shortSha}</code>
         <button
           class="grid h-[23px] w-6 cursor-pointer place-items-center border-0 border-l border-border-soft bg-panel-raised p-0 text-faint"
           aria-label="Copy commit SHA"

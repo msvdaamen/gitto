@@ -2,11 +2,11 @@ import { createFileRoute } from "@tanstack/solid-router";
 import { cn } from "cn";
 import { createSignal } from "solid-js";
 
-import { CommitDetails } from "@/components/repository/commit-details";
-import { HistoryTable } from "@/components/repository/history-table";
-import { RefsSidebar } from "@/components/repository/refs-sidebar";
+import { CommitDetails } from "@/components/repository/details/commit-details";
+import { HistoryTable } from "@/components/repository/history/history-table";
+import { RefsSidebar } from "@/components/repository/sidebar/refs-sidebar";
 import { RepositoryToolbar } from "@/components/repository/toolbar";
-import { useRepositoryWatcher } from "@/git/watch";
+import { useRepositoryWatcher } from "@/git/queries/watch";
 
 export const Route = createFileRoute("/(main)/$repoId")({
   component: RouteComponent,

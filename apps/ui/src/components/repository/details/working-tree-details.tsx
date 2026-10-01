@@ -13,9 +13,11 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Mascot } from "@/components/ui/mascot";
 import { SectionHeader } from "@/components/ui/section-header";
 import { UpdatingIndicator } from "@/components/ui/updating-indicator";
-import { useWorkingTreeChanges } from "@/git/diff";
-import { stagingPaths, useStage, useUnstage } from "@/git/staging";
-import { headLabel, useStatus } from "@/git/status";
+import { stagingPaths } from "@/git/changes";
+import { useWorkingTreeChanges } from "@/git/queries/diff";
+import { useStage, useUnstage } from "@/git/queries/staging";
+import { useStatus } from "@/git/queries/status";
+import { headLabel } from "@/git/status";
 import { useDelayed } from "@/hooks/delayed";
 
 import { ChangedFileList, type FileAction } from "./changed-file-list";
