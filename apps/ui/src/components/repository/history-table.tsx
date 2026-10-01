@@ -3,7 +3,7 @@ import LoaderCircle from "lucide-solid/icons/loader-circle";
 import PencilLine from "lucide-solid/icons/pencil-line";
 import Search from "lucide-solid/icons/search";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
-import { createEffect, createMemo, For, Index, Show, Suspense, type JSX } from "solid-js";
+import { createEffect, createMemo, Index, Show, Suspense, type JSX } from "solid-js";
 
 import { Avatar } from "@/components/ui/avatar";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -11,8 +11,20 @@ import { LineStats } from "@/components/ui/line-stats";
 import { toneClasses, type Tone } from "@/components/ui/tone";
 import { useCommitFiles } from "@/git/diff";
 import { useHistory } from "@/git/history";
+import { refLabelMatches } from "@/git/ref-labels";
 import { headLabel, useStatus } from "@/git/status";
-import type { Commit, CommitRef } from "@/types/git";
+import type { Commit } from "@/types/git";
+
+import { graphWidth, HistoryGraph, laneColor } from "./history-graph";
+import { HistoryRefLabels } from "./history-ref-labels";
+
+/** The table's minimum width: its other columns', plus the graph's (see `graphWidth`). */
+const MIN_WIDTH = "min-w-[calc(560px+var(--graph-width))]";
+/** The table's columns: branch / tag, graph, message, author and date. */
+const COLUMNS = cn(
+  MIN_WIDTH,
+  "grid-cols-[minmax(105px,.8fr)_var(--graph-width)_minmax(240px,2.2fr)_minmax(115px,.85fr)_100px]",
+);
 
 export function HistoryTable(props: {
   repositoryId: string;
@@ -21,23 +33,46 @@ export function HistoryTable(props: {
   onSelect: (id: string) => void;
 }) {
   return (
-    <main class="min-h-0 min-w-0 overflow-auto bg-bg">
-      <div class="sticky top-0 z-10 grid h-[31px] min-w-[642px] grid-cols-[minmax(105px,.8fr)_82px_minmax(240px,2.2fr)_minmax(115px,.85fr)_100px] items-center border-b border-border bg-bg-soft text-[8px] font-[720] tracking-[.055em] text-faint uppercase [&>span]:flex [&>span]:h-full [&>span]:items-center [&>span]:border-r [&>span]:border-border-soft [&>span]:px-[9px]">
-        <span>Branch / tag</span>
-        <span>Graph</span>
-        <span>Commit message</span>
-        <span>Author</span>
-        <span>Date</span>
-      </div>
-      <div class="min-w-[642px]" role="listbox" aria-label="Commit history">
-        <Suspense fallback={<EmptyState icon={LoaderCircle} title="Loading history…" />}>
-          <HistoryRows {...props} />
-        </Suspense>
-      </div>
+    <main
+      class="min-h-0 min-w-0 overflow-auto bg-bg"
+      style={{ "--graph-width": `${graphWidth(1)}px` }}
+    >
+      <Suspense
+        fallback={
+          <>
+            <HistoryHeader />
+            <EmptyState icon={LoaderCircle} title="Loading history…" />
+          </>
+        }
+      >
+        <HistoryRows {...props} />
+      </Suspense>
     </main>
   );
 }
 
+function HistoryHeader() {
+  return (
+    <div
+      class={cn(
+        "sticky top-0 z-10 grid h-[31px] items-center",
+        COLUMNS,
+        "border-b border-border bg-bg-soft text-[8px] font-[720] tracking-[.055em] text-faint uppercase [&>span]:flex [&>span]:h-full [&>span]:items-center [&>span]:border-r [&>span]:border-border-soft [&>span]:px-[9px]",
+      )}
+    >
+      <span>Branch / tag</span>
+      <span>Graph</span>
+      <span>Commit message</span>
+      <span>Author</span>
+      <span>Date</span>
+    </div>
+  );
+}
+
+/**
+ * The header and the rows. The header is rendered here, not in `HistoryTable`, so both are sized
+ * to the graph's lanes as soon as the history is loaded.
+ */
 function HistoryRows(props: {
   repositoryId: string;
   search: string;
@@ -56,104 +91,112 @@ function HistoryRows(props: {
       props.onSelect(row.id);
     }
   });
-  const visibleRows = createMemo(() => {
-    const needle = props.search.trim().toLowerCase();
-    return needle
+  const lanes = createMemo(() =>
+    Math.max(1, ...history.rows().map((row) => row.graph?.width ?? 1)),
+  );
+  const needle = createMemo(() => props.search.trim().toLowerCase());
+  const visibleRows = createMemo(() =>
+    needle()
       ? history
           .rows()
-          .filter((commit) =>
-            `${commit.message} ${commit.author} ${commit.id} ${commit.refs.map(refLabel).join(" ")}`
-              .toLowerCase()
-              .includes(needle),
+          .filter(
+            (commit) =>
+              `${commit.message} ${commit.author} ${commit.id}`.toLowerCase().includes(needle()) ||
+              commit.labels.some((label) => refLabelMatches(label, needle())),
           )
-      : history.rows();
-  });
+      : history.rows(),
+  );
 
   return (
-    <Show
-      when={!history.log.error}
-      fallback={
-        <EmptyState icon={TriangleAlert} title="Couldn't load history" tone="error">
-          {history.log.error?.message}
-        </EmptyState>
-      }
-    >
-      <Show
-        when={visibleRows().length}
-        fallback={
-          <EmptyState icon={Search} title="No commits found">
-            Try a different message, author, or SHA.
-          </EmptyState>
-        }
-      >
-        {/* By position rather than `<For>`'s object identity: the rows are rebuilt whenever the log
+    <div class={MIN_WIDTH} style={{ "--graph-width": `${graphWidth(lanes())}px` }}>
+      <HistoryHeader />
+      <div role="listbox" aria-label="Commit history">
+        <Show
+          when={!history.log.error}
+          fallback={
+            <EmptyState icon={TriangleAlert} title="Couldn't load history" tone="error">
+              {history.log.error?.message}
+            </EmptyState>
+          }
+        >
+          <Show
+            when={visibleRows().length}
+            fallback={
+              <EmptyState icon={Search} title="No commits found">
+                Try a different message, author, or SHA.
+              </EmptyState>
+            }
+          >
+            {/* By position rather than `<For>`'s object identity: the rows are rebuilt whenever the log
             or status is refetched, and re-creating them would restart their queries. */}
-        <Index each={visibleRows()}>
-          {(commit) => (
-            <Show
-              when={commit().isWip}
-              fallback={
-                <HistoryRow
-                  commit={commit()}
-                  selected={history.selected()?.id === commit().id}
-                  onSelect={() => props.onSelect(commit().id)}
-                />
-              }
-            >
-              <WipRow
-                commit={commit()}
-                selected={history.selected()?.id === commit().id}
-                onSelect={() => props.onSelect(commit().id)}
-              />
-            </Show>
-          )}
-        </Index>
-      </Show>
-    </Show>
+            <Index each={visibleRows()}>
+              {(commit) => (
+                <Show
+                  when={commit().isWip}
+                  fallback={
+                    <HistoryRow
+                      commit={commit()}
+                      search={needle()}
+                      selected={history.selected()?.id === commit().id}
+                      onSelect={() => props.onSelect(commit().id)}
+                    />
+                  }
+                >
+                  <WipRow
+                    commit={commit()}
+                    searching={!!needle()}
+                    selected={history.selected()?.id === commit().id}
+                    onSelect={() => props.onSelect(commit().id)}
+                  />
+                </Show>
+              )}
+            </Index>
+          </Show>
+        </Show>
+      </div>
+    </div>
   );
 }
 
-function HistoryRow(props: { commit: Commit; selected: boolean; onSelect: () => void }) {
+function HistoryRow(props: {
+  commit: Commit;
+  /**
+   * The lowercase search, if any: a label it matches comes first, and the graph only shows the
+   * commit's node, as its lines would lead to rows the search hides.
+   */
+  search: string;
+  selected: boolean;
+  onSelect: () => void;
+}) {
   return (
     <button
       role="option"
       aria-selected={props.selected ? "true" : "false"}
       class={cn(
-        "group grid h-[47px] w-full min-w-[642px] cursor-pointer grid-cols-[minmax(105px,.8fr)_82px_minmax(240px,2.2fr)_minmax(115px,.85fr)_100px] items-center border-0 border-b border-border-soft bg-transparent p-0 text-left text-muted hover:bg-panel-hover [&>span]:min-w-0 [&>span]:px-[9px]",
+        COLUMNS,
+        "group grid h-[47px] w-full cursor-pointer items-center border-0 border-b border-border-soft bg-transparent p-0 text-left text-muted hover:bg-panel-hover [&>span]:min-w-0 [&>span]:px-[9px]",
         props.selected &&
           "bg-[linear-gradient(90deg,var(--primary-soft),color-mix(in_srgb,var(--primary-soft)_35%,transparent))] text-text-soft shadow-[inset_2px_0_var(--primary)]",
       )}
       onClick={props.onSelect}
     >
-      <span class="flex gap-1 overflow-hidden">
-        <For each={props.commit.refs.slice(0, 2)}>
-          {(ref) => (
-            <span
-              class={cn(
-                "max-w-[78px] truncate rounded-sm border border-border bg-panel px-[5px] py-[3px] text-[8px] text-text-soft",
-                ref.kind === "head" &&
-                  cn(
-                    toneClasses.purple,
-                    "border-[color-mix(in_srgb,var(--primary)_40%,var(--border))]",
-                  ),
-                ref.kind === "remote" && toneClasses.blue,
-              )}
-            >
-              {refLabel(ref)}
-            </span>
+      <HistoryRefLabels
+        labels={props.commit.labels}
+        search={props.search}
+        color={laneColor(props.commit.graph?.column ?? 0)}
+      />
+      <div class="h-full overflow-x-clip">
+        <Show when={props.commit.graph}>
+          {(row) => (
+            <HistoryGraph
+              row={row()}
+              nodeOnly={!!props.search}
+              initials={props.commit.initials}
+              avatarColor={props.commit.avatarColor}
+            />
           )}
-        </For>
-      </span>
-      <span
-        class="flex h-full items-center font-mono text-[19px] font-bold tracking-[-5px] whitespace-pre [&>i]:w-[18px] [&>i]:not-italic"
-        aria-label={`Graph ${props.commit.graph.join(" ")}`}
-      >
-        <For each={props.commit.graph}>
-          {(cell, index) => (
-            <i class={["text-primary-strong", "text-blue", "text-mint"][index() % 3]}>{cell}</i>
-          )}
-        </For>
-      </span>
+        </Show>
+      </div>
       <span class="flex min-w-0 items-center justify-between gap-[7px]">
         <strong class="truncate text-[10.5px] font-[570] text-text">{props.commit.message}</strong>
         <Show when={props.selected}>
@@ -178,15 +221,17 @@ function HistoryRow(props: { commit: Commit; selected: boolean; onSelect: () => 
   );
 }
 
-function refLabel(ref: CommitRef): string {
-  return ref.kind === "tag" ? `tag: ${ref.name}` : ref.name;
-}
-
 /**
  * The uncommitted changes, set apart from the commits below: an amber, dashed-off row with a
  * hollow graph node that counts what's staged and what isn't.
  */
-function WipRow(props: { commit: Commit; selected: boolean; onSelect: () => void }) {
+function WipRow(props: {
+  commit: Commit;
+  /** Whether a search is active; the graph then only shows the node, like in `HistoryRow`. */
+  searching: boolean;
+  selected: boolean;
+  onSelect: () => void;
+}) {
   const status = useStatus(() => props.commit.repositoryId);
   const counts = createMemo(() => {
     const files = status.data?.files ?? [];
@@ -202,7 +247,8 @@ function WipRow(props: { commit: Commit; selected: boolean; onSelect: () => void
       role="option"
       aria-selected={props.selected ? "true" : "false"}
       class={cn(
-        "grid h-[47px] w-full min-w-[642px] cursor-pointer grid-cols-[minmax(105px,.8fr)_82px_minmax(240px,2.2fr)_minmax(115px,.85fr)_100px] items-center border-0 border-b border-dashed border-[color-mix(in_srgb,var(--amber)_45%,var(--border))] p-0 text-left text-muted shadow-[inset_2px_0_var(--amber)] [&>span]:min-w-0 [&>span]:px-[9px]",
+        COLUMNS,
+        "grid h-[47px] w-full cursor-pointer items-center border-0 border-b border-dashed border-[color-mix(in_srgb,var(--amber)_45%,var(--border))] p-0 text-left text-muted shadow-[inset_2px_0_var(--amber)] [&>span]:min-w-0 [&>span]:px-[9px]",
         props.selected
           ? "bg-[linear-gradient(90deg,color-mix(in_srgb,var(--amber)_24%,transparent),color-mix(in_srgb,var(--amber)_8%,transparent))]"
           : "bg-[color-mix(in_srgb,var(--amber-soft)_70%,transparent)] hover:bg-amber-soft",
@@ -220,14 +266,11 @@ function WipRow(props: { commit: Commit; selected: boolean; onSelect: () => void
           WIP
         </span>
       </span>
-      <span
-        class="flex h-full items-center font-mono text-[19px] font-bold tracking-[-5px] whitespace-pre [&>i]:w-[18px] [&>i]:not-italic"
-        aria-hidden="true"
-      >
-        <For each={props.commit.graph}>
-          {(cell) => <i class={cell === "○" ? "text-amber" : "text-faint"}>{cell}</i>}
-        </For>
-      </span>
+      <div class="h-full overflow-x-clip">
+        <Show when={props.commit.graph}>
+          {(row) => <HistoryGraph row={row()} wip nodeOnly={props.searching} />}
+        </Show>
+      </div>
       <span class="col-span-3 flex min-w-0 items-center gap-2">
         <strong class="truncate text-[10.5px] font-[620] text-text italic">
           {props.commit.message}

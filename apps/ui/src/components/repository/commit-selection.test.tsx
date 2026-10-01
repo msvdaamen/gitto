@@ -55,6 +55,7 @@ function commit(sha: string, subject: string, parents: string[]) {
     authorName: "Ada Lovelace",
     authorEmail: "ada@example.com",
     authoredAt: 0,
+    committedAt: 0,
     refs: [],
     subject,
     body: "",

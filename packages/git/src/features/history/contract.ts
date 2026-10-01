@@ -5,7 +5,11 @@ import { RepositoryInput, Sha } from "../../input";
 import { CommitSchema } from "./schema";
 
 export const HistoryContract = {
-  /** History of all branches, remotes and tags, newest first in topological order. */
+  /**
+   * History of all branches, remotes and tags, most recently committed first across all of them,
+   * like GitKraken; a commit still always comes after its children. Sorting by commit date keeps
+   * rebased and amended work at the top, where sorting by author date would bury it.
+   */
   log: oc
     .input(
       RepositoryInput.extend({

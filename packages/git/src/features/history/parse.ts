@@ -1,7 +1,7 @@
 import { parseRefName } from "../refs/parse";
 import type { Commit, CommitRef } from "./schema";
 
-const FIELDS = ["%H", "%P", "%an", "%ae", "%at", "%D", "%s", "%b"];
+const FIELDS = ["%H", "%P", "%an", "%ae", "%at", "%ct", "%D", "%s", "%b"];
 
 // With -z, commits are NUL-separated as well, so the output is a flat list of fields where every
 // FIELDS.length entries make up one commit. None of the fields can contain NUL.
@@ -12,10 +12,18 @@ export function parseLog(output: string): Commit[] {
   const commits: Commit[] = [];
 
   for (let i = 0; i + FIELDS.length <= fields.length; i += FIELDS.length) {
-    const [sha, parents, authorName, authorEmail, authoredAt, refs, subject, body] = fields.slice(
-      i,
-      i + FIELDS.length,
-    ) as [string, string, string, string, string, string, string, string];
+    const [sha, parents, authorName, authorEmail, authoredAt, committedAt, refs, subject, body] =
+      fields.slice(i, i + FIELDS.length) as [
+        string,
+        string,
+        string,
+        string,
+        string,
+        string,
+        string,
+        string,
+        string,
+      ];
 
     commits.push({
       sha: sha.trim(),
@@ -23,6 +31,7 @@ export function parseLog(output: string): Commit[] {
       authorName,
       authorEmail,
       authoredAt: Number(authoredAt) * 1000,
+      committedAt: Number(committedAt) * 1000,
       refs: parseDecorations(refs),
       subject,
       body: body.trim(),
@@ -33,17 +42,18 @@ export function parseLog(output: string): Commit[] {
 }
 
 /**
- * `HEAD -> refs/heads/main, refs/remotes/origin/main, tag: refs/tags/v1` → HEAD, local `main`,
- * remote `origin/main` and tag `v1`. Needs `--decorate=full`: short names can't tell a remote
- * branch from a local one named like it (`origin/main`).
+ * `HEAD -> refs/heads/main, refs/remotes/origin/main, tag: refs/tags/v1` → the checked-out local
+ * `main`, remote `origin/main` and tag `v1`. A detached HEAD is a bare `HEAD`, even on a commit a
+ * branch points at too (`HEAD, refs/heads/main`). Needs `--decorate=full`: short names can't tell
+ * a remote branch from a local one named like it (`origin/main`).
  */
 function parseDecorations(decorations: string): CommitRef[] {
   if (!decorations) return [];
-  return decorations
-    .split(", ")
-    .flatMap((decoration) => decoration.split(" -> "))
-    .flatMap<CommitRef>((ref) => {
-      if (ref === "HEAD") return [{ kind: "head", name: "HEAD" }];
-      return parseRefName(ref.replace(/^tag: /, "")) ?? [];
-    });
+  return decorations.split(", ").flatMap<CommitRef>((decoration) => {
+    if (decoration === "HEAD") return [{ kind: "head", name: "HEAD" }];
+    const checkedOut = decoration.startsWith("HEAD -> ");
+    const ref = parseRefName(decoration.replace(/^HEAD -> |^tag: /, ""));
+    if (!ref) return [];
+    return [checkedOut ? { ...ref, current: true } : ref];
+  });
 }

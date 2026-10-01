@@ -4,7 +4,7 @@ import { createMemo } from "solid-js";
 import { rpc } from "@/lib/rpc";
 
 import { gitKeys } from "./keys";
-import { toCommitRow, toCommitRows } from "./rows";
+import { hasUncommittedChanges, historyGraph, toCommitRow, toCommitRows } from "./rows";
 import { useStatus } from "./status";
 
 export function useLog(repositoryId: () => string) {
@@ -29,8 +29,18 @@ export function useHistory(repositoryId: () => string, selectedId: () => string 
   const log = useLog(repositoryId);
   const status = useStatus(repositoryId);
 
+  // The layout only depends on the log, whether there are changes and HEAD; not on the rest of
+  // the status, which is refetched whenever a file changes.
+  const hasChanges = createMemo(() => hasUncommittedChanges(status.data));
+  const head = createMemo(() => {
+    const current = status.data?.head;
+    return current && current.kind !== "unborn" ? current.sha : undefined;
+  });
+  const graph = createMemo(() =>
+    log.data ? historyGraph(log.data.commits, hasChanges(), head()) : [],
+  );
   const rows = createMemo(() =>
-    log.data ? toCommitRows(log.data.repositoryId, log.data.commits, status.data) : [],
+    log.data ? toCommitRows(log.data.repositoryId, log.data.commits, hasChanges(), graph()) : [],
   );
   const selected = createMemo(() => rows().find((row) => row.id === selectedId()) ?? rows()[0]);
 
