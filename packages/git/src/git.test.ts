@@ -296,7 +296,8 @@ async function fullDiffs(repo: Repo) {
 describe("the changed files", () => {
   it("are the same as full diffs", async () => {
     const path = createRepo("changes");
-    for (const name of ["keep.txt", "edit.txt", "both.txt", "gone.txt", "move.txt"]) {
+    // `:colon.txt` would be pathspec magic, if git didn't take paths literally (GIT_LITERAL_PATHSPECS).
+    for (const name of ["keep.txt", "edit.txt", "both.txt", "gone.txt", "move.txt", ":colon.txt"]) {
       writeFileSync(join(path, name), `${name}\n`);
     }
     writeFileSync(join(path, "bin.dat"), Buffer.from([0, 1, 2]));
@@ -304,6 +305,7 @@ describe("the changed files", () => {
     git(path, "commit", "-q", "-m", "first");
 
     writeFileSync(join(path, "edit.txt"), "changed\n");
+    writeFileSync(join(path, ":colon.txt"), "changed\n");
     writeFileSync(join(path, "both.txt"), "staged\n");
     git(path, "add", "both.txt");
     writeFileSync(join(path, "both.txt"), "staged, then changed again\n");
@@ -316,7 +318,14 @@ describe("the changed files", () => {
     const { changes } = await getStatus(repo);
     expect(changes).toEqual(await fullDiffs(repo));
     expect(changes.unstaged.map((file) => file.path)).toEqual(
-      expect.arrayContaining(["edit.txt", "both.txt", "gone.txt", "bin.dat", "new.txt"]),
+      expect.arrayContaining([
+        "edit.txt",
+        ":colon.txt",
+        "both.txt",
+        "gone.txt",
+        "bin.dat",
+        "new.txt",
+      ]),
     );
   });
 
@@ -610,6 +619,36 @@ describe("watching the git directory", () => {
       controller.abort();
     },
   );
+
+  it("reports refs stored in a reftable", { timeout: 10_000 }, async () => {
+    // What `git init --ref-format=reftable` (git 2.45+) writes to, instead of `refs`.
+    const path = createRepo("watched-reftable");
+    mkdirSync(join(path, ".git", "reftable"));
+    const repo = await repos.open("watched-reftable");
+    const controller = new AbortController();
+    const changes = watchGitDir(repo, controller.signal);
+
+    const next = changes.next();
+    soon(() => writeFileSync(join(path, ".git", "reftable", "tables.list"), "x"));
+    expect(await next).toEqual({ value: ["refs"], done: false });
+
+    controller.abort();
+  });
+
+  it("ends quietly when aborted while starting", async () => {
+    createRepo("watched-abort");
+    const repo = await repos.open("watched-abort");
+    const ends = [watchGitDir, watchWorkingTree].map((watch) => {
+      const controller = new AbortController();
+      const next = watch(repo, controller.signal).next();
+      controller.abort();
+      return next;
+    });
+    expect(await Promise.all(ends)).toEqual([
+      { value: undefined, done: true },
+      { value: undefined, done: true },
+    ]);
+  });
 
   it("follows a linked worktree's own HEAD and index", { timeout: 10_000 }, async () => {
     const main = createRepo("watched-main");

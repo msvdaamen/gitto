@@ -49,11 +49,14 @@ afterEach(() => {
 function procedure<T>() {
   let push: ((event: T) => void) | undefined;
   let fail: ((error: Error) => void) | undefined;
+  let end: (() => void) | undefined;
   const state = {
     open: 0,
     push: (event: T) => push?.(event),
     /** Ends the open subscription with an error, like the watcher running out of file watches. */
     fail: (error: Error) => fail?.(error),
+    /** Ends the open subscription normally, like the server closing it. */
+    end: () => end?.(),
     call: async (_input: unknown, { signal }: { signal: AbortSignal }) => {
       state.open++;
       signal.addEventListener("abort", () => state.open--);
@@ -65,6 +68,10 @@ function procedure<T>() {
               fail = (error) => {
                 state.open--;
                 reject(error);
+              };
+              end = () => {
+                state.open--;
+                resolve({ value: undefined, done: true });
               };
             }),
         }),
@@ -171,6 +178,37 @@ describe("watching a repository", () => {
     window.dispatchEvent(new Event("focus"));
     expect(invalidated()).toEqual([gitKeys.uncommitted("repo")]);
     await vi.waitFor(() => expect(rpc.workingTree.open).toBe(1));
+
+    cleanup();
+  });
+
+  it("starts watching the working tree again on the next focus when its stream ended", async () => {
+    const { invalidated, cleanup } = watch(true);
+    await vi.waitFor(() => expect(rpc.workingTree.open).toBe(1));
+
+    rpc.workingTree.end();
+    await vi.advanceTimersByTimeAsync(0);
+    window.dispatchEvent(new Event("blur"));
+    window.dispatchEvent(new Event("focus"));
+    expect(invalidated()).toEqual([gitKeys.uncommitted("repo")]);
+    await vi.waitFor(() => expect(rpc.workingTree.open).toBe(1));
+
+    cleanup();
+  });
+
+  it("watches the git directory again, and refetches everything, when it failed", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { invalidated, cleanup } = watch(true);
+    await vi.waitFor(() => expect(rpc.gitDir.open).toBe(1));
+
+    rpc.gitDir.fail(new Error("no space left on device"));
+    await vi.waitFor(() => expect(logged).toHaveBeenCalled());
+    expect(rpc.gitDir.open).toBe(0);
+
+    window.dispatchEvent(new Event("blur"));
+    window.dispatchEvent(new Event("focus"));
+    expect(invalidated()).toEqual([gitKeys.repository("repo")]);
+    await vi.waitFor(() => expect(rpc.gitDir.open).toBe(1));
 
     cleanup();
   });

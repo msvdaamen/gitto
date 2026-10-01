@@ -27,8 +27,8 @@ export async function getCommitFiles(
 }
 
 /**
- * Above this many characters of paths, the unstaged diff isn't limited to the changed files: the
- * command line would get too long (Windows allows 32k characters).
+ * Past this many characters of paths, the unstaged diff isn't limited to the changed files: the
+ * command line would get too long (Windows allows 32k characters, git's own arguments included).
  */
 const MAX_PATHSPEC_LENGTH = 16_000;
 
@@ -46,8 +46,9 @@ export async function getWorkingTreeFiles(
   const unstagedPaths = files
     .filter((file) => file.unstaged !== null && file.unstaged !== "untracked")
     .map((file) => file.path);
-  const pathspec =
-    unstagedPaths.join("").length > MAX_PATHSPEC_LENGTH ? [] : ["--", ...unstagedPaths];
+  // Each path also takes a space and, on Windows, quotes if it has spaces.
+  const length = unstagedPaths.reduce((sum, path) => sum + path.length + 3, 0);
+  const pathspec = length > MAX_PATHSPEC_LENGTH ? [] : ["--", ...unstagedPaths];
 
   const [staged, unstaged] = await Promise.all([
     // Without a HEAD commit, `--cached` diffs the index against the empty tree.

@@ -1,6 +1,6 @@
 import { EventEmitter, on } from "node:events";
 import { realpath } from "node:fs/promises";
-import { basename, dirname, isAbsolute, relative, sep } from "node:path";
+import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 import { subscribe, type AsyncSubscription } from "@parcel/watcher";
 
@@ -15,10 +15,16 @@ const DEBOUNCE_MS = 300;
  */
 const GIT_DIR_IGNORED = ["objects", "logs", "hooks", "lfs", "modules", "info"];
 
-/** Files in a worktree's own git directory: HEAD (and MERGE_HEAD etc.), operations in progress. */
-const WORKTREE_STATE = /^([A-Z_]*HEAD|(rebase-merge|rebase-apply|sequencer)(\/.*)?)$/;
-/** Files in the shared git directory: branches, tags and remotes, and the config (upstreams). */
-const SHARED_STATE = /^(refs(\/.*)?|packed-refs|config)$/;
+/**
+ * Files in a worktree's own git directory: HEAD (and MERGE_HEAD etc.), operations in progress, and
+ * its refs when they're stored in a reftable (`git init --ref-format=reftable`).
+ */
+const WORKTREE_STATE = /^([A-Z_]*HEAD|(rebase-merge|rebase-apply|sequencer|reftable)(\/.*)?)$/;
+/**
+ * Files in the shared git directory: branches, tags and remotes (as files, packed, or in a
+ * reftable), and the config (upstreams).
+ */
+const SHARED_STATE = /^((refs|reftable)(\/.*)?|packed-refs|config)$/;
 
 /** Yields what changed in the repository's git directory (debounced), until `signal` aborts. */
 export async function* watchGitDir(
@@ -27,6 +33,8 @@ export async function* watchGitDir(
 ): AsyncGenerator<GitDirChange[]> {
   if (signal?.aborted) return;
   const dirs = await gitDirs(repo);
+  // Checked again: `Batches` throws if it's given a signal that's already aborted.
+  if (signal?.aborted) return;
   // A linked worktree has its own git directory (inside the shared one) for HEAD and the index.
   const roots =
     dirs.gitDir === dirs.commonDir || inside(dirs.commonDir, dirs.gitDir) !== undefined
@@ -51,10 +59,12 @@ export async function* watchGitDir(
         ),
       ),
     );
+    // All the subscriptions that worked are kept (and so unsubscribed below), even if one failed.
     for (const result of subscribed) {
-      if (result.status === "rejected") throw result.reason;
-      subscriptions.push(result.value);
+      if (result.status === "fulfilled") subscriptions.push(result.value);
     }
+    const failed = subscribed.find((result) => result.status === "rejected");
+    if (failed) throw failed.reason;
     for await (const batch of changes.stream()) yield [...new Set(batch)];
   } finally {
     changes.close();
@@ -66,6 +76,8 @@ export async function* watchGitDir(
 export async function* watchWorkingTree(repo: Repo, signal?: AbortSignal): AsyncGenerator<null> {
   if (signal?.aborted) return;
   const [root, dirs] = await Promise.all([realpath(repo.path), gitDirs(repo)]);
+  // Checked again: `Batches` throws if it's given a signal that's already aborted.
+  if (signal?.aborted) return;
 
   // Whether the ignore rules changed.
   const changes = new Batches<boolean>(signal);
@@ -171,10 +183,11 @@ interface GitDirs {
 
 /** The repository's git directories, symlinks resolved (that's how the watcher reports paths). */
 async function gitDirs(repo: Repo): Promise<GitDirs> {
+  // Not `--path-format=absolute`, which needs git 2.31: the other two can be relative to the
+  // repository, so they're resolved here.
   const output = await repo.read([
     "rev-parse",
-    "--path-format=absolute",
-    "--git-dir",
+    "--absolute-git-dir",
     "--git-common-dir",
     "--git-path",
     "info/exclude",
@@ -182,8 +195,8 @@ async function gitDirs(repo: Repo): Promise<GitDirs> {
   const [gitDir = "", commonDir = "", excludeFile = ""] = output.split("\n");
   return {
     gitDir: await realpath(gitDir),
-    commonDir: await realpath(commonDir),
-    excludeFile,
+    commonDir: await realpath(resolve(repo.path, commonDir)),
+    excludeFile: resolve(repo.path, excludeFile),
   };
 }
 

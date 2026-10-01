@@ -34,7 +34,8 @@ const config: ForgeConfig = {
       );
       // Only this machine's prebuilt binary is installed, so another platform would crash on start.
       const binary = `@parcel/watcher-${platform}-${arch}`;
-      if (![...packages.keys()].some((name) => name.startsWith(binary))) {
+      // Exactly that name, or with a libc suffix: `linux-arm` isn't `linux-arm64-glibc`.
+      if (![...packages.keys()].some((name) => name === binary || name.startsWith(`${binary}-`))) {
         throw new Error(
           `${binary} isn't installed, so Gitto can't be packaged for ${platform}-${arch} here.`,
         );
