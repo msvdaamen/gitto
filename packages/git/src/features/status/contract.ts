@@ -1,8 +1,7 @@
 import { oc } from "@orpc/contract";
 
 import { RepositoryInput } from "../../input";
-import { WorkingTreeFilesSchema } from "../diff/schema";
-import { StatusSchema } from "./schema";
+import { StatusSchema, WorkingTreeFilesSchema } from "./schema";
 
 export const StatusContract = {
   /**

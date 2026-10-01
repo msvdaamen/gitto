@@ -1,17 +1,7 @@
 import { z } from "zod";
 
-export const FileStatusSchema = z.enum([
-  "modified",
-  "added",
-  "deleted",
-  "renamed",
-  "copied",
-  "typechange",
-  "untracked",
-  "conflicted",
-]);
-
-export type FileStatus = z.infer<typeof FileStatusSchema>;
+import { FileStatusSchema } from "../../schema";
+import { ChangedFileSchema } from "../diff/schema";
 
 export const StatusFileSchema = z.object({
   path: z.string(),
@@ -46,3 +36,12 @@ export const StatusSchema = z.object({
 });
 
 export type Status = z.infer<typeof StatusSchema>;
+
+export const WorkingTreeFilesSchema = z.object({
+  /** Changes in the index, compared to HEAD: what the next commit will contain. */
+  staged: z.array(ChangedFileSchema),
+  /** Changes in the working tree, compared to the index, followed by the untracked files. */
+  unstaged: z.array(ChangedFileSchema),
+});
+
+export type WorkingTreeFiles = z.infer<typeof WorkingTreeFilesSchema>;

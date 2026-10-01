@@ -1,4 +1,4 @@
-import type { FileStatus } from "../status/schema";
+import type { FileStatus } from "../../schema";
 import type { ChangedFile } from "./schema";
 
 const CODES: Record<string, FileStatus> = {
