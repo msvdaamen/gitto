@@ -1,3 +1,4 @@
+import { AvatarsContract } from "./features/avatars/contract";
 import { CommitContract } from "./features/commit/contract";
 import { DiffContract } from "./features/diff/contract";
 import { HistoryContract } from "./features/history/contract";
@@ -15,4 +16,5 @@ export const GitContract = {
   staging: StagingContract,
   commit: CommitContract,
   watch: WatchContract,
+  avatars: AvatarsContract,
 };

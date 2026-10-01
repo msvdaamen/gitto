@@ -8,6 +8,7 @@ import { createEffect, createMemo, Index, Show, Suspense, type JSX } from "solid
 import { EmptyState } from "@/components/ui/empty-state";
 import { LineStats } from "@/components/ui/line-stats";
 import { toneClasses, type Tone } from "@/components/ui/tone";
+import { avatarAuthor } from "@/git/avatars";
 import { useCommitFiles } from "@/git/diff";
 import { useHistory } from "@/git/history";
 import { refLabelMatches } from "@/git/ref-labels";
@@ -193,7 +194,7 @@ function HistoryRow(props: {
               row={row()}
               nodeOnly={!!props.search}
               author={props.commit.author}
-              email={props.commit.email}
+              avatar={avatarAuthor(props.commit)}
               initials={props.commit.initials}
               avatarColor={props.commit.avatarColor}
             />

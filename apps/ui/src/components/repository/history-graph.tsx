@@ -1,6 +1,6 @@
 import { createUniqueId, Index, Show } from "solid-js";
 
-import { useAvatar } from "@/git/avatars";
+import { useAvatar, type AvatarAuthor } from "@/git/avatars";
 import type { GraphEdge, GraphRow } from "@/git/graph";
 
 /** Width of a lane, and the space left and right of the lanes. */
@@ -67,8 +67,10 @@ function bottomPath(edge: GraphEdge): string {
  */
 export function HistoryGraph(props: {
   row: GraphRow;
+  /** The author's name, shown on hover. */
   author?: string;
-  email?: string;
+  /** Whose profile picture to show on the commit's node. */
+  avatar?: AvatarAuthor;
   initials?: string;
   avatarColor?: string;
   wip?: boolean;
@@ -123,7 +125,7 @@ export function HistoryGraph(props: {
             <CommitNode
               x={node()}
               color={color()}
-              email={props.email}
+              avatar={props.avatar}
               initials={props.initials}
               avatarColor={props.avatarColor}
             />
@@ -138,12 +140,12 @@ export function HistoryGraph(props: {
 function CommitNode(props: {
   x: number;
   color: string;
-  email?: string;
+  avatar?: AvatarAuthor;
   initials?: string;
   avatarColor?: string;
 }) {
   const clipId = createUniqueId();
-  const avatar = useAvatar(() => props.email);
+  const avatar = useAvatar(() => props.avatar);
   // Inside the ring, which is centred on the circle's edge.
   const inner = NODE_RADIUS - 1;
 

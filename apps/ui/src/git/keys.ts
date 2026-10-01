@@ -10,4 +10,7 @@ export const gitKeys = {
   commit: (repositoryId: string, sha: string) => ["git-commit", repositoryId, sha] as const,
   commitFiles: (repositoryId: string, sha: string) =>
     [...gitKeys.commit(repositoryId, sha), "files"] as const,
+  /** Avatars are looked up online, so they're kept outside `repository(id)` too. */
+  avatar: (repositoryId: string, email: string) =>
+    ["git-avatar", repositoryId, email.trim().toLowerCase()] as const,
 };

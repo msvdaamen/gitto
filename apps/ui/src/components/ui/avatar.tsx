@@ -1,16 +1,16 @@
 import { cn } from "cn";
 import { Show } from "solid-js";
 
-import { useAvatar } from "@/git/avatars";
+import { useAvatar, type AvatarAuthor } from "@/git/avatars";
 
-/** The initials on a coloured circle, covered by the profile picture for `email` if it has one. */
+/** The initials on a coloured circle, covered by the author's profile picture if they have one. */
 export function Avatar(props: {
   initials: string;
-  email?: string;
+  author?: AvatarAuthor;
   color?: string;
   size?: "sm" | "md";
 }) {
-  const avatar = useAvatar(() => props.email);
+  const avatar = useAvatar(() => props.author);
 
   return (
     <span

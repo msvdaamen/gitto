@@ -1,3 +1,4 @@
+import { avatarsRouter } from "./features/avatars/handler";
 import { commitRouter } from "./features/commit/handler";
 import { diffRouter } from "./features/diff/handler";
 import { historyRouter } from "./features/history/handler";
@@ -15,4 +16,5 @@ export const gitRouter = {
   staging: stagingRouter,
   commit: commitRouter,
   watch: watchRouter,
+  avatars: avatarsRouter,
 };

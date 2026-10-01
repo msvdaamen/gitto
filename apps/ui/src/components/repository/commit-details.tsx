@@ -11,6 +11,7 @@ import { IconButton } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LineStats } from "@/components/ui/line-stats";
 import { SectionHeader } from "@/components/ui/section-header";
+import { avatarAuthor } from "@/git/avatars";
 import { useCommitFiles } from "@/git/diff";
 import { useCommit } from "@/git/history";
 import { WIP_ID } from "@/git/rows";
@@ -105,7 +106,7 @@ function CommitSummary(props: {
       <div class="flex items-center gap-[9px]">
         <Avatar
           initials={props.commit.initials}
-          email={props.commit.email}
+          author={avatarAuthor(props.commit)}
           color={props.commit.avatarColor}
           size="md"
         />
