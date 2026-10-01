@@ -18,7 +18,7 @@ import { IconButton } from "@/components/ui/button";
 import { Divider } from "@/components/ui/divider";
 import { TextInput } from "@/components/ui/text-input";
 import { headLabel, useStatus } from "@/git/status";
-import { useRepository } from "@/hooks/repository";
+import { useRepository } from "@/hooks/repositories";
 
 const toolbarActions: { icon: LucideIcon; label: string; accent?: boolean }[] = [
   { icon: Undo2, label: "Undo" },
