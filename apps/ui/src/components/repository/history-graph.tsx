@@ -5,8 +5,10 @@ import type { GraphEdge, GraphRow } from "@/git/graph";
 /** Width of a lane, and the space left and right of the lanes. */
 const LANE = 20;
 const PADDING = 6;
-/** Height of a row's graph: the row is 47px, including its 1px bottom border. */
-const HEIGHT = 46;
+/** Height of a history row, including its 1px bottom border. */
+export const ROW_HEIGHT = 47;
+/** Height of a row's graph: the row, without its bottom border. */
+const HEIGHT = ROW_HEIGHT - 1;
 const MIDDLE = HEIGHT / 2;
 const NODE_RADIUS = 8;
 /** Radius of the rounded corner where a line turns from one lane towards another. */

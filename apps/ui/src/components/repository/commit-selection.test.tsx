@@ -89,6 +89,10 @@ describe("selecting a commit", () => {
     ));
 
     expect(await screen.findByText("Working directory")).toBeInTheDocument();
+    // Only the rows in view are rendered, so each says where it is in the whole list.
+    const options = await screen.findAllByRole("option");
+    expect(options.map((option) => option.getAttribute("aria-posinset"))).toEqual(["1", "2", "3"]);
+    expect(options.every((option) => option.getAttribute("aria-setsize") === "3")).toBe(true);
     await userEvent.click(screen.getByText("First"));
 
     expect(await screen.findByText("first.txt")).toBeInTheDocument();

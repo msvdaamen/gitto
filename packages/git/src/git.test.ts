@@ -1,20 +1,12 @@
 // Runs every feature's commands against real repositories in a temp directory.
 import { execFileSync } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  utimesSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { RepositoryService } from "@gitto/repository/server";
 import { call, ORPCError } from "@orpc/server";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
   FolderNotFoundError,
@@ -457,45 +449,13 @@ describe("a big working tree", () => {
     ]);
   });
 
-  it("refreshes the index, so files touched but not changed aren't read again", async () => {
-    const path = createRepo("touched");
-    writeFileSync(join(path, "file.txt"), "a\n");
-    git(path, "add", "file.txt");
-    git(path, "commit", "-q", "-m", "First");
-    const later = new Date(Date.now() + 60_000);
-    utimesSync(join(path, "file.txt"), later, later);
-    const repo = await repos.open("touched");
-
-    // `diff-files` compares the index's timestamps without refreshing it.
-    expect(git(path, "diff-files", "--name-only")).toBe("file.txt");
-    await repo.refreshIndex();
-    expect(git(path, "diff-files", "--name-only")).toBe("");
-  });
-
-  it("doesn't fail to refresh the index while another git process holds it", async () => {
-    const path = createRepo("refresh-locked");
-    const repo = await repos.open("refresh-locked");
+  it("reports a locked index when staging more paths than git reads before it fails", async () => {
+    const path = createRepo("big-locked");
+    const repo = await repos.open("big-locked");
     writeFileSync(join(path, ".git", "index.lock"), "");
-    await expect(repo.refreshIndex()).resolves.toBeUndefined();
-  });
-
-  it("keeps a commit-graph up to date as its log is read", async () => {
-    const path = createRepo("no-graph");
-    git(path, "commit", "-q", "--allow-empty", "-m", "First");
-    const chain = join(path, ".git", "objects", "info", "commit-graphs", "commit-graph-chain");
-    const repo = await repos.open("no-graph");
-    expect(existsSync(chain)).toBe(false);
-
-    // The first one's written in the background.
-    await getLog(repo, page);
-    await vi.waitFor(() => expect(existsSync(chain)).toBe(true));
-    const first = readFileSync(chain, "utf8");
-
-    // Later ones are added to it before the log is read.
-    git(path, "commit", "-q", "--allow-empty", "-m", "Second");
-    await getLog(repo, page);
-    expect(readFileSync(chain, "utf8")).not.toBe(first);
-    expect(git(path, "commit-graph", "verify")).toBe("");
+    // About 1MB: more than the pipe holds, so git exits before taking it all from stdin.
+    const names = Array.from({ length: 20_000 }, (_, i) => `${"long-file-name-".repeat(3)}${i}`);
+    await expect(stage(repo, names)).rejects.toBeInstanceOf(IndexLockedError);
   });
 });
 

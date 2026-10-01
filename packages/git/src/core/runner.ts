@@ -68,6 +68,9 @@ export function runGit(cwd: string, args: string[], options: RunOptions = {}): P
       }
     });
 
+    // Git can exit before reading all of stdin, e.g. when the index is locked; writing the rest
+    // then fails with EPIPE. Its exit code and stderr already say why, so that's not reported.
+    child.stdin.on("error", () => undefined);
     child.stdin.end(options.stdin);
   });
 }

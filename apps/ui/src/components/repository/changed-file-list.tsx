@@ -38,8 +38,9 @@ export interface FileAction {
   run: (file: ChangedFile) => void;
 }
 
-/** Height of a file's row (`h-[42px]`), plus the space below it. */
-const ROW_HEIGHT = 42 + 2;
+/** Height of a file's row, and the space below it. */
+const ROW_HEIGHT = 42;
+const ROW_GAP = 2;
 
 /**
  * The files, in `scrollElement`, which scrolls them along with whatever is around them. Only the
@@ -51,9 +52,14 @@ export function ChangedFileList(props: {
   action?: FileAction;
 }) {
   return (
-    <VirtualRows items={props.files} rowHeight={ROW_HEIGHT} scrollElement={props.scrollElement}>
+    <VirtualRows
+      items={props.files}
+      rowHeight={ROW_HEIGHT}
+      gap={ROW_GAP}
+      scrollElement={props.scrollElement}
+    >
       {(file) => (
-        <div class="group grid h-[42px] w-full grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-[7px] rounded-md p-[7px] text-left hover:bg-panel-hover">
+        <div class="group grid h-full w-full grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-[7px] rounded-md p-[7px] text-left hover:bg-panel-hover">
           <span
             class={cn(
               "grid size-[17px] place-items-center rounded-sm font-mono text-[8px] font-bold",

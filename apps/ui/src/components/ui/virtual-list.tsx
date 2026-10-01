@@ -1,4 +1,4 @@
-import { createVirtualizer } from "@tanstack/solid-virtual";
+import { createVirtualizer, defaultRangeExtractor, type Range } from "@tanstack/solid-virtual";
 import { cn } from "cn";
 import { createEffect, createSignal, For, onCleanup, onMount, Show, type JSX } from "solid-js";
 
@@ -59,16 +59,20 @@ export function VirtualList<T>(props: {
 
 /**
  * The rows of a list inside a scroll container it shares with other content, e.g. a commit's files
- * below its message: only the rows in view are rendered, like in `VirtualList`. Every row is
- * `rowHeight` tall. Rows are rendered by position, so a refetch that replaces the items updates the
- * rows in place instead of re-creating them.
+ * below its message: only the rows in view are rendered, like in `VirtualList`, plus the one with
+ * focus, so scrolling it out of view doesn't lose it. Every row is `rowHeight` tall, with `gap`
+ * below it. Rows are rendered by position, so a refetch that replaces the items updates the rows in
+ * place instead of re-creating them.
  */
 export function VirtualRows<T>(props: {
   items: T[];
   rowHeight: number;
+  /** Space below each row, in pixels. */
+  gap?: number;
   /** The element that scrolls the rows, along with whatever is above and below them. */
   scrollElement: HTMLElement | undefined;
-  children: (item: () => T) => JSX.Element;
+  /** Renders the item at `index`; the item can change, as rows are rendered by position. */
+  children: (item: () => T, index: number) => JSX.Element;
 }) {
   let list: HTMLDivElement | undefined;
   const connected = useConnected(() => list);
@@ -96,16 +100,34 @@ export function VirtualRows<T>(props: {
     onCleanup(() => observer.disconnect());
   });
 
+  // The row with focus, if any, by its index.
+  const [focused, setFocused] = createSignal<number>();
+  const onFocusIn = (event: FocusEvent) => {
+    const row = (event.target as Element).closest<HTMLElement>("[data-index]");
+    setFocused(row ? Number(row.dataset.index) : undefined);
+  };
+  const onFocusOut = (event: FocusEvent) => {
+    if (!list?.contains(event.relatedTarget as Node | null)) setFocused(undefined);
+  };
+
   const virtualizer = createVirtualizer({
     get count() {
       return props.items.length;
     },
     getScrollElement: () => scrollElement() ?? null,
-    estimateSize: () => props.rowHeight,
+    estimateSize: () => props.rowHeight + (props.gap ?? 0),
     get scrollMargin() {
       return offset();
     },
     overscan: OVERSCAN,
+    get rangeExtractor() {
+      const index = focused();
+      return (range: Range) => {
+        const indexes = defaultRangeExtractor(range);
+        if (index === undefined || index >= range.count || indexes.includes(index)) return indexes;
+        return [...indexes, index].toSorted((a, b) => a - b);
+      };
+    },
   });
 
   return (
@@ -113,17 +135,20 @@ export function VirtualRows<T>(props: {
       ref={(el) => (list = el)}
       class="relative"
       style={{ height: `${virtualizer.getTotalSize()}px` }}
+      onFocusIn={onFocusIn}
+      onFocusOut={onFocusOut}
     >
       <For each={virtualizer.getVirtualItems()}>
         {(row) => (
           <div
+            data-index={row.index}
             class="absolute inset-x-0 top-0"
             style={{
               height: `${props.rowHeight}px`,
               transform: `translateY(${row.start - offset()}px)`,
             }}
           >
-            <Show when={props.items[row.index]}>{(item) => props.children(item)}</Show>
+            <Show when={props.items[row.index]}>{(item) => props.children(item, row.index)}</Show>
           </div>
         )}
       </For>
