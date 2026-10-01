@@ -62,7 +62,7 @@ export function RefsSidebar(props: { repositoryId: string; open: boolean }) {
         >
           <Suspense
             fallback={
-              <EmptyState icon={LoaderCircle} title="Loading branches…" class="h-[150px]" />
+              <EmptyState icon={LoaderCircle} loading title="Loading branches…" class="h-[150px]" />
             }
           >
             <RefList repositoryId={props.repositoryId} />

@@ -36,7 +36,7 @@ export function CommitDetails(props: { repositoryId: string; selectedId: string 
             <span>{selectedId() === WIP_ID ? "Working directory" : "Commit details"}</span>
             <IconButton label="More commit actions" icon={Ellipsis} />
           </div>
-          <Suspense fallback={<EmptyState icon={LoaderCircle} title="Loading details…" />}>
+          <Suspense fallback={<EmptyState icon={LoaderCircle} loading title="Loading details…" />}>
             <Show
               when={selectedId() === WIP_ID}
               fallback={
