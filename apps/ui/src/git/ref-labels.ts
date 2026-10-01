@@ -60,15 +60,28 @@ export function toRefLabels(refs: CommitRef[]): RefLabel[] {
 }
 
 /**
- * Whether a search matches the label: its name, a remote copy's full name (`origin/main`) or, for
- * a tag, `tag: v1`. Case-insensitive; `needle` is lowercase.
+ * Whether a search matches the label: its name, a remote copy's full name (`origin/main`), `HEAD`
+ * for the checked-out branch or, for a tag, `tag: v1`. Case-insensitive; `needle` is lowercase.
  */
 export function refLabelMatches(label: RefLabel, needle: string): boolean {
-  const names =
-    label.kind === "tag"
-      ? [`tag: ${label.name}`]
-      : label.kind === "branch" && label.local
-        ? [label.name, ...label.remotes.map((remote) => `${remote}/${label.name}`)]
-        : [label.name];
-  return names.some((name) => name.toLowerCase().includes(needle));
+  return searchNames(label).some((name) => name.toLowerCase().includes(needle));
+}
+
+function searchNames(label: RefLabel): string[] {
+  if (label.kind === "tag") return [`tag: ${label.name}`];
+  if (label.kind === "head" || !label.local) return [label.name];
+  const remotes = label.remotes.map((remote) => `${remote}/${label.name}`);
+  return [label.name, ...remotes, ...(label.current ? ["HEAD"] : [])];
+}
+
+/**
+ * The label in words, e.g. `main (checked out; local, origin, upstream)`, `v1 (tag)` or
+ * `origin/feature (remote)`; for tooltips, where its icons aren't shown.
+ */
+export function describeRefLabel(label: RefLabel): string {
+  if (label.kind === "tag") return `${label.name} (tag)`;
+  if (label.kind === "head") return "HEAD (detached)";
+  if (!label.local) return `${label.name} (remote)`;
+  const where = ["local", ...label.remotes].join(", ");
+  return `${label.name} (${label.current ? `checked out; ${where}` : where})`;
 }

@@ -21,9 +21,14 @@ export const CommitSchema = z.object({
   parents: z.array(z.string()),
   authorName: z.string(),
   authorEmail: z.string(),
-  /** Author date in milliseconds since the epoch. */
+  /** Author date in milliseconds since the epoch: when the change was first written. */
   authoredAt: z.number(),
-  /** Refs pointing at this commit. When a branch is checked out, `HEAD` comes right before it. */
+  /**
+   * Commit date in milliseconds since the epoch: when the commit was made, which a rebase or amend
+   * moves to that moment. The history is sorted by it.
+   */
+  committedAt: z.number(),
+  /** Refs pointing at this commit; a checked-out branch is marked `current`. */
   refs: z.array(CommitRefSchema),
   subject: z.string(),
   body: z.string(),

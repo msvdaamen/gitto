@@ -3,6 +3,7 @@ import type { Commit as GitCommit, Status } from "@gitto/git/types";
 import type { Commit } from "@/types/git";
 
 import { computeGraph, type GraphRow } from "./graph";
+import { toRefLabels } from "./ref-labels";
 
 /** Row id of the uncommitted changes, shown above the history when there are any. */
 export const WIP_ID = "wip";
@@ -25,16 +26,16 @@ export function historyGraph(
 
 /**
  * Turns a repository's log, plus the uncommitted changes if there are any, into history table
- * rows, with their rows of `graph` (see `historyGraph`). Each row records the repository, so
- * follow-up requests (like its changed files) always go to the repository the commit is in.
+ * rows, with their rows of `graph`: the graph `historyGraph` laid out for the same `log` and
+ * `hasChanges`. Each row records the repository, so follow-up requests (like its changed files)
+ * always go to the repository the commit is in.
  */
 export function toCommitRows(
   repositoryId: string,
   log: GitCommit[],
-  status: Status | undefined,
+  hasChanges: boolean,
   graph: GraphRow[],
 ): Commit[] {
-  const hasChanges = hasUncommittedChanges(status);
   const offset = hasChanges ? 1 : 0;
 
   const rows = log.map((commit, index) => toCommitRow(repositoryId, commit, graph[index + offset]));
@@ -53,6 +54,7 @@ export function toCommitRows(
       avatarColor: "#a978dd",
       timestamp: "Now",
       refs: [],
+      labels: [],
       isWip: true,
     },
     ...rows,
@@ -75,8 +77,10 @@ export function toCommitRow(repositoryId: string, commit: GitCommit, graph?: Gra
     author: commit.authorName,
     initials: initials(commit.authorName),
     avatarColor: avatarColor(commit.authorEmail),
-    timestamp: relativeTime(commit.authoredAt),
+    // The commit date, which the history is sorted by.
+    timestamp: relativeTime(commit.committedAt),
     refs: commit.refs,
+    labels: toRefLabels(commit.refs),
   };
 }
 

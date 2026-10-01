@@ -4,7 +4,7 @@ import { parseLog } from "./parse";
 
 describe("parseLog", () => {
   it("reads NUL-separated commits", () => {
-    // sha, parents, author name, author email, author date, decorations, subject, body
+    // sha, parents, author name, author email, author date, commit date, decorations, subject, body
     const commits = [
       [
         "bbb",
@@ -12,6 +12,7 @@ describe("parseLog", () => {
         "Ada Lovelace",
         "ada@example.com",
         "1700000000",
+        "1700000500",
         [
           "HEAD -> refs/heads/main",
           "refs/remotes/origin/main",
@@ -23,7 +24,17 @@ describe("parseLog", () => {
         "Merge branch 'feature'",
         "Body line\n\n",
       ],
-      ["aaa", "", "Grace Hopper", "grace@example.com", "1600000000", "", "Initial", ""],
+      [
+        "aaa",
+        "",
+        "Grace Hopper",
+        "grace@example.com",
+        "1600000000",
+        "1600000000",
+        "",
+        "Initial",
+        "",
+      ],
     ];
     const output = commits.flat().join("\0");
 
@@ -34,6 +45,7 @@ describe("parseLog", () => {
         authorName: "Ada Lovelace",
         authorEmail: "ada@example.com",
         authoredAt: 1_700_000_000_000,
+        committedAt: 1_700_000_500_000,
         refs: [
           { kind: "local", name: "main", current: true },
           { kind: "remote", name: "origin/main" },
@@ -50,6 +62,7 @@ describe("parseLog", () => {
         authorName: "Grace Hopper",
         authorEmail: "grace@example.com",
         authoredAt: 1_600_000_000_000,
+        committedAt: 1_600_000_000_000,
         refs: [],
         subject: "Initial",
         body: "",
@@ -58,7 +71,17 @@ describe("parseLog", () => {
   });
 
   it("tells a detached HEAD from a checked-out branch on the same commit", () => {
-    const output = ["aaa", "", "Ada", "ada@example.com", "1", "HEAD, refs/heads/main", "S", ""];
+    const output = [
+      "aaa",
+      "",
+      "Ada",
+      "ada@example.com",
+      "1",
+      "1",
+      "HEAD, refs/heads/main",
+      "S",
+      "",
+    ];
 
     expect(parseLog(output.join("\0"))[0]!.refs).toEqual([
       { kind: "head", name: "HEAD" },

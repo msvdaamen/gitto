@@ -71,7 +71,9 @@ export function computeGraph(commits: GraphCommit[]): GraphRow[] {
       bottom.push(edge(column, column, !!commit.dashed));
     }
     for (const parent of merged) {
-      let lane = lanes.indexOf(parent);
+      // Join a lane already heading to the parent, but not the dashed one from the uncommitted
+      // changes: a merge drawn into it would look like part of them.
+      let lane = lanes.findIndex((target, i) => target === parent && !dashed.has(i));
       if (lane === -1) {
         lane = freeLane(lanes, incoming);
         lanes[lane] = parent;

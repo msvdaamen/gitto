@@ -1,7 +1,7 @@
 import { parseRefName } from "../refs/parse";
 import type { Commit, CommitRef } from "./schema";
 
-const FIELDS = ["%H", "%P", "%an", "%ae", "%at", "%D", "%s", "%b"];
+const FIELDS = ["%H", "%P", "%an", "%ae", "%at", "%ct", "%D", "%s", "%b"];
 
 // With -z, commits are NUL-separated as well, so the output is a flat list of fields where every
 // FIELDS.length entries make up one commit. None of the fields can contain NUL.
@@ -12,10 +12,18 @@ export function parseLog(output: string): Commit[] {
   const commits: Commit[] = [];
 
   for (let i = 0; i + FIELDS.length <= fields.length; i += FIELDS.length) {
-    const [sha, parents, authorName, authorEmail, authoredAt, refs, subject, body] = fields.slice(
-      i,
-      i + FIELDS.length,
-    ) as [string, string, string, string, string, string, string, string];
+    const [sha, parents, authorName, authorEmail, authoredAt, committedAt, refs, subject, body] =
+      fields.slice(i, i + FIELDS.length) as [
+        string,
+        string,
+        string,
+        string,
+        string,
+        string,
+        string,
+        string,
+        string,
+      ];
 
     commits.push({
       sha: sha.trim(),
@@ -23,6 +31,7 @@ export function parseLog(output: string): Commit[] {
       authorName,
       authorEmail,
       authoredAt: Number(authoredAt) * 1000,
+      committedAt: Number(committedAt) * 1000,
       refs: parseDecorations(refs),
       subject,
       body: body.trim(),

@@ -40,7 +40,7 @@ export function useHistory(repositoryId: () => string, selectedId: () => string 
     log.data ? historyGraph(log.data.commits, hasChanges(), head()) : [],
   );
   const rows = createMemo(() =>
-    log.data ? toCommitRows(log.data.repositoryId, log.data.commits, status.data, graph()) : [],
+    log.data ? toCommitRows(log.data.repositoryId, log.data.commits, hasChanges(), graph()) : [],
   );
   const selected = createMemo(() => rows().find((row) => row.id === selectedId()) ?? rows()[0]);
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { refLabelMatches, toRefLabels } from "./ref-labels";
+import { describeRefLabel, refLabelMatches, toRefLabels } from "./ref-labels";
 
 describe("toRefLabels", () => {
   it("merges a local branch with its remote copies and puts the checked-out one first", () => {
@@ -96,5 +96,31 @@ describe("refLabelMatches", () => {
         "main",
       ),
     ).toBe(true);
+  });
+});
+
+describe("refLabelMatches for the checked-out branch", () => {
+  it("matches `HEAD`, like the branch's decoration in git", () => {
+    const [main] = toRefLabels([{ kind: "local", name: "main", current: true }]);
+    expect(refLabelMatches(main!, "head")).toBe(true);
+  });
+});
+
+describe("describeRefLabel", () => {
+  it("spells out what the pill's icons show", () => {
+    expect(
+      toRefLabels([
+        { kind: "local", name: "main", current: true },
+        { kind: "remote", name: "origin/main" },
+        { kind: "remote", name: "origin/feature" },
+        { kind: "tag", name: "v1" },
+        { kind: "head", name: "HEAD" },
+      ]).map(describeRefLabel),
+    ).toEqual([
+      "HEAD (detached)",
+      "main (checked out; local, origin)",
+      "origin/feature (remote)",
+      "v1 (tag)",
+    ]);
   });
 });

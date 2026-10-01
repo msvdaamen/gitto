@@ -1,6 +1,7 @@
 import type { CommitRef } from "@gitto/git/types";
 
 import type { GraphRow } from "@/git/graph";
+import type { RefLabel } from "@/git/ref-labels";
 
 export type { ChangedFile, CommitRef, FileStatus } from "@gitto/git/types";
 
@@ -50,6 +51,8 @@ export interface Commit {
   avatarColor: string;
   timestamp: string;
   refs: CommitRef[];
+  /** `refs` merged into the labels the history shows (see `toRefLabels`). */
+  labels: RefLabel[];
   isWip?: boolean;
 }
 

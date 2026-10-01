@@ -11,7 +11,7 @@ import { LineStats } from "@/components/ui/line-stats";
 import { toneClasses, type Tone } from "@/components/ui/tone";
 import { useCommitFiles } from "@/git/diff";
 import { useHistory } from "@/git/history";
-import { refLabelMatches, toRefLabels } from "@/git/ref-labels";
+import { refLabelMatches } from "@/git/ref-labels";
 import { headLabel, useStatus } from "@/git/status";
 import type { Commit } from "@/types/git";
 
@@ -102,7 +102,7 @@ function HistoryRows(props: {
           .filter(
             (commit) =>
               `${commit.message} ${commit.author} ${commit.id}`.toLowerCase().includes(needle()) ||
-              toRefLabels(commit.refs).some((label) => refLabelMatches(label, needle())),
+              commit.labels.some((label) => refLabelMatches(label, needle())),
           )
       : history.rows(),
   );
@@ -144,6 +144,7 @@ function HistoryRows(props: {
                 >
                   <WipRow
                     commit={commit()}
+                    searching={!!needle()}
                     selected={history.selected()?.id === commit().id}
                     onSelect={() => props.onSelect(commit().id)}
                   />
@@ -159,7 +160,10 @@ function HistoryRows(props: {
 
 function HistoryRow(props: {
   commit: Commit;
-  /** The lowercase search, if any; a label it matches comes first. */
+  /**
+   * The lowercase search, if any: a label it matches comes first, and the graph only shows the
+   * commit's node, as its lines would lead to rows the search hides.
+   */
   search: string;
   selected: boolean;
   onSelect: () => void;
@@ -177,7 +181,7 @@ function HistoryRow(props: {
       onClick={props.onSelect}
     >
       <HistoryRefLabels
-        refs={props.commit.refs}
+        labels={props.commit.labels}
         search={props.search}
         color={laneColor(props.commit.graph?.column ?? 0)}
       />
@@ -186,6 +190,7 @@ function HistoryRow(props: {
           {(row) => (
             <HistoryGraph
               row={row()}
+              nodeOnly={!!props.search}
               initials={props.commit.initials}
               avatarColor={props.commit.avatarColor}
             />
@@ -220,7 +225,13 @@ function HistoryRow(props: {
  * The uncommitted changes, set apart from the commits below: an amber, dashed-off row with a
  * hollow graph node that counts what's staged and what isn't.
  */
-function WipRow(props: { commit: Commit; selected: boolean; onSelect: () => void }) {
+function WipRow(props: {
+  commit: Commit;
+  /** Whether a search is active; the graph then only shows the node, like in `HistoryRow`. */
+  searching: boolean;
+  selected: boolean;
+  onSelect: () => void;
+}) {
   const status = useStatus(() => props.commit.repositoryId);
   const counts = createMemo(() => {
     const files = status.data?.files ?? [];
@@ -256,7 +267,9 @@ function WipRow(props: { commit: Commit; selected: boolean; onSelect: () => void
         </span>
       </span>
       <div class="h-full overflow-x-clip">
-        <Show when={props.commit.graph}>{(row) => <HistoryGraph row={row()} wip />}</Show>
+        <Show when={props.commit.graph}>
+          {(row) => <HistoryGraph row={row()} wip nodeOnly={props.searching} />}
+        </Show>
       </div>
       <span class="col-span-3 flex min-w-0 items-center gap-2">
         <strong class="truncate text-[10.5px] font-[620] text-text italic">

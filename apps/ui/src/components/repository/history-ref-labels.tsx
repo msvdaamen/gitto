@@ -5,8 +5,7 @@ import Laptop from "lucide-solid/icons/laptop";
 import Tag from "lucide-solid/icons/tag";
 import { createMemo, Show } from "solid-js";
 
-import { refLabelMatches, toRefLabels, type RefLabel } from "@/git/ref-labels";
-import type { CommitRef } from "@/types/git";
+import { describeRefLabel, refLabelMatches, type RefLabel } from "@/git/ref-labels";
 
 /** A ref pill's shape, border and text, in its lane's colour (`--lane`). */
 const PILL =
@@ -18,9 +17,9 @@ const PILL =
  * While searching (`search`, lowercase), a label the search matches comes first, so the row shows
  * why it matched.
  */
-export function HistoryRefLabels(props: { refs: CommitRef[]; search: string; color: string }) {
+export function HistoryRefLabels(props: { labels: RefLabel[]; search: string; color: string }) {
   const labels = createMemo(() => {
-    const all = toRefLabels(props.refs);
+    const all = props.labels;
     const match = props.search
       ? all.findIndex((label) => refLabelMatches(label, props.search))
       : -1;
@@ -33,10 +32,7 @@ export function HistoryRefLabels(props: { refs: CommitRef[]; search: string; col
       <Show when={labels().length > 1}>
         <span
           class={cn(PILL, "shrink-0 px-[4px] font-[680]")}
-          title={labels()
-            .slice(1)
-            .map((label) => label.name)
-            .join("\n")}
+          title={labels().slice(1).map(describeRefLabel).join("\n")}
         >
           +{labels().length - 1}
         </span>
@@ -55,7 +51,7 @@ function RefPill(props: { label: RefLabel }) {
         "flex min-w-0 items-center gap-[3px] bg-[color-mix(in_srgb,var(--lane)_16%,transparent)] px-[5px] [&>svg]:shrink-0",
         branch()?.current && "font-[720] text-text",
       )}
-      title={props.label.name}
+      title={describeRefLabel(props.label)}
     >
       <Show when={branch()?.current}>
         <Check size={9} strokeWidth={3} />

@@ -68,6 +68,8 @@ export function HistoryGraph(props: {
   initials?: string;
   avatarColor?: string;
   wip?: boolean;
+  /** Leave out the lines, e.g. while searching, when the rows they lead to may be hidden. */
+  nodeOnly?: boolean;
 }) {
   const node = () => x(props.row.column);
   const color = () => (props.wip ? "var(--amber)" : laneColor(props.row.column));
@@ -82,17 +84,19 @@ export function HistoryGraph(props: {
       fill="none"
       stroke-width="2"
     >
-      {/* By position: the edges are new objects whenever the history is refetched, and `<For>`
-          would re-create every path for them. */}
-      <Index each={props.row.through}>
-        {(edge) => <Line d={throughPath(edge())} edge={edge()} lane={edge().from} />}
-      </Index>
-      <Index each={props.row.top}>
-        {(edge) => <Line d={topPath(edge())} edge={edge()} lane={edge().from} />}
-      </Index>
-      <Index each={props.row.bottom}>
-        {(edge) => <Line d={bottomPath(edge())} edge={edge()} lane={edge().to} />}
-      </Index>
+      <Show when={!props.nodeOnly}>
+        {/* By position: the edges are new objects whenever the history is refetched, and `<For>`
+            would re-create every path for them. */}
+        <Index each={props.row.through}>
+          {(edge) => <Line d={throughPath(edge())} edge={edge()} lane={edge().from} />}
+        </Index>
+        <Index each={props.row.top}>
+          {(edge) => <Line d={topPath(edge())} edge={edge()} lane={edge().from} />}
+        </Index>
+        <Index each={props.row.bottom}>
+          {(edge) => <Line d={bottomPath(edge())} edge={edge()} lane={edge().to} />}
+        </Index>
+      </Show>
       <Show
         when={!props.wip}
         fallback={

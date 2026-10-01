@@ -96,6 +96,24 @@ describe("computeGraph", () => {
     ]);
   });
 
+  it("gives a merge its own lane instead of joining the dashed one to the same commit", () => {
+    const [, merge, , head] = computeGraph([
+      { sha: "wip", parents: ["head"], dashed: true },
+      { sha: "merge", parents: ["base", "head"] },
+      { sha: "base", parents: [] },
+      { sha: "head", parents: [] },
+    ]);
+
+    expect(merge!.bottom).toEqual([
+      { from: 1, to: 1 },
+      { from: 1, to: 2 },
+    ]);
+    expect(head!.top).toEqual([
+      { from: 0, to: 0, dashed: true },
+      { from: 2, to: 0 },
+    ]);
+  });
+
   it("doesn't reuse a lane that ends at a node for that node's merged parent", () => {
     const rows = computeGraph([
       { sha: "a", parents: ["m"] },
