@@ -2,7 +2,7 @@ import { render, screen } from "@solidjs/testing-library";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import userEvent from "@testing-library/user-event";
 import { createSignal } from "solid-js";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CommitDetails } from "./commit-details";
 import { HistoryTable } from "./history-table";
@@ -63,6 +63,16 @@ function commit(sha: string, subject: string, parents: string[]) {
 }
 
 describe("selecting a commit", () => {
+  beforeEach(() => {
+    // jsdom has no layout: give the history and the details some room, so their rows render.
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(500);
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(500);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("shows an older commit's details while there are uncommitted changes", async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const [selectedId, setSelectedId] = createSignal<string>();
@@ -79,6 +89,10 @@ describe("selecting a commit", () => {
     ));
 
     expect(await screen.findByText("Working directory")).toBeInTheDocument();
+    // Only the rows in view are rendered, so each says where it is in the whole list.
+    const options = await screen.findAllByRole("option");
+    expect(options.map((option) => option.getAttribute("aria-posinset"))).toEqual(["1", "2", "3"]);
+    expect(options.every((option) => option.getAttribute("aria-setsize") === "3")).toBe(true);
     await userEvent.click(screen.getByText("First"));
 
     expect(await screen.findByText("first.txt")).toBeInTheDocument();

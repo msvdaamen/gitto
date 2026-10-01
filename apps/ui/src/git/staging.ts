@@ -5,10 +5,18 @@ import { rpc } from "@/lib/rpc";
 
 import { gitKeys } from "./keys";
 
+/** Files to stage or unstage: their paths (see `stagingPaths`), or all of them. */
+export type StagingTarget = string[] | "all";
+
 export function useStage(repositoryId: () => string) {
   const queryClient = useQueryClient();
   return useMutation(() => ({
-    mutationFn: (paths: string[]) => rpc.git.staging.stage({ repositoryId: repositoryId(), paths }),
+    mutationFn: (target: StagingTarget) => {
+      const id = repositoryId();
+      return target === "all"
+        ? rpc.git.staging.stageAll({ repositoryId: id })
+        : rpc.git.staging.stage({ repositoryId: id, paths: target });
+    },
     // The watcher would catch this too, but refetching right away feels snappier.
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: gitKeys.uncommitted(repositoryId()) }),
@@ -18,8 +26,12 @@ export function useStage(repositoryId: () => string) {
 export function useUnstage(repositoryId: () => string) {
   const queryClient = useQueryClient();
   return useMutation(() => ({
-    mutationFn: (paths: string[]) =>
-      rpc.git.staging.unstage({ repositoryId: repositoryId(), paths }),
+    mutationFn: (target: StagingTarget) => {
+      const id = repositoryId();
+      return target === "all"
+        ? rpc.git.staging.unstageAll({ repositoryId: id })
+        : rpc.git.staging.unstage({ repositoryId: id, paths: target });
+    },
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: gitKeys.uncommitted(repositoryId()) }),
   }));

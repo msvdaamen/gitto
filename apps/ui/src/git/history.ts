@@ -17,6 +17,9 @@ export function useLog(repositoryId: () => string) {
         repositoryId: id,
         commits: await rpc.git.history.log({ repositoryId: id }, { signal }),
       }),
+      // Merged into the previous log, commit by commit, so a refetch that brings nothing new
+      // (the refs changed elsewhere, say) doesn't lay out and render the history again.
+      reconcile: "sha",
     };
   });
 }

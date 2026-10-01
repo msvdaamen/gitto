@@ -5,16 +5,18 @@ import FilePen from "lucide-solid/icons/file-pen";
 import Minus from "lucide-solid/icons/minus";
 import Plus from "lucide-solid/icons/plus";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
-import { Show, type JSX } from "solid-js";
+import { createSignal, Show, type JSX } from "solid-js";
 
 import { Badge } from "@/components/ui/badge";
 import { LinkButton } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Mascot } from "@/components/ui/mascot";
 import { SectionHeader } from "@/components/ui/section-header";
+import { UpdatingIndicator } from "@/components/ui/updating-indicator";
 import { useWorkingTreeChanges } from "@/git/diff";
 import { stagingPaths, useStage, useUnstage } from "@/git/staging";
 import { headLabel, useStatus } from "@/git/status";
+import { useDelayed } from "@/hooks/delayed";
 
 import { ChangedFileList, type FileAction } from "./changed-file-list";
 import { CommitForm } from "./commit-form";
@@ -30,6 +32,8 @@ export function WorkingTreeDetails(props: { repositoryId: string }) {
   const stage = useStage(() => props.repositoryId);
   const unstage = useUnstage(() => props.repositoryId);
   const busy = () => stage.isPending || unstage.isPending;
+  // The status is reloaded whenever a file changes, which takes a while in a big repository.
+  const updating = useDelayed(() => status.isRefetching);
 
   return (
     <div class="flex min-h-0 flex-1 flex-col">
@@ -45,6 +49,9 @@ export function WorkingTreeDetails(props: { repositoryId: string }) {
             {" · "}
             {changes.staged().length} staged, {changes.unstaged().length} unstaged
           </p>
+          <Show when={updating()}>
+            <UpdatingIndicator class="mt-1" />
+          </Show>
         </div>
       </div>
 
@@ -68,7 +75,7 @@ export function WorkingTreeDetails(props: { repositoryId: string }) {
         empty="Nothing left to stage."
         bulkLabel="Stage all"
         busy={busy()}
-        onBulk={() => stage.mutate(stagingPaths(changes.unstaged()))}
+        onBulk={() => stage.mutate("all")}
         action={{
           label: "Stage",
           icon: Plus,
@@ -84,7 +91,7 @@ export function WorkingTreeDetails(props: { repositoryId: string }) {
         empty="Stage files to include them in the next commit."
         bulkLabel="Unstage all"
         busy={busy()}
-        onBulk={() => unstage.mutate(stagingPaths(changes.staged()))}
+        onBulk={() => unstage.mutate("all")}
         action={{
           label: "Unstage",
           icon: Minus,
@@ -109,6 +116,7 @@ function FileSection(props: {
   onBulk: () => void;
   action: FileAction;
 }) {
+  const [scrollElement, setScrollElement] = createSignal<HTMLDivElement>();
   return (
     <section class="flex min-h-[130px] flex-1 basis-0 flex-col border-b border-border pt-3">
       <SectionHeader
@@ -122,12 +130,16 @@ function FileSection(props: {
           {props.bulkLabel}
         </LinkButton>
       </SectionHeader>
-      <div class="min-h-0 flex-1 overflow-y-auto px-2.5 pb-3">
+      <div ref={setScrollElement} class="min-h-0 flex-1 overflow-y-auto px-2.5 pb-3">
         <Show
           when={props.files.length}
           fallback={<p class="m-0 px-1 pb-1 text-[9px] text-faint">{props.empty}</p>}
         >
-          <ChangedFileList files={props.files} action={props.action} />
+          <ChangedFileList
+            files={props.files}
+            scrollElement={scrollElement()}
+            action={props.action}
+          />
         </Show>
       </div>
     </section>

@@ -3,19 +3,22 @@ import LoaderCircle from "lucide-solid/icons/loader-circle";
 import PencilLine from "lucide-solid/icons/pencil-line";
 import Search from "lucide-solid/icons/search";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
-import { createEffect, createMemo, Index, Show, Suspense, type JSX } from "solid-js";
+import { createEffect, createMemo, createSignal, Show, Suspense, type JSX } from "solid-js";
 
 import { Avatar } from "@/components/ui/avatar";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LineStats } from "@/components/ui/line-stats";
 import { toneClasses, type Tone } from "@/components/ui/tone";
+import { UpdatingIndicator } from "@/components/ui/updating-indicator";
+import { VirtualRows } from "@/components/ui/virtual-list";
 import { useCommitFiles } from "@/git/diff";
 import { useHistory } from "@/git/history";
 import { refLabelMatches } from "@/git/ref-labels";
 import { headLabel, useStatus } from "@/git/status";
+import { useDelayed } from "@/hooks/delayed";
 import type { Commit } from "@/types/git";
 
-import { graphWidth, HistoryGraph, laneColor } from "./history-graph";
+import { graphWidth, HistoryGraph, laneColor, ROW_HEIGHT } from "./history-graph";
 import { HistoryRefLabels } from "./history-ref-labels";
 
 /** The table's minimum width: its other columns', plus the graph's (see `graphWidth`). */
@@ -32,8 +35,10 @@ export function HistoryTable(props: {
   selectedId: string | undefined;
   onSelect: (id: string) => void;
 }) {
+  const [scrollElement, setScrollElement] = createSignal<HTMLElement>();
   return (
     <main
+      ref={setScrollElement}
       class="min-h-0 min-w-0 overflow-auto bg-bg"
       style={{ "--graph-width": `${graphWidth(1)}px` }}
     >
@@ -41,17 +46,18 @@ export function HistoryTable(props: {
         fallback={
           <>
             <HistoryHeader />
-            <EmptyState icon={LoaderCircle} title="Loading history…" />
+            <EmptyState icon={LoaderCircle} loading title="Loading history…" />
           </>
         }
       >
-        <HistoryRows {...props} />
+        <HistoryRows {...props} scrollElement={scrollElement()} />
       </Suspense>
     </main>
   );
 }
 
-function HistoryHeader() {
+/** The column headings; `updating` says the history is being reloaded. */
+function HistoryHeader(props: { updating?: boolean }) {
   return (
     <div
       class={cn(
@@ -62,7 +68,12 @@ function HistoryHeader() {
     >
       <span>Branch / tag</span>
       <span>Graph</span>
-      <span>Commit message</span>
+      <span class="justify-between gap-2">
+        Commit message
+        <Show when={props.updating}>
+          <UpdatingIndicator />
+        </Show>
+      </span>
       <span>Author</span>
       <span>Date</span>
     </div>
@@ -78,6 +89,8 @@ function HistoryRows(props: {
   search: string;
   selectedId: string | undefined;
   onSelect: (id: string) => void;
+  /** The table's scroll container; only the rows in view are rendered. */
+  scrollElement: HTMLElement | undefined;
 }) {
   const history = useHistory(
     () => props.repositoryId,
@@ -91,6 +104,8 @@ function HistoryRows(props: {
       props.onSelect(row.id);
     }
   });
+  // The log is reloaded whenever a branch or tag changes, which takes a while in a big repository.
+  const updating = useDelayed(() => history.log.isRefetching);
   const lanes = createMemo(() =>
     Math.max(1, ...history.rows().map((row) => row.graph?.width ?? 1)),
   );
@@ -109,7 +124,7 @@ function HistoryRows(props: {
 
   return (
     <div class={MIN_WIDTH} style={{ "--graph-width": `${graphWidth(lanes())}px` }}>
-      <HistoryHeader />
+      <HistoryHeader updating={updating()} />
       <div role="listbox" aria-label="Commit history">
         <Show
           when={!history.log.error}
@@ -127,10 +142,14 @@ function HistoryRows(props: {
               </EmptyState>
             }
           >
-            {/* By position rather than `<For>`'s object identity: the rows are rebuilt whenever the log
-            or status is refetched, and re-creating them would restart their queries. */}
-            <Index each={visibleRows()}>
-              {(commit) => (
+            {/* By position rather than object identity: the rows are rebuilt whenever the log or
+            the uncommitted changes change, and re-creating them would restart their queries. */}
+            <VirtualRows
+              items={visibleRows()}
+              rowHeight={ROW_HEIGHT}
+              scrollElement={props.scrollElement}
+            >
+              {(commit, index) => (
                 <Show
                   when={commit().isWip}
                   fallback={
@@ -138,6 +157,7 @@ function HistoryRows(props: {
                       commit={commit()}
                       search={needle()}
                       selected={history.selected()?.id === commit().id}
+                      position={{ index, count: visibleRows().length }}
                       onSelect={() => props.onSelect(commit().id)}
                     />
                   }
@@ -146,16 +166,26 @@ function HistoryRows(props: {
                     commit={commit()}
                     searching={!!needle()}
                     selected={history.selected()?.id === commit().id}
+                    position={{ index, count: visibleRows().length }}
                     onSelect={() => props.onSelect(commit().id)}
                   />
                 </Show>
               )}
-            </Index>
+            </VirtualRows>
           </Show>
         </Show>
       </div>
     </div>
   );
+}
+
+/**
+ * A row's place in the list. Only the rows in view are rendered, so assistive tech needs to be told
+ * how long the list is.
+ */
+interface RowPosition {
+  index: number;
+  count: number;
 }
 
 function HistoryRow(props: {
@@ -166,15 +196,18 @@ function HistoryRow(props: {
    */
   search: string;
   selected: boolean;
+  position: RowPosition;
   onSelect: () => void;
 }) {
   return (
     <button
       role="option"
       aria-selected={props.selected ? "true" : "false"}
+      aria-posinset={props.position.index + 1}
+      aria-setsize={props.position.count}
       class={cn(
         COLUMNS,
-        "group grid h-[47px] w-full cursor-pointer items-center border-0 border-b border-border-soft bg-transparent p-0 text-left text-muted hover:bg-panel-hover [&>span]:min-w-0 [&>span]:px-[9px]",
+        "group grid h-full w-full cursor-pointer items-center border-0 border-b border-border-soft bg-transparent p-0 text-left text-muted hover:bg-panel-hover [&>span]:min-w-0 [&>span]:px-[9px]",
         props.selected &&
           "bg-[linear-gradient(90deg,var(--primary-soft),color-mix(in_srgb,var(--primary-soft)_35%,transparent))] text-text-soft shadow-[inset_2px_0_var(--primary)]",
       )}
@@ -230,6 +263,7 @@ function WipRow(props: {
   /** Whether a search is active; the graph then only shows the node, like in `HistoryRow`. */
   searching: boolean;
   selected: boolean;
+  position: RowPosition;
   onSelect: () => void;
 }) {
   const status = useStatus(() => props.commit.repositoryId);
@@ -246,9 +280,11 @@ function WipRow(props: {
     <button
       role="option"
       aria-selected={props.selected ? "true" : "false"}
+      aria-posinset={props.position.index + 1}
+      aria-setsize={props.position.count}
       class={cn(
         COLUMNS,
-        "grid h-[47px] w-full cursor-pointer items-center border-0 border-b border-dashed border-[color-mix(in_srgb,var(--amber)_45%,var(--border))] p-0 text-left text-muted shadow-[inset_2px_0_var(--amber)] [&>span]:min-w-0 [&>span]:px-[9px]",
+        "grid h-full w-full cursor-pointer items-center border-0 border-b border-dashed border-[color-mix(in_srgb,var(--amber)_45%,var(--border))] p-0 text-left text-muted shadow-[inset_2px_0_var(--amber)] [&>span]:min-w-0 [&>span]:px-[9px]",
         props.selected
           ? "bg-[linear-gradient(90deg,color-mix(in_srgb,var(--amber)_24%,transparent),color-mix(in_srgb,var(--amber)_8%,transparent))]"
           : "bg-[color-mix(in_srgb,var(--amber-soft)_70%,transparent)] hover:bg-amber-soft",
