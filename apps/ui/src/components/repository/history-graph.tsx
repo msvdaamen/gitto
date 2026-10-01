@@ -1,5 +1,6 @@
-import { Index, Show } from "solid-js";
+import { createUniqueId, Index, Show } from "solid-js";
 
+import { useAvatar } from "@/git/avatars";
 import type { GraphEdge, GraphRow } from "@/git/graph";
 
 /** Width of a lane, and the space left and right of the lanes. */
@@ -62,9 +63,12 @@ function bottomPath(edge: GraphEdge): string {
 /**
  * A commit's row of the history graph. Commits are avatars ringed in their lane's colour, merges
  * small dots, and the uncommitted changes a dashed, hollow circle with a dashed line to HEAD.
+ * Hovering a commit or merge shows its author.
  */
 export function HistoryGraph(props: {
   row: GraphRow;
+  author?: string;
+  email?: string;
   initials?: string;
   avatarColor?: string;
   wip?: boolean;
@@ -110,32 +114,75 @@ export function HistoryGraph(props: {
           />
         }
       >
-        <Show
-          when={!isMerge()}
-          fallback={<circle cx={node()} cy={MIDDLE} r={4.5} fill={color()} stroke="none" />}
-        >
-          <circle
-            cx={node()}
-            cy={MIDDLE}
-            r={NODE_RADIUS}
-            fill={props.avatarColor ?? color()}
-            stroke={color()}
-          />
-          <text
-            x={node()}
-            y={MIDDLE}
-            fill="#fff"
-            stroke="none"
-            font-size="6.5"
-            font-weight="700"
-            text-anchor="middle"
-            dominant-baseline="central"
+        <g>
+          <Show when={props.author}>{(author) => <title>{author()}</title>}</Show>
+          <Show
+            when={!isMerge()}
+            fallback={<circle cx={node()} cy={MIDDLE} r={4.5} fill={color()} stroke="none" />}
           >
-            {props.initials}
-          </text>
-        </Show>
+            <CommitNode
+              x={node()}
+              color={color()}
+              email={props.email}
+              initials={props.initials}
+              avatarColor={props.avatarColor}
+            />
+          </Show>
+        </g>
       </Show>
     </svg>
+  );
+}
+
+/** A commit's avatar: its initials, covered by the author's profile picture if they have one. */
+function CommitNode(props: {
+  x: number;
+  color: string;
+  email?: string;
+  initials?: string;
+  avatarColor?: string;
+}) {
+  const clipId = createUniqueId();
+  const avatar = useAvatar(() => props.email);
+  // Inside the ring, which is centred on the circle's edge.
+  const inner = NODE_RADIUS - 1;
+
+  return (
+    <>
+      <circle cx={props.x} cy={MIDDLE} r={NODE_RADIUS} fill={props.avatarColor ?? props.color} />
+      <text
+        x={props.x}
+        y={MIDDLE}
+        fill="#fff"
+        stroke="none"
+        font-size="6.5"
+        font-weight="700"
+        text-anchor="middle"
+        dominant-baseline="central"
+      >
+        {props.initials}
+      </text>
+      <Show when={avatar.url()}>
+        {(url) => (
+          <>
+            <clipPath id={clipId}>
+              <circle cx={props.x} cy={MIDDLE} r={inner} />
+            </clipPath>
+            <image
+              href={url()}
+              x={props.x - inner}
+              y={MIDDLE - inner}
+              width={inner * 2}
+              height={inner * 2}
+              preserveAspectRatio="xMidYMid slice"
+              clip-path={`url(#${clipId})`}
+              onError={avatar.onError}
+            />
+          </>
+        )}
+      </Show>
+      <circle cx={props.x} cy={MIDDLE} r={NODE_RADIUS} stroke={props.color} />
+    </>
   );
 }
 

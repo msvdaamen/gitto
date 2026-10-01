@@ -75,6 +75,7 @@ export function toCommitRow(repositoryId: string, commit: GitCommit, graph?: Gra
     message: commit.subject,
     description: commit.body || undefined,
     author: commit.authorName,
+    email: commit.authorEmail,
     initials: initials(commit.authorName),
     avatarColor: avatarColor(commit.authorEmail),
     // The commit date, which the history is sorted by.

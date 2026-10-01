@@ -47,6 +47,8 @@ export interface Commit {
   message: string;
   description?: string;
   author: string;
+  /** The author's email address, which their profile picture is looked up by. */
+  email?: string;
   initials: string;
   avatarColor: string;
   timestamp: string;

@@ -5,7 +5,6 @@ import Search from "lucide-solid/icons/search";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
 import { createEffect, createMemo, Index, Show, Suspense, type JSX } from "solid-js";
 
-import { Avatar } from "@/components/ui/avatar";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LineStats } from "@/components/ui/line-stats";
 import { toneClasses, type Tone } from "@/components/ui/tone";
@@ -19,11 +18,14 @@ import { graphWidth, HistoryGraph, laneColor } from "./history-graph";
 import { HistoryRefLabels } from "./history-ref-labels";
 
 /** The table's minimum width: its other columns', plus the graph's (see `graphWidth`). */
-const MIN_WIDTH = "min-w-[calc(560px+var(--graph-width))]";
-/** The table's columns: branch / tag, graph, message, author and date. */
+const MIN_WIDTH = "min-w-[calc(445px+var(--graph-width))]";
+/**
+ * The table's columns: branch / tag, graph, message and date. The author is in the graph, as their
+ * avatar, with their name on hover.
+ */
 const COLUMNS = cn(
   MIN_WIDTH,
-  "grid-cols-[minmax(105px,.8fr)_var(--graph-width)_minmax(240px,2.2fr)_minmax(115px,.85fr)_100px]",
+  "grid-cols-[minmax(105px,.8fr)_var(--graph-width)_minmax(240px,3fr)_100px]",
 );
 
 export function HistoryTable(props: {
@@ -63,7 +65,6 @@ function HistoryHeader() {
       <span>Branch / tag</span>
       <span>Graph</span>
       <span>Commit message</span>
-      <span>Author</span>
       <span>Date</span>
     </div>
   );
@@ -191,6 +192,8 @@ function HistoryRow(props: {
             <HistoryGraph
               row={row()}
               nodeOnly={!!props.search}
+              author={props.commit.author}
+              email={props.commit.email}
               initials={props.commit.initials}
               avatarColor={props.commit.avatarColor}
             />
@@ -198,23 +201,16 @@ function HistoryRow(props: {
         </Show>
       </div>
       <span class="flex min-w-0 items-center justify-between gap-[7px]">
-        <strong class="truncate text-[10.5px] font-[570] text-text">{props.commit.message}</strong>
+        <strong class="truncate text-[10.5px] font-[570] text-text">
+          {props.commit.message}
+          {/* The graph, where the author's avatar is, is hidden from screen readers. */}
+          <span class="sr-only">, by {props.commit.author}</span>
+        </strong>
         <Show when={props.selected}>
           <Suspense>
             <CommitTotals commit={props.commit} />
           </Suspense>
         </Show>
-      </span>
-      <span class="flex items-center gap-[7px]">
-        <Avatar initials={props.commit.initials} color={props.commit.avatarColor} />
-        <span class="truncate text-[9.5px]">
-          {props.commit.author.split(" ").map((part, index) => (
-            <>
-              {index > 0 && " "}
-              <span>{part}</span>
-            </>
-          ))}
-        </span>
       </span>
       <span class="truncate text-[9px]">{props.commit.timestamp}</span>
     </button>
@@ -271,7 +267,7 @@ function WipRow(props: {
           {(row) => <HistoryGraph row={row()} wip nodeOnly={props.searching} />}
         </Show>
       </div>
-      <span class="col-span-3 flex min-w-0 items-center gap-2">
+      <span class="col-span-2 flex min-w-0 items-center gap-2">
         <strong class="truncate text-[10.5px] font-[620] text-text italic">
           {props.commit.message}
         </strong>

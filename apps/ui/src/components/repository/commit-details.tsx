@@ -103,7 +103,12 @@ function CommitSummary(props: {
   return (
     <div class="border-b border-border p-4">
       <div class="flex items-center gap-[9px]">
-        <Avatar initials={props.commit.initials} color={props.commit.avatarColor} size="md" />
+        <Avatar
+          initials={props.commit.initials}
+          email={props.commit.email}
+          color={props.commit.avatarColor}
+          size="md"
+        />
         <div class="flex flex-col gap-0.5">
           <strong class="text-[10.5px]">{props.commit.author}</strong>
           <span class="text-[8.5px] text-faint">{props.commit.timestamp}</span>
