@@ -25,7 +25,7 @@ export function Button(props: {
       type={props.type ?? "button"}
       disabled={props.disabled}
       class={cn(
-        "inline-flex h-9 cursor-pointer items-center justify-center gap-2 rounded-lg border border-border px-3.5 text-[12.5px] font-[640] transition-[transform,border-color,background] duration-150 enabled:hover:-translate-y-px focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-default disabled:opacity-50 motion-reduce:transition-none",
+        "inline-flex h-9 cursor-pointer items-center justify-center gap-2 rounded-lg border border-border px-3.5 text-[12.5px] font-[640] transition-[transform,border-color,background] duration-150 enabled:hover:-translate-y-px focus-ring disabled:cursor-default disabled:opacity-50 motion-reduce:transition-none",
         variants[props.variant ?? "secondary"],
         props.class,
       )}
@@ -70,7 +70,7 @@ export function IconButton(props: {
     <button
       type="button"
       class={cn(
-        "grid size-[30px] shrink-0 cursor-pointer place-items-center rounded-[7px] border border-transparent bg-transparent p-0 text-muted hover:bg-panel-hover hover:text-text focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary",
+        "grid size-[30px] shrink-0 cursor-pointer place-items-center rounded-[7px] border border-transparent bg-transparent p-0 text-muted hover:bg-panel-hover hover:text-text focus-ring",
         props.active && "bg-primary-soft text-primary-strong",
         props.class,
       )}

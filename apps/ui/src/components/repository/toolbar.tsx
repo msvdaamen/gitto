@@ -41,8 +41,8 @@ export function RepositoryToolbar(props: {
   onToggleDetails: () => void;
 }) {
   return (
-    <header class="flex min-w-0 items-center gap-[7px] border-b border-border bg-panel px-[9px] max-[700px]:gap-[3px]">
-      <div class="flex min-w-[195px] items-center gap-[7px] max-[900px]:min-w-fit">
+    <header class="flex min-w-0 items-center gap-[7px] border-b border-border bg-panel px-[9px] max-sm:gap-[3px]">
+      <div class="flex min-w-[195px] items-center gap-[7px] max-md:min-w-fit">
         <IconButton
           label="Toggle sidebar"
           icon={PanelLeft}
@@ -53,7 +53,7 @@ export function RepositoryToolbar(props: {
           <span class="grid size-[27px] shrink-0 place-items-center rounded-[7px] bg-primary-soft text-primary-strong">
             <GitBranch size={15} />
           </span>
-          <div class="flex min-w-0 flex-col gap-px max-[900px]:hidden">
+          <div class="flex min-w-0 flex-col gap-px max-md:hidden">
             <Suspense>
               <RepositoryName repositoryId={props.repositoryId} />
             </Suspense>
@@ -67,10 +67,10 @@ export function RepositoryToolbar(props: {
               {index() === 2 && <Divider class="h-6" />}
               <button
                 class={cn(
-                  "flex h-[38px] min-w-[43px] cursor-pointer flex-col items-center justify-center gap-0.5 rounded-md border-0 bg-transparent px-1.5 text-muted hover:bg-panel-hover hover:text-text max-[900px]:min-w-9 max-[900px]:[&>span]:hidden",
+                  "flex h-[38px] min-w-[43px] cursor-pointer flex-col items-center justify-center gap-0.5 rounded-md border-0 bg-transparent px-1.5 text-muted hover:bg-panel-hover hover:text-text max-md:min-w-9 max-md:[&>span]:hidden",
                   action.accent && "text-blue",
-                  [0, 1, 5, 6].includes(index()) && "max-[1100px]:hidden",
-                  index() >= 4 && "max-[700px]:hidden",
+                  [0, 1, 5, 6].includes(index()) && "max-lg:hidden",
+                  index() >= 4 && "max-sm:hidden",
                 )}
                 title={action.label}
               >
@@ -81,7 +81,7 @@ export function RepositoryToolbar(props: {
           )}
         </For>
       </div>
-      <div class="ml-auto max-[900px]:min-w-[115px] max-[700px]:min-w-[90px]">
+      <div class="ml-auto max-md:min-w-[115px] max-sm:min-w-[90px]">
         <TextInput
           compact
           value={props.search}

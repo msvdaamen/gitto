@@ -45,11 +45,11 @@ function RouteComponent() {
           "relative grid min-h-0 min-w-0 overflow-hidden",
           sidebarOpen()
             ? detailsOpen()
-              ? "grid-cols-[220px_minmax(0,1fr)_326px] max-[1100px]:grid-cols-[210px_minmax(0,1fr)] max-[900px]:grid-cols-[52px_minmax(0,1fr)]"
-              : "grid-cols-[220px_minmax(0,1fr)_0] max-[1100px]:grid-cols-[210px_minmax(0,1fr)] max-[900px]:grid-cols-[52px_minmax(0,1fr)]"
+              ? "grid-cols-[220px_minmax(0,1fr)_326px] max-lg:grid-cols-[210px_minmax(0,1fr)] max-md:grid-cols-[52px_minmax(0,1fr)]"
+              : "grid-cols-[220px_minmax(0,1fr)_0] max-lg:grid-cols-[210px_minmax(0,1fr)] max-md:grid-cols-[52px_minmax(0,1fr)]"
             : detailsOpen()
-              ? "grid-cols-[0_minmax(0,1fr)_326px] max-[1100px]:grid-cols-[0_minmax(0,1fr)]"
-              : "grid-cols-[0_minmax(0,1fr)_0] max-[1100px]:grid-cols-[0_minmax(0,1fr)]",
+              ? "grid-cols-[0_minmax(0,1fr)_326px] max-lg:grid-cols-[0_minmax(0,1fr)]"
+              : "grid-cols-[0_minmax(0,1fr)_0] max-lg:grid-cols-[0_minmax(0,1fr)]",
         )}
       >
         <RefsSidebar repositoryId={repositoryId()} open={sidebarOpen()} />
@@ -63,8 +63,8 @@ function RouteComponent() {
 
         <aside
           class={cn(
-            "min-h-0 min-w-0 overflow-hidden border-l border-border bg-panel transition-[opacity,transform] duration-150 motion-reduce:transition-none max-[1100px]:absolute max-[1100px]:top-0 max-[1100px]:right-0 max-[1100px]:bottom-0 max-[1100px]:z-[5] max-[1100px]:w-[340px] max-[1100px]:shadow-[-18px_0_40px_rgba(5,3,7,.25)] max-[700px]:w-[min(340px,calc(100%_-_52px))]",
-            !detailsOpen() && "pointer-events-none opacity-0 max-[1100px]:translate-x-full",
+            "min-h-0 min-w-0 overflow-hidden border-l border-border bg-panel transition-[opacity,transform] duration-150 motion-reduce:transition-none max-lg:absolute max-lg:top-0 max-lg:right-0 max-lg:bottom-0 max-lg:z-[5] max-lg:w-[340px] max-lg:shadow-[-18px_0_40px_rgba(5,3,7,.25)] max-sm:w-[min(340px,calc(100%_-_52px))]",
+            !detailsOpen() && "pointer-events-none opacity-0 max-lg:translate-x-full",
           )}
         >
           <CommitDetails repositoryId={repositoryId()} selectedId={selectedId()} />

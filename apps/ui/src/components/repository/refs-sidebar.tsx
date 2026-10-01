@@ -43,11 +43,11 @@ export function RefsSidebar(props: { repositoryId: string; open: boolean }) {
   return (
     <aside
       class={cn(
-        "relative flex min-h-0 min-w-0 flex-col overflow-hidden border-r border-border bg-panel transition-opacity duration-150 motion-reduce:transition-none max-[900px]:w-[52px]",
+        "relative flex min-h-0 min-w-0 flex-col overflow-hidden border-r border-border bg-panel transition-opacity duration-150 motion-reduce:transition-none max-md:w-[52px]",
         !props.open && "pointer-events-none opacity-0",
       )}
     >
-      <div class="px-2.5 pt-[9px] pb-2 max-[900px]:hidden">
+      <div class="px-2.5 pt-[9px] pb-2 max-md:hidden">
         <SegmentedControl
           value={mode()}
           options={MODES.map((option) => option.label)}
@@ -57,7 +57,7 @@ export function RefsSidebar(props: { repositoryId: string; open: boolean }) {
       <RailModeSwitch value={mode()} onChange={setMode} />
       <Show when={mode() === "List"} fallback={<AgentPlaceholder />}>
         <nav
-          class="flex min-h-0 flex-1 flex-col overflow-hidden pb-[35px] max-[900px]:items-center max-[900px]:gap-1 max-[900px]:pt-2"
+          class="flex min-h-0 flex-1 flex-col overflow-hidden pb-[35px] max-md:items-center max-md:gap-1 max-md:pt-2"
           aria-label="Repository references"
         >
           <Suspense
@@ -69,7 +69,7 @@ export function RefsSidebar(props: { repositoryId: string; open: boolean }) {
           </Suspense>
         </nav>
       </Show>
-      <button class="absolute right-0 bottom-0 left-0 flex h-[34px] cursor-pointer items-center gap-[7px] border-0 border-t border-border-soft bg-panel px-3 text-[9px] text-faint hover:text-text-soft max-[900px]:justify-center max-[900px]:px-0 max-[900px]:[&>span]:hidden">
+      <button class="absolute right-0 bottom-0 left-0 flex h-[34px] cursor-pointer items-center gap-[7px] border-0 border-t border-border-soft bg-panel px-3 text-[9px] text-faint hover:text-text-soft max-md:justify-center max-md:px-0 max-md:[&>span]:hidden">
         <Settings size={15} />
         <span>Configure sidebar</span>
       </button>
@@ -81,7 +81,7 @@ export function RefsSidebar(props: { repositoryId: string; open: boolean }) {
 function RailModeSwitch(props: { value: string; onChange: (value: string) => void }) {
   return (
     <div
-      class="hidden flex-col items-center gap-1 border-b border-border-soft py-2 max-[900px]:flex"
+      class="hidden flex-col items-center gap-1 border-b border-border-soft py-2 max-md:flex"
       role="group"
       aria-label="Sidebar view"
     >
@@ -89,7 +89,7 @@ function RailModeSwitch(props: { value: string; onChange: (value: string) => voi
         {(option) => (
           <button
             class={cn(
-              "grid size-9 cursor-pointer place-items-center rounded-lg border-0 bg-transparent text-muted hover:bg-panel-hover hover:text-text focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary",
+              "grid size-9 cursor-pointer place-items-center rounded-lg border-0 bg-transparent text-muted hover:bg-panel-hover hover:text-text focus-ring-inset",
               props.value === option.label &&
                 "bg-primary-soft text-primary-strong hover:bg-primary-soft hover:text-primary-strong",
             )}
@@ -285,7 +285,7 @@ function SidebarSection<T>(props: {
   return (
     <section
       class={cn(
-        "flex min-h-[31px] flex-col border-t border-border-soft max-[900px]:min-h-0 max-[900px]:flex-none max-[900px]:border-0",
+        "flex min-h-[31px] flex-col border-t border-border-soft max-md:min-h-0 max-md:flex-none max-md:border-0",
         expanded() ? "flex-1" : "flex-none",
       )}
       style={{
@@ -296,7 +296,7 @@ function SidebarSection<T>(props: {
     >
       <button
         class={cn(
-          "flex h-[30px] w-full shrink-0 cursor-pointer items-center gap-1.5 border-0 bg-panel-raised px-2.5 text-left text-muted hover:bg-panel-hover hover:text-text-soft focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary max-[900px]:hidden",
+          "flex h-[30px] w-full shrink-0 cursor-pointer items-center gap-1.5 border-0 bg-panel-raised px-2.5 text-left text-muted hover:bg-panel-hover hover:text-text-soft focus-ring-inset max-md:hidden",
           !props.collapsed && "text-text-soft",
         )}
         aria-expanded={!props.collapsed ? "true" : "false"}
@@ -317,7 +317,7 @@ function SidebarSection<T>(props: {
           items={props.items}
           rowHeight={ROW_HEIGHT}
           padding={LIST_PADDING}
-          class="border-t border-border-soft px-1.5 max-[900px]:hidden"
+          class="border-t border-border-soft px-1.5 max-md:hidden"
         >
           {props.children}
         </VirtualList>
@@ -357,7 +357,7 @@ function RailSection<T>(props: {
   return (
     <Popover placement="right-start" gutter={10}>
       <Popover.Trigger
-        class="relative hidden size-9 cursor-pointer place-items-center rounded-lg border-0 bg-transparent text-muted hover:bg-panel-hover hover:text-text focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary data-expanded:bg-primary-soft data-expanded:text-primary-strong max-[900px]:grid"
+        class="relative hidden size-9 cursor-pointer place-items-center rounded-lg border-0 bg-transparent text-muted hover:bg-panel-hover hover:text-text focus-ring-inset data-expanded:bg-primary-soft data-expanded:text-primary-strong max-md:grid"
         title={props.title}
         aria-label={`${props.title} (${props.count})`}
       >
@@ -408,7 +408,7 @@ function SidebarFolder(props: {
 }) {
   return (
     <button
-      class="grid h-7 w-full cursor-pointer grid-cols-[12px_16px_minmax(0,1fr)_auto] items-center gap-[5px] rounded-[5px] border-0 bg-transparent pr-[7px] text-left text-muted hover:bg-panel-hover hover:text-text-soft focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+      class="grid h-7 w-full cursor-pointer grid-cols-[12px_16px_minmax(0,1fr)_auto] items-center gap-[5px] rounded-[5px] border-0 bg-transparent pr-[7px] text-left text-muted hover:bg-panel-hover hover:text-text-soft focus-ring-inset"
       style={{ "padding-left": `${8 + props.depth * DEPTH_INDENT}px` }}
       aria-expanded={!props.collapsed ? "true" : "false"}
       title={props.name}
@@ -435,7 +435,7 @@ function SidebarRow(props: {
   return (
     <button
       class={cn(
-        "grid h-7 w-full cursor-pointer grid-cols-[16px_minmax(0,1fr)_auto_auto] items-center gap-[5px] rounded-[5px] border-0 bg-transparent pr-[7px] text-left text-muted hover:bg-panel-hover hover:text-text-soft focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary",
+        "grid h-7 w-full cursor-pointer grid-cols-[16px_minmax(0,1fr)_auto_auto] items-center gap-[5px] rounded-[5px] border-0 bg-transparent pr-[7px] text-left text-muted hover:bg-panel-hover hover:text-text-soft focus-ring-inset",
         props.active && "bg-primary-soft text-text [&>svg]:text-primary-strong",
       )}
       style={{ "padding-left": `${25 + (props.depth ?? 0) * DEPTH_INDENT}px` }}
@@ -460,7 +460,7 @@ function SidebarRow(props: {
 
 function AgentPlaceholder() {
   return (
-    <div class="flex flex-col items-center px-[18px] py-[65px] text-center max-[900px]:px-0 max-[900px]:py-4 max-[900px]:[&>:not(:first-child)]:hidden">
+    <div class="flex flex-col items-center px-[18px] py-[65px] text-center max-md:px-0 max-md:py-4 max-md:[&>:not(:first-child)]:hidden">
       <Mascot size={38} />
       <strong class="mt-3 text-[11px]">No agents running</strong>
       <p class="mt-1.5 mb-3 text-[9px] leading-1.5 text-muted">

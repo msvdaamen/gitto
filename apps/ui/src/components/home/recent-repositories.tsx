@@ -24,7 +24,7 @@ export function RecentRepositories(props: {
 
   return (
     <section class="rounded-[11px] border border-border bg-panel p-5">
-      <div class="mb-4 flex items-center justify-between gap-4 max-[700px]:flex-col max-[700px]:items-start max-[700px]:[&>label]:w-full">
+      <div class="mb-4 flex items-center justify-between gap-4 max-sm:flex-col max-sm:items-start max-sm:[&>label]:w-full">
         <div>
           <h2 class="mt-0 mb-0.75 text-[15px] tracking-[-.2px]">Recent repositories</h2>
           <p class="m-0 text-[10.5px] text-muted">Your latest local workspaces</p>

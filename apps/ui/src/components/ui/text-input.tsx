@@ -16,7 +16,7 @@ export function TextInput(props: {
       class={cn(
         "flex items-center gap-2 rounded-lg border border-border px-2 pr-2 pl-2.5 text-muted focus-within:border-[color-mix(in_srgb,var(--primary)_62%,var(--border))] focus-within:shadow-[0_0_0_3px_var(--primary-soft)]",
         props.compact
-          ? "h-7.5 w-[min(210px,17vw)] bg-bg max-[700px]:w-full"
+          ? "h-7.5 w-[min(210px,17vw)] bg-bg max-sm:w-full"
           : "h-8.5 w-56 bg-panel",
       )}
       value={props.value}
