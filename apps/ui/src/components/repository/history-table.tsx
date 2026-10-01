@@ -3,12 +3,13 @@ import LoaderCircle from "lucide-solid/icons/loader-circle";
 import PencilLine from "lucide-solid/icons/pencil-line";
 import Search from "lucide-solid/icons/search";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
-import { createEffect, createMemo, Index, Show, Suspense, type JSX } from "solid-js";
+import { createEffect, createMemo, createSignal, Show, Suspense, type JSX } from "solid-js";
 
 import { Avatar } from "@/components/ui/avatar";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LineStats } from "@/components/ui/line-stats";
 import { toneClasses, type Tone } from "@/components/ui/tone";
+import { VirtualRows } from "@/components/ui/virtual-list";
 import { useCommitFiles } from "@/git/diff";
 import { useHistory } from "@/git/history";
 import { refLabelMatches } from "@/git/ref-labels";
@@ -20,6 +21,8 @@ import { HistoryRefLabels } from "./history-ref-labels";
 
 /** The table's minimum width: its other columns', plus the graph's (see `graphWidth`). */
 const MIN_WIDTH = "min-w-[calc(560px+var(--graph-width))]";
+/** Height of a row, including its bottom border (`h-[47px]`). */
+const ROW_HEIGHT = 47;
 /** The table's columns: branch / tag, graph, message, author and date. */
 const COLUMNS = cn(
   MIN_WIDTH,
@@ -32,8 +35,10 @@ export function HistoryTable(props: {
   selectedId: string | undefined;
   onSelect: (id: string) => void;
 }) {
+  const [scrollElement, setScrollElement] = createSignal<HTMLElement>();
   return (
     <main
+      ref={setScrollElement}
       class="min-h-0 min-w-0 overflow-auto bg-bg"
       style={{ "--graph-width": `${graphWidth(1)}px` }}
     >
@@ -45,7 +50,7 @@ export function HistoryTable(props: {
           </>
         }
       >
-        <HistoryRows {...props} />
+        <HistoryRows {...props} scrollElement={scrollElement()} />
       </Suspense>
     </main>
   );
@@ -78,6 +83,8 @@ function HistoryRows(props: {
   search: string;
   selectedId: string | undefined;
   onSelect: (id: string) => void;
+  /** The table's scroll container; only the rows in view are rendered. */
+  scrollElement: HTMLElement | undefined;
 }) {
   const history = useHistory(
     () => props.repositoryId,
@@ -127,9 +134,13 @@ function HistoryRows(props: {
               </EmptyState>
             }
           >
-            {/* By position rather than `<For>`'s object identity: the rows are rebuilt whenever the log
-            or status is refetched, and re-creating them would restart their queries. */}
-            <Index each={visibleRows()}>
+            {/* By position rather than object identity: the rows are rebuilt whenever the log or
+            the uncommitted changes change, and re-creating them would restart their queries. */}
+            <VirtualRows
+              items={visibleRows()}
+              rowHeight={ROW_HEIGHT}
+              scrollElement={props.scrollElement}
+            >
               {(commit) => (
                 <Show
                   when={commit().isWip}
@@ -150,7 +161,7 @@ function HistoryRows(props: {
                   />
                 </Show>
               )}
-            </Index>
+            </VirtualRows>
           </Show>
         </Show>
       </div>

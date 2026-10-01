@@ -5,7 +5,7 @@ import FilePen from "lucide-solid/icons/file-pen";
 import Minus from "lucide-solid/icons/minus";
 import Plus from "lucide-solid/icons/plus";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
-import { Show, type JSX } from "solid-js";
+import { createSignal, Show, type JSX } from "solid-js";
 
 import { Badge } from "@/components/ui/badge";
 import { LinkButton } from "@/components/ui/button";
@@ -109,6 +109,7 @@ function FileSection(props: {
   onBulk: () => void;
   action: FileAction;
 }) {
+  const [scrollElement, setScrollElement] = createSignal<HTMLDivElement>();
   return (
     <section class="flex min-h-[130px] flex-1 basis-0 flex-col border-b border-border pt-3">
       <SectionHeader
@@ -122,12 +123,16 @@ function FileSection(props: {
           {props.bulkLabel}
         </LinkButton>
       </SectionHeader>
-      <div class="min-h-0 flex-1 overflow-y-auto px-2.5 pb-3">
+      <div ref={setScrollElement} class="min-h-0 flex-1 overflow-y-auto px-2.5 pb-3">
         <Show
           when={props.files.length}
           fallback={<p class="m-0 px-1 pb-1 text-[9px] text-faint">{props.empty}</p>}
         >
-          <ChangedFileList files={props.files} action={props.action} />
+          <ChangedFileList
+            files={props.files}
+            scrollElement={scrollElement()}
+            action={props.action}
+          />
         </Show>
       </div>
     </section>

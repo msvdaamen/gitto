@@ -1,6 +1,6 @@
 import { createVirtualizer } from "@tanstack/solid-virtual";
 import { cn } from "cn";
-import { createSignal, For, onCleanup, onMount, Show, type JSX } from "solid-js";
+import { createEffect, createSignal, For, onCleanup, onMount, Show, type JSX } from "solid-js";
 
 /** Rows rendered past each edge of the viewport, so scrolling doesn't reveal blank space. */
 const OVERSCAN = 10;
@@ -19,19 +19,8 @@ export function VirtualList<T>(props: {
   children: (item: T) => JSX.Element;
 }) {
   let container: HTMLDivElement | undefined;
-  // The virtualizer takes the window to observe from the scroll container's document when it first
-  // gets one, so only hand it over once it's on the page: on mount it can still be detached, being
-  // rendered inside a `Suspense` boundary.
-  const [scrollElement, setScrollElement] = createSignal<HTMLDivElement>();
-  onMount(() => {
-    let frame = 0;
-    const attach = () => {
-      if (container?.isConnected) setScrollElement(container);
-      else frame = requestAnimationFrame(attach);
-    };
-    attach();
-    onCleanup(() => cancelAnimationFrame(frame));
-  });
+  const connected = useConnected(() => container);
+  const scrollElement = () => (connected() ? container : undefined);
 
   const virtualizer = createVirtualizer({
     get count() {
@@ -66,4 +55,97 @@ export function VirtualList<T>(props: {
       </div>
     </div>
   );
+}
+
+/**
+ * The rows of a list inside a scroll container it shares with other content, e.g. a commit's files
+ * below its message: only the rows in view are rendered, like in `VirtualList`. Every row is
+ * `rowHeight` tall. Rows are rendered by position, so a refetch that replaces the items updates the
+ * rows in place instead of re-creating them.
+ */
+export function VirtualRows<T>(props: {
+  items: T[];
+  rowHeight: number;
+  /** The element that scrolls the rows, along with whatever is above and below them. */
+  scrollElement: HTMLElement | undefined;
+  children: (item: () => T) => JSX.Element;
+}) {
+  let list: HTMLDivElement | undefined;
+  const connected = useConnected(() => list);
+  const scrollElement = () => (connected() ? props.scrollElement : undefined);
+
+  // Where the list starts in the scroll container's content, which moves when the content above it
+  // changes size. That content is somewhere inside the list's ancestors, so they're the ones watched.
+  const [offset, setOffset] = createSignal(0);
+  createEffect(() => {
+    const scroller = scrollElement();
+    if (!scroller || !list) return;
+    const measure = () =>
+      setOffset(
+        list!.getBoundingClientRect().top -
+          scroller.getBoundingClientRect().top -
+          scroller.clientTop +
+          scroller.scrollTop,
+      );
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    for (let el = list.parentElement; el && el !== scroller; el = el.parentElement) {
+      observer.observe(el);
+    }
+    onCleanup(() => observer.disconnect());
+  });
+
+  const virtualizer = createVirtualizer({
+    get count() {
+      return props.items.length;
+    },
+    getScrollElement: () => scrollElement() ?? null,
+    estimateSize: () => props.rowHeight,
+    get scrollMargin() {
+      return offset();
+    },
+    overscan: OVERSCAN,
+  });
+
+  return (
+    <div
+      ref={(el) => (list = el)}
+      class="relative"
+      style={{ height: `${virtualizer.getTotalSize()}px` }}
+    >
+      <For each={virtualizer.getVirtualItems()}>
+        {(row) => (
+          <div
+            class="absolute inset-x-0 top-0"
+            style={{
+              height: `${props.rowHeight}px`,
+              transform: `translateY(${row.start - offset()}px)`,
+            }}
+          >
+            <Show when={props.items[row.index]}>{(item) => props.children(item)}</Show>
+          </div>
+        )}
+      </For>
+    </div>
+  );
+}
+
+/**
+ * Whether `element` is on the page. The virtualizer takes the window to observe from the scroll
+ * container's document when it first gets one, so it's only handed over once it's on the page: on
+ * mount it can still be detached, being rendered inside a `Suspense` boundary.
+ */
+function useConnected(element: () => HTMLElement | undefined) {
+  const [connected, setConnected] = createSignal(false);
+  onMount(() => {
+    let frame = 0;
+    const check = () => {
+      if (element()?.isConnected) setConnected(true);
+      else frame = requestAnimationFrame(check);
+    };
+    check();
+    onCleanup(() => cancelAnimationFrame(frame));
+  });
+  return connected;
 }

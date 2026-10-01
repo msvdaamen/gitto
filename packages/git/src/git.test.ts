@@ -1,12 +1,12 @@
 // Runs every feature's commands against real repositories in a temp directory.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { RepositoryService } from "@gitto/repository/server";
 import { call, ORPCError } from "@orpc/server";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
   FolderNotFoundError,
@@ -360,6 +360,52 @@ describe("the changed files", () => {
     const { changes } = await getStatus(repo);
     expect(changes.unstaged).toHaveLength(400);
     expect(changes).toEqual(await fullDiffs(repo));
+  });
+});
+
+describe("a big working tree", () => {
+  it("stages and unstages more paths than fit on a Windows command line", async () => {
+    const path = createRepo("big-stage");
+    const names = Array.from({ length: 1000 }, (_, i) => `${"long-file-name-".repeat(3)}${i}.txt`);
+    for (const name of names) writeFileSync(join(path, name), "a\n");
+    const repo = await repos.open("big-stage");
+
+    await stage(repo, names);
+    expect((await getStatus(repo)).changes.staged).toHaveLength(1000);
+    await unstage(repo, names);
+    expect((await getStatus(repo)).changes).toMatchObject({ staged: [] });
+  });
+
+  it("refreshes the index, so files touched but not changed aren't read again", async () => {
+    const path = createRepo("touched");
+    writeFileSync(join(path, "file.txt"), "a\n");
+    git(path, "add", "file.txt");
+    git(path, "commit", "-q", "-m", "First");
+    const later = new Date(Date.now() + 60_000);
+    utimesSync(join(path, "file.txt"), later, later);
+    const repo = await repos.open("touched");
+
+    // `diff-files` compares the index's timestamps without refreshing it.
+    expect(git(path, "diff-files", "--name-only")).toBe("file.txt");
+    await repo.refreshIndex();
+    expect(git(path, "diff-files", "--name-only")).toBe("");
+  });
+
+  it("doesn't fail to refresh the index while another git process holds it", async () => {
+    const path = createRepo("refresh-locked");
+    const repo = await repos.open("refresh-locked");
+    writeFileSync(join(path, ".git", "index.lock"), "");
+    await expect(repo.refreshIndex()).resolves.toBeUndefined();
+  });
+
+  it("gets a commit-graph once its log is read", async () => {
+    const path = createRepo("no-graph");
+    git(path, "commit", "-q", "--allow-empty", "-m", "First");
+    const graph = join(path, ".git", "objects", "info", "commit-graph");
+    expect(existsSync(graph)).toBe(false);
+
+    await getLog(await repos.open("no-graph"), page);
+    await vi.waitFor(() => expect(existsSync(graph)).toBe(true));
   });
 });
 

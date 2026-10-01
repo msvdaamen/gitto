@@ -4,7 +4,7 @@ import File from "lucide-solid/icons/file";
 import GitCommitHorizontal from "lucide-solid/icons/git-commit-horizontal";
 import LoaderCircle from "lucide-solid/icons/loader-circle";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
-import { Show, Suspense } from "solid-js";
+import { createSignal, Show, Suspense } from "solid-js";
 
 import { Avatar } from "@/components/ui/avatar";
 import { IconButton } from "@/components/ui/button";
@@ -24,13 +24,14 @@ import { WorkingTreeDetails } from "./working-tree-details";
  * itself, so it only needs the row's id from the history table.
  */
 export function CommitDetails(props: { repositoryId: string; selectedId: string | undefined }) {
+  const [scrollElement, setScrollElement] = createSignal<HTMLDivElement>();
   return (
     <Show
       when={props.selectedId}
       fallback={<EmptyState icon={GitCommitHorizontal} title="Nothing selected" />}
     >
       {(selectedId) => (
-        <div class="flex h-full min-w-[280px] flex-col overflow-y-auto">
+        <div ref={setScrollElement} class="flex h-full min-w-[280px] flex-col overflow-y-auto">
           <div class="flex h-[38px] shrink-0 items-center justify-between border-b border-border py-0 pr-[9px] pl-[13px] text-[9px] font-[720] tracking-[.07em] text-muted uppercase">
             <span>{selectedId() === WIP_ID ? "Working directory" : "Commit details"}</span>
             <IconButton label="More commit actions" icon={Ellipsis} />
@@ -38,7 +39,13 @@ export function CommitDetails(props: { repositoryId: string; selectedId: string 
           <Suspense fallback={<EmptyState icon={LoaderCircle} title="Loading details…" />}>
             <Show
               when={selectedId() === WIP_ID}
-              fallback={<SelectedCommit repositoryId={props.repositoryId} sha={selectedId()} />}
+              fallback={
+                <SelectedCommit
+                  repositoryId={props.repositoryId}
+                  sha={selectedId()}
+                  scrollElement={scrollElement()}
+                />
+              }
             >
               <WorkingTreeDetails repositoryId={props.repositoryId} />
             </Show>
@@ -49,7 +56,12 @@ export function CommitDetails(props: { repositoryId: string; selectedId: string 
   );
 }
 
-function SelectedCommit(props: { repositoryId: string; sha: string }) {
+function SelectedCommit(props: {
+  repositoryId: string;
+  sha: string;
+  /** The details' scroll container, which scrolls the files along with the commit's message. */
+  scrollElement: HTMLElement | undefined;
+}) {
   const details = useCommit(
     () => props.repositoryId,
     () => props.sha,
@@ -59,8 +71,9 @@ function SelectedCommit(props: { repositoryId: string; sha: string }) {
     () => props.sha,
   );
 
+  // One element, so the file list sees it change size when the message above the files loads.
   return (
-    <>
+    <div>
       <Show when={details.query.error ?? changes.query.error}>
         {(error) => (
           <EmptyState
@@ -89,9 +102,9 @@ function SelectedCommit(props: { repositoryId: string; sha: string }) {
           count={changes.files().length}
           class="px-1 pb-2"
         />
-        <ChangedFileList files={changes.files()} />
+        <ChangedFileList files={changes.files()} scrollElement={props.scrollElement} />
       </div>
-    </>
+    </div>
   );
 }
 
