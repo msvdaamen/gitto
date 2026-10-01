@@ -3,19 +3,16 @@ import { GitReposImpl, type GitContext } from "@gitto/git/server";
 import {
   RepositoryStoreImpl,
   RepositoryServiceImpl,
-  type RepositoryService,
+  type RepositoryContext,
 } from "@gitto/repository/server";
 import type { SystemContext } from "@gitto/system/server";
 
-export type AppContext = SystemContext &
-  GitContext & {
-    repoService: RepositoryService;
-  };
+export type AppContext = SystemContext & GitContext & RepositoryContext;
 
 export function createContainer(db: Db, system: SystemContext): AppContext {
   const repoStore = new RepositoryStoreImpl(db);
-  const repoService = new RepositoryServiceImpl(repoStore);
-  const gitRepos = new GitReposImpl(repoService);
+  const repositoryService = new RepositoryServiceImpl(repoStore);
+  const gitRepos = new GitReposImpl(repositoryService);
 
-  return { ...system, repoService, gitRepos };
+  return { ...system, repositoryService, gitRepos };
 }
