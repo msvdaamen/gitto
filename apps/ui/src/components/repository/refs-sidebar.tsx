@@ -1,7 +1,9 @@
 import type { Ref } from "@gitto/git/types";
+import { Popover } from "@kobalte/core/popover";
 import { cn } from "cn";
 import type { LucideIcon } from "lucide-solid";
 import Archive from "lucide-solid/icons/archive";
+import Bot from "lucide-solid/icons/bot";
 import ChevronDown from "lucide-solid/icons/chevron-down";
 import ChevronRight from "lucide-solid/icons/chevron-right";
 import Cloud from "lucide-solid/icons/cloud";
@@ -11,23 +13,29 @@ import FolderOpen from "lucide-solid/icons/folder-open";
 import GitBranch from "lucide-solid/icons/git-branch";
 import GitMerge from "lucide-solid/icons/git-merge";
 import Inbox from "lucide-solid/icons/inbox";
+import ListTree from "lucide-solid/icons/list-tree";
 import LoaderCircle from "lucide-solid/icons/loader-circle";
 import Settings from "lucide-solid/icons/settings";
 import Tag from "lucide-solid/icons/tag";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
 import { createMemo, createSignal, For, Show, Suspense } from "solid-js";
 import type { JSX } from "solid-js";
-import { Dynamic } from "solid-js/web";
 
 import { EmptyState } from "@/components/ui/empty-state";
 import { Mascot } from "@/components/ui/mascot";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { toneClasses } from "@/components/ui/tone";
-import { buildRefTree } from "@/git/ref-tree";
-import type { RefTreeNode } from "@/git/ref-tree";
+import { VirtualList } from "@/components/ui/virtual-list";
+import { buildRefTree, flattenRefTree } from "@/git/ref-tree";
+import type { RefTreeRow } from "@/git/ref-tree";
 import { useRefs } from "@/git/refs";
 import { useStatus } from "@/git/status";
 import { useCollapsed } from "@/hooks/collapsed";
+
+const MODES = [
+  { label: "List", icon: ListTree },
+  { label: "Agents", icon: Bot },
+];
 
 export function RefsSidebar(props: { repositoryId: string; open: boolean }) {
   const [mode, setMode] = createSignal("List");
@@ -39,12 +47,17 @@ export function RefsSidebar(props: { repositoryId: string; open: boolean }) {
         !props.open && "pointer-events-none opacity-0",
       )}
     >
-      <div class="pt-[9px] pr-2.5 pb-1.5 pl-2.5 max-[900px]:px-[7px] max-[900px]:py-2">
-        <SegmentedControl value={mode()} options={["List", "Agents"]} onChange={setMode} />
+      <div class="px-2.5 pt-[9px] pb-2 max-[900px]:hidden">
+        <SegmentedControl
+          value={mode()}
+          options={MODES.map((option) => option.label)}
+          onChange={setMode}
+        />
       </div>
+      <RailModeSwitch value={mode()} onChange={setMode} />
       <Show when={mode() === "List"} fallback={<AgentPlaceholder />}>
         <nav
-          class="min-h-0 flex-1 overflow-y-auto pt-0.5 pr-[7px] pb-[35px] pl-[7px]"
+          class="flex min-h-0 flex-1 flex-col overflow-hidden pb-[35px] max-[900px]:items-center max-[900px]:gap-1 max-[900px]:pt-2"
           aria-label="Repository references"
         >
           <Suspense
@@ -64,6 +77,53 @@ export function RefsSidebar(props: { repositoryId: string; open: boolean }) {
   );
 }
 
+/** The List / Agents switch as a column of icons, for the narrow sidebar below 900px. */
+function RailModeSwitch(props: { value: string; onChange: (value: string) => void }) {
+  return (
+    <div
+      class="hidden flex-col items-center gap-1 border-b border-border-soft py-2 max-[900px]:flex"
+      role="group"
+      aria-label="Sidebar view"
+    >
+      <For each={MODES}>
+        {(option) => (
+          <button
+            class={cn(
+              "grid size-9 cursor-pointer place-items-center rounded-lg border-0 bg-transparent text-muted hover:bg-panel-hover hover:text-text focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary",
+              props.value === option.label &&
+                "bg-primary-soft text-primary-strong hover:bg-primary-soft hover:text-primary-strong",
+            )}
+            title={option.label}
+            aria-label={option.label}
+            aria-pressed={props.value === option.label}
+            onClick={() => props.onChange(option.label)}
+          >
+            <option.icon size={16} />
+          </button>
+        )}
+      </For>
+    </div>
+  );
+}
+
+/**
+ * Height of an expanded section without its rows: its top border, its header (`h-[30px]`), the
+ * border below that and the list's padding.
+ */
+const SECTION_CHROME = 1 + 30 + 1 + 2 * 4;
+/** Space above a section's first row and below its last one. */
+const LIST_PADDING = 4;
+/** Height of every row in a section: 28px (`h-7`) plus the 1px gap below it. */
+const ROW_HEIGHT = 29;
+/** Indentation per tree level, in pixels. */
+const DEPTH_INDENT = 12;
+
+const PULL_REQUESTS = [
+  { label: "#24 Polish desktop shell", meta: "open" },
+  { label: "#18 Theme tokens", meta: "merged" },
+];
+const STASHES = [{ label: "WIP: layout experiment" }];
+
 function RefList(props: { repositoryId: string }) {
   const status = useStatus(() => props.repositoryId);
   const refs = useRefs(() => props.repositoryId);
@@ -71,13 +131,42 @@ function RefList(props: { repositoryId: string }) {
   const ofKind = (kind: Ref["kind"]) => (refs.data ?? []).filter((ref) => ref.kind === kind);
   const localBranches = createMemo(() => ofKind("local"));
   const remoteBranches = createMemo(() => ofKind("remote"));
-  const localTree = createMemo(() => buildRefTree(localBranches()));
-  const remoteTree = createMemo(() => buildRefTree(remoteBranches()));
   const tags = createMemo(() => ofKind("tag"));
 
   // Sections and ref folders share one saved state; folder ids are full ref paths like
   // `refs/heads/feature`, so they can't clash with the section ids.
   const collapsed = useCollapsed(() => props.repositoryId, { tags: true, stashes: true });
+  const localRows = createMemo(() =>
+    flattenRefTree(buildRefTree(localBranches()), collapsed.isCollapsed),
+  );
+  const remoteRows = createMemo(() =>
+    flattenRefTree(buildRefTree(remoteBranches()), collapsed.isCollapsed),
+  );
+
+  /** A ref tree's line: a collapsible folder, or a ref drawn by `ref`. */
+  const treeRow = (
+    { node, depth }: RefTreeRow,
+    ref: (ref: Ref, label: string, depth: number) => JSX.Element,
+  ) =>
+    node.type === "folder" ? (
+      <SidebarFolder
+        name={node.name}
+        count={node.count}
+        depth={depth}
+        collapsed={collapsed.isCollapsed(node.path)}
+        onToggle={() => collapsed.toggle(node.path)}
+      />
+    ) : (
+      ref(node.ref, node.name, depth)
+    );
+
+  /** The props a section needs to collapse, saved under `id`. */
+  const collapsible = (id: string) => ({
+    get collapsed() {
+      return collapsed.isCollapsed(id);
+    },
+    onToggle: () => collapsed.toggle(id),
+  });
 
   return (
     <>
@@ -87,7 +176,7 @@ function RefList(props: { repositoryId: string }) {
             icon={TriangleAlert}
             title="Couldn't load branches"
             tone="error"
-            class="h-[150px]"
+            class="h-[150px] shrink-0"
           >
             {error().message}
           </EmptyState>
@@ -97,28 +186,28 @@ function RefList(props: { repositoryId: string }) {
         title="Workspace"
         icon={Folder}
         count={1}
-        collapsed={false}
-        onToggle={() => undefined}
-        locked
+        {...collapsible("workspace")}
+        items={["working-directory"]}
       >
-        <SidebarRow
-          icon={File}
-          label="Working directory"
-          active
-          count={status.data?.files.length ?? 0}
-          tone="amber"
-        />
+        {() => (
+          <SidebarRow
+            icon={File}
+            label="Working directory"
+            active
+            count={status.data?.files.length ?? 0}
+            tone="amber"
+          />
+        )}
       </SidebarSection>
       <SidebarSection
         title="Local branches"
         icon={GitBranch}
         count={localBranches().length}
-        collapsed={false}
-        onToggle={() => undefined}
-        locked
+        {...collapsible("local")}
+        items={localRows()}
       >
-        <RefTree nodes={localTree()} collapsed={collapsed}>
-          {(branch, label, depth) => (
+        {(row) =>
+          treeRow(row, (branch, label, depth) => (
             <SidebarRow
               icon={GitBranch}
               label={label}
@@ -129,119 +218,186 @@ function RefList(props: { repositoryId: string }) {
                 branch.ahead ? `↑${branch.ahead}` : branch.behind ? `↓${branch.behind}` : undefined
               }
             />
-          )}
-        </RefTree>
+          ))
+        }
       </SidebarSection>
       <SidebarSection
         title="Remotes"
         icon={Cloud}
         count={remoteBranches().length}
-        collapsed={collapsed.isCollapsed("remotes")}
-        onToggle={() => collapsed.toggle("remotes")}
+        {...collapsible("remotes")}
+        items={remoteRows()}
       >
-        <RefTree nodes={remoteTree()} collapsed={collapsed}>
-          {(branch, label, depth) => (
+        {(row) =>
+          treeRow(row, (branch, label, depth) => (
             <SidebarRow icon={GitBranch} label={label} title={branch.name} depth={depth} />
-          )}
-        </RefTree>
+          ))
+        }
       </SidebarSection>
       <SidebarSection
         title="Pull requests"
         icon={GitMerge}
-        count={2}
-        collapsed={collapsed.isCollapsed("pullRequests")}
-        onToggle={() => collapsed.toggle("pullRequests")}
+        count={PULL_REQUESTS.length}
+        {...collapsible("pullRequests")}
+        items={PULL_REQUESTS}
       >
-        <SidebarRow icon={GitMerge} label="#24 Polish desktop shell" meta="open" />
-        <SidebarRow icon={GitMerge} label="#18 Theme tokens" meta="merged" />
+        {(pr) => <SidebarRow icon={GitMerge} label={pr.label} meta={pr.meta} />}
       </SidebarSection>
       <SidebarSection
         title="Tags"
         icon={Tag}
         count={tags().length}
-        collapsed={collapsed.isCollapsed("tags")}
-        onToggle={() => collapsed.toggle("tags")}
+        {...collapsible("tags")}
+        items={tags()}
       >
-        <For each={tags()}>{(tag) => <SidebarRow icon={Tag} label={tag.name} />}</For>
+        {(tag) => <SidebarRow icon={Tag} label={tag.name} />}
       </SidebarSection>
       <SidebarSection
         title="Stashes"
         icon={Inbox}
-        count={1}
-        collapsed={collapsed.isCollapsed("stashes")}
-        onToggle={() => collapsed.toggle("stashes")}
+        count={STASHES.length}
+        {...collapsible("stashes")}
+        items={STASHES}
       >
-        <SidebarRow icon={Archive} label="WIP: layout experiment" />
+        {(stash) => <SidebarRow icon={Archive} label={stash.label} />}
       </SidebarSection>
     </>
   );
 }
 
-function SidebarSection(props: {
+/**
+ * A section of the sidebar, like GitKraken's: its header always shows, and while expanded its rows
+ * scroll on their own, only rendering the ones in view. Expanded sections share the sidebar's
+ * height, but never take more than their rows need. Below 900px the section is an icon in a rail
+ * instead, that opens its rows in a popover.
+ */
+function SidebarSection<T>(props: {
   title: string;
   icon: LucideIcon;
   count: number;
   collapsed: boolean;
-  locked?: boolean;
   onToggle: () => void;
-  children: JSX.Element;
+  items: T[];
+  children: (item: T) => JSX.Element;
 }) {
+  const expanded = () => !props.collapsed && props.items.length > 0;
+
   return (
-    <section class="mb-1">
+    <section
+      class={cn(
+        "flex min-h-[31px] flex-col border-t border-border-soft max-[900px]:min-h-0 max-[900px]:flex-none max-[900px]:border-0",
+        expanded() ? "flex-1" : "flex-none",
+      )}
+      style={{
+        "max-height": expanded()
+          ? `${SECTION_CHROME + props.items.length * ROW_HEIGHT}px`
+          : undefined,
+      }}
+    >
       <button
-        class="grid h-[27px] w-full cursor-pointer grid-cols-[14px_16px_minmax(0,1fr)_auto] items-center gap-1 rounded-[5px] border-0 bg-transparent px-[5px] text-left text-muted hover:not-disabled:bg-panel-hover disabled:cursor-default max-[900px]:flex max-[900px]:h-[31px] max-[900px]:justify-center max-[900px]:p-0 max-[900px]:[&>svg:first-child]:hidden max-[900px]:[&>small]:hidden max-[900px]:[&>span]:hidden"
+        class={cn(
+          "flex h-[30px] w-full shrink-0 cursor-pointer items-center gap-1.5 border-0 bg-panel-raised px-2.5 text-left text-muted hover:bg-panel-hover hover:text-text-soft focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary max-[900px]:hidden",
+          !props.collapsed && "text-text-soft",
+        )}
         aria-expanded={!props.collapsed ? "true" : "false"}
         onClick={props.onToggle}
-        disabled={props.locked}
       >
-        {props.collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-        <Dynamic component={props.icon} size={14} />
-        <span class="truncate text-[9px] font-[720] tracking-[.055em] uppercase">
-          {props.title}
-        </span>
-        <small class="text-[8px] text-faint">{props.count}</small>
+        <ChevronRight
+          size={12}
+          class={cn(
+            "shrink-0 text-faint transition-transform duration-150 motion-reduce:transition-none",
+            !props.collapsed && "rotate-90",
+          )}
+        />
+        <props.icon size={13} class="shrink-0" />
+        <SectionTitle title={props.title} count={props.count} />
       </button>
-      <Show when={!props.collapsed}>
-        <div class="flex flex-col gap-px max-[900px]:hidden">{props.children}</div>
+      <Show when={expanded()}>
+        <VirtualList
+          items={props.items}
+          rowHeight={ROW_HEIGHT}
+          padding={LIST_PADDING}
+          class="border-t border-border-soft px-1.5 max-[900px]:hidden"
+        >
+          {props.children}
+        </VirtualList>
       </Show>
+      <RailSection title={props.title} icon={props.icon} count={props.count} items={props.items}>
+        {props.children}
+      </RailSection>
     </section>
   );
 }
 
-/** Refs grouped into collapsible folders on `/`. Folders start expanded. */
-function RefTree(props: {
-  nodes: RefTreeNode[];
-  collapsed: ReturnType<typeof useCollapsed>;
-  children: (ref: Ref, label: string, depth: number) => JSX.Element;
-}) {
-  const Nodes = (nodesProps: { nodes: RefTreeNode[]; depth: number }) => (
-    <For each={nodesProps.nodes}>
-      {(node) =>
-        node.type === "folder" ? (
-          <>
-            <SidebarFolder
-              name={node.name}
-              count={node.count}
-              depth={nodesProps.depth}
-              collapsed={props.collapsed.isCollapsed(node.path)}
-              onToggle={() => props.collapsed.toggle(node.path)}
-            />
-            <Show when={!props.collapsed.isCollapsed(node.path)}>
-              <Nodes nodes={node.children} depth={nodesProps.depth + 1} />
-            </Show>
-          </>
-        ) : (
-          props.children(node.ref, node.name, nodesProps.depth)
-        )
-      }
-    </For>
+/** A section's title, with how many items it has. */
+function SectionTitle(props: { title: string; count: number }) {
+  return (
+    <>
+      <span class="min-w-0 flex-1 truncate text-[9px] font-[720] tracking-[.06em] uppercase">
+        {props.title}
+      </span>
+      <span class="shrink-0 rounded-full bg-bg px-1.5 py-px text-[8px] font-[650] text-faint tabular-nums">
+        {props.count}
+      </span>
+    </>
   );
-
-  return <Nodes nodes={props.nodes} depth={0} />;
 }
 
-/** Indentation per tree level, in pixels. */
-const DEPTH_INDENT = 12;
+/**
+ * A section in the narrow sidebar: its icon, with a badge counting its items, that opens the
+ * section's rows in a popover beside the rail.
+ */
+function RailSection<T>(props: {
+  title: string;
+  icon: LucideIcon;
+  count: number;
+  items: T[];
+  children: (item: T) => JSX.Element;
+}) {
+  return (
+    <Popover placement="right-start" gutter={10}>
+      <Popover.Trigger
+        class="relative hidden size-9 cursor-pointer place-items-center rounded-lg border-0 bg-transparent text-muted hover:bg-panel-hover hover:text-text focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary data-expanded:bg-primary-soft data-expanded:text-primary-strong max-[900px]:grid"
+        title={props.title}
+        aria-label={`${props.title} (${props.count})`}
+      >
+        <props.icon size={16} />
+        <Show when={props.count > 0}>
+          <span class="absolute -top-0.5 -right-1 min-w-[16px] rounded-full border-2 border-panel bg-panel-active px-[3px] text-center text-[7.5px] leading-[11px] font-[700] text-text-soft tabular-nums">
+            {compactCount(props.count)}
+          </span>
+        </Show>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content class="z-50 flex w-[260px] flex-col overflow-hidden rounded-lg border border-border bg-panel shadow-app outline-none">
+          <Popover.Title class="flex h-[30px] shrink-0 items-center gap-1.5 border-b border-border-soft bg-panel-raised px-2.5 text-text-soft">
+            <props.icon size={13} class="shrink-0" />
+            <SectionTitle title={props.title} count={props.count} />
+          </Popover.Title>
+          <Show
+            when={props.items.length}
+            fallback={<p class="px-3 py-4 text-center text-[10px] text-faint">Nothing here yet</p>}
+          >
+            <VirtualList
+              items={props.items}
+              rowHeight={ROW_HEIGHT}
+              padding={LIST_PADDING}
+              class="max-h-[min(400px,70vh)] px-1.5"
+            >
+              {props.children}
+            </VirtualList>
+          </Show>
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover>
+  );
+}
+
+/** A count short enough for a badge: `1.2k` for 1234. */
+function compactCount(count: number): string {
+  if (count < 1000) return String(count);
+  return `${(count / 1000).toFixed(count < 10_000 ? 1 : 0).replace(/\.0$/, "")}k`;
+}
 
 function SidebarFolder(props: {
   name: string;
@@ -252,7 +408,7 @@ function SidebarFolder(props: {
 }) {
   return (
     <button
-      class="grid h-7 w-full cursor-pointer grid-cols-[12px_16px_minmax(0,1fr)_auto] items-center gap-[5px] rounded-[5px] border-0 bg-transparent pr-[7px] text-left text-muted hover:bg-panel-hover hover:text-text-soft"
+      class="grid h-7 w-full cursor-pointer grid-cols-[12px_16px_minmax(0,1fr)_auto] items-center gap-[5px] rounded-[5px] border-0 bg-transparent pr-[7px] text-left text-muted hover:bg-panel-hover hover:text-text-soft focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
       style={{ "padding-left": `${8 + props.depth * DEPTH_INDENT}px` }}
       aria-expanded={!props.collapsed ? "true" : "false"}
       title={props.name}
@@ -279,13 +435,13 @@ function SidebarRow(props: {
   return (
     <button
       class={cn(
-        "grid h-7 w-full cursor-pointer grid-cols-[16px_minmax(0,1fr)_auto_auto] items-center gap-[5px] rounded-[5px] border-0 bg-transparent pr-[7px] text-left text-muted hover:bg-panel-hover hover:text-text-soft",
+        "grid h-7 w-full cursor-pointer grid-cols-[16px_minmax(0,1fr)_auto_auto] items-center gap-[5px] rounded-[5px] border-0 bg-transparent pr-[7px] text-left text-muted hover:bg-panel-hover hover:text-text-soft focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary",
         props.active && "bg-primary-soft text-text [&>svg]:text-primary-strong",
       )}
       style={{ "padding-left": `${25 + (props.depth ?? 0) * DEPTH_INDENT}px` }}
       title={props.title ?? props.label}
     >
-      <Dynamic component={props.icon} size={13} />
+      <props.icon size={13} />
       <span class="truncate text-[10px]">{props.label}</span>
       {props.meta && <small class="text-[8px] text-blue">{props.meta}</small>}
       {props.count !== undefined && (
@@ -304,7 +460,7 @@ function SidebarRow(props: {
 
 function AgentPlaceholder() {
   return (
-    <div class="flex flex-col items-center px-[18px] py-[65px] text-center">
+    <div class="flex flex-col items-center px-[18px] py-[65px] text-center max-[900px]:px-0 max-[900px]:py-4 max-[900px]:[&>:not(:first-child)]:hidden">
       <Mascot size={38} />
       <strong class="mt-3 text-[11px]">No agents running</strong>
       <p class="mt-1.5 mb-3 text-[9px] leading-1.5 text-muted">

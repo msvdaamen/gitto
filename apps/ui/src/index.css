@@ -96,3 +96,32 @@
     transform: translateY(0) scale(1);
   }
 }
+
+/* Every scrollbar in the app: thin and rounded, without arrow buttons, blending into the panel it's
+   on until the pointer is over its scroll area. */
+@layer base {
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-button {
+    display: none;
+  }
+  ::-webkit-scrollbar-thumb {
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background-clip: padding-box;
+    background-color: color-mix(in srgb, var(--border) 65%, transparent);
+  }
+  :hover::-webkit-scrollbar-thumb {
+    background-color: var(--border);
+  }
+  ::-webkit-scrollbar-thumb:hover,
+  ::-webkit-scrollbar-thumb:active {
+    background-color: var(--faint);
+  }
+}

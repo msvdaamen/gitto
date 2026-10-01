@@ -59,3 +59,26 @@ function sortFoldersFirst(nodes: RefTreeNode[]): RefTreeNode[] {
   for (const folder of folders) folder.children = sortFoldersFirst(folder.children);
   return [...folders, ...leaves];
 }
+
+/** A line of the tree as the sidebar shows it: a folder or ref, indented `depth` levels. */
+export type RefTreeRow = { node: RefTreeNode; depth: number };
+
+/**
+ * The tree as the flat list of lines it shows, top to bottom; the children of collapsed folders
+ * (`isCollapsed` takes a folder's `path`) are left out. Flat so the sidebar can render only the
+ * lines in view.
+ */
+export function flattenRefTree(
+  nodes: RefTreeNode[],
+  isCollapsed: (path: string) => boolean,
+): RefTreeRow[] {
+  const rows: RefTreeRow[] = [];
+  const visit = (level: RefTreeNode[], depth: number) => {
+    for (const node of level) {
+      rows.push({ node, depth });
+      if (node.type === "folder" && !isCollapsed(node.path)) visit(node.children, depth + 1);
+    }
+  };
+  visit(nodes, 0);
+  return rows;
+}

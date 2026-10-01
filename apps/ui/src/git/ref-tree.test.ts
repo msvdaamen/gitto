@@ -1,7 +1,7 @@
 import type { Ref } from "@gitto/git/types";
 import { describe, expect, it } from "vitest";
 
-import { buildRefTree } from "./ref-tree";
+import { buildRefTree, flattenRefTree } from "./ref-tree";
 import type { RefTreeNode } from "./ref-tree";
 
 function ref(fullName: string, name: string, kind: Ref["kind"]): Ref {
@@ -58,6 +58,43 @@ describe("buildRefTree", () => {
     expect(shape(buildRefTree([local("feature"), local("feature/login")]))).toEqual([
       { "feature/": ["login"] },
       "feature",
+    ]);
+  });
+});
+
+describe("flattenRefTree", () => {
+  const tree = buildRefTree([
+    local("main"),
+    local("feature/login"),
+    local("feature/ui/button"),
+    local("fix/crash"),
+  ]);
+  const lines = (collapsed: string[]) =>
+    flattenRefTree(tree, (path) => collapsed.includes(path)).map(
+      ({ node, depth }) => `${"  ".repeat(depth)}${node.name}${node.type === "folder" ? "/" : ""}`,
+    );
+
+  it("lists folders before their children, indented by depth", () => {
+    expect(lines([])).toEqual([
+      "feature/",
+      "  ui/",
+      "    button",
+      "  login",
+      "fix/",
+      "  crash",
+      "main",
+    ]);
+  });
+
+  it("leaves out what's inside collapsed folders", () => {
+    expect(lines(["refs/heads/feature"])).toEqual(["feature/", "fix/", "  crash", "main"]);
+    expect(lines(["refs/heads/feature/ui"])).toEqual([
+      "feature/",
+      "  ui/",
+      "  login",
+      "fix/",
+      "  crash",
+      "main",
     ]);
   });
 });
