@@ -15,15 +15,15 @@ import LoaderCircle from "lucide-solid/icons/loader-circle";
 import Settings from "lucide-solid/icons/settings";
 import Tag from "lucide-solid/icons/tag";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
-import { createMemo, createSignal, For, Show, Suspense } from "solid-js";
+import { createMemo, createSignal, Show, Suspense } from "solid-js";
 import type { JSX } from "solid-js";
-import { Dynamic } from "solid-js/web";
 
 import { EmptyState } from "@/components/ui/empty-state";
 import { Mascot } from "@/components/ui/mascot";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { toneClasses } from "@/components/ui/tone";
-import { buildRefTree } from "@/git/ref-tree";
+import { VirtualList, VirtualViewport } from "@/components/ui/virtual-list";
+import { buildRefTree, flattenRefTree } from "@/git/ref-tree";
 import type { RefTreeNode } from "@/git/ref-tree";
 import { useRefs } from "@/git/refs";
 import { useStatus } from "@/git/status";
@@ -47,13 +47,15 @@ export function RefsSidebar(props: { repositoryId: string; open: boolean }) {
           class="min-h-0 flex-1 overflow-y-auto pt-0.5 pr-[7px] pb-[35px] pl-[7px]"
           aria-label="Repository references"
         >
-          <Suspense
-            fallback={
-              <EmptyState icon={LoaderCircle} title="Loading branches…" class="h-[150px]" />
-            }
-          >
-            <RefList repositoryId={props.repositoryId} />
-          </Suspense>
+          <VirtualViewport>
+            <Suspense
+              fallback={
+                <EmptyState icon={LoaderCircle} title="Loading branches…" class="h-[150px]" />
+              }
+            >
+              <RefList repositoryId={props.repositoryId} />
+            </Suspense>
+          </VirtualViewport>
         </nav>
       </Show>
       <button class="absolute right-0 bottom-0 left-0 flex h-[34px] cursor-pointer items-center gap-[7px] border-0 border-t border-border-soft bg-panel px-3 text-[9px] text-faint hover:text-text-soft max-[900px]:justify-center max-[900px]:px-0 max-[900px]:[&>span]:hidden">
@@ -162,7 +164,9 @@ function RefList(props: { repositoryId: string }) {
         collapsed={collapsed.isCollapsed("tags")}
         onToggle={() => collapsed.toggle("tags")}
       >
-        <For each={tags()}>{(tag) => <SidebarRow icon={Tag} label={tag.name} />}</For>
+        <VirtualList items={tags()} rowHeight={ROW_HEIGHT} class={ROWS}>
+          {(tag) => <SidebarRow icon={Tag} label={tag.name} />}
+        </VirtualList>
       </SidebarSection>
       <SidebarSection
         title="Stashes"
@@ -195,51 +199,53 @@ function SidebarSection(props: {
         disabled={props.locked}
       >
         {props.collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-        <Dynamic component={props.icon} size={14} />
+        <props.icon size={14} />
         <span class="truncate text-[9px] font-[720] tracking-[.055em] uppercase">
           {props.title}
         </span>
         <small class="text-[8px] text-faint">{props.count}</small>
       </button>
       <Show when={!props.collapsed}>
-        <div class="flex flex-col gap-px max-[900px]:hidden">{props.children}</div>
+        <div class={cn(ROWS, "max-[900px]:hidden")}>{props.children}</div>
       </Show>
     </section>
   );
 }
 
-/** Refs grouped into collapsible folders on `/`. Folders start expanded. */
+/**
+ * Refs grouped into collapsible folders on `/`. Folders start expanded. Only the lines in view are
+ * rendered, as a repository can have thousands of branches.
+ */
 function RefTree(props: {
   nodes: RefTreeNode[];
   collapsed: ReturnType<typeof useCollapsed>;
   children: (ref: Ref, label: string, depth: number) => JSX.Element;
 }) {
-  const Nodes = (nodesProps: { nodes: RefTreeNode[]; depth: number }) => (
-    <For each={nodesProps.nodes}>
-      {(node) =>
+  const rows = createMemo(() => flattenRefTree(props.nodes, props.collapsed.isCollapsed));
+
+  return (
+    <VirtualList items={rows()} rowHeight={ROW_HEIGHT} class={ROWS}>
+      {({ node, depth }) =>
         node.type === "folder" ? (
-          <>
-            <SidebarFolder
-              name={node.name}
-              count={node.count}
-              depth={nodesProps.depth}
-              collapsed={props.collapsed.isCollapsed(node.path)}
-              onToggle={() => props.collapsed.toggle(node.path)}
-            />
-            <Show when={!props.collapsed.isCollapsed(node.path)}>
-              <Nodes nodes={node.children} depth={nodesProps.depth + 1} />
-            </Show>
-          </>
+          <SidebarFolder
+            name={node.name}
+            count={node.count}
+            depth={depth}
+            collapsed={props.collapsed.isCollapsed(node.path)}
+            onToggle={() => props.collapsed.toggle(node.path)}
+          />
         ) : (
-          props.children(node.ref, node.name, nodesProps.depth)
+          props.children(node.ref, node.name, depth)
         )
       }
-    </For>
+    </VirtualList>
   );
-
-  return <Nodes nodes={props.nodes} depth={0} />;
 }
 
+/** A section's rows: stacked with a 1px gap. */
+const ROWS = "flex flex-col gap-px";
+/** Height of a ref or folder row (`h-7`), plus the gap below it; lists are virtualized on it. */
+const ROW_HEIGHT = 29;
 /** Indentation per tree level, in pixels. */
 const DEPTH_INDENT = 12;
 
@@ -285,7 +291,7 @@ function SidebarRow(props: {
       style={{ "padding-left": `${25 + (props.depth ?? 0) * DEPTH_INDENT}px` }}
       title={props.title ?? props.label}
     >
-      <Dynamic component={props.icon} size={13} />
+      <props.icon size={13} />
       <span class="truncate text-[10px]">{props.label}</span>
       {props.meta && <small class="text-[8px] text-blue">{props.meta}</small>}
       {props.count !== undefined && (
