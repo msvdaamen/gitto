@@ -1,6 +1,6 @@
 // Runs every feature's commands against real repositories in a temp directory.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -22,7 +22,7 @@ import { getCommit, getLog } from "./features/history/commands";
 import { listRefs } from "./features/refs/commands";
 import { stage, unstage } from "./features/staging/commands";
 import { getStatus } from "./features/status/commands";
-import { watchChanges } from "./features/watch/commands";
+import { watchGitDir } from "./features/watch/commands";
 import { gitRouter } from "./router";
 
 let root: string;
@@ -359,80 +359,86 @@ function quiet(next: Promise<unknown>): Promise<unknown> {
   return Promise.race([next, new Promise((resolve) => setTimeout(() => resolve("quiet"), 700))]);
 }
 
-describe("watching", () => {
-  it("emits after a change and stops when aborted", async () => {
-    const path = createRepo("watched");
-    const repo = await repos.open("watched");
+/** Runs `change` once the watcher has had time to start; it only sees what happens after that. */
+function soon(change: () => void) {
+  setTimeout(change, 200);
+}
+
+describe("watching the git directory", () => {
+  it(
+    "reports staging, commits and checkouts, but not the working tree",
+    { timeout: 10_000 },
+    async () => {
+      const path = createRepo("watched-refs");
+      const repo = await repos.open("watched-refs");
+      const controller = new AbortController();
+      const changes = watchGitDir(repo, controller.signal);
+
+      let next = changes.next();
+      soon(() => {
+        writeFileSync(join(path, "file.txt"), "x");
+        git(path, "add", "file.txt");
+      });
+      expect(await next).toEqual({ value: ["index"], done: false });
+
+      next = changes.next();
+      git(path, "commit", "-q", "-m", "First");
+      expect((await next).value).toContain("refs");
+
+      next = changes.next();
+      git(path, "checkout", "-q", "-b", "feature");
+      expect((await next).value).toContain("refs");
+
+      next = changes.next();
+      writeFileSync(join(path, "file.txt"), "y");
+      expect(await quiet(next)).toBe("quiet");
+
+      controller.abort();
+      expect(await changes.next()).toEqual({ value: undefined, done: true });
+    },
+  );
+
+  it("reports refs packed into packed-refs", { timeout: 10_000 }, async () => {
+    const path = createRepo("watched-packed");
+    git(path, "commit", "-q", "--allow-empty", "-m", "First");
+    git(path, "tag", "v1");
+    const repo = await repos.open("watched-packed");
     const controller = new AbortController();
-    const changes = watchChanges(repo, controller.signal);
+    const changes = watchGitDir(repo, controller.signal);
 
     const next = changes.next();
-    setTimeout(() => writeFileSync(join(path, "file.txt"), "x"), 50);
-    expect(await next).toEqual({ value: null, done: false });
-
-    controller.abort();
-    expect(await changes.next()).toEqual({ value: undefined, done: true });
-  });
-
-  it("skips ignored directories and follows new ones", { timeout: 10_000 }, async () => {
-    const path = createRepo("watched-tree");
-    writeFileSync(join(path, ".gitignore"), "build/\n");
-    mkdirSync(join(path, "build"));
-    const repo = await repos.open("watched-tree");
-    const controller = new AbortController();
-    const changes = watchChanges(repo, controller.signal);
-
-    let next = changes.next();
-    setTimeout(() => writeFileSync(join(path, "file.txt"), "x"), 200);
-    expect(await next).toEqual({ value: null, done: false });
-
-    // Ignored.
-    next = changes.next();
-    writeFileSync(join(path, "build", "out.txt"), "x");
-    expect(await quiet(next)).toBe("quiet");
-
-    // Created (and reported) afterwards; changes in it are reported too.
-    mkdirSync(join(path, "src"));
-    expect(await next).toEqual({ value: null, done: false });
-    next = changes.next();
-    writeFileSync(join(path, "src", "a.txt"), "x");
-    expect(await next).toEqual({ value: null, done: false });
+    soon(() => git(path, "pack-refs", "--all"));
+    expect(await next).toEqual({ value: ["refs"], done: false });
 
     controller.abort();
   });
 
-  it("follows changes to the ignore rules", { timeout: 10_000 }, async () => {
-    const path = createRepo("watched-rules");
-    writeFileSync(join(path, ".gitignore"), "build/\n");
-    mkdirSync(join(path, "build"));
-    mkdirSync(join(path, "src"));
-    const repo = await repos.open("watched-rules");
+  it("follows a linked worktree's own HEAD and index", { timeout: 10_000 }, async () => {
+    const main = createRepo("watched-main");
+    git(main, "commit", "-q", "--allow-empty", "-m", "First");
+    const linked = join(root, "watched-linked");
+    git(main, "worktree", "add", "-q", linked);
+    paths.set("watched-linked", linked);
+    const repo = await repos.open("watched-linked");
     const controller = new AbortController();
-    const changes = watchChanges(repo, controller.signal);
+    const changes = watchGitDir(repo, controller.signal);
 
     let next = changes.next();
-    setTimeout(() => writeFileSync(join(path, "file.txt"), "x"), 200);
-    expect(await next).toEqual({ value: null, done: false });
+    soon(() => {
+      writeFileSync(join(linked, "file.txt"), "x");
+      git(linked, "add", "file.txt");
+    });
+    expect(await next).toEqual({ value: ["index"], done: false });
 
-    // `build` is no longer ignored, `src` now is.
+    // The main worktree's index isn't this one's.
     next = changes.next();
-    writeFileSync(join(path, ".gitignore"), "src/\n");
-    expect(await next).toEqual({ value: null, done: false });
-
-    next = changes.next();
-    writeFileSync(join(path, "build", "out.txt"), "x");
-    expect(await next).toEqual({ value: null, done: false });
-
-    next = changes.next();
-    writeFileSync(join(path, "src", "a.txt"), "x");
+    writeFileSync(join(main, "other.txt"), "x");
+    git(main, "add", "other.txt");
     expect(await quiet(next)).toBe("quiet");
 
-    // Rules in .git/info/exclude count too.
-    writeFileSync(join(path, ".git", "info", "exclude"), "build/\n");
-    expect(await next).toEqual({ value: null, done: false });
-    next = changes.next();
-    writeFileSync(join(path, "build", "out.txt"), "y");
-    expect(await quiet(next)).toBe("quiet");
+    // Branches are shared.
+    git(main, "branch", "shared");
+    expect((await next).value).toContain("refs");
 
     controller.abort();
   });
