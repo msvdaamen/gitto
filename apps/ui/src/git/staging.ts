@@ -11,7 +11,7 @@ export function useStage(repositoryId: () => string) {
     mutationFn: (paths: string[]) => rpc.git.staging.stage({ repositoryId: repositoryId(), paths }),
     // The watcher would catch this too, but refetching right away feels snappier.
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: gitKeys.repository(repositoryId()) }),
+      queryClient.invalidateQueries({ queryKey: gitKeys.uncommitted(repositoryId()) }),
   }));
 }
 
@@ -21,7 +21,7 @@ export function useUnstage(repositoryId: () => string) {
     mutationFn: (paths: string[]) =>
       rpc.git.staging.unstage({ repositoryId: repositoryId(), paths }),
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: gitKeys.repository(repositoryId()) }),
+      queryClient.invalidateQueries({ queryKey: gitKeys.uncommitted(repositoryId()) }),
   }));
 }
 

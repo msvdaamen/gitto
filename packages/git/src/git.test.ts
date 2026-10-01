@@ -17,12 +17,13 @@ import {
 } from "./core/errors";
 import { GitReposImpl, type Repo } from "./core/repo";
 import { createCommit } from "./features/commit/commands";
-import { getCommitFiles, getWorkingTreeFiles } from "./features/diff/commands";
+import { getCommitFiles } from "./features/diff/commands";
+import { parseDiff } from "./features/diff/parse";
 import { getCommit, getLog } from "./features/history/commands";
 import { listRefs } from "./features/refs/commands";
 import { stage, unstage } from "./features/staging/commands";
 import { getStatus } from "./features/status/commands";
-import { watchChanges } from "./features/watch/commands";
+import { watchGitDir, watchWorkingTree } from "./features/watch/commands";
 import { gitRouter } from "./router";
 
 let root: string;
@@ -175,7 +176,7 @@ describe("a repository with history", () => {
   });
 
   it("diffs the working tree against the index", async () => {
-    expect(await getWorkingTreeFiles(repo)).toEqual({
+    expect((await getStatus(repo)).changes).toEqual({
       staged: [],
       unstaged: [
         { path: "a file.txt", status: "modified", origPath: null, additions: 1, deletions: 2 },
@@ -194,13 +195,13 @@ describe("a repository with history", () => {
     };
 
     await stage(repo, ["a file.txt"]);
-    expect(await getWorkingTreeFiles(repo)).toEqual({
+    expect((await getStatus(repo)).changes).toEqual({
       staged: [change],
       unstaged: [untrackedFile],
     });
 
     await unstage(repo, ["a file.txt"]);
-    expect(await getWorkingTreeFiles(repo)).toEqual({
+    expect((await getStatus(repo)).changes).toEqual({
       staged: [],
       unstaged: [change, untrackedFile],
     });
@@ -229,7 +230,7 @@ describe("a repository without commits", () => {
     });
     expect(await getLog(repo, page)).toEqual([]);
     expect(await listRefs(repo)).toEqual([]);
-    expect(await getWorkingTreeFiles(repo)).toEqual({ staged: [], unstaged: [] });
+    expect((await getStatus(repo)).changes).toEqual({ staged: [], unstaged: [] });
   });
 
   it("stages, unstages and commits", async () => {
@@ -239,7 +240,7 @@ describe("a repository without commits", () => {
     expect((await getStatus(repo)).files).toEqual([
       { path: "x y.txt", origPath: null, staged: "added", unstaged: null },
     ]);
-    expect(await getWorkingTreeFiles(repo)).toEqual({
+    expect((await getStatus(repo)).changes).toEqual({
       staged: [{ path: "x y.txt", status: "added", origPath: null, additions: 1, deletions: 0 }],
       unstaged: [],
     });
@@ -264,6 +265,101 @@ describe("a repository without commits", () => {
     await expect(createCommit(repo, "nothing")).rejects.toMatchObject({
       message: expect.stringContaining("nothing to commit"),
     });
+  });
+});
+
+/** What the changed files were before they came from the status: full diffs and ls-files. */
+async function fullDiffs(repo: Repo) {
+  const [staged, unstaged, untracked] = await Promise.all([
+    repo.read(["diff", "--cached", "--raw", "--numstat", "-z", "-M"]),
+    repo.read(["diff", "--raw", "--numstat", "-z"]),
+    repo.read(["ls-files", "--others", "--exclude-standard", "-z"]),
+  ]);
+  return {
+    staged: parseDiff(staged),
+    unstaged: [
+      ...parseDiff(unstaged),
+      ...untracked
+        .split("\0")
+        .filter(Boolean)
+        .map((path) => ({
+          path,
+          status: "untracked",
+          origPath: null,
+          additions: null,
+          deletions: null,
+        })),
+    ],
+  };
+}
+
+describe("the changed files", () => {
+  it("are the same as full diffs", async () => {
+    const path = createRepo("changes");
+    // `:colon.txt` would be pathspec magic, if git didn't take paths literally (GIT_LITERAL_PATHSPECS).
+    for (const name of ["keep.txt", "edit.txt", "both.txt", "gone.txt", "move.txt", ":colon.txt"]) {
+      writeFileSync(join(path, name), `${name}\n`);
+    }
+    writeFileSync(join(path, "bin.dat"), Buffer.from([0, 1, 2]));
+    git(path, "add", ".");
+    git(path, "commit", "-q", "-m", "first");
+
+    writeFileSync(join(path, "edit.txt"), "changed\n");
+    writeFileSync(join(path, ":colon.txt"), "changed\n");
+    writeFileSync(join(path, "both.txt"), "staged\n");
+    git(path, "add", "both.txt");
+    writeFileSync(join(path, "both.txt"), "staged, then changed again\n");
+    rmSync(join(path, "gone.txt"));
+    git(path, "mv", "move.txt", "moved.txt");
+    writeFileSync(join(path, "bin.dat"), Buffer.from([3, 4, 5]));
+    writeFileSync(join(path, "new.txt"), "new\n");
+    const repo = await repos.open("changes");
+
+    const { changes } = await getStatus(repo);
+    expect(changes).toEqual(await fullDiffs(repo));
+    expect(changes.unstaged.map((file) => file.path)).toEqual(
+      expect.arrayContaining([
+        "edit.txt",
+        ":colon.txt",
+        "both.txt",
+        "gone.txt",
+        "bin.dat",
+        "new.txt",
+      ]),
+    );
+  });
+
+  it("are the same as full diffs with a merge conflict", async () => {
+    const path = createRepo("conflict");
+    writeFileSync(join(path, "file.txt"), "base\n");
+    git(path, "add", ".");
+    git(path, "commit", "-q", "-m", "base");
+    git(path, "checkout", "-q", "-b", "side");
+    writeFileSync(join(path, "file.txt"), "side\n");
+    git(path, "commit", "-q", "-am", "side");
+    git(path, "checkout", "-q", "main");
+    writeFileSync(join(path, "file.txt"), "main\n");
+    git(path, "commit", "-q", "-am", "main");
+    expect(() => git(path, "merge", "-q", "side")).toThrow();
+    const repo = await repos.open("conflict");
+
+    const { changes } = await getStatus(repo);
+    expect(changes).toEqual(await fullDiffs(repo));
+    expect(changes.unstaged).toEqual([expect.objectContaining({ path: "file.txt" })]);
+  });
+
+  it("are the same as full diffs when there are too many paths to list", async () => {
+    const path = createRepo("many");
+    const names = Array.from({ length: 400 }, (_, i) => `${"long-file-name-".repeat(3)}${i}.txt`);
+    for (const name of names) writeFileSync(join(path, name), "a\n");
+    git(path, "add", ".");
+    git(path, "commit", "-q", "-m", "many");
+    for (const name of names) writeFileSync(join(path, name), "b\n");
+    const repo = await repos.open("many");
+
+    const { changes } = await getStatus(repo);
+    expect(changes.unstaged).toHaveLength(400);
+    expect(changes).toEqual(await fullDiffs(repo));
   });
 });
 
@@ -359,19 +455,41 @@ function quiet(next: Promise<unknown>): Promise<unknown> {
   return Promise.race([next, new Promise((resolve) => setTimeout(() => resolve("quiet"), 700))]);
 }
 
-describe("watching", () => {
+/** Runs `change` once the watcher has had time to start; it only sees what happens after that. */
+function soon(change: () => void) {
+  setTimeout(change, 200);
+}
+
+describe("watching the working tree", () => {
   it("emits after a change and stops when aborted", async () => {
     const path = createRepo("watched");
     const repo = await repos.open("watched");
     const controller = new AbortController();
-    const changes = watchChanges(repo, controller.signal);
+    const changes = watchWorkingTree(repo, controller.signal);
 
     const next = changes.next();
-    setTimeout(() => writeFileSync(join(path, "file.txt"), "x"), 50);
+    soon(() => writeFileSync(join(path, "file.txt"), "x"));
     expect(await next).toEqual({ value: null, done: false });
 
     controller.abort();
     expect(await changes.next()).toEqual({ value: undefined, done: true });
+  });
+
+  it("leaves the git directory out", { timeout: 10_000 }, async () => {
+    const path = createRepo("watched-git-dir");
+    const repo = await repos.open("watched-git-dir");
+    const controller = new AbortController();
+    const changes = watchWorkingTree(repo, controller.signal);
+
+    let next = changes.next();
+    soon(() => writeFileSync(join(path, "file.txt"), "x"));
+    expect(await next).toEqual({ value: null, done: false });
+
+    next = changes.next();
+    git(path, "add", "file.txt");
+    expect(await quiet(next)).toBe("quiet");
+
+    controller.abort();
   });
 
   it("skips ignored directories and follows new ones", { timeout: 10_000 }, async () => {
@@ -380,10 +498,10 @@ describe("watching", () => {
     mkdirSync(join(path, "build"));
     const repo = await repos.open("watched-tree");
     const controller = new AbortController();
-    const changes = watchChanges(repo, controller.signal);
+    const changes = watchWorkingTree(repo, controller.signal);
 
     let next = changes.next();
-    setTimeout(() => writeFileSync(join(path, "file.txt"), "x"), 200);
+    soon(() => writeFileSync(join(path, "file.txt"), "x"));
     expect(await next).toEqual({ value: null, done: false });
 
     // Ignored.
@@ -408,10 +526,10 @@ describe("watching", () => {
     mkdirSync(join(path, "src"));
     const repo = await repos.open("watched-rules");
     const controller = new AbortController();
-    const changes = watchChanges(repo, controller.signal);
+    const changes = watchWorkingTree(repo, controller.signal);
 
     let next = changes.next();
-    setTimeout(() => writeFileSync(join(path, "file.txt"), "x"), 200);
+    soon(() => writeFileSync(join(path, "file.txt"), "x"));
     expect(await next).toEqual({ value: null, done: false });
 
     // `build` is no longer ignored, `src` now is.
@@ -433,6 +551,131 @@ describe("watching", () => {
     next = changes.next();
     writeFileSync(join(path, "build", "out.txt"), "y");
     expect(await quiet(next)).toBe("quiet");
+
+    controller.abort();
+  });
+});
+
+describe("watching the git directory", () => {
+  it(
+    "reports staging, commits and checkouts, but not the working tree",
+    { timeout: 10_000 },
+    async () => {
+      const path = createRepo("watched-refs");
+      const repo = await repos.open("watched-refs");
+      const controller = new AbortController();
+      const changes = watchGitDir(repo, controller.signal);
+
+      let next = changes.next();
+      soon(() => {
+        writeFileSync(join(path, "file.txt"), "x");
+        git(path, "add", "file.txt");
+      });
+      expect(await next).toEqual({ value: ["index"], done: false });
+
+      next = changes.next();
+      git(path, "commit", "-q", "-m", "First");
+      expect((await next).value).toContain("refs");
+
+      next = changes.next();
+      git(path, "checkout", "-q", "-b", "feature");
+      expect((await next).value).toContain("refs");
+
+      next = changes.next();
+      writeFileSync(join(path, "file.txt"), "y");
+      expect(await quiet(next)).toBe("quiet");
+
+      controller.abort();
+      expect(await changes.next()).toEqual({ value: undefined, done: true });
+    },
+  );
+
+  it(
+    "keeps going while the working tree is watched and unwatched",
+    { timeout: 10_000 },
+    async () => {
+      const path = createRepo("watched-both");
+      const repo = await repos.open("watched-both");
+      const controller = new AbortController();
+      const changes = watchGitDir(repo, controller.signal);
+      let next = changes.next();
+
+      // Like the UI does when the window gets and loses focus.
+      const tree = new AbortController();
+      const treeChanges = watchWorkingTree(repo, tree.signal);
+      const treeNext = treeChanges.next();
+      soon(() => writeFileSync(join(path, "file.txt"), "x"));
+      expect(await treeNext).toEqual({ value: null, done: false });
+      tree.abort();
+      expect(await treeChanges.next()).toEqual({ value: undefined, done: true });
+
+      git(path, "add", "file.txt");
+      expect(await next).toEqual({ value: ["index"], done: false });
+      next = changes.next();
+      writeFileSync(join(path, ".git", "info", "exclude"), "build/\n");
+      git(path, "commit", "-q", "-m", "First");
+      expect((await next).value).toContain("refs");
+
+      controller.abort();
+    },
+  );
+
+  it("reports refs stored in a reftable", { timeout: 10_000 }, async () => {
+    // What `git init --ref-format=reftable` (git 2.45+) writes to, instead of `refs`.
+    const path = createRepo("watched-reftable");
+    mkdirSync(join(path, ".git", "reftable"));
+    const repo = await repos.open("watched-reftable");
+    const controller = new AbortController();
+    const changes = watchGitDir(repo, controller.signal);
+
+    const next = changes.next();
+    soon(() => writeFileSync(join(path, ".git", "reftable", "tables.list"), "x"));
+    expect(await next).toEqual({ value: ["refs"], done: false });
+
+    controller.abort();
+  });
+
+  it("ends quietly when aborted while starting", async () => {
+    createRepo("watched-abort");
+    const repo = await repos.open("watched-abort");
+    const ends = [watchGitDir, watchWorkingTree].map((watch) => {
+      const controller = new AbortController();
+      const next = watch(repo, controller.signal).next();
+      controller.abort();
+      return next;
+    });
+    expect(await Promise.all(ends)).toEqual([
+      { value: undefined, done: true },
+      { value: undefined, done: true },
+    ]);
+  });
+
+  it("follows a linked worktree's own HEAD and index", { timeout: 10_000 }, async () => {
+    const main = createRepo("watched-main");
+    git(main, "commit", "-q", "--allow-empty", "-m", "First");
+    const linked = join(root, "watched-linked");
+    git(main, "worktree", "add", "-q", linked);
+    paths.set("watched-linked", linked);
+    const repo = await repos.open("watched-linked");
+    const controller = new AbortController();
+    const changes = watchGitDir(repo, controller.signal);
+
+    let next = changes.next();
+    soon(() => {
+      writeFileSync(join(linked, "file.txt"), "x");
+      git(linked, "add", "file.txt");
+    });
+    expect(await next).toEqual({ value: ["index"], done: false });
+
+    // The main worktree's index isn't this one's.
+    next = changes.next();
+    writeFileSync(join(main, "other.txt"), "x");
+    git(main, "add", "other.txt");
+    expect(await quiet(next)).toBe("quiet");
+
+    // Branches are shared.
+    git(main, "branch", "shared");
+    expect((await next).value).toContain("refs");
 
     controller.abort();
   });

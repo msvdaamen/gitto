@@ -27,6 +27,12 @@ const rpc = vi.hoisted(() => {
             ahead: 0,
             behind: 0,
             files: [{ path: "wip.txt", origPath: null, staged: null, unstaged: "modified" }],
+            changes: {
+              staged: [],
+              unstaged: [
+                { path: "wip.txt", status: "modified", origPath: null, additions: 1, deletions: 0 },
+              ],
+            },
           };
         },
       },
@@ -34,12 +40,6 @@ const rpc = vi.hoisted(() => {
         commitFiles: async () => [
           { path: "first.txt", status: "added", origPath: null, additions: 1, deletions: 0 },
         ],
-        workingTreeFiles: async () => ({
-          staged: [],
-          unstaged: [
-            { path: "wip.txt", status: "modified", origPath: null, additions: 1, deletions: 0 },
-          ],
-        }),
       },
     },
   };

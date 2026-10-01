@@ -13,14 +13,16 @@ catalog:
   vitest: "^5.0.2"
 
 # pnpm's default, set explicitly so Electron Forge's package manager check passes.
-# The Electron app is fully bundled by Vite (Forge only packages the .vite folder),
-# so it ships no node_modules and doesn't need `nodeLinker: hoisted`.
+# The Electron app is bundled by Vite (Forge only packages the .vite folder); the few
+# native modules it ships are copied in by forge.config.ts, so it doesn't need `nodeLinker: hoisted`.
 hoistPattern:
   - "*"
 
 allowBuilds:
   electron-winstaller: true
   esbuild: true
+  # Only builds from source when asked to; the prebuilt binaries come as optional dependencies.
+  "@parcel/watcher": false
 
 overrides:
   # Forge 7 depends on @electron/rebuild@3, which pulls node-gyp from a git repo
