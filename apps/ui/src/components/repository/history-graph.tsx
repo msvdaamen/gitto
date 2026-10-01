@@ -1,4 +1,4 @@
-import { For, Index, Show } from "solid-js";
+import { Index, Show } from "solid-js";
 
 import type { GraphEdge, GraphRow } from "@/git/graph";
 
@@ -32,6 +32,11 @@ export function graphWidth(lanes: number): number {
 
 function x(lane: number): number {
   return PADDING + lane * LANE + LANE / 2;
+}
+
+/** A lane passing by the node, from the top of the row to the bottom. */
+function throughPath(edge: GraphEdge): string {
+  return `M${x(edge.from)} 0V${HEIGHT + 1}`;
 }
 
 /** A line from the top of the row into the node: straight down, then a corner into the node. */
@@ -77,22 +82,16 @@ export function HistoryGraph(props: {
       fill="none"
       stroke-width="2"
     >
-      <For each={props.row.through}>
-        {(lane) => <path d={`M${x(lane)} 0V${HEIGHT + 1}`} stroke={laneColor(lane)} />}
-      </For>
       {/* By position: the edges are new objects whenever the history is refetched, and `<For>`
           would re-create every path for them. */}
+      <Index each={props.row.through}>
+        {(edge) => <Line d={throughPath(edge())} edge={edge()} lane={edge().from} />}
+      </Index>
       <Index each={props.row.top}>
-        {(edge) => <path d={topPath(edge())} stroke={laneColor(edge().from)} />}
+        {(edge) => <Line d={topPath(edge())} edge={edge()} lane={edge().from} />}
       </Index>
       <Index each={props.row.bottom}>
-        {(edge) => (
-          <path
-            d={bottomPath(edge())}
-            stroke={props.wip ? "var(--amber)" : laneColor(edge().to)}
-            stroke-dasharray={props.wip ? "3 3" : undefined}
-          />
-        )}
+        {(edge) => <Line d={bottomPath(edge())} edge={edge()} lane={edge().to} />}
       </Index>
       <Show
         when={!props.wip}
@@ -133,5 +132,16 @@ export function HistoryGraph(props: {
         </Show>
       </Show>
     </svg>
+  );
+}
+
+/** A line in `lane`'s colour; dashed amber on its way from the uncommitted changes to HEAD. */
+function Line(props: { d: string; edge: GraphEdge; lane: number }) {
+  return (
+    <path
+      d={props.d}
+      stroke={props.edge.dashed ? "var(--amber)" : laneColor(props.lane)}
+      stroke-dasharray={props.edge.dashed ? "3 3" : undefined}
+    />
   );
 }

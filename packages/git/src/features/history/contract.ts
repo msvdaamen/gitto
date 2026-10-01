@@ -6,8 +6,8 @@ import { CommitSchema } from "./schema";
 
 export const HistoryContract = {
   /**
-   * History of all branches, remotes and tags, newest commit first across all of them, like
-   * GitKraken; a commit still always comes after its children.
+   * History of all branches, remotes and tags, most recently authored commit first across all of
+   * them, like GitKraken; a commit still always comes after its children.
    */
   log: oc
     .input(

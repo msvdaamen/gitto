@@ -132,8 +132,7 @@ describe("a repository with history", () => {
     ]);
     expect(log[0]).toMatchObject({
       refs: [
-        { kind: "head", name: "HEAD" },
-        { kind: "local", name: "main" },
+        { kind: "local", name: "main", current: true },
         { kind: "tag", name: "v1" },
       ],
       authorName: "Test User",
@@ -256,10 +255,7 @@ describe("a repository without commits", () => {
       expect.objectContaining({
         subject: "Initial commit",
         body: "With body",
-        refs: [
-          { kind: "head", name: "HEAD" },
-          { kind: "local", name: "main" },
-        ],
+        refs: [{ kind: "local", name: "main", current: true }],
       }),
     ]);
   });

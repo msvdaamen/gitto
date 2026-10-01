@@ -35,8 +35,7 @@ describe("parseLog", () => {
         authorEmail: "ada@example.com",
         authoredAt: 1_700_000_000_000,
         refs: [
-          { kind: "head", name: "HEAD" },
-          { kind: "local", name: "main" },
+          { kind: "local", name: "main", current: true },
           { kind: "remote", name: "origin/main" },
           // A local branch that only looks like a remote one.
           { kind: "local", name: "origin/local" },
@@ -55,6 +54,15 @@ describe("parseLog", () => {
         subject: "Initial",
         body: "",
       },
+    ]);
+  });
+
+  it("tells a detached HEAD from a checked-out branch on the same commit", () => {
+    const output = ["aaa", "", "Ada", "ada@example.com", "1", "HEAD, refs/heads/main", "S", ""];
+
+    expect(parseLog(output.join("\0"))[0]!.refs).toEqual([
+      { kind: "head", name: "HEAD" },
+      { kind: "local", name: "main" },
     ]);
   });
 

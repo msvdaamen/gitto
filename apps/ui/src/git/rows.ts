@@ -10,24 +10,34 @@ export const WIP_ID = "wip";
 const AVATAR_COLORS = ["#7c5ce7", "#38bda9", "#a978dd", "#e2a646", "#5b9be6", "#e0707a"];
 
 /**
+ * Lays out the history graph: the log, below the uncommitted changes when there are any. Those
+ * get a dashed line to the commit they're based on, `head`, if it's in the log.
+ */
+export function historyGraph(
+  log: GitCommit[],
+  hasChanges: boolean,
+  head: string | undefined,
+): GraphRow[] {
+  if (!hasChanges) return computeGraph(log);
+  const parents = head && log.some((commit) => commit.sha === head) ? [head] : [];
+  return computeGraph([{ sha: WIP_ID, parents, dashed: true }, ...log]);
+}
+
+/**
  * Turns a repository's log, plus the uncommitted changes if there are any, into history table
- * rows. Each row records the repository, so follow-up requests (like its changed files) always go
- * to the repository the commit is in.
+ * rows, with their rows of `graph` (see `historyGraph`). Each row records the repository, so
+ * follow-up requests (like its changed files) always go to the repository the commit is in.
  */
 export function toCommitRows(
   repositoryId: string,
   log: GitCommit[],
   status: Status | undefined,
+  graph: GraphRow[],
 ): Commit[] {
-  const hasChanges = !!status && status.files.length > 0;
-  const head = status?.head;
-  const wip = { sha: WIP_ID, parents: head && head.kind !== "unborn" ? [head.sha] : [] };
-  const graph = computeGraph(hasChanges ? [wip, ...log] : log);
+  const hasChanges = hasUncommittedChanges(status);
   const offset = hasChanges ? 1 : 0;
 
-  const rows = log.map((commit, index) =>
-    toCommitRow(repositoryId, commit, graph[index + offset]!),
-  );
+  const rows = log.map((commit, index) => toCommitRow(repositoryId, commit, graph[index + offset]));
   if (!hasChanges) return rows;
 
   return [
@@ -47,6 +57,10 @@ export function toCommitRows(
     },
     ...rows,
   ];
+}
+
+export function hasUncommittedChanges(status: Status | undefined): boolean {
+  return !!status && status.files.length > 0;
 }
 
 /** A commit as the UI shows it; `graph` is its row in the history table's graph column. */

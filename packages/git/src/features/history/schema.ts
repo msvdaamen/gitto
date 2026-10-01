@@ -2,11 +2,16 @@ import { z } from "zod";
 
 import { RefKindSchema } from "../refs/schema";
 
-/** A ref pointing at a commit: `HEAD`, or a branch or tag, e.g. local `main` or tag `v1`. */
+/**
+ * A ref pointing at a commit: a branch or tag, e.g. local `main` or tag `v1`, or `HEAD` when it's
+ * detached. A checked-out branch is marked `current` instead of getting a `HEAD` of its own.
+ */
 export const CommitRefSchema = z.object({
   kind: z.enum(["head", ...RefKindSchema.options]),
-  /** Short name, e.g. `main`, `origin/main`, `v1`; `HEAD` for the head. */
+  /** Short name, e.g. `main`, `origin/main`, `v1`; `HEAD` for a detached head. */
   name: z.string(),
+  /** Whether it's the checked-out branch. */
+  current: z.boolean().optional(),
 });
 
 export type CommitRef = z.infer<typeof CommitRefSchema>;

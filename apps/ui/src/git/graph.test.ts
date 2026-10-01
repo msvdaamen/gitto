@@ -36,8 +36,8 @@ describe("computeGraph", () => {
       { from: 0, to: 0 },
       { from: 0, to: 1 },
     ]);
-    expect(main).toMatchObject({ column: 0, through: [1] });
-    expect(side).toMatchObject({ column: 1, through: [0] });
+    expect(main).toMatchObject({ column: 0, through: [{ from: 1, to: 1 }] });
+    expect(side).toMatchObject({ column: 1, through: [{ from: 0, to: 0 }] });
     // Both lanes lead to the fork point, where the side branch's lane curves back in.
     expect(base).toMatchObject({
       column: 0,
@@ -57,7 +57,7 @@ describe("computeGraph", () => {
     ]);
 
     expect(feature).toMatchObject({ column: 0, top: [] });
-    expect(main).toMatchObject({ column: 1, top: [], through: [0] });
+    expect(main).toMatchObject({ column: 1, top: [], through: [{ from: 0, to: 0 }] });
     expect(base!.top).toEqual([
       { from: 0, to: 0 },
       { from: 1, to: 0 },
@@ -73,9 +73,25 @@ describe("computeGraph", () => {
     ]);
 
     expect(feature).toMatchObject({ column: 0 });
-    expect(merge).toMatchObject({ column: 1, through: [0] });
+    expect(merge).toMatchObject({ column: 1, through: [{ from: 0, to: 0 }] });
     expect(merge!.bottom).toEqual([
       { from: 1, to: 1 },
+      { from: 1, to: 0 },
+    ]);
+  });
+
+  it("dashes the line from the uncommitted changes all the way down to their commit", () => {
+    const [wip, other, head] = computeGraph([
+      { sha: "wip", parents: ["head"], dashed: true },
+      { sha: "other", parents: ["head"] },
+      { sha: "head", parents: [] },
+    ]);
+
+    expect(wip!.bottom).toEqual([{ from: 0, to: 0, dashed: true }]);
+    // Commits on other branches can sort in between; the line passes them by still dashed.
+    expect(other!.through).toEqual([{ from: 0, to: 0, dashed: true }]);
+    expect(head!.top).toEqual([
+      { from: 0, to: 0, dashed: true },
       { from: 1, to: 0 },
     ]);
   });

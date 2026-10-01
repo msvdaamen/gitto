@@ -22,45 +22,53 @@ export type RefLabel =
 
 /**
  * Merges a commit's refs into labels, like GitKraken: a local branch and its remote copies
- * (`main`, `origin/main`) share one label. The checked-out branch comes first, then other local
- * branches, remote-only branches and tags.
+ * (`main`, `origin/main`) share one label. A detached HEAD comes first, then the checked-out
+ * branch, other local branches, remote-only branches and tags.
  */
 export function toRefLabels(refs: CommitRef[]): RefLabel[] {
-  const branches = new Map<string, BranchLabel>();
-  const tags: RefLabel[] = [];
-  let head: RefLabel | undefined;
+  const head: RefLabel[] = refs.some((ref) => ref.kind === "head")
+    ? [{ kind: "head", name: "HEAD" }]
+    : [];
+  const locals = new Map<string, BranchLabel>(
+    refs
+      .filter((ref) => ref.kind === "local")
+      .map((ref) => [
+        ref.name,
+        { kind: "branch", name: ref.name, local: true, remotes: [], current: !!ref.current },
+      ]),
+  );
+  // Remote branches without a local copy here; kept apart from the local ones, as a local branch
+  // can be named like a remote one (`origin/main`).
+  const remoteOnly: BranchLabel[] = [];
 
-  refs.forEach((ref, index) => {
-    if (ref.kind === "head") {
-      // `HEAD` comes right before the branch it's on; without one it's detached.
-      if (refs[index + 1]?.kind !== "local") head = { kind: "head", name: "HEAD" };
-    } else if (ref.kind === "tag") {
-      tags.push({ kind: "tag", name: ref.name });
-    } else if (ref.kind === "local") {
-      const current = refs[index - 1]?.kind === "head";
-      branches.set(ref.name, { kind: "branch", name: ref.name, local: true, remotes: [], current });
-    }
-  });
-
-  // Remotes after locals, so a remote copy finds its local branch whichever comes first.
   for (const ref of refs) {
     if (ref.kind !== "remote") continue;
     // `origin/feature/login` is branch `feature/login` on remote `origin`.
     const slash = ref.name.indexOf("/");
     const remotes = slash === -1 ? [] : [ref.name.slice(0, slash)];
-    const local = slash === -1 ? undefined : branches.get(ref.name.slice(slash + 1));
-    if (local?.local) local.remotes.push(...remotes);
-    else
-      branches.set(ref.name, {
-        kind: "branch",
-        name: ref.name,
-        local: false,
-        remotes,
-        current: false,
-      });
+    const local = slash === -1 ? undefined : locals.get(ref.name.slice(slash + 1));
+    if (local) local.remotes.push(...remotes);
+    else remoteOnly.push({ kind: "branch", name: ref.name, local: false, remotes, current: false });
   }
 
-  const rank = (label: BranchLabel) => (label.current ? 0 : label.local ? 1 : 2);
-  const sorted = [...branches.values()].toSorted((a, b) => rank(a) - rank(b));
-  return [...(head ? [head] : []), ...sorted, ...tags];
+  const tags = refs
+    .filter((ref) => ref.kind === "tag")
+    .map((ref): RefLabel => ({ kind: "tag", name: ref.name }));
+  // The checked-out branch first; otherwise in git's order.
+  const branches = [...locals.values()].toSorted((a, b) => Number(b.current) - Number(a.current));
+  return [...head, ...branches, ...remoteOnly, ...tags];
+}
+
+/**
+ * Whether a search matches the label: its name, a remote copy's full name (`origin/main`) or, for
+ * a tag, `tag: v1`. Case-insensitive; `needle` is lowercase.
+ */
+export function refLabelMatches(label: RefLabel, needle: string): boolean {
+  const names =
+    label.kind === "tag"
+      ? [`tag: ${label.name}`]
+      : label.kind === "branch" && label.local
+        ? [label.name, ...label.remotes.map((remote) => `${remote}/${label.name}`)]
+        : [label.name];
+  return names.some((name) => name.toLowerCase().includes(needle));
 }
