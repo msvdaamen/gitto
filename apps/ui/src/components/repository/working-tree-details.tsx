@@ -68,7 +68,7 @@ export function WorkingTreeDetails(props: { repositoryId: string }) {
         empty="Nothing left to stage."
         bulkLabel="Stage all"
         busy={busy()}
-        onBulk={() => stage.mutate(stagingPaths(changes.unstaged()))}
+        onBulk={() => stage.mutate("all")}
         action={{
           label: "Stage",
           icon: Plus,
@@ -84,7 +84,7 @@ export function WorkingTreeDetails(props: { repositoryId: string }) {
         empty="Stage files to include them in the next commit."
         bulkLabel="Unstage all"
         busy={busy()}
-        onBulk={() => unstage.mutate(stagingPaths(changes.staged()))}
+        onBulk={() => unstage.mutate("all")}
         action={{
           label: "Unstage",
           icon: Minus,

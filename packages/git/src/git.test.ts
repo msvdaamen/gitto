@@ -21,7 +21,7 @@ import { getCommitFiles } from "./features/diff/commands";
 import { parseDiff } from "./features/diff/parse";
 import { getCommit, getLog } from "./features/history/commands";
 import { listRefs } from "./features/refs/commands";
-import { stage, unstage } from "./features/staging/commands";
+import { stage, stageAll, unstage, unstageAll } from "./features/staging/commands";
 import { getStatus } from "./features/status/commands";
 import { watchGitDir, watchWorkingTree } from "./features/watch/commands";
 import { gitRouter } from "./router";
@@ -374,6 +374,79 @@ describe("a big working tree", () => {
     expect((await getStatus(repo)).changes.staged).toHaveLength(1000);
     await unstage(repo, names);
     expect((await getStatus(repo)).changes).toMatchObject({ staged: [] });
+  });
+
+  it("stages and unstages everything at once", async () => {
+    const path = createRepo("all");
+    for (const name of ["kept.txt", "deleted.txt", "moved.txt"]) {
+      writeFileSync(join(path, name), `${name}\n`);
+    }
+    git(path, "add", ".");
+    git(path, "commit", "-q", "-m", "First");
+    writeFileSync(join(path, "kept.txt"), "changed\n");
+    rmSync(join(path, "deleted.txt"));
+    git(path, "mv", "moved.txt", "renamed.txt");
+    writeFileSync(join(path, "new file.txt"), "new\n");
+    const repo = await repos.open("all");
+
+    await stageAll(repo);
+    const staged = await getStatus(repo);
+    expect(staged.files.map((file) => [file.path, file.staged, file.unstaged])).toEqual([
+      ["deleted.txt", "deleted", null],
+      ["kept.txt", "modified", null],
+      ["new file.txt", "added", null],
+      ["renamed.txt", "renamed", null],
+    ]);
+
+    await unstageAll(repo);
+    const unstaged = await getStatus(repo);
+    expect(unstaged.changes.staged).toEqual([]);
+    expect(unstaged.files.map((file) => [file.path, file.unstaged])).toEqual([
+      ["deleted.txt", "deleted"],
+      ["kept.txt", "modified"],
+      ["moved.txt", "deleted"],
+      ["new file.txt", "untracked"],
+      ["renamed.txt", "untracked"],
+    ]);
+  });
+
+  it("unstages everything but conflicts, which stay conflicted", async () => {
+    const path = createRepo("all-conflict");
+    writeFileSync(join(path, "both.txt"), "base\n");
+    writeFileSync(join(path, "other.txt"), "other\n");
+    git(path, "add", ".");
+    git(path, "commit", "-q", "-m", "base");
+    git(path, "checkout", "-q", "-b", "side");
+    writeFileSync(join(path, "both.txt"), "side\n");
+    git(path, "commit", "-q", "-am", "side");
+    git(path, "checkout", "-q", "main");
+    writeFileSync(join(path, "both.txt"), "main\n");
+    git(path, "commit", "-q", "-am", "main");
+    expect(() => git(path, "merge", "-q", "side")).toThrow();
+    writeFileSync(join(path, "other.txt"), "changed\n");
+    git(path, "add", "other.txt");
+    const repo = await repos.open("all-conflict");
+
+    await unstageAll(repo);
+    expect((await getStatus(repo)).files).toEqual([
+      { path: "other.txt", origPath: null, staged: null, unstaged: "modified" },
+      { path: "both.txt", origPath: null, staged: "conflicted", unstaged: "conflicted" },
+    ]);
+    expect(existsSync(join(path, ".git", "MERGE_HEAD"))).toBe(true);
+  });
+
+  it("stages and unstages everything before the first commit", async () => {
+    const path = createRepo("all-empty");
+    const repo = await repos.open("all-empty");
+    await unstageAll(repo);
+
+    writeFileSync(join(path, "a.txt"), "a\n");
+    await stageAll(repo);
+    expect((await getStatus(repo)).changes.staged).toHaveLength(1);
+    await unstageAll(repo);
+    expect((await getStatus(repo)).files).toEqual([
+      { path: "a.txt", origPath: null, staged: null, unstaged: "untracked" },
+    ]);
   });
 
   it("refreshes the index, so files touched but not changed aren't read again", async () => {

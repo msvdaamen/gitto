@@ -8,4 +8,8 @@ const PathsInput = RepositoryInput.extend({ paths: z.array(z.string().min(1)).mi
 export const StagingContract = {
   stage: oc.input(PathsInput),
   unstage: oc.input(PathsInput),
+  /** Stages every change, untracked files and conflicts included. */
+  stageAll: oc.input(RepositoryInput),
+  /** Unstages every staged change; conflicts stay conflicted. */
+  unstageAll: oc.input(RepositoryInput),
 };
