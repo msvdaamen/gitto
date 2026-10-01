@@ -1,4 +1,5 @@
 import type { Ref } from "@gitto/git/types";
+import { createVirtualizer } from "@tanstack/solid-virtual";
 import { cn } from "cn";
 import type { LucideIcon } from "lucide-solid";
 import Archive from "lucide-solid/icons/archive";
@@ -15,14 +16,22 @@ import LoaderCircle from "lucide-solid/icons/loader-circle";
 import Settings from "lucide-solid/icons/settings";
 import Tag from "lucide-solid/icons/tag";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
-import { createMemo, createSignal, Show, Suspense } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  onCleanup,
+  onMount,
+  Show,
+  Suspense,
+} from "solid-js";
 import type { JSX } from "solid-js";
 
 import { EmptyState } from "@/components/ui/empty-state";
 import { Mascot } from "@/components/ui/mascot";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { toneClasses } from "@/components/ui/tone";
-import { VirtualList, VirtualViewport } from "@/components/ui/virtual-list";
 import { buildRefTree, flattenRefTree } from "@/git/ref-tree";
 import type { RefTreeNode } from "@/git/ref-tree";
 import { useRefs } from "@/git/refs";
@@ -31,6 +40,7 @@ import { useCollapsed } from "@/hooks/collapsed";
 
 export function RefsSidebar(props: { repositoryId: string; open: boolean }) {
   const [mode, setMode] = createSignal("List");
+  let nav: HTMLElement | undefined;
 
   return (
     <aside
@@ -44,18 +54,17 @@ export function RefsSidebar(props: { repositoryId: string; open: boolean }) {
       </div>
       <Show when={mode() === "List"} fallback={<AgentPlaceholder />}>
         <nav
+          ref={(el) => (nav = el)}
           class="min-h-0 flex-1 overflow-y-auto pt-0.5 pr-[7px] pb-[35px] pl-[7px]"
           aria-label="Repository references"
         >
-          <VirtualViewport>
-            <Suspense
-              fallback={
-                <EmptyState icon={LoaderCircle} title="Loading branches…" class="h-[150px]" />
-              }
-            >
-              <RefList repositoryId={props.repositoryId} />
-            </Suspense>
-          </VirtualViewport>
+          <Suspense
+            fallback={
+              <EmptyState icon={LoaderCircle} title="Loading branches…" class="h-[150px]" />
+            }
+          >
+            <RefList repositoryId={props.repositoryId} scrollElement={() => nav} />
+          </Suspense>
         </nav>
       </Show>
       <button class="absolute right-0 bottom-0 left-0 flex h-[34px] cursor-pointer items-center gap-[7px] border-0 border-t border-border-soft bg-panel px-3 text-[9px] text-faint hover:text-text-soft max-[900px]:justify-center max-[900px]:px-0 max-[900px]:[&>span]:hidden">
@@ -66,7 +75,33 @@ export function RefsSidebar(props: { repositoryId: string; open: boolean }) {
   );
 }
 
-function RefList(props: { repositoryId: string }) {
+/**
+ * A line of the sidebar: a section's header or one of its rows. The sidebar is one flat list of
+ * lines so it can render only the ones in view, as a repository can have thousands of branches.
+ */
+interface Line {
+  /** Unique across the sidebar and stable across refetches, so its measured height is kept. */
+  key: string;
+  /** Its height in pixels, until it's rendered and measured. */
+  size: number;
+  /** Spacing below it. */
+  class?: string;
+  render: () => JSX.Element;
+}
+
+type Row = Pick<Line, "key" | "render">;
+
+/** Height of a section header (`h-[27px]`). */
+const HEADER_HEIGHT = 27;
+/** Height of a ref or folder row (`h-7`). */
+const ROW_HEIGHT = 28;
+/** Space between a section's rows, and below a section. */
+const ROW_GAP = 1;
+const SECTION_GAP = 4;
+/** Indentation per tree level, in pixels. */
+const DEPTH_INDENT = 12;
+
+function RefList(props: { repositoryId: string; scrollElement: () => HTMLElement | undefined }) {
   const status = useStatus(() => props.repositoryId);
   const refs = useRefs(() => props.repositoryId);
 
@@ -81,173 +116,234 @@ function RefList(props: { repositoryId: string }) {
   // `refs/heads/feature`, so they can't clash with the section ids.
   const collapsed = useCollapsed(() => props.repositoryId, { tags: true, stashes: true });
 
-  return (
-    <>
-      <Show when={refs.error}>
-        {(error) => (
-          <EmptyState
-            icon={TriangleAlert}
-            title="Couldn't load branches"
-            tone="error"
-            class="h-[150px]"
-          >
-            {error().message}
-          </EmptyState>
-        )}
-      </Show>
-      <SidebarSection
-        title="Workspace"
-        icon={Folder}
-        count={1}
-        collapsed={false}
-        onToggle={() => undefined}
-        locked
-      >
-        <SidebarRow
-          icon={File}
-          label="Working directory"
-          active
-          count={status.data?.files.length ?? 0}
-          tone="amber"
+  /**
+   * A section's header, followed by its rows unless it's collapsed. `rows` is only called for an
+   * expanded section. Below 900px the sidebar only shows the headers.
+   */
+  function section(
+    header: { id: string; title: string; icon: LucideIcon; count: number; locked?: boolean },
+    rows: () => Row[],
+  ): Line[] {
+    const isCollapsed = !header.locked && collapsed.isCollapsed(header.id);
+    const shown = isCollapsed ? [] : rows();
+    const headerLine: Line = {
+      key: `section:${header.id}`,
+      size: HEADER_HEIGHT + (shown.length ? 0 : SECTION_GAP),
+      class: shown.length ? "max-[900px]:pb-1" : "pb-1",
+      render: () => (
+        <SectionHeader
+          title={header.title}
+          icon={header.icon}
+          count={header.count}
+          collapsed={isCollapsed}
+          locked={header.locked}
+          onToggle={() => collapsed.toggle(header.id)}
         />
-      </SidebarSection>
-      <SidebarSection
-        title="Local branches"
-        icon={GitBranch}
-        count={localBranches().length}
-        collapsed={false}
-        onToggle={() => undefined}
-        locked
-      >
-        <RefTree nodes={localTree()} collapsed={collapsed}>
-          {(branch, label, depth) => (
+      ),
+    };
+    return [
+      headerLine,
+      ...shown.map((row, index): Line => {
+        const last = index === shown.length - 1;
+        return {
+          key: row.key,
+          render: row.render,
+          size: ROW_HEIGHT + (last ? SECTION_GAP : ROW_GAP),
+          class: cn(last ? "pb-1" : "pb-px", "max-[900px]:hidden"),
+        };
+      }),
+    ];
+  }
+
+  /** Refs grouped into collapsible folders on `/`. Folders start expanded. */
+  function treeRows(
+    tree: RefTreeNode[],
+    row: (ref: Ref, label: string, depth: number) => JSX.Element,
+  ): Row[] {
+    return flattenRefTree(tree, collapsed.isCollapsed).map(({ node, depth }) =>
+      node.type === "folder"
+        ? {
+            key: `folder:${node.path}`,
+            render: () => (
+              <SidebarFolder
+                name={node.name}
+                count={node.count}
+                depth={depth}
+                collapsed={collapsed.isCollapsed(node.path)}
+                onToggle={() => collapsed.toggle(node.path)}
+              />
+            ),
+          }
+        : { key: `ref:${node.ref.fullName}`, render: () => row(node.ref, node.name, depth) },
+    );
+  }
+
+  const lines = createMemo((): Line[] => [
+    ...(refs.error
+      ? [
+          {
+            key: "error",
+            size: 150,
+            render: () => (
+              <EmptyState
+                icon={TriangleAlert}
+                title="Couldn't load branches"
+                tone="error"
+                class="h-[150px]"
+              >
+                {refs.error?.message}
+              </EmptyState>
+            ),
+          },
+        ]
+      : []),
+    ...section(
+      { id: "workspace", title: "Workspace", icon: Folder, count: 1, locked: true },
+      () => [
+        {
+          key: "workspace",
+          render: () => (
             <SidebarRow
-              icon={GitBranch}
-              label={label}
-              title={branch.name}
-              depth={depth}
-              active={branch.current}
-              meta={
-                branch.ahead ? `↑${branch.ahead}` : branch.behind ? `↓${branch.behind}` : undefined
-              }
+              icon={File}
+              label="Working directory"
+              active
+              count={status.data?.files.length ?? 0}
+              tone="amber"
             />
-          )}
-        </RefTree>
-      </SidebarSection>
-      <SidebarSection
-        title="Remotes"
-        icon={Cloud}
-        count={remoteBranches().length}
-        collapsed={collapsed.isCollapsed("remotes")}
-        onToggle={() => collapsed.toggle("remotes")}
-      >
-        <RefTree nodes={remoteTree()} collapsed={collapsed}>
-          {(branch, label, depth) => (
-            <SidebarRow icon={GitBranch} label={label} title={branch.name} depth={depth} />
-          )}
-        </RefTree>
-      </SidebarSection>
-      <SidebarSection
-        title="Pull requests"
-        icon={GitMerge}
-        count={2}
-        collapsed={collapsed.isCollapsed("pullRequests")}
-        onToggle={() => collapsed.toggle("pullRequests")}
-      >
-        <SidebarRow icon={GitMerge} label="#24 Polish desktop shell" meta="open" />
-        <SidebarRow icon={GitMerge} label="#18 Theme tokens" meta="merged" />
-      </SidebarSection>
-      <SidebarSection
-        title="Tags"
-        icon={Tag}
-        count={tags().length}
-        collapsed={collapsed.isCollapsed("tags")}
-        onToggle={() => collapsed.toggle("tags")}
-      >
-        <VirtualList items={tags()} rowHeight={ROW_HEIGHT} class={ROWS}>
-          {(tag) => <SidebarRow icon={Tag} label={tag.name} />}
-        </VirtualList>
-      </SidebarSection>
-      <SidebarSection
-        title="Stashes"
-        icon={Inbox}
-        count={1}
-        collapsed={collapsed.isCollapsed("stashes")}
-        onToggle={() => collapsed.toggle("stashes")}
-      >
-        <SidebarRow icon={Archive} label="WIP: layout experiment" />
-      </SidebarSection>
-    </>
+          ),
+        },
+      ],
+    ),
+    ...section(
+      {
+        id: "local",
+        title: "Local branches",
+        icon: GitBranch,
+        count: localBranches().length,
+        locked: true,
+      },
+      () =>
+        treeRows(localTree(), (branch, label, depth) => (
+          <SidebarRow
+            icon={GitBranch}
+            label={label}
+            title={branch.name}
+            depth={depth}
+            active={branch.current}
+            meta={
+              branch.ahead ? `↑${branch.ahead}` : branch.behind ? `↓${branch.behind}` : undefined
+            }
+          />
+        )),
+    ),
+    ...section(
+      { id: "remotes", title: "Remotes", icon: Cloud, count: remoteBranches().length },
+      () =>
+        treeRows(remoteTree(), (branch, label, depth) => (
+          <SidebarRow icon={GitBranch} label={label} title={branch.name} depth={depth} />
+        )),
+    ),
+    ...section({ id: "pullRequests", title: "Pull requests", icon: GitMerge, count: 2 }, () => [
+      {
+        key: "pr:24",
+        render: () => <SidebarRow icon={GitMerge} label="#24 Polish desktop shell" meta="open" />,
+      },
+      {
+        key: "pr:18",
+        render: () => <SidebarRow icon={GitMerge} label="#18 Theme tokens" meta="merged" />,
+      },
+    ]),
+    ...section({ id: "tags", title: "Tags", icon: Tag, count: tags().length }, () =>
+      tags().map((tag) => ({
+        key: `ref:${tag.fullName}`,
+        render: () => <SidebarRow icon={Tag} label={tag.name} />,
+      })),
+    ),
+    ...section({ id: "stashes", title: "Stashes", icon: Inbox, count: 1 }, () => [
+      {
+        key: "stash:0",
+        render: () => <SidebarRow icon={Archive} label="WIP: layout experiment" />,
+      },
+    ]),
+  ]);
+
+  // The virtualizer takes the window to observe from the scroll element's document when it first
+  // gets one, so only hand it over once it's on the page: on mount it can still be detached, being
+  // rendered inside a `Suspense` boundary.
+  const [scrollElement, setScrollElement] = createSignal<HTMLElement>();
+  onMount(() => {
+    let frame = 0;
+    const attach = () => {
+      const element = props.scrollElement();
+      if (element?.isConnected) setScrollElement(element);
+      else frame = requestAnimationFrame(attach);
+    };
+    attach();
+    onCleanup(() => cancelAnimationFrame(frame));
+  });
+
+  const virtualizer = createVirtualizer({
+    get count() {
+      return lines().length;
+    },
+    getScrollElement: () => scrollElement() ?? null,
+    estimateSize: (index) => lines()[index]?.size ?? ROW_HEIGHT,
+    getItemKey: (index) => lines()[index]?.key ?? index,
+    overscan: 10,
+  });
+
+  return (
+    <div class="relative" style={{ height: `${virtualizer.getTotalSize()}px` }}>
+      <For each={virtualizer.getVirtualItems()}>
+        {(item) => {
+          const line = () => lines()[item.index];
+          let element: HTMLDivElement | undefined;
+          // Measure once rendered (`data-index` is set by then), and again whenever another line
+          // moves into this position, e.g. after a folder above it collapses.
+          createEffect(() => {
+            line();
+            if (element) virtualizer.measureElement(element);
+          });
+          return (
+            <div
+              ref={(el) => (element = el)}
+              data-index={item.index}
+              class={cn("absolute inset-x-0 top-0", line()?.class)}
+              style={{ transform: `translateY(${item.start}px)` }}
+            >
+              <Show when={line()} keyed>
+                {(current) => current.render()}
+              </Show>
+            </div>
+          );
+        }}
+      </For>
+    </div>
   );
 }
 
-function SidebarSection(props: {
+function SectionHeader(props: {
   title: string;
   icon: LucideIcon;
   count: number;
   collapsed: boolean;
   locked?: boolean;
   onToggle: () => void;
-  children: JSX.Element;
 }) {
   return (
-    <section class="mb-1">
-      <button
-        class="grid h-[27px] w-full cursor-pointer grid-cols-[14px_16px_minmax(0,1fr)_auto] items-center gap-1 rounded-[5px] border-0 bg-transparent px-[5px] text-left text-muted hover:not-disabled:bg-panel-hover disabled:cursor-default max-[900px]:flex max-[900px]:h-[31px] max-[900px]:justify-center max-[900px]:p-0 max-[900px]:[&>svg:first-child]:hidden max-[900px]:[&>small]:hidden max-[900px]:[&>span]:hidden"
-        aria-expanded={!props.collapsed ? "true" : "false"}
-        onClick={props.onToggle}
-        disabled={props.locked}
-      >
-        {props.collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-        <props.icon size={14} />
-        <span class="truncate text-[9px] font-[720] tracking-[.055em] uppercase">
-          {props.title}
-        </span>
-        <small class="text-[8px] text-faint">{props.count}</small>
-      </button>
-      <Show when={!props.collapsed}>
-        <div class={cn(ROWS, "max-[900px]:hidden")}>{props.children}</div>
-      </Show>
-    </section>
+    <button
+      class="grid h-[27px] w-full cursor-pointer grid-cols-[14px_16px_minmax(0,1fr)_auto] items-center gap-1 rounded-[5px] border-0 bg-transparent px-[5px] text-left text-muted hover:not-disabled:bg-panel-hover disabled:cursor-default max-[900px]:flex max-[900px]:h-[31px] max-[900px]:justify-center max-[900px]:p-0 max-[900px]:[&>svg:first-child]:hidden max-[900px]:[&>small]:hidden max-[900px]:[&>span]:hidden"
+      aria-expanded={!props.collapsed ? "true" : "false"}
+      onClick={props.onToggle}
+      disabled={props.locked}
+    >
+      {props.collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+      <props.icon size={14} />
+      <span class="truncate text-[9px] font-[720] tracking-[.055em] uppercase">{props.title}</span>
+      <small class="text-[8px] text-faint">{props.count}</small>
+    </button>
   );
 }
-
-/**
- * Refs grouped into collapsible folders on `/`. Folders start expanded. Only the lines in view are
- * rendered, as a repository can have thousands of branches.
- */
-function RefTree(props: {
-  nodes: RefTreeNode[];
-  collapsed: ReturnType<typeof useCollapsed>;
-  children: (ref: Ref, label: string, depth: number) => JSX.Element;
-}) {
-  const rows = createMemo(() => flattenRefTree(props.nodes, props.collapsed.isCollapsed));
-
-  return (
-    <VirtualList items={rows()} rowHeight={ROW_HEIGHT} class={ROWS}>
-      {({ node, depth }) =>
-        node.type === "folder" ? (
-          <SidebarFolder
-            name={node.name}
-            count={node.count}
-            depth={depth}
-            collapsed={props.collapsed.isCollapsed(node.path)}
-            onToggle={() => props.collapsed.toggle(node.path)}
-          />
-        ) : (
-          props.children(node.ref, node.name, depth)
-        )
-      }
-    </VirtualList>
-  );
-}
-
-/** A section's rows: stacked with a 1px gap. */
-const ROWS = "flex flex-col gap-px";
-/** Height of a ref or folder row (`h-7`), plus the gap below it; lists are virtualized on it. */
-const ROW_HEIGHT = 29;
-/** Indentation per tree level, in pixels. */
-const DEPTH_INDENT = 12;
 
 function SidebarFolder(props: {
   name: string;

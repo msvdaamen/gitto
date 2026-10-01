@@ -16,6 +16,7 @@
     "@kobalte/core": "^0.13.14",
     "@tanstack/solid-query": "^5.104.0",
     "@tanstack/solid-router": "^1.170.37",
+    "@tanstack/solid-virtual": "^3.13.40",
     "cn": "^0.4.0",
     "lucide-solid": "^1.48.0",
     "solid-js": "^1.9.15"
