@@ -1,6 +1,14 @@
 // Runs every feature's commands against real repositories in a temp directory.
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -471,14 +479,23 @@ describe("a big working tree", () => {
     await expect(repo.refreshIndex()).resolves.toBeUndefined();
   });
 
-  it("gets a commit-graph once its log is read", async () => {
+  it("keeps a commit-graph up to date as its log is read", async () => {
     const path = createRepo("no-graph");
     git(path, "commit", "-q", "--allow-empty", "-m", "First");
-    const graph = join(path, ".git", "objects", "info", "commit-graph");
-    expect(existsSync(graph)).toBe(false);
+    const chain = join(path, ".git", "objects", "info", "commit-graphs", "commit-graph-chain");
+    const repo = await repos.open("no-graph");
+    expect(existsSync(chain)).toBe(false);
 
-    await getLog(await repos.open("no-graph"), page);
-    await vi.waitFor(() => expect(existsSync(graph)).toBe(true));
+    // The first one's written in the background.
+    await getLog(repo, page);
+    await vi.waitFor(() => expect(existsSync(chain)).toBe(true));
+    const first = readFileSync(chain, "utf8");
+
+    // Later ones are added to it before the log is read.
+    git(path, "commit", "-q", "--allow-empty", "-m", "Second");
+    await getLog(repo, page);
+    expect(readFileSync(chain, "utf8")).not.toBe(first);
+    expect(git(path, "commit-graph", "verify")).toBe("");
   });
 });
 

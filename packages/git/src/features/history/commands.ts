@@ -11,7 +11,7 @@ export async function getLog(
   page: { limit: number; skip: number },
   signal?: AbortSignal,
 ): Promise<Commit[]> {
-  void writeCommitGraph(repo);
+  await updateCommitGraph(repo);
   // Only refs a user would recognise; `--all` also picks up tool namespaces (e.g. refs/t3/*).
   // HEAD is included for detached checkouts, unless the branch has no commits yet.
   const revisions = [
@@ -45,41 +45,71 @@ export async function getCommit(repo: Repo, sha: string, signal?: AbortSignal): 
   return commit;
 }
 
-/** Repositories `writeCommitGraph` has looked at since the app started. */
-const commitGraphChecked = new Set<string>();
+/**
+ * Each repository's latest commit-graph write, and whether it's still waiting for the one before
+ * it to finish.
+ */
+const commitGraphWrites = new Map<string, { done: Promise<void>; waiting: boolean }>();
+/** Each repository's commit-graph chain file, once looked up. */
+const commitGraphChains = new Map<string, string>();
 
 /**
- * Writes the repository's commit-graph, in the background, if it doesn't have one. Without it,
- * `--date-order` walks the whole history before git shows the first commit: seconds, with 100k+
- * commits; with it, git only walks about as far as the commits it shows. Git writes one itself on
- * `gc` and `maintenance`, but a fresh clone, say, has none yet.
+ * Brings the repository's commit-graph up to date. Without one, `--date-order` walks the whole
+ * history before git shows the first commit: seconds, with 100k+ commits. The same goes for the
+ * commits it doesn't have yet, so it's updated before every read, not just written once.
+ *
+ * With `--split`, an update adds a layer with only the new commits, which takes milliseconds, so the
+ * log waits for it. The first write takes seconds in a big repository, and so does the first one
+ * after `git gc` replaced the layers with a single file; the log doesn't wait for those.
  */
-async function writeCommitGraph(repo: Repo): Promise<void> {
-  if (commitGraphChecked.has(repo.path)) return;
-  commitGraphChecked.add(repo.path);
+async function updateCommitGraph(repo: Repo): Promise<void> {
   try {
-    // A single file, or a chain of them in a folder (`git commit-graph write --split`).
-    const output = await repo.read([
-      "rev-parse",
-      "--git-path",
-      "objects/info/commit-graph",
-      "--git-path",
-      "objects/info/commit-graphs",
-    ]);
-    const paths = output.split("\n").filter(Boolean);
-    const found = await Promise.all(
-      paths.map((path) =>
-        stat(resolve(repo.path, path)).then(
-          () => true,
-          () => false,
-        ),
-      ),
-    );
-    if (found.includes(true)) return;
-    // Not a `write`: it leaves the index and refs alone and takes a lock of its own, and in a big
-    // repository it would hold up staging and committing for seconds.
-    await repo.read(["commit-graph", "write", "--reachable"]);
+    const incremental = await exists(await commitGraphChain(repo));
+    const write = writeCommitGraph(repo);
+    if (incremental) await write;
   } catch {
     // Only an optimisation; the log works without it.
   }
+}
+
+function writeCommitGraph(repo: Repo): Promise<void> {
+  const latest = commitGraphWrites.get(repo.path);
+  // A write that hasn't started yet will see the newest commits too.
+  if (latest?.waiting) return latest.done;
+  // One that has may have started before them, so another one follows it.
+  const write = { done: Promise.resolve(), waiting: true };
+  write.done = (latest?.done ?? Promise.resolve())
+    .then(async () => {
+      write.waiting = false;
+      // Not a `write`: it leaves the index and refs alone and takes a lock of its own, so it
+      // needn't wait for (or hold up) staging and committing.
+      await repo.read(["commit-graph", "write", "--reachable", "--split"]);
+    })
+    .catch(() => undefined)
+    .finally(() => {
+      if (commitGraphWrites.get(repo.path) === write) commitGraphWrites.delete(repo.path);
+    });
+  commitGraphWrites.set(repo.path, write);
+  return write.done;
+}
+
+async function commitGraphChain(repo: Repo): Promise<string> {
+  let chain = commitGraphChains.get(repo.path);
+  if (chain === undefined) {
+    const path = await repo.read([
+      "rev-parse",
+      "--git-path",
+      "objects/info/commit-graphs/commit-graph-chain",
+    ]);
+    chain = resolve(repo.path, path.trim());
+    commitGraphChains.set(repo.path, chain);
+  }
+  return chain;
+}
+
+function exists(path: string): Promise<boolean> {
+  return stat(path).then(
+    () => true,
+    () => false,
+  );
 }
