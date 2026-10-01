@@ -317,7 +317,7 @@ function SidebarSection<T>(props: {
           items={props.items}
           rowHeight={ROW_HEIGHT}
           padding={LIST_PADDING}
-          class="scrollbar-subtle border-t border-border-soft px-1.5 max-[900px]:hidden"
+          class="border-t border-border-soft px-1.5 max-[900px]:hidden"
         >
           {props.children}
         </VirtualList>
@@ -382,7 +382,7 @@ function RailSection<T>(props: {
               items={props.items}
               rowHeight={ROW_HEIGHT}
               padding={LIST_PADDING}
-              class="scrollbar-subtle max-h-[min(400px,70vh)] px-1.5"
+              class="max-h-[min(400px,70vh)] px-1.5"
             >
               {props.children}
             </VirtualList>
