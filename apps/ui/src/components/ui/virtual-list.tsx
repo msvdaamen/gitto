@@ -12,6 +12,8 @@ const OVERSCAN = 10;
 export function VirtualList<T>(props: {
   items: T[];
   rowHeight: number;
+  /** Space above the first row and below the last one, in pixels. */
+  padding?: number;
   /** Classes for the scroll container. */
   class?: string;
   children: (item: T) => JSX.Element;
@@ -37,6 +39,12 @@ export function VirtualList<T>(props: {
     },
     getScrollElement: () => scrollElement() ?? null,
     estimateSize: () => props.rowHeight,
+    get paddingStart() {
+      return props.padding ?? 0;
+    },
+    get paddingEnd() {
+      return props.padding ?? 0;
+    },
     overscan: OVERSCAN,
   });
 
