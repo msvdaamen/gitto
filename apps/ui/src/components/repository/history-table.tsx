@@ -9,13 +9,11 @@ import { Avatar } from "@/components/ui/avatar";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LineStats } from "@/components/ui/line-stats";
 import { toneClasses, type Tone } from "@/components/ui/tone";
-import { UpdatingIndicator } from "@/components/ui/updating-indicator";
 import { VirtualRows } from "@/components/ui/virtual-list";
 import { useCommitFiles } from "@/git/diff";
 import { useHistory } from "@/git/history";
 import { refLabelMatches } from "@/git/ref-labels";
 import { headLabel, useStatus } from "@/git/status";
-import { useDelayed } from "@/hooks/delayed";
 import type { Commit } from "@/types/git";
 
 import { graphWidth, HistoryGraph, laneColor, ROW_HEIGHT } from "./history-graph";
@@ -46,7 +44,7 @@ export function HistoryTable(props: {
         fallback={
           <>
             <HistoryHeader />
-            <EmptyState icon={LoaderCircle} loading title="Loading history…" />
+            <EmptyState icon={LoaderCircle} title="Loading history…" />
           </>
         }
       >
@@ -56,8 +54,7 @@ export function HistoryTable(props: {
   );
 }
 
-/** The column headings; `updating` says the history is being reloaded. */
-function HistoryHeader(props: { updating?: boolean }) {
+function HistoryHeader() {
   return (
     <div
       class={cn(
@@ -68,12 +65,7 @@ function HistoryHeader(props: { updating?: boolean }) {
     >
       <span>Branch / tag</span>
       <span>Graph</span>
-      <span class="justify-between gap-2">
-        Commit message
-        <Show when={props.updating}>
-          <UpdatingIndicator />
-        </Show>
-      </span>
+      <span>Commit message</span>
       <span>Author</span>
       <span>Date</span>
     </div>
@@ -104,8 +96,6 @@ function HistoryRows(props: {
       props.onSelect(row.id);
     }
   });
-  // The log is reloaded whenever a branch or tag changes, which takes a while in a big repository.
-  const updating = useDelayed(() => history.log.isRefetching);
   const lanes = createMemo(() =>
     Math.max(1, ...history.rows().map((row) => row.graph?.width ?? 1)),
   );
@@ -124,7 +114,7 @@ function HistoryRows(props: {
 
   return (
     <div class={MIN_WIDTH} style={{ "--graph-width": `${graphWidth(lanes())}px` }}>
-      <HistoryHeader updating={updating()} />
+      <HistoryHeader />
       <div role="listbox" aria-label="Commit history">
         <Show
           when={!history.log.error}

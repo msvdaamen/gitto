@@ -12,11 +12,9 @@ import { LinkButton } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Mascot } from "@/components/ui/mascot";
 import { SectionHeader } from "@/components/ui/section-header";
-import { UpdatingIndicator } from "@/components/ui/updating-indicator";
 import { useWorkingTreeChanges } from "@/git/diff";
 import { stagingPaths, useStage, useUnstage } from "@/git/staging";
 import { headLabel, useStatus } from "@/git/status";
-import { useDelayed } from "@/hooks/delayed";
 
 import { ChangedFileList, type FileAction } from "./changed-file-list";
 import { CommitForm } from "./commit-form";
@@ -32,8 +30,6 @@ export function WorkingTreeDetails(props: { repositoryId: string }) {
   const stage = useStage(() => props.repositoryId);
   const unstage = useUnstage(() => props.repositoryId);
   const busy = () => stage.isPending || unstage.isPending;
-  // The status is reloaded whenever a file changes, which takes a while in a big repository.
-  const updating = useDelayed(() => status.isRefetching);
 
   return (
     <div class="flex min-h-0 flex-1 flex-col">
@@ -49,9 +45,6 @@ export function WorkingTreeDetails(props: { repositoryId: string }) {
             {" · "}
             {changes.staged().length} staged, {changes.unstaged().length} unstaged
           </p>
-          <Show when={updating()}>
-            <UpdatingIndicator class="mt-1" />
-          </Show>
         </div>
       </div>
 
