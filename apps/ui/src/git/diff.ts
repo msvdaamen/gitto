@@ -5,6 +5,7 @@ import { createMemo } from "solid-js";
 import { rpc } from "@/lib/rpc";
 
 import { gitKeys } from "./keys";
+import { useStatus } from "./status";
 
 /** Files changed by a commit, compared to its first parent. */
 export function useCommitFiles(repositoryId: () => string, sha: () => string) {
@@ -27,23 +28,18 @@ export function useCommitFiles(repositoryId: () => string, sha: () => string) {
   return { query, files, totals };
 }
 
-/** The uncommitted changes, split into what's staged for the next commit and what isn't. */
+/**
+ * The uncommitted changes, split into what's staged for the next commit and what isn't. They come
+ * with the status, so this shares its query.
+ */
 export function useWorkingTreeChanges(repositoryId: () => string) {
-  const query = useQuery(() => {
-    const id = repositoryId();
-    return {
-      queryKey: gitKeys.workingTreeFiles(id),
-      queryFn: ({ signal }: { signal: AbortSignal }) =>
-        rpc.git.diff.workingTreeFiles({ repositoryId: id }, { signal }),
-      staleTime: 0,
-    };
-  });
+  const query = useStatus(repositoryId);
 
   // A conflict shows up on both sides, but it's resolved (and so staged) by staging it.
   const staged = createMemo(() =>
-    (query.data?.staged ?? []).filter((file) => file.status !== "conflicted"),
+    (query.data?.changes.staged ?? []).filter((file) => file.status !== "conflicted"),
   );
-  const unstaged = createMemo(() => query.data?.unstaged ?? []);
+  const unstaged = createMemo(() => query.data?.changes.unstaged ?? []);
 
   return { query, staged, unstaged };
 }
