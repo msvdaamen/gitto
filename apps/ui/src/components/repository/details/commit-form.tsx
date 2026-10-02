@@ -64,9 +64,9 @@ export function CommitForm(props: { repositoryId: string; stagedCount: number })
           ⌘ ↵
         </Kbd>
       </Button>
-      <Show when={commit.error}>
+      <Show when={commit.error} keyed>
         {(error) => (
-          <p class="m-0 mt-2.5 text-[9px] whitespace-pre-wrap text-coral">{error().message}</p>
+          <p class="m-0 mt-2.5 text-[9px] whitespace-pre-wrap text-coral">{error.message}</p>
         )}
       </Show>
     </form>

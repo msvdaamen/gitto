@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/solid-router";
 import { cn } from "cn";
-import { createSignal } from "solid-js";
+import { createMemo, createSignal } from "solid-js";
 
 import { CommitDetails } from "@/components/repository/details/commit-details";
 import { HistoryTable } from "@/components/repository/history/history-table";
@@ -13,8 +13,10 @@ export const Route = createFileRoute("/(main)/$repoId")({
 });
 
 function RouteComponent() {
-  const params = Route.useParams();
-  const repositoryId = () => params().repoId;
+  // Not thrown on once the route is left: effects on this page can still run until it's removed.
+  const params = Route.useParams({ shouldThrow: false });
+  // The repository in the URL; the last one once the route is left.
+  const repositoryId = createMemo((last: string) => params()?.repoId ?? last, "");
   useRepositoryWatcher(repositoryId);
 
   const [search, setSearch] = createSignal("");

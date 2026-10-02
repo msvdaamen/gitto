@@ -57,7 +57,7 @@ export function WorkingTreeDetails(props: { repositoryId: string }) {
         </div>
       </div>
 
-      <Show when={changes.query.error ?? stage.error ?? unstage.error}>
+      <Show when={changes.query.error ?? stage.error ?? unstage.error} keyed>
         {(error) => (
           <EmptyState
             icon={TriangleAlert}
@@ -65,7 +65,7 @@ export function WorkingTreeDetails(props: { repositoryId: string }) {
             tone="error"
             class="h-auto shrink-0 border-b border-border py-4"
           >
-            {error().message}
+            {error.message}
           </EmptyState>
         )}
       </Show>

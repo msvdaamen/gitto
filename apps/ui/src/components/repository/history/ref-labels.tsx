@@ -28,7 +28,9 @@ export function HistoryRefLabels(props: { labels: RefLabel[]; search: string; co
 
   return (
     <span class="flex items-center gap-1 overflow-hidden" style={{ "--lane": props.color }}>
-      <Show when={labels()[0]}>{(label) => <RefPill label={label()} />}</Show>
+      <Show when={labels()[0]} keyed>
+        {(label) => <RefPill label={label} />}
+      </Show>
       <Show when={labels().length > 1}>
         <span
           class={cn(PILL, "shrink-0 px-[4px] font-[680]")}

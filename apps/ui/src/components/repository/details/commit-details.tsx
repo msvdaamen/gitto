@@ -4,7 +4,7 @@ import File from "lucide-solid/icons/file";
 import GitCommitHorizontal from "lucide-solid/icons/git-commit-horizontal";
 import LoaderCircle from "lucide-solid/icons/loader-circle";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
-import { createSignal, Show, Suspense } from "solid-js";
+import { createMemo, createSignal, Show, Suspense } from "solid-js";
 
 import { Avatar } from "@/components/ui/avatar";
 import { IconButton } from "@/components/ui/button";
@@ -24,33 +24,34 @@ import { WorkingTreeDetails } from "./working-tree-details";
  */
 export function CommitDetails(props: { repositoryId: string; selectedId: string | undefined }) {
   const [scrollElement, setScrollElement] = createSignal<HTMLDivElement>();
+  // The selected row, kept while the selection is briefly empty: switching repositories clears it
+  // until the history picks a row, and effects in the details can still run in between.
+  const selectedId = createMemo((last: string) => props.selectedId ?? last, "");
   return (
     <Show
       when={props.selectedId}
       fallback={<EmptyState icon={GitCommitHorizontal} title="Nothing selected" />}
     >
-      {(selectedId) => (
-        <div ref={setScrollElement} class="flex h-full min-w-[280px] flex-col overflow-y-auto">
-          <div class="flex h-[38px] shrink-0 items-center justify-between border-b border-border py-0 pr-[9px] pl-[13px] text-[9px] font-[720] tracking-[.07em] text-muted uppercase">
-            <span>{selectedId() === WIP_ID ? "Working directory" : "Commit details"}</span>
-            <IconButton label="More commit actions" icon={Ellipsis} />
-          </div>
-          <Suspense fallback={<EmptyState icon={LoaderCircle} loading title="Loading details…" />}>
-            <Show
-              when={selectedId() === WIP_ID}
-              fallback={
-                <SelectedCommit
-                  repositoryId={props.repositoryId}
-                  sha={selectedId()}
-                  scrollElement={scrollElement()}
-                />
-              }
-            >
-              <WorkingTreeDetails repositoryId={props.repositoryId} />
-            </Show>
-          </Suspense>
+      <div ref={setScrollElement} class="flex h-full min-w-[280px] flex-col overflow-y-auto">
+        <div class="flex h-[38px] shrink-0 items-center justify-between border-b border-border py-0 pr-[9px] pl-[13px] text-[9px] font-[720] tracking-[.07em] text-muted uppercase">
+          <span>{selectedId() === WIP_ID ? "Working directory" : "Commit details"}</span>
+          <IconButton label="More commit actions" icon={Ellipsis} />
         </div>
-      )}
+        <Suspense fallback={<EmptyState icon={LoaderCircle} loading title="Loading details…" />}>
+          <Show
+            when={selectedId() === WIP_ID}
+            fallback={
+              <SelectedCommit
+                repositoryId={props.repositoryId}
+                sha={selectedId()}
+                scrollElement={scrollElement()}
+              />
+            }
+          >
+            <WorkingTreeDetails repositoryId={props.repositoryId} />
+          </Show>
+        </Suspense>
+      </div>
     </Show>
   );
 }
@@ -73,7 +74,7 @@ function SelectedCommit(props: {
   // One element, so the file list sees it change size when the message above the files loads.
   return (
     <div>
-      <Show when={details.query.error ?? changes.query.error}>
+      <Show when={details.query.error ?? changes.query.error} keyed>
         {(error) => (
           <EmptyState
             icon={TriangleAlert}
@@ -81,14 +82,14 @@ function SelectedCommit(props: {
             tone="error"
             class="h-auto border-b border-border py-4"
           >
-            {error().message}
+            {error.message}
           </EmptyState>
         )}
       </Show>
-      <Show when={details.commit()}>
+      <Show when={details.commit()} keyed>
         {(commit) => (
           <CommitSummary
-            commit={commit()}
+            commit={commit}
             fileCount={changes.files().length}
             totals={changes.totals()}
           />

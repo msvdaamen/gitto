@@ -75,7 +75,7 @@ export function RefList(props: { repositoryId: string }) {
 
   return (
     <>
-      <Show when={refs.error}>
+      <Show when={refs.error} keyed>
         {(error) => (
           <EmptyState
             icon={TriangleAlert}
@@ -83,7 +83,7 @@ export function RefList(props: { repositoryId: string }) {
             tone="error"
             class="h-[150px] shrink-0"
           >
-            {error().message}
+            {error.message}
           </EmptyState>
         )}
       </Show>

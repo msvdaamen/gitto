@@ -19,10 +19,10 @@ export function Footer() {
         <GittoIcon class="h-3 w-3.5" />
         <StatusDot color="var(--mint)" />
         <span>Ready</span>
-        <Show when={params().repoId}>
+        <Show when={params().repoId} keyed>
           {(repositoryId) => (
             <Suspense>
-              <RepositoryStatus repositoryId={repositoryId()} />
+              <RepositoryStatus repositoryId={repositoryId} />
             </Suspense>
           )}
         </Show>
@@ -40,19 +40,19 @@ function RepositoryStatus(props: { repositoryId: string }) {
   const status = useStatus(() => props.repositoryId);
 
   return (
-    <Show when={status.data}>
+    <Show when={status.data} keyed>
       {(data) => (
         <>
           <Divider />
           <span>
             <GitBranch size={12} />
-            {headLabel(data().head)}
+            {headLabel(data.head)}
           </span>
-          <Show when={data().upstream}>
+          <Show when={data.upstream} keyed>
             {(upstream) => (
               <span class="text-blue">
                 <Cloud size={12} />
-                {upstream()} · {syncLabel(data())}
+                {upstream} · {syncLabel(data)}
               </span>
             )}
           </Show>
