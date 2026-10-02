@@ -1,9 +1,10 @@
 import { realpath } from "node:fs/promises";
-import { basename, dirname } from "node:path";
+import { basename, dirname, relative } from "node:path";
 
 import { subscribe, type AsyncSubscription } from "@parcel/watcher";
 
 import type { Repo } from "../../core/repo";
+import { trace, tracing } from "../../core/trace";
 import { Batches } from "./batches";
 import { classify, gitDirs, inside } from "./git-dirs";
 import type { GitDirChange } from "./schema";
@@ -53,7 +54,11 @@ export async function* watchGitDir(
     }
     const failed = subscribed.find((result) => result.status === "rejected");
     if (failed) throw failed.reason;
-    for await (const batch of changes.stream()) yield [...new Set(batch)];
+    for await (const batch of changes.stream()) {
+      const unique = [...new Set(batch)];
+      trace(`git dir changed in ${repo.path}: ${unique.join(", ")}`);
+      yield unique;
+    }
   } finally {
     changes.close();
     await Promise.all(subscriptions.map((subscription) => subscription.unsubscribe()));
@@ -72,12 +77,15 @@ export async function* watchWorkingTree(repo: Repo, signal?: AbortSignal): Async
   let tree: AsyncSubscription | undefined;
   let excludes: AsyncSubscription | undefined;
   let closed = false;
+  // With tracing on, the files that changed since the last batch.
+  const changedFiles = new Set<string>();
 
   // Everything git ignores (e.g. `node_modules`) is left out, so it's never walked or watched, and
   // so is the git directory: that's `watchGitDir`'s. The ignored paths are a snapshot, so this
   // starts over whenever the ignore rules change.
   async function watchTree() {
     const ignore = [dirs.gitDir, ...(await ignoredPaths(repo))];
+    const start = performance.now();
     // Stopped first: the watcher reuses what an existing subscription on the folder already walked,
     // which would leave out a folder that's no longer ignored. Changes in between are reported
     // anyway, as the ignore rules changing is one.
@@ -89,10 +97,13 @@ export async function* watchWorkingTree(repo: Repo, signal?: AbortSignal): Async
       root,
       (error, events) => {
         if (error) return changes.fail(error);
+        if (tracing) for (const event of events) changedFiles.add(relative(root, event.path));
         changes.add(events.some((event) => basename(event.path) === ".gitignore"));
       },
       { ignore },
     );
+    const ms = (performance.now() - start).toFixed(0);
+    trace(`watching ${root} (${ignore.length - 1} ignored paths, set up in ${ms}ms)`);
     if (closed) return next.unsubscribe();
     tree = next;
   }
@@ -107,6 +118,13 @@ export async function* watchWorkingTree(repo: Repo, signal?: AbortSignal): Async
     }).catch(() => undefined);
 
     for await (const batch of changes.stream()) {
+      if (tracing) {
+        const files = [...changedFiles];
+        changedFiles.clear();
+        trace(
+          `working tree changed in ${root}: ${files.length} files (${files.slice(0, 5).join(", ")})`,
+        );
+      }
       if (batch.includes(true)) await watchTree();
       yield null;
     }
@@ -121,7 +139,7 @@ export async function* watchWorkingTree(repo: Repo, signal?: AbortSignal): Async
  * What git ignores right now, e.g. `node_modules` or build output: whole directories (listed once,
  * with --directory) and single files. Relative to the repository, `/`-separated.
  */
-async function ignoredPaths(repo: Repo): Promise<string[]> {
+export async function ignoredPaths(repo: Repo): Promise<string[]> {
   const output = await repo
     .read(["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"])
     .catch(() => "");

@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 
 import { commandError, GitError } from "./errors";
+import { trace, tracing } from "./trace";
 
 export interface RunOptions {
   signal?: AbortSignal;
@@ -34,6 +35,7 @@ const ENV = {
 /** Runs `git` in `cwd` and resolves to its stdout; rejects with a `GitError` (or a more specific
  * subclass, see `commandError`) on a non-zero exit. */
 export function runGit(cwd: string, args: string[], options: RunOptions = {}): Promise<string> {
+  const start = tracing ? performance.now() : 0;
   return new Promise((resolve, reject) => {
     const child = spawn("git", [...CONFIG, ...args], {
       cwd,
@@ -61,6 +63,10 @@ export function runGit(cwd: string, args: string[], options: RunOptions = {}): P
     child.on("close", (code) => {
       const out = Buffer.concat(stdout).toString("utf8");
       const err = Buffer.concat(stderr).toString("utf8");
+      if (tracing) {
+        const ms = (performance.now() - start).toFixed(0);
+        trace(`${ms.padStart(5)}ms ${String(out.length).padStart(8)}B  git ${args.join(" ")}`);
+      }
       if (code === 0) {
         resolve(out);
       } else {

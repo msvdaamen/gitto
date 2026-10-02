@@ -5,7 +5,10 @@ import { RouterProvider, createRouter } from "@tanstack/solid-router";
 import { render } from "solid-js/web";
 
 import { queryClient } from "./lib/query-client";
+import { traceLongFrames } from "./lib/trace";
 import { routeTree } from "./routeTree.gen";
+
+if (import.meta.env.DEV) traceLongFrames();
 
 const router = createRouter({
   routeTree,

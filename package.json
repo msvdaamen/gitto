@@ -9,6 +9,7 @@
     "make": "pnpm --filter @gitto/electron make",
     "typecheck": "pnpm -r typecheck",
     "test": "vitest run",
+    "perf": "vitest run --config vitest.perf.config.ts",
     "db:generate": "pnpm --filter @gitto/electron db:generate",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
