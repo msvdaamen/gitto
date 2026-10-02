@@ -81,13 +81,19 @@ export class GitReposImpl implements GitRepos {
   }
 }
 
-/** Whether `ref` (e.g. `HEAD`, `MERGE_HEAD`) points at a commit; rejects if git couldn't tell. */
-export function refExists(run: GitCommand, ref: string): Promise<boolean> {
-  return run(["rev-parse", "--verify", "--quiet", ref]).then(
-    () => true,
+/** The commit `rev` (e.g. `HEAD`, a branch) points at; `null` if none. Rejects if git couldn't tell. */
+export function resolveRef(run: GitCommand, rev: string): Promise<string | null> {
+  return run(["rev-parse", "--verify", "--quiet", `${rev}^{commit}`]).then(
+    (sha) => sha.trim(),
     (error: unknown) => {
-      if (error instanceof GitError && error.exitCode === 1) return false;
+      // Exits with 1, saying nothing, when there's no such commit.
+      if (error instanceof GitError && error.exitCode === 1) return null;
       throw error;
     },
   );
+}
+
+/** Whether `ref` (e.g. `HEAD`, `MERGE_HEAD`) points at a commit; rejects if git couldn't tell. */
+export async function refExists(run: GitCommand, ref: string): Promise<boolean> {
+  return (await resolveRef(run, ref)) !== null;
 }

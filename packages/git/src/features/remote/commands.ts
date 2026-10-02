@@ -1,5 +1,5 @@
 import { readFile, stat } from "node:fs/promises";
-import { resolve } from "node:path";
+import { join } from "node:path";
 
 import {
   GitError,
@@ -7,7 +7,8 @@ import {
   PullInterruptedError,
   RepositoryChangedError,
 } from "../../core/errors";
-import { refExists, type GitCommand, type Repo } from "../../core/repo";
+import { refExists, resolveRef, type GitCommand, type Repo } from "../../core/repo";
+import { gitDirs, type GitDirs } from "../watch/git-dirs";
 import { NO_BRANCH, noUpstream, REBASING } from "./pull-blocker";
 
 /**
@@ -39,14 +40,15 @@ async function gitFetch(run: GitCommand, args: string[]): Promise<void> {
  * for (and holds up) the other writes to the repository: the fetch takes as long as the network.
  */
 export async function pull(repo: Repo): Promise<void> {
-  const [{ branch, upstream, config: settings }, paths] = await Promise.all([
-    readBranch(repo.read, repo.path),
-    statePaths(repo.read, repo.path),
-  ]);
+  // Where git keeps FETCH_HEAD and the state of a rebase; asked for once.
+  const dirs = gitDirs(repo);
+  const { branch, upstream, config: settings } = await readBranch(repo.read, dirs);
+  const { gitDir } = await dirs;
   // Its merge commit is worded unless the pull will rebase, or only fast-forward, which makes none
   // (as the settings say before fetching).
   const fetched = await fetchUpstream(
     repo,
+    gitDir,
     upstream,
     !rebases(settings, branch) && settings.get("pull.ff")?.toLowerCase() !== "only",
   );
@@ -57,7 +59,7 @@ export async function pull(repo: Repo): Promise<void> {
     const [current, config, before, hasHead] = await Promise.all([
       currentBranch(run),
       readConfig(run),
-      progress(run, paths),
+      progress(run, gitDir),
       refExists(run, "HEAD"),
     ]);
     if (current !== branch) {
@@ -88,17 +90,14 @@ export async function pull(repo: Repo): Promise<void> {
       // Even one that went through: putting back local changes it stashed can conflict, and
       // `branch.<name>.mergeOptions` can stop a merge before committing, or squash it: then
       // what was merged isn't in HEAD.
-      const after = await progress(run, paths);
+      const after = await progress(run, gitDir);
       // A merge that went through, or stopped at conflicts, without a merge to commit: squashed,
       // if what it merged isn't in HEAD.
       const squashing =
         args[0] === "merge" &&
         !after.merging &&
         (!failure || after.conflicts) &&
-        (await run(["merge-base", "--is-ancestor", args.at(-1)!, "HEAD"]).then(
-          () => false,
-          () => true,
-        ));
+        !(await isAncestor(run, args.at(-1)!, "HEAD"));
       if (after.conflicts || after.merging || after.rebasing || squashing) {
         const name = tracking.replace(/^refs\/(remotes|heads)\//, "");
         throw interruptedError(name, { ...after, squashing }, failure);
@@ -123,12 +122,12 @@ interface Upstream {
 /** The checked-out branch, and the upstream it pulls from; rejects if there isn't one. */
 async function readBranch(
   run: GitCommand,
-  path: string,
+  dirs: Promise<GitDirs>,
 ): Promise<{ branch: string; upstream: Upstream; config: Map<string, string> }> {
   const [branch, config] = await Promise.all([currentBranch(run), readConfig(run)]);
   if (branch === null) {
     // HEAD is detached while a rebase stops: it's that to finish, not a branch to check out.
-    const { rebasing } = await progress(run, await statePaths(run, path));
+    const rebasing = (await rebaseState((await dirs).gitDir)).rebasing;
     throw new NoUpstreamError(rebasing ? REBASING : NO_BRANCH);
   }
   // From the config: a branch without commits yet has no ref to ask for its upstream. A remote
@@ -176,6 +175,7 @@ interface Fetched {
  */
 async function fetchUpstream(
   repo: Repo,
+  gitDir: string,
   { remote, merge, tracking }: Upstream,
   word: boolean,
 ): Promise<Fetched | null> {
@@ -183,14 +183,7 @@ async function fetchUpstream(
   if (remote === ".") {
     if (!tracking) return null;
     // As `git pull` words FETCH_HEAD for a local branch.
-    const sha = await repo.read(["rev-parse", "--verify", "--quiet", `${tracking}^{commit}`]).then(
-      (output) => output.trim(),
-      (error: unknown) => {
-        // Exits with 1, saying nothing, when there's no such commit.
-        if (error instanceof GitError && error.exitCode === 1) return "";
-        throw error;
-      },
-    );
+    const sha = await resolveRef(repo.read, tracking);
     if (!sha) {
       throw new NoUpstreamError(`${tracking.replace(/^refs\/heads\//, "")} no longer exists.`);
     }
@@ -198,8 +191,7 @@ async function fetchUpstream(
   } else {
     fetchHead = await repo.fetching(async (run) => {
       await gitFetch(run, ["--quiet", "--", remote, merge]);
-      const file = (await run(["rev-parse", "--git-path", "FETCH_HEAD"])).trim();
-      return readFile(resolve(repo.path, file), "utf8");
+      return readFile(join(gitDir, "FETCH_HEAD"), "utf8");
     });
   }
   const sha = fetchHead.slice(0, fetchHead.indexOf("\t"));
@@ -333,7 +325,9 @@ function integrateArgs(
   // What was fetched, with the message `git pull` would give it; or, without one, the
   // remote-tracking branch.
   const target = fetched ? ["-m", fetched.message, fetched.sha] : [tracking];
-  return ["merge", "--quiet", "--no-edit", ...ffArgs, ...target];
+  // Its log, if `merge.log` wants one, is already in the message, and its comments are git's own.
+  const wording = fetched ? ["--no-log", "--cleanup=strip"] : [];
+  return ["merge", "--quiet", "--no-edit", ...wording, ...ffArgs, ...target];
 }
 
 /** What a merge, rebase or `git am` left unfinished in a repository. */
@@ -343,25 +337,6 @@ interface Progress {
   rebasing: boolean;
   /** Applying patches with `git am`, which keeps its state where some rebases do. */
   applying: boolean;
-}
-
-/** Where a repository keeps the state of a rebase or `git am` while it's stopped. */
-interface StatePaths {
-  rebaseMerge: string;
-  rebaseApply: string;
-  /** In `rebaseApply`, saying it's `git am`'s. */
-  applying: string;
-}
-
-async function statePaths(run: GitCommand, path: string): Promise<StatePaths> {
-  const names = ["rebase-merge", "rebase-apply", "rebase-apply/applying"];
-  const output = await run(["rev-parse", ...names.flatMap((name) => ["--git-path", name])]);
-  // Relative to the repository, or absolute, e.g. in a linked worktree.
-  const [rebaseMerge, rebaseApply, applying] = output
-    .split("\n")
-    .filter(Boolean)
-    .map((file) => resolve(path, file));
-  return { rebaseMerge: rebaseMerge!, rebaseApply: rebaseApply!, applying: applying! };
 }
 
 async function hasConflicts(run: GitCommand): Promise<boolean> {
@@ -375,20 +350,37 @@ function exists(file: string): Promise<boolean> {
   );
 }
 
-async function progress(run: GitCommand, paths: StatePaths): Promise<Progress> {
-  const [conflicts, merging, rebaseMerge, rebaseApply, applying] = await Promise.all([
+/**
+ * Whether a rebase, or `git am`, is stopped in the worktree whose git directory is `gitDir`: they
+ * keep their state there meanwhile, `am` where some rebases do, with a file saying it's `am`'s.
+ */
+async function rebaseState(gitDir: string): Promise<{ rebasing: boolean; applying: boolean }> {
+  const [rebaseMerge, rebaseApply, applying] = await Promise.all(
+    ["rebase-merge", "rebase-apply", "rebase-apply/applying"].map((name) =>
+      exists(join(gitDir, name)),
+    ),
+  );
+  return { rebasing: !!rebaseMerge || (!!rebaseApply && !applying), applying: !!applying };
+}
+
+async function progress(run: GitCommand, gitDir: string): Promise<Progress> {
+  const [conflicts, merging, state] = await Promise.all([
     hasConflicts(run),
     refExists(run, "MERGE_HEAD"),
-    exists(paths.rebaseMerge),
-    exists(paths.rebaseApply),
-    exists(paths.applying),
+    rebaseState(gitDir),
   ]);
-  return {
-    conflicts,
-    merging,
-    rebasing: rebaseMerge || (rebaseApply && !applying),
-    applying,
-  };
+  return { conflicts, merging, ...state };
+}
+
+/** Whether `ancestor` is in `rev`'s history; rejects if git couldn't tell. */
+function isAncestor(run: GitCommand, ancestor: string, rev: string): Promise<boolean> {
+  return run(["merge-base", "--is-ancestor", ancestor, rev]).then(
+    () => true,
+    (error: unknown) => {
+      if (error instanceof GitError && error.exitCode === 1) return false;
+      throw error;
+    },
+  );
 }
 
 /** Says where the pull stopped, and what to do to finish it. */

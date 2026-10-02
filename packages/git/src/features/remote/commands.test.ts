@@ -116,11 +116,15 @@ describe("pull", () => {
     commit(path, "ours.txt", "ours\n", "ours");
     commit(twin, "ours.txt", "ours\n", "ours");
 
+    // With the log of what's merged, which git adds to its message.
+    git(path, "config", "merge.log", "true");
+    git(twin, "config", "merge.log", "true");
     await pull(await repos.open("worded"));
     git(twin, "pull", "-q", "--no-rebase");
-    const subject = git(path, "log", "-1", "--format=%s");
-    expect(subject).toBe(`Merge branch 'main' of ${upstream} into feature`);
-    expect(subject).toBe(git(twin, "log", "-1", "--format=%s"));
+    expect(git(path, "log", "-1", "--format=%s")).toBe(
+      `Merge branch 'main' of ${upstream} into feature`,
+    );
+    expect(git(path, "log", "-1", "--format=%B")).toBe(git(twin, "log", "-1", "--format=%B"));
   });
 
   it("says when a merge is left to commit", async () => {
