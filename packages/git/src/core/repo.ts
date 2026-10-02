@@ -71,7 +71,7 @@ export class GitReposImpl implements GitRepos {
       path,
       read: run,
       write: (args, options) => this.writes.run(path, () => run(args, options)),
-      fetch: (args, options) => fetching((run) => run(args, options)),
+      fetch: (args, options) => fetching((queued) => queued(args, options)),
       fetching,
       exclusive: (task) => this.writes.run(path, () => task(run)),
       // Any failure is taken for no HEAD, as callers have always had it.
