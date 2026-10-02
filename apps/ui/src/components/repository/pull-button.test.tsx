@@ -98,18 +98,44 @@ describe("the pull button", () => {
     await user.click(await loadedButton("Pull 2 commits from origin/main"));
     expect(screen.getByRole("button", { name: "Pull" })).toHaveAttribute("aria-busy", "true");
 
+    // Another repository's pull button isn't busy with it…
     switchTo("other");
     const other = await loadedButton("Pull 2 commits from origin/main");
     expect(other).toBeEnabled();
     expect(other).not.toHaveAttribute("aria-busy", "true");
 
-    // The repository that was pulled is the one reloaded (once it's on show again), and its error
-    // isn't shown over the other one.
+    // …and doesn't show why it failed, which the repository that was pulled is refreshed for.
     fail(new Error("Pulling origin/main caused conflicts."));
     await vi.waitFor(() =>
       expect(client.getQueryState(gitKeys.status("repo"))?.isInvalidated).toBe(true),
     );
     expect(client.getQueryState(gitKeys.status("other"))?.isInvalidated).toBe(false);
     expect(screen.queryByText("Pulling origin/main caused conflicts.")).not.toBeInTheDocument();
+
+    // Back in that repository, it does, without taking the focus from what the user's doing.
+    const input = document.createElement("input");
+    document.body.append(input);
+    input.focus();
+    switchTo("repo");
+    expect(await screen.findByText("Pulling origin/main caused conflicts.")).toBeInTheDocument();
+    expect(input).toHaveFocus();
+    input.remove();
+  });
+
+  it("stays busy when switching away from a running pull and back", async () => {
+    const user = userEvent.setup();
+    rpc.git.status.get.mockResolvedValue(status);
+    rpc.git.remote.pull.mockReturnValue(new Promise(() => undefined));
+    const { switchTo } = renderButton();
+
+    await user.click(await loadedButton("Pull 2 commits from origin/main"));
+    switchTo("other");
+    await loadedButton("Pull 2 commits from origin/main");
+    switchTo("repo");
+    await vi.waitFor(() =>
+      expect(screen.getByRole("button", { name: "Pull" })).toHaveAttribute("aria-busy", "true"),
+    );
+    expect(screen.getByRole("button", { name: "Pull" })).toBeDisabled();
+    expect(rpc.git.remote.pull).toHaveBeenCalledTimes(1);
   });
 });

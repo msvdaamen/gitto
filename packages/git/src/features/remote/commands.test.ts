@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { GitError, NoUpstreamError, PullInterruptedError } from "../../core/errors";
 import type { Repo } from "../../core/repo";
-import { cloneRepo, createRepo, git, rejection, repos, root } from "../../test/fixtures";
+import { cloneRepo, createRepo, git, paths, rejection, repos, root } from "../../test/fixtures";
 import { pull, remoteEnv } from "./commands";
 
 /** Writes `content` to `file` in `path` and commits it with `message`. */
@@ -135,6 +135,7 @@ describe("pull", () => {
     vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
     vi.stubEnv("GIT_SSH_COMMAND", undefined);
     vi.stubEnv("GIT_SSH", undefined);
+    vi.stubEnv("SSH_ASKPASS", undefined);
 
     const { path } = createClone("ssh");
     git(path, "remote", "set-url", "origin", "git@example.invalid:repo.git");
@@ -206,6 +207,68 @@ describe("pull", () => {
     expect(subjects(path)).toEqual(["first"]);
   });
 
+  it("says to continue a rebase that stopped in a linked worktree", async () => {
+    const { upstream, path } = createClone("worktree-main");
+    commit(upstream, "a.txt", "theirs\n", "theirs");
+    const worktree = join(root, "worktree");
+    git(path, "worktree", "add", "-q", "-b", "wt", worktree, "origin/main~0");
+    git(worktree, "branch", "-q", "--set-upstream-to", "origin/main");
+    git(worktree, "reset", "-q", "--hard", "main");
+    git(worktree, "config", "pull.rebase", "true");
+    commit(worktree, "a.txt", "ours\n", "ours");
+    paths.set("worktree", worktree);
+    await expect(pull(await repos.open("worktree"))).rejects.toMatchObject({
+      message: "Pulling origin/main caused conflicts. Resolve them, then continue the rebase.",
+    });
+  });
+
+  it("pulls an upstream that has no remote-tracking branch", async () => {
+    const upstream = createRepo("untracked-upstream");
+    commit(upstream, "a.txt", "a\n", "first");
+    git(upstream, "branch", "dev");
+    const path = cloneRepo("untracked", upstream);
+    // Only `main` is fetched into a remote-tracking branch.
+    git(path, "config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main");
+    git(path, "checkout", "-qb", "dev");
+    git(path, "config", "branch.dev.remote", "origin");
+    git(path, "config", "branch.dev.merge", "refs/heads/dev");
+    git(upstream, "checkout", "-q", "dev");
+    commit(upstream, "theirs.txt", "theirs\n", "theirs");
+    commit(path, "ours.txt", "ours\n", "ours");
+    await pull(await repos.open("untracked"));
+    expect(git(path, "log", "-1", "--format=%s")).toBe("Merge branch 'dev' of origin");
+    expect(subjects(path)).toEqual(expect.arrayContaining(["theirs", "ours"]));
+  });
+
+  it("pulls the first commits into a branch without any, even when set to rebase", async () => {
+    const upstream = createRepo("empty-upstream");
+    const path = cloneRepo("empty", upstream);
+    git(path, "config", "pull.rebase", "true");
+    git(path, "config", "branch.main.remote", "origin");
+    git(path, "config", "branch.main.merge", "refs/heads/main");
+    commit(upstream, "a.txt", "a\n", "first");
+    await pull(await repos.open("empty"));
+    expect(subjects(path)).toEqual(["first"]);
+  });
+
+  it("doesn't merge another upstream than the one it fetched", async () => {
+    const { upstream, path } = createClone("upstream-changed");
+    commit(upstream, "a.txt", "a\nb\n", "second");
+    const real = await repos.open("upstream-changed");
+    const repo: Repo = {
+      ...real,
+      remote: async (args, options) => {
+        const output = await real.remote(args, options);
+        git(path, "config", "branch.main.merge", "refs/heads/release");
+        return output;
+      },
+    };
+    await expect(pull(repo)).rejects.toMatchObject({
+      message: "main's upstream changed while pulling it. Pull again.",
+    });
+    expect(subjects(path)).toEqual(["first"]);
+  });
+
   it("explains why local changes stop it, without git's hints", async () => {
     const { upstream, path } = createClone("dirty");
     commit(upstream, "a.txt", "theirs\n", "theirs");
@@ -242,6 +305,18 @@ describe("the environment for talking to remotes", () => {
       GIT_HTTP_LOW_SPEED_LIMIT: "1000",
       GIT_HTTP_LOW_SPEED_TIME: "60",
     });
+  });
+
+  it("asks with the user's askpass program instead, if there is one", () => {
+    expect(remoteEnv(none, { SSH_ASKPASS: "/usr/bin/ksshaskpass" })).toMatchObject({
+      SSH_ASKPASS_REQUIRE: "force",
+    });
+    expect(remoteEnv(none, { SSH_ASKPASS: "/usr/bin/ksshaskpass" })).not.toHaveProperty(
+      "GIT_SSH_COMMAND",
+    );
+    expect(
+      remoteEnv(none, { SSH_ASKPASS: "askpass", SSH_ASKPASS_REQUIRE: "prefer" }),
+    ).not.toHaveProperty("SSH_ASKPASS_REQUIRE");
   });
 
   it("leaves the user's own settings be", () => {

@@ -1,7 +1,7 @@
 import { Popover } from "@kobalte/core/popover";
 import Download from "lucide-solid/icons/download";
 import X from "lucide-solid/icons/x";
-import { Show, Suspense } from "solid-js";
+import { Suspense } from "solid-js";
 
 import { usePull } from "@/git/queries/remote";
 import { useStatus } from "@/git/queries/status";
@@ -13,23 +13,19 @@ import { ToolbarButton } from "./toolbar-button";
 export function PullButton(props: { repositoryId: string }) {
   return (
     <Suspense fallback={<ToolbarButton icon={Download} label="Pull" accent disabled />}>
-      {/* Made again for each repository, so one's pull (running, or why it failed) doesn't show
-          on another's toolbar: the route's components are reused when switching repositories. */}
-      <Show when={props.repositoryId} keyed>
-        {(repositoryId) => <Pull repositoryId={repositoryId} />}
-      </Show>
+      <Pull repositoryId={props.repositoryId} />
     </Suspense>
   );
 }
 
 function Pull(props: { repositoryId: string }) {
   const status = useStatus(() => props.repositoryId);
-  const pull = usePull();
+  const pull = usePull(() => props.repositoryId);
 
   return (
     <Popover
-      open={!!pull.error}
-      onOpenChange={(open) => !open && pull.reset()}
+      open={!!pull.error()}
+      onOpenChange={(open) => !open && pull.dismiss()}
       placement="bottom-start"
       gutter={6}
     >
@@ -39,18 +35,22 @@ function Pull(props: { repositoryId: string }) {
           label="Pull"
           accent
           title={status.data ? pullTitle(status.data) : "Pull"}
-          disabled={!status.data || !!headPullBlocker(status.data) || pull.isPending}
-          busy={pull.isPending}
+          disabled={!status.data || !!headPullBlocker(status.data) || pull.isPending()}
+          busy={pull.isPending()}
           count={status.data?.behind}
-          onClick={() => pull.mutate(props.repositoryId)}
+          onClick={() => pull.pull()}
         />
       </Popover.Anchor>
       <Popover.Portal>
-        <Popover.Content class="z-50 flex max-w-[360px] animate-toast-in items-start gap-2 rounded-lg border border-[color-mix(in_srgb,var(--coral)_30%,var(--border))] bg-panel-raised p-3 text-text shadow-app motion-reduce:animate-none">
+        <Popover.Content
+          // Not focused: the pull can fail while the user is typing elsewhere.
+          onOpenAutoFocus={(event) => event.preventDefault()}
+          class="z-50 flex max-w-[360px] animate-toast-in items-start gap-2 rounded-lg border border-[color-mix(in_srgb,var(--coral)_30%,var(--border))] bg-panel-raised p-3 text-text shadow-app motion-reduce:animate-none"
+        >
           <div class="min-w-0">
             <Popover.Title class="m-0 text-[12.5px] font-[680]">Couldn't pull</Popover.Title>
             <Popover.Description class="m-0 mt-1 text-[11.5px] break-words whitespace-pre-wrap text-coral">
-              {pull.error?.message}
+              {pull.error()?.message}
             </Popover.Description>
           </div>
           <Popover.CloseButton
