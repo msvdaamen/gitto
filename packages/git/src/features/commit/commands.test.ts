@@ -69,6 +69,13 @@ describe("createCommit", () => {
     ]);
   });
 
+  it("keeps lines starting with # whatever commit.cleanup says", async () => {
+    git(path, "config", "commit.cleanup", "strip");
+    await createCommit(repo, "Kept\n\n#123 fixes it", { amend: head() });
+    git(path, "config", "--unset", "commit.cleanup");
+    expect(git(path, "log", "-1", "--format=%B")).toBe("Kept\n\n#123 fixes it");
+  });
+
   it("explains why a commit failed", async () => {
     await expect(createCommit(repo, "nothing")).rejects.toMatchObject({
       message: expect.stringContaining("nothing to commit"),
@@ -104,10 +111,11 @@ describe("createCommit", () => {
 });
 
 describe("getCommitMessage", () => {
-  it("is the message as written, first lines and all", async () => {
+  it("is the message as written, first lines and all, in UTF-8", async () => {
     const path = createRepo("message");
-    const message = "First line\nsecond line\n\n#123 fixes it\n## Notes";
+    const message = "First line\nsecond line\n\n#123 fixes it\n## Café";
     git(path, "commit", "-q", "--allow-empty", "-m", message);
+    git(path, "config", "i18n.logOutputEncoding", "ISO-8859-1");
     expect(await getCommitMessage(await repos.open("message"), "HEAD")).toBe(message);
   });
 });
@@ -138,6 +146,12 @@ describe("getPushedTo", () => {
     expect(await getPushedTo(repo, "HEAD")).toBeNull();
     git(path, "config", "push.default", "upstream");
     expect(await getPushedTo(repo, "HEAD")).toBe("origin/theirs");
+
+    // A tag of the same name doesn't confuse which branch is checked out.
+    git(path, "config", "--unset", "push.default");
+    git(path, "switch", "-q", "feature");
+    git(path, "tag", "feature");
+    expect(await getPushedTo(repo, "HEAD")).toBe("origin/feature");
 
     git(path, "switch", "-q", "--detach");
     expect(await getPushedTo(repo, "HEAD")).toBeNull();

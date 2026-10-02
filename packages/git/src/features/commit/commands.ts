@@ -20,7 +20,15 @@ export async function createCommit(
       );
       if (head !== amend) throw new HeadMovedError(amend);
     }
-    const args = ["commit", ...(amend ? ["--amend", "--allow-empty"] : []), "-F", "-"];
+    // `whitespace`, whatever `commit.cleanup` says: lines starting with `#` are only comments in
+    // the editor, which isn't used here, and an amended message is kept as written.
+    const args = [
+      "commit",
+      ...(amend ? ["--amend", "--allow-empty"] : []),
+      "--cleanup=whitespace",
+      "-F",
+      "-",
+    ];
     await run(args, { stdin: message });
   });
 }
@@ -37,7 +45,11 @@ export async function getCommitMessage(
   sha: string,
   signal?: AbortSignal,
 ): Promise<string> {
-  const message = await repo.read(["log", "--max-count=1", "--format=%B", sha, "--"], { signal });
+  const message = await repo.read(
+    // In UTF-8, as it's read, whatever `i18n.logOutputEncoding` says.
+    ["log", "--max-count=1", "--encoding=UTF-8", "--format=%B", sha, "--"],
+    { signal },
+  );
   return message.trimEnd();
 }
 
@@ -57,11 +69,16 @@ export async function getPushedTo(
       (output) => output.trim(),
       () => "",
     );
-  const branch = await lookUp(["symbolic-ref", "--quiet", "--short", "HEAD"]);
-  if (!branch) return null;
-  // Where the repository's config pushes it. When that can't say, e.g. because its upstream has
-  // another name, the branch of the same name on any remote, which `git push <remote>` updates.
-  const push = await lookUp(["rev-parse", "--symbolic-full-name", "@{push}"]);
+  const [head, push] = await Promise.all([
+    // In full: `--short` can say `heads/<name>` when a tag has the same name.
+    lookUp(["symbolic-ref", "--quiet", "HEAD"]),
+    // Where the repository's config pushes the branch.
+    lookUp(["rev-parse", "--symbolic-full-name", "@{push}"]),
+  ]);
+  if (!head) return null;
+  const branch = head.replace(/^refs\/heads\//, "");
+  // When the config can't say, e.g. because the upstream has another name, a guess: the branch of
+  // the same name on any remote, which `git push <remote>` updates.
   const pushedTo = await repo.read(
     [
       "for-each-ref",

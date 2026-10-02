@@ -2,11 +2,11 @@ import { keepPreviousData, useQuery } from "@tanstack/solid-query";
 import { createMemo } from "solid-js";
 
 import { historyGraph, toCommitRow, toHistoryRows } from "@/git/rows";
-import { hasUncommittedChanges, headSha } from "@/git/status";
+import { hasUncommittedChanges } from "@/git/status";
 import { rpc } from "@/lib/rpc";
 
 import { gitKeys } from "./keys";
-import { useStatus } from "./status";
+import { useHeadSha, useStatus } from "./status";
 
 export function useLog(repositoryId: () => string) {
   return useQuery(() => {
@@ -36,7 +36,7 @@ export function useHistory(repositoryId: () => string, selectedId: () => string 
   // The layout only depends on the log, whether there are changes and HEAD; not on the rest of
   // the status, which is refetched whenever a file changes.
   const hasChanges = createMemo(() => hasUncommittedChanges(status.data));
-  const head = createMemo(() => status.data && headSha(status.data.head));
+  const head = useHeadSha(repositoryId);
   const graph = createMemo(() =>
     log.data ? historyGraph(log.data.commits, hasChanges(), head()) : [],
   );

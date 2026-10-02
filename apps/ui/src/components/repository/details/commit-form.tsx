@@ -20,8 +20,8 @@ export function CommitForm(props: {
   lastCommit: string | undefined;
 }) {
   const commit = useCreateCommit(() => props.repositoryId);
-  // The commit being amended. Amending stops once HEAD moves: after the amend, or when a commit is
-  // made or HEAD switched elsewhere, so a stale message is never amended onto another commit.
+  // The commit being amended. Amending stops once HEAD moves to another commit: after the amend, or
+  // when a commit is made or checked out elsewhere, so a stale message is never amended onto it.
   const [amending, setAmending] = createSignal<string>();
   createEffect(
     on(
@@ -48,6 +48,9 @@ export function CommitForm(props: {
   const loaded = createMemo(() =>
     lastMessage.isSuccess ? splitMessage(lastMessage.data) : undefined,
   );
+  // Locked while loading the message, not once loading it failed: the error says what went wrong.
+  const loading = () => amend() && lastMessage.isPending;
+  const locked = () => loading() || commit.isPending;
   const amendEdits = () => {
     const edited = edits();
     return edited && edited.sha === props.lastCommit ? edited.message : undefined;
@@ -67,7 +70,8 @@ export function CommitForm(props: {
 
   const canCommit = () =>
     !!message().summary.trim() &&
-    (amend() ? !!loaded() : props.stagedCount > 0) &&
+    // Once the push check is done too, so its warning is seen before amending.
+    (amend() ? !!loaded() && !pushedTo.isPending : props.stagedCount > 0) &&
     !commit.isPending;
 
   function submit() {
@@ -106,10 +110,10 @@ export function CommitForm(props: {
     >
       <FormField
         label="Commit message"
-        placeholder={amend() && !loaded() ? "Loading the last commit…" : "Summary of your changes"}
+        placeholder={loading() ? "Loading the last commit…" : "Summary of your changes"}
         value={message().summary}
         onChange={(summary) => edit({ summary })}
-        readOnly={(amend() && !loaded()) || commit.isPending}
+        readOnly={locked()}
       />
       <FormField
         label="Description"
@@ -118,7 +122,7 @@ export function CommitForm(props: {
         rows={3}
         value={message().description}
         onChange={(description) => edit({ description })}
-        readOnly={(amend() && !loaded()) || commit.isPending}
+        readOnly={locked()}
       />
       <label class="mb-2.5 flex w-fit cursor-pointer items-center gap-[7px] text-[11.5px] text-muted has-disabled:cursor-default has-disabled:opacity-50">
         <input

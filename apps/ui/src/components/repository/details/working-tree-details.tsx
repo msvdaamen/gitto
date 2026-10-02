@@ -5,7 +5,7 @@ import FilePen from "lucide-solid/icons/file-pen";
 import Minus from "lucide-solid/icons/minus";
 import Plus from "lucide-solid/icons/plus";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
-import { createMemo, createSignal, Show, type JSX } from "solid-js";
+import { createSignal, Show, type JSX } from "solid-js";
 
 import { Badge } from "@/components/ui/badge";
 import { LinkButton } from "@/components/ui/button";
@@ -16,8 +16,8 @@ import { UpdatingIndicator } from "@/components/ui/updating-indicator";
 import { stagingPaths } from "@/git/changes";
 import { useWorkingTreeChanges } from "@/git/queries/diff";
 import { useStage, useUnstage } from "@/git/queries/staging";
-import { useStatus } from "@/git/queries/status";
-import { headLabel, headSha } from "@/git/status";
+import { useHeadSha, useStatus } from "@/git/queries/status";
+import { headLabel } from "@/git/status";
 import { useDelayed } from "@/hooks/delayed";
 
 import { ChangedFileList, type FileAction } from "./changed-file-list";
@@ -34,8 +34,7 @@ export function WorkingTreeDetails(props: { repositoryId: string }) {
   const stage = useStage(() => props.repositoryId);
   const unstage = useUnstage(() => props.repositoryId);
   const busy = () => stage.isPending || unstage.isPending;
-  // Only changes with HEAD, not with every status refetch.
-  const lastCommit = createMemo(() => status.data && headSha(status.data.head));
+  const lastCommit = useHeadSha(() => props.repositoryId);
   // The status is reloaded whenever a file changes, which takes a while in a big repository.
   const updating = useDelayed(() => status.isRefetching);
 

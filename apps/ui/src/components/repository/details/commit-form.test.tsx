@@ -169,6 +169,28 @@ describe("amending the last commit", () => {
     expect(summary).toHaveValue("");
   });
 
+  it("unlocks the fields when the last commit's message can't be loaded", async () => {
+    rpc.git.commit.message.mockRejectedValueOnce(new Error("log failed"));
+    const { summary, amend } = renderForm();
+    await userEvent.click(amend);
+    expect(await screen.findByText("log failed")).toBeInTheDocument();
+    expect(summary).not.toHaveAttribute("readonly");
+    expect(summary).toHaveAttribute("placeholder", "Summary of your changes");
+  });
+
+  it("waits for the push check before amending, so its warning is seen", async () => {
+    let finish!: (branch: string | null) => void;
+    rpc.git.commit.pushedTo.mockReturnValueOnce(new Promise((r) => (finish = r)));
+    const { amend } = renderForm();
+    await userEvent.click(amend);
+    await screen.findByDisplayValue("Commit a1");
+    expect(screen.getByRole("button", { name: /Amend message/ })).toBeDisabled();
+
+    finish("origin/feature");
+    expect(await screen.findByText(/already on origin\/feature/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Amend message/ })).toBeEnabled();
+  });
+
   it("doesn't call a failed push check an error", async () => {
     rpc.git.commit.pushedTo.mockRejectedValueOnce(new Error("for-each-ref failed"));
     const { amend } = renderForm();
