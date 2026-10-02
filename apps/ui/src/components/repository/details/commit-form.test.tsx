@@ -60,7 +60,7 @@ describe("amending the last commit", () => {
     expect(rpc.git.commit.create).toHaveBeenCalledWith({
       repositoryId: "repo",
       message: "Reworded\n\nIts body",
-      amend: true,
+      amend: "a1",
     });
     expect(amend).not.toBeChecked();
   });
@@ -73,7 +73,7 @@ describe("amending the last commit", () => {
     expect(rpc.git.commit.create).toHaveBeenCalledWith({
       repositoryId: "repo",
       message: "First line\nsecond line\n\n    code();",
-      amend: true,
+      amend: "a1",
     });
   });
 
@@ -104,17 +104,38 @@ describe("amending the last commit", () => {
     expect(await screen.findByDisplayValue("Draft")).toBe(summary);
   });
 
-  it("loads the new last commit's message when HEAD moves", async () => {
-    const { setLastCommit, summary, amend } = renderForm();
+  it("stops amending once HEAD moves on, without loading the new commit's message", async () => {
+    const { setLastCommit, summary, amend } = renderForm({ stagedCount: 1 });
+    await userEvent.type(summary, "Draft");
     await userEvent.click(amend);
     await screen.findByDisplayValue("Commit a1");
-    await userEvent.type(summary, " edited");
 
+    // Made in a terminal, say.
     setLastCommit("b2");
-    expect(await screen.findByDisplayValue("Commit b2")).toBe(summary);
+    expect(amend).not.toBeChecked();
+    expect(summary).toHaveValue("Draft");
+    expect(rpc.git.commit.message).not.toHaveBeenCalledWith(
+      expect.objectContaining({ sha: "b2" }),
+      expect.anything(),
+    );
   });
 
-  it("turns off when there's no commit left to amend", async () => {
+  it("stops amending once the amend moves HEAD, before it's done", async () => {
+    const { setLastCommit, amend } = renderForm();
+    await userEvent.click(amend);
+    await screen.findByDisplayValue("Commit a1");
+    let finish!: () => void;
+    rpc.git.commit.create.mockImplementationOnce(() => new Promise((r) => (finish = r)));
+    await userEvent.click(screen.getByRole("button", { name: /Amend message/ }));
+    expect(screen.getByLabelText("Commit message")).toBeDisabled();
+
+    setLastCommit("b2");
+    finish();
+    expect(amend).not.toBeChecked();
+    expect(rpc.git.commit.message).toHaveBeenCalledTimes(1);
+  });
+
+  it("turns off when there's no commit left to amend, and stays off", async () => {
     const { setLastCommit, summary, amend } = renderForm({ stagedCount: 1 });
     await userEvent.click(amend);
     await screen.findByDisplayValue("Commit a1");
@@ -124,6 +145,10 @@ describe("amending the last commit", () => {
     expect(amend).toBeDisabled();
     await userEvent.type(summary, "First commit");
     expect(screen.getByRole("button", { name: /Commit 1 file/ })).toBeEnabled();
+
+    setLastCommit("c3");
+    expect(amend).not.toBeChecked();
+    expect(screen.getByRole("button", { name: /Commit 1 file/ })).toBeEnabled();
   });
 
   it("warns when the last commit is already on a remote branch", async () => {
@@ -131,6 +156,16 @@ describe("amending the last commit", () => {
     const { amend } = renderForm();
     await userEvent.click(amend);
     expect(await screen.findByText(/already on origin\/side/)).toBeInTheDocument();
+  });
+
+  it("doesn't call a failed push check an error", async () => {
+    rpc.git.commit.pushedTo.mockRejectedValueOnce(new Error("for-each-ref failed"));
+    const { amend } = renderForm();
+    await userEvent.click(amend);
+    await screen.findByDisplayValue("Commit a1");
+    await vi.waitFor(() => expect(rpc.git.commit.pushedTo).toHaveBeenCalled());
+    expect(screen.queryByText("for-each-ref failed")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Amend message/ })).toBeEnabled();
   });
 
   it("can't amend before the first commit", () => {

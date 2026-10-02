@@ -20,6 +20,14 @@ export class NotARepositoryError extends GitError {}
 /** Another git process holds `index.lock`, e.g. one running in the user's terminal. */
 export class IndexLockedError extends GitError {}
 
+/** HEAD isn't the commit that was meant to be amended, e.g. one was made in a terminal since. */
+export class HeadMovedError extends Error {
+  constructor(readonly expected: string) {
+    super("The last commit has changed since you started amending it. Check it and try again.");
+    this.name = new.target.name;
+  }
+}
+
 /** No repository with that id has been added to Gitto. */
 export class RepositoryNotFoundError extends Error {
   constructor(readonly repositoryId: string) {

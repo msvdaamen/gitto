@@ -3,6 +3,7 @@ import { ORPCError, os } from "@orpc/server";
 import {
   FolderNotFoundError,
   GitError,
+  HeadMovedError,
   IndexLockedError,
   NotARepositoryError,
   RepositoryNotFoundError,
@@ -36,7 +37,7 @@ function toApiError(error: unknown): unknown {
   ) {
     return new ORPCError("NOT_FOUND", { message: error.message, cause: error });
   }
-  if (error instanceof IndexLockedError) {
+  if (error instanceof IndexLockedError || error instanceof HeadMovedError) {
     return new ORPCError("CONFLICT", { message: error.message, cause: error });
   }
   if (error instanceof GitError) {

@@ -4,11 +4,11 @@ import { rpc } from "@/lib/rpc";
 
 import { gitKeys } from "./keys";
 
-/** Commits what's staged; with `amend`, replaces the last commit instead. */
+/** Commits what's staged; with `amend`, HEAD's SHA, replaces that commit instead. */
 export function useCreateCommit(repositoryId: () => string) {
   const queryClient = useQueryClient();
   return useMutation(() => ({
-    mutationFn: (commit: { message: string; amend: boolean }) =>
+    mutationFn: (commit: { message: string; amend?: string }) =>
       rpc.git.commit.create({ repositoryId: repositoryId(), ...commit }),
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: gitKeys.repository(repositoryId()) }),
@@ -24,7 +24,7 @@ export function commitMessageQuery(repositoryId: string, sha: string) {
   });
 }
 
-/** A remote branch that has the commit, e.g. `origin/main`; `null` if it hasn't been pushed. */
+/** The remote branch `git push` would update that has the commit; `null` if it has no need to. */
 export function pushedToQuery(repositoryId: string, sha: string) {
   return queryOptions({
     queryKey: gitKeys.pushedTo(repositoryId, sha),

@@ -6,10 +6,15 @@ export interface CommitMessage {
 
 export const emptyMessage: CommitMessage = { summary: "", description: "" };
 
-/** Splits a commit message into its first line and the rest. */
+/**
+ * Splits a commit message into its subject, the first paragraph on one line as git shows it, and
+ * the body after it.
+ */
 export function splitMessage(message: string): CommitMessage {
-  const [summary = "", ...rest] = message.split("\n");
-  return { summary, description: trimBody(rest.join("\n")) };
+  const blankLine = /\n\s*\n/.exec(message);
+  const subject = blankLine ? message.slice(0, blankLine.index) : message;
+  const body = blankLine ? message.slice(blankLine.index + blankLine[0].length) : "";
+  return { summary: subject.replace(/\s*\n\s*/g, " ").trim(), description: trimBody(body) };
 }
 
 /** The message to commit: the summary, then a blank line and the description if there is one. */

@@ -11,6 +11,13 @@ describe("commit messages", () => {
     expect(splitMessage("Subject")).toEqual({ summary: "Subject", description: "" });
   });
 
+  it("puts a subject over several lines on one, as git shows it", () => {
+    expect(splitMessage("Fix parser\nfor nested lists\n\nBody")).toEqual({
+      summary: "Fix parser for nested lists",
+      description: "Body",
+    });
+  });
+
   it("joins the summary and the description with a blank line", () => {
     expect(joinMessage({ summary: " Subject ", description: "\nBody\n" })).toBe("Subject\n\nBody");
     expect(joinMessage({ summary: "Subject", description: "  " })).toBe("Subject");

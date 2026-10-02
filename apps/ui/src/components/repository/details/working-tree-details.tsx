@@ -104,11 +104,14 @@ export function WorkingTreeDetails(props: { repositoryId: string }) {
         }}
       />
 
-      <CommitForm
-        repositoryId={props.repositoryId}
-        stagedCount={changes.staged().length}
-        lastCommit={lastCommit()}
-      />
+      {/* Once the status says whether there's a commit to amend. */}
+      <Show when={status.data}>
+        <CommitForm
+          repositoryId={props.repositoryId}
+          stagedCount={changes.staged().length}
+          lastCommit={lastCommit()}
+        />
+      </Show>
     </div>
   );
 }

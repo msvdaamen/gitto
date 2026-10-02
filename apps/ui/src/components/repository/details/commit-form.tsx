@@ -20,12 +20,12 @@ export function CommitForm(props: {
   lastCommit: string | undefined;
 }) {
   const commit = useCreateCommit(() => props.repositoryId);
-  const [amendChecked, setAmendChecked] = createSignal(false);
-  // Turns itself off when there's no commit left to amend, e.g. after `git switch --orphan`.
-  const amend = () => amendChecked() && !!props.lastCommit;
+  // The commit being amended. Amending stops once HEAD moves on from it: after the amend, or when a
+  // commit is made or HEAD switched elsewhere, so a stale message is never amended onto another.
+  const [amending, setAmending] = createSignal<string>();
+  const amend = () => !!amending() && amending() === props.lastCommit;
   const [draft, setDraft] = createSignal(emptyMessage);
-  // Edits to the last commit's message, for the commit it was loaded from: if HEAD moves, the new
-  // last commit's message is loaded instead, so it's never amended with another one's.
+  // Edits to the amended message, kept for the commit they were made to while amending is toggled.
   const [edits, setEdits] = createSignal<{ sha: string; message: CommitMessage }>();
 
   const lastMessage = useQuery(() => ({
@@ -53,7 +53,7 @@ export function CommitForm(props: {
   }
 
   function toggleAmend(on: boolean) {
-    setAmendChecked(on);
+    setAmending(on ? props.lastCommit : undefined);
     commit.reset();
   }
 
@@ -64,15 +64,15 @@ export function CommitForm(props: {
 
   function submit() {
     if (!canCommit()) return;
-    const amending = amend();
+    const amended = amend() ? props.lastCommit : undefined;
     // An untouched message is amended as written, not as the form splits it into two fields.
-    const text = (amending && !amendEdits() && lastMessage.data) || joinMessage(message());
+    const text = (amended && !amendEdits() && lastMessage.data) || joinMessage(message());
     commit.mutate(
-      { message: text, amend: amending },
+      { message: text, amend: amended },
       {
         onSuccess: () => {
-          if (!amending) return setDraft(emptyMessage);
-          setAmendChecked(false);
+          if (!amended) return setDraft(emptyMessage);
+          setAmending(undefined);
           setEdits(undefined);
         },
       },
@@ -101,7 +101,7 @@ export function CommitForm(props: {
         placeholder="Summary of your changes"
         value={message().summary}
         onChange={(summary) => edit({ summary })}
-        disabled={amend() && !loaded()}
+        disabled={(amend() && !loaded()) || commit.isPending}
       />
       <FormField
         label="Description"
@@ -110,7 +110,7 @@ export function CommitForm(props: {
         rows={3}
         value={message().description}
         onChange={(description) => edit({ description })}
-        disabled={amend() && !loaded()}
+        disabled={(amend() && !loaded()) || commit.isPending}
       />
       <label
         class="mb-2.5 flex w-fit cursor-pointer items-center gap-[7px] text-[11.5px] text-muted has-disabled:cursor-default has-disabled:opacity-50"
@@ -126,9 +126,9 @@ export function CommitForm(props: {
         Amend last commit
       </label>
       <Show when={amend() && pushedTo.isSuccess && pushedTo.data}>
-        {(upstream) => (
+        {(branch) => (
           <p class="m-0 mb-2.5 text-[11.5px] leading-[1.45] text-amber">
-            The last commit is already on {upstream()}; amending it means force-pushing.
+            The last commit is already on {branch()}; amending it means force-pushing.
           </p>
         )}
       </Show>
@@ -144,7 +144,8 @@ export function CommitForm(props: {
           ⌘ ↵
         </Kbd>
       </Button>
-      <Show when={commit.error ?? (amend() && (lastMessage.error ?? pushedTo.error))} keyed>
+      {/* Not whether it's been pushed: that only decides the warning, and doesn't stop amending. */}
+      <Show when={commit.error ?? (amend() && lastMessage.error)} keyed>
         {(error) => (
           <p class="m-0 mt-2.5 text-[11.5px] whitespace-pre-wrap text-coral">{error.message}</p>
         )}

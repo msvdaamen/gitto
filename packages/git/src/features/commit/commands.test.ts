@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import { beforeAll, describe, expect, it } from "vitest";
 
+import { HeadMovedError } from "../../core/errors";
 import type { Repo } from "../../core/repo";
 import { createRepo, git, page, paths, repos, root } from "../../test/fixtures";
 import { getLog } from "../history/commands";
@@ -16,6 +17,8 @@ describe("createCommit", () => {
     path = createRepo("empty");
     repo = await repos.open("empty");
   });
+
+  const head = () => git(path, "rev-parse", "HEAD");
 
   it("commits what's staged, with the message's body", async () => {
     writeFileSync(join(path, "x y.txt"), "hi\n");
@@ -33,7 +36,7 @@ describe("createCommit", () => {
   it("amends the last commit with what's staged and a new message", async () => {
     writeFileSync(join(path, "more.txt"), "more\n");
     git(path, "add", "more.txt");
-    await createCommit(repo, "Amended commit", { amend: true });
+    await createCommit(repo, "Amended commit", { amend: head() });
     expect(await getLog(repo, page)).toEqual([
       expect.objectContaining({ subject: "Amended commit", body: "", parents: [] }),
     ]);
@@ -44,7 +47,7 @@ describe("createCommit", () => {
   });
 
   it("rewords the last commit with nothing staged", async () => {
-    await createCommit(repo, "Reworded\n\nNew body", { amend: true });
+    await createCommit(repo, "Reworded\n\nNew body", { amend: head() });
     expect(await getLog(repo, page)).toEqual([
       expect.objectContaining({ subject: "Reworded", body: "New body", parents: [] }),
     ]);
@@ -52,7 +55,7 @@ describe("createCommit", () => {
 
   it("rewords an empty commit", async () => {
     git(path, "commit", "-q", "--allow-empty", "-m", "Empty");
-    await createCommit(repo, "Still empty", { amend: true });
+    await createCommit(repo, "Still empty", { amend: head() });
     expect((await getLog(repo, page))[0]).toMatchObject({ subject: "Still empty" });
   });
 
@@ -62,13 +65,22 @@ describe("createCommit", () => {
     });
   });
 
+  it("won't amend once HEAD has moved on", async () => {
+    const amending = head();
+    git(path, "commit", "-q", "--allow-empty", "-m", "Made in a terminal");
+    await expect(createCommit(repo, "Amend", { amend: amending })).rejects.toBeInstanceOf(
+      HeadMovedError,
+    );
+    expect((await getLog(repo, page))[0]).toMatchObject({ subject: "Made in a terminal" });
+  });
+
   it("can't amend before the first commit", async () => {
     const unborn = createRepo("unborn");
     writeFileSync(join(unborn, "a.txt"), "a\n");
     git(unborn, "add", "a.txt");
     await expect(
-      createCommit(await repos.open("unborn"), "Amend", { amend: true }),
-    ).rejects.toMatchObject({ message: expect.stringContaining("nothing to amend") });
+      createCommit(await repos.open("unborn"), "Amend", { amend: "a".repeat(40) }),
+    ).rejects.toBeInstanceOf(HeadMovedError);
   });
 });
 
@@ -82,7 +94,7 @@ describe("getCommitMessage", () => {
 });
 
 describe("getPushedTo", () => {
-  it("is a remote branch that has the commit, whether or not it's tracked", async () => {
+  it("is the remote branch git push would update, if it has the commit", async () => {
     const remote = createRepo("remote");
     git(remote, "commit", "-q", "--allow-empty", "-m", "First");
     const path = join(root, "clone");
@@ -91,11 +103,17 @@ describe("getPushedTo", () => {
     const repo = await repos.open("clone");
     expect(await getPushedTo(repo, "HEAD")).toBe("origin/main");
 
-    git(path, "commit", "-q", "--allow-empty", "-m", "Local");
+    // Only created from origin/main, which tracks it: amending rewrites `feature` alone.
+    git(path, "switch", "-q", "-c", "feature", "origin/main");
     expect(await getPushedTo(repo, "HEAD")).toBeNull();
 
-    git(path, "push", "-q", "origin", "HEAD:refs/heads/side");
-    git(path, "fetch", "-q");
-    expect(await getPushedTo(repo, "HEAD")).toBe("origin/side");
+    git(path, "commit", "-q", "--allow-empty", "-m", "Feature");
+    expect(await getPushedTo(repo, "HEAD")).toBeNull();
+    // Pushed without setting it as the upstream.
+    git(path, "push", "-q", "origin", "feature");
+    expect(await getPushedTo(repo, "HEAD")).toBe("origin/feature");
+
+    git(path, "switch", "-q", "--detach");
+    expect(await getPushedTo(repo, "HEAD")).toBeNull();
   });
 });
