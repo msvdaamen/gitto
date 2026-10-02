@@ -5,7 +5,7 @@ import { lineTotals } from "@/git/changes";
 import { rpc } from "@/lib/rpc";
 
 import { gitKeys } from "./keys";
-import { useStatus } from "./status";
+import { useUncommittedFiles } from "./status";
 
 /** Files changed by a commit, compared to its first parent. */
 export function useCommitFiles(repositoryId: () => string, sha: () => string) {
@@ -33,13 +33,13 @@ export function useCommitFiles(repositoryId: () => string, sha: () => string) {
  * with the status, so this shares its query.
  */
 export function useWorkingTreeChanges(repositoryId: () => string) {
-  const query = useStatus(repositoryId);
+  const query = useUncommittedFiles(repositoryId);
 
   // A conflict shows up on both sides, but it's resolved (and so staged) by staging it.
   const staged = createMemo(() =>
-    (query.data?.changes.staged ?? []).filter((file) => file.status !== "conflicted"),
+    (query.data?.staged ?? []).filter((file) => file.status !== "conflicted"),
   );
-  const unstaged = createMemo(() => query.data?.changes.unstaged ?? []);
+  const unstaged = createMemo(() => query.data?.unstaged ?? []);
 
   return { query, staged, unstaged };
 }

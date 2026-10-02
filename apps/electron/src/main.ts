@@ -134,8 +134,25 @@ app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });
 
+/**
+ * With GITTO_TRACE=1, logs whenever something keeps the main process busy long enough to stall the
+ * UI: it routes the renderer's input and IPC, so while it's blocked, the window can't respond.
+ */
+function traceEventLoopStalls() {
+  const INTERVAL_MS = 20;
+  const STALL_MS = 50;
+  let last = performance.now();
+  setInterval(() => {
+    const now = performance.now();
+    const stall = now - last - INTERVAL_MS;
+    if (stall >= STALL_MS) console.log(`[main] event loop blocked for ${stall.toFixed(0)}ms`);
+    last = now;
+  }, INTERVAL_MS).unref();
+}
+
 // Not `await app.whenReady()`: top-level await in the ESM entry blocks Electron's startup.
 app.on("ready", () => {
+  if (process.env.GITTO_TRACE) traceEventLoopStalls();
   registerAppProtocol();
   registerRpc();
   createWindow();

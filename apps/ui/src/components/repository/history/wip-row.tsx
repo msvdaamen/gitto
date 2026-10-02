@@ -1,11 +1,11 @@
 import { cn } from "cn";
 import PencilLine from "lucide-solid/icons/pencil-line";
-import { createMemo, Show, type JSX } from "solid-js";
+import { Show, type JSX } from "solid-js";
 
 import { toneClasses, type Tone } from "@/components/ui/tone";
 import { useStatus } from "@/git/queries/status";
 import { WIP_MESSAGE, type WipRow } from "@/git/rows";
-import { headLabel, statusCounts } from "@/git/status";
+import { headLabel } from "@/git/status";
 
 import { HistoryGraph } from "./history-graph";
 import { HistoryOption, type HistoryRowProps } from "./history-option";
@@ -22,7 +22,7 @@ export function HistoryWipRow(
   },
 ) {
   const status = useStatus(() => props.row.repositoryId);
-  const counts = createMemo(() => statusCounts(status.data));
+  const counts = () => status.data?.counts ?? { staged: 0, unstaged: 0, conflicted: 0 };
 
   return (
     <HistoryOption

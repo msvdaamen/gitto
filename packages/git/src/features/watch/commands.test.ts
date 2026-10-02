@@ -75,6 +75,34 @@ describe("watching the working tree", () => {
     controller.abort();
   });
 
+  it("skips ignored folders created after it started", { timeout: 10_000 }, async () => {
+    const path = createRepo("watched-new-ignored");
+    writeFileSync(join(path, ".gitignore"), "dist/\n*.log\n");
+    const repo = await repos.open("watched-new-ignored");
+    const controller = new AbortController();
+    const changes = watchWorkingTree(repo, controller.signal);
+
+    let next = changes.next();
+    soon(() => writeFileSync(join(path, "file.txt"), "x"));
+    expect(await next).toEqual({ value: null, done: false });
+
+    // Like a build: a new ignored folder, written to repeatedly.
+    next = changes.next();
+    mkdirSync(join(path, "dist"));
+    writeFileSync(join(path, "dist", "a.js"), "x");
+    expect(await quiet(next)).toBe("quiet");
+    writeFileSync(join(path, "dist", "b.js"), "x");
+    writeFileSync(join(path, "debug.log"), "x");
+    expect(await quiet(next)).toBe("quiet");
+
+    // A change that shows, alongside ignored ones, is still reported.
+    writeFileSync(join(path, "dist", "c.js"), "x");
+    writeFileSync(join(path, "file.txt"), "y");
+    expect(await next).toEqual({ value: null, done: false });
+
+    controller.abort();
+  });
+
   it("follows changes to the ignore rules", { timeout: 10_000 }, async () => {
     const path = createRepo("watched-rules");
     writeFileSync(join(path, ".gitignore"), "build/\n");

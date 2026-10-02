@@ -23,10 +23,7 @@ describe("a repository with history", () => {
       ahead: 0,
       behind: 0,
     });
-    expect(status.files).toEqual([
-      { path: "a file.txt", origPath: null, staged: null, unstaged: "modified" },
-      { path: "new file.txt", origPath: null, staged: null, unstaged: "untracked" },
-    ]);
+    expect(status.counts).toEqual({ files: 2, staged: 0, unstaged: 2, conflicted: 0 });
   });
 
   it("diffs the working tree against the index", async () => {
@@ -46,11 +43,26 @@ describe("a repository with history", () => {
   });
 });
 
+describe("the version", () => {
+  it("stays the same until something changes", async () => {
+    const repo = await createHistoryRepo("versioned");
+    const { version } = await getStatus(repo);
+    expect((await getStatus(repo)).version).toBe(version);
+
+    // Only the line counts change: git status reports the same, but the diff doesn't.
+    writeFileSync(join(repo.path, "a file.txt"), "changed\nagain\n");
+    expect((await getStatus(repo)).version).not.toBe(version);
+  });
+});
+
 describe("a repository without commits", () => {
   it("has an empty status", async () => {
     createRepo("empty");
     const status = await getStatus(await repos.open("empty"));
-    expect(status).toMatchObject({ head: { kind: "unborn", name: "main" }, files: [] });
+    expect(status).toMatchObject({
+      head: { kind: "unborn", name: "main" },
+      counts: { files: 0, staged: 0, unstaged: 0, conflicted: 0 },
+    });
     expect(status.changes).toEqual({ staged: [], unstaged: [] });
   });
 });
@@ -130,9 +142,10 @@ describe("the changed files", () => {
     expect(() => git(path, "merge", "-q", "side")).toThrow();
     const repo = await repos.open("conflict");
 
-    const { changes } = await getStatus(repo);
+    const { changes, counts } = await getStatus(repo);
     expect(changes).toEqual(await fullDiffs(repo));
     expect(changes.unstaged).toEqual([expect.objectContaining({ path: "file.txt" })]);
+    expect(counts).toEqual({ files: 1, staged: 0, unstaged: 0, conflicted: 1 });
   });
 
   it("are the same as full diffs when there are too many paths to list", async () => {

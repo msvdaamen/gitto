@@ -1,16 +1,34 @@
+import { createHash } from "node:crypto";
+
 import type { Repo } from "../../core/repo";
 import { parseDiff } from "../diff/parse";
 import type { ChangedFile } from "../diff/schema";
 import { parseStatus, STATUS_ARGS } from "./parse";
-import type { Status, StatusFile, WorkingTreeFiles } from "./schema";
+import type { StatusCounts, StatusFile, Uncommitted, WorkingTreeFiles } from "./schema";
 
 /** The status, and the changed files with their line counts: all the uncommitted changes show. */
-export async function getStatus(
-  repo: Repo,
-  signal?: AbortSignal,
-): Promise<Status & { changes: WorkingTreeFiles }> {
-  const status = parseStatus(await repo.read(STATUS_ARGS, { signal }));
-  return { ...status, changes: await getWorkingTreeFiles(repo, status.files, signal) };
+export async function getStatus(repo: Repo, signal?: AbortSignal): Promise<Uncommitted> {
+  const output = await repo.read(STATUS_ARGS, { signal });
+  const { files, ...status } = parseStatus(output);
+  const { changes, outputs } = await getWorkingTreeFiles(repo, files, signal);
+  // Everything shown comes from git's output, so the same output means the same status.
+  const hash = createHash("sha1");
+  for (const part of [output, ...outputs]) hash.update(part).update("\0");
+  return { ...status, counts: countFiles(files), changes, version: hash.digest("hex") };
+}
+
+function countFiles(files: StatusFile[]): StatusCounts {
+  let staged = 0;
+  let unstaged = 0;
+  let conflicted = 0;
+  for (const file of files) {
+    if (file.staged === "conflicted") conflicted++;
+    else {
+      if (file.staged) staged++;
+      if (file.unstaged) unstaged++;
+    }
+  }
+  return { files: files.length, staged, unstaged, conflicted };
 }
 
 /**
@@ -28,7 +46,7 @@ async function getWorkingTreeFiles(
   repo: Repo,
   files: StatusFile[],
   signal?: AbortSignal,
-): Promise<WorkingTreeFiles> {
+): Promise<{ changes: WorkingTreeFiles; outputs: string[] }> {
   const hasStaged = files.some((file) => file.staged !== null);
   const unstagedPaths = files
     .filter((file) => file.unstaged !== null && file.unstaged !== "untracked")
@@ -44,7 +62,7 @@ async function getWorkingTreeFiles(
       ? repo.read(["diff", "--raw", "--numstat", "-z", ...pathspec], { signal })
       : "",
   ]);
-  return {
+  const changes = {
     staged: parseDiff(staged),
     unstaged: [
       ...parseDiff(unstaged),
@@ -59,4 +77,5 @@ async function getWorkingTreeFiles(
         })),
     ],
   };
+  return { changes, outputs: [staged, unstaged] };
 }

@@ -1,29 +1,15 @@
-import type { Status } from "@gitto/git/types";
+import type { StatusSummary } from "@gitto/git/types";
 import { describe, expect, it } from "vitest";
 
-import { hasUncommittedChanges, headLabel, headSha, statusCounts, syncLabel } from "./status";
+import { hasUncommittedChanges, headLabel, headSha, syncLabel } from "./status";
 
-const status: Status = {
+const status: StatusSummary = {
   head: { kind: "branch", name: "main", sha: "abc" },
   upstream: null,
   ahead: 0,
   behind: 0,
-  files: [
-    { path: "a", origPath: null, staged: "modified", unstaged: "modified" },
-    { path: "b", origPath: null, staged: null, unstaged: "untracked" },
-    { path: "c", origPath: null, staged: "conflicted", unstaged: "conflicted" },
-  ],
+  counts: { files: 3, staged: 1, unstaged: 2, conflicted: 1 },
 };
-
-describe("statusCounts", () => {
-  it("counts conflicts apart from staged and unstaged changes", () => {
-    expect(statusCounts(status)).toEqual({ staged: 1, unstaged: 2, conflicted: 1 });
-  });
-
-  it("counts nothing before the status is loaded", () => {
-    expect(statusCounts(undefined)).toEqual({ staged: 0, unstaged: 0, conflicted: 0 });
-  });
-});
 
 describe("HEAD", () => {
   it("names the branch, or says it's detached", () => {
@@ -40,7 +26,9 @@ describe("HEAD", () => {
 describe("hasUncommittedChanges", () => {
   it("is true when any file changed", () => {
     expect(hasUncommittedChanges(status)).toBe(true);
-    expect(hasUncommittedChanges({ ...status, files: [] })).toBe(false);
+    const clean = { files: 0, staged: 0, unstaged: 0, conflicted: 0 };
+    expect(hasUncommittedChanges({ ...status, counts: clean })).toBe(false);
+    expect(hasUncommittedChanges(undefined)).toBe(false);
   });
 });
 
