@@ -36,16 +36,27 @@ export function usePull(repositoryId: () => string) {
     // refreshed even if another one is on show by then.
     mutationFn: (id: string) => rpc.git.remote.pull({ repositoryId: id }),
     // Also after a failure: a pull that stopped at conflicts still brought in the upstream's commits.
-    onSettled: (_data, _error, id) =>
-      queryClient.invalidateQueries({ queryKey: gitKeys.repository(id) }),
-    // Kept until dismissed or pulled again, however long the user is in another repository.
+    // Not awaited: the pull is done (and its error shown) before the history has reloaded.
+    onSettled: (_data, _error, id) => {
+      void queryClient.invalidateQueries({ queryKey: gitKeys.repository(id) });
+    },
+    // A failed pull is kept until dismissed or pulled again, however long the user is in another
+    // repository; one that went through is dropped (below).
     gcTime: Infinity,
   }));
 
   // The repository's pulls, again whenever the repository or one of them changes. Not through
   // `useMutationState`, which only reads its filters when the cache changes, not the repository.
   const [changes, setChanges] = createSignal(0);
-  onCleanup(cache.subscribe(() => setChanges((count) => count + 1)));
+  onCleanup(
+    cache.subscribe((event) => {
+      if (event.mutation?.options.mutationKey?.[0] !== "pull") return;
+      if (event.type === "updated" && event.action.type === "success") {
+        cache.remove(event.mutation);
+      }
+      setChanges((count) => count + 1);
+    }),
+  );
   const pulls = createMemo(() => {
     changes();
     return cache.findAll({ mutationKey: pullKey(repositoryId()), exact: true });

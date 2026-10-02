@@ -186,13 +186,14 @@ describe("pull", () => {
   it.skipIf(process.platform === "win32")(
     "fetches without a terminal for ssh to ask questions on, with the user's ssh command",
     async () => {
-      // An `ssh` that records its session and how it was run, and fails.
+      // An `ssh` that records its process group (a session of its own has its own) and how it was
+      // run, and fails.
       const bin = join(root, "bin");
       const log = join(root, "ssh.log");
       mkdirSync(bin, { recursive: true });
       writeFileSync(
         join(bin, "ssh"),
-        `#!/bin/sh\necho "$(ps -o sid= -p $$) $*" >> "${log}"\nexit 1\n`,
+        `#!/bin/sh\necho "$(ps -o pgid= -p $$) $*" >> "${log}"\nexit 1\n`,
       );
       chmodSync(join(bin, "ssh"), 0o755);
       vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
@@ -204,12 +205,39 @@ describe("pull", () => {
       git(path, "config", "core.sshCommand", "ssh -o User=me");
       await expect(pull(await repos.open("ssh"))).rejects.toBeInstanceOf(GitError);
 
-      const [session, ...args] = readFileSync(log, "utf8").trim().split(/\s+/);
-      const ours = execFileSync("ps", ["-o", "sid=", "-p", String(process.pid)], {
+      const [group, ...args] = readFileSync(log, "utf8").trim().split(/\s+/);
+      const ours = execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)], {
         encoding: "utf8",
       }).trim();
-      expect(session).not.toBe(ours);
+      expect(group).not.toBe(ours);
       expect(args.join(" ")).toContain("-o User=me");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "says why a merge stopped before committing, and merges without a terminal",
+    async () => {
+      const { upstream, path } = createClone("hooked");
+      commit(upstream, "theirs.txt", "theirs\n", "theirs");
+      commit(path, "ours.txt", "ours\n", "ours");
+      // A hook that records its process group, and turns the merge commit down.
+      const log = join(root, "hook.log");
+      const hook = join(path, ".git", "hooks", "pre-merge-commit");
+      writeFileSync(
+        hook,
+        `#!/bin/sh\nps -o pgid= -p $$ > "${log}"\necho "Not today." >&2\nexit 1\n`,
+      );
+      chmodSync(hook, 0o755);
+
+      const error = await rejection(pull(await repos.open("hooked")));
+      expect(error).toBeInstanceOf(PullInterruptedError);
+      expect((error as Error).message).toMatch(
+        /^Merging origin\/main stopped before committing:\nNot today\.\n[^]*Fix that, then commit the merge, or abort it\.$/,
+      );
+      const ours = execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)], {
+        encoding: "utf8",
+      }).trim();
+      expect(readFileSync(log, "utf8").trim()).not.toBe(ours);
     },
   );
 

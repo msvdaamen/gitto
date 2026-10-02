@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 
 import { commandError, GitError } from "./errors";
 import { trace, tracing } from "./trace";
@@ -42,6 +42,12 @@ const ENV = {
   GIT_PAGER: "cat",
 };
 
+/** The git processes running in a session of their own (see `RunOptions.noTerminal`). */
+const sessions = new Set<ChildProcess>();
+process.on("exit", () => {
+  for (const child of sessions) child.kill();
+});
+
 /** Runs `git` in `cwd` and resolves to its stdout; rejects with a `GitError` (or a more specific
  * subclass, see `commandError`) on a non-zero exit. */
 export function runGit(cwd: string, args: string[], options: RunOptions = {}): Promise<string> {
@@ -54,6 +60,11 @@ export function runGit(cwd: string, args: string[], options: RunOptions = {}): P
       stdio: ["pipe", "pipe", "pipe"],
       detached: options.noTerminal && process.platform !== "win32",
     });
+    // Out of the terminal's reach, Ctrl-C there doesn't stop it: it's stopped when Gitto is.
+    if (options.noTerminal) {
+      sessions.add(child);
+      child.on("close", () => sessions.delete(child));
+    }
 
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];

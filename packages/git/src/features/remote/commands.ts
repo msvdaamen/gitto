@@ -15,7 +15,7 @@ import { NO_BRANCH, noUpstream } from "./pull-blocker";
  * so the sidebar and history show the remotes as they are.
  */
 export async function fetchAll(repo: Repo): Promise<void> {
-  await fetch(repo, ["--all", "--prune", "--no-progress"]);
+  await gitFetch(repo, ["--all", "--prune", "--no-progress"]);
 }
 
 /**
@@ -23,7 +23,7 @@ export async function fetchAll(repo: Repo): Promise<void> {
  * commit-graph): fetches run alongside the queued writes, which that could get in the way of.
  * `settings` adds to those.
  */
-async function fetch(repo: Repo, args: string[], settings: string[] = []): Promise<void> {
+async function gitFetch(repo: Repo, args: string[], settings: string[] = []): Promise<void> {
   const all = ["gc.auto=0", "maintenance.auto=false", "fetch.writeCommitGraph=false", ...settings];
   try {
     await repo.fetch([...all.flatMap((setting) => ["-c", setting]), "fetch", ...args]);
@@ -44,7 +44,11 @@ export async function pull(repo: Repo): Promise<void> {
   // Just the upstream branch, as `git pull` fetches it, which updates its remote-tracking branch.
   // A local upstream (remote ".") has nothing to fetch.
   if (upstream.remote !== ".") {
-    await fetch(repo, ["--quiet", upstream.remote, upstream.merge], ["fetch.writeFetchHead=false"]);
+    await gitFetch(
+      repo,
+      ["--quiet", upstream.remote, upstream.merge],
+      ["fetch.writeFetchHead=false"],
+    );
   }
 
   await repo.exclusive(async (run) => {
@@ -68,7 +72,9 @@ export async function pull(repo: Repo): Promise<void> {
 
     let failure: GitError | undefined;
     try {
-      await run(args);
+      // Without a terminal, like the fetch: signing the merge commit, say, mustn't ask there and
+      // hold up the repository's writes waiting for an answer.
+      await run(args, { noTerminal: true });
     } catch (error) {
       if (!(error instanceof GitError)) throw error;
       failure = error;
@@ -276,6 +282,12 @@ function interruptedError(
       : `Rebasing onto ${upstream} stopped partway. Continue the rebase, or abort it.`;
   } else if (rebasing) {
     message = `Pulling ${upstream} caused conflicts. Resolve them, then continue the rebase.`;
+  } else if (merging && !conflicts) {
+    // E.g. a hook that turned the merge commit down, or a signature that couldn't be made.
+    const reason = failure && withoutHints(failure).message;
+    message = reason
+      ? `Merging ${upstream} stopped before committing:\n${reason}\nFix that, then commit the merge, or abort it.`
+      : `Merging ${upstream} stopped before committing. Commit the merge, or abort it.`;
   } else if (merging) {
     message = `Pulling ${upstream} caused conflicts. Resolve them, then commit the merge.`;
   } else {
@@ -285,7 +297,10 @@ function interruptedError(
   return new PullInterruptedError(message, args, failure?.exitCode ?? 0, failure?.stderr ?? "");
 }
 
-/** `error` without git's hints, which suggest commands to type and so don't help in the app. */
+/**
+ * `error` without git's hints, which suggest commands to type and so don't help in the app; of the
+ * same class, so it reaches the renderer the same way.
+ */
 function withoutHints(error: GitError): GitError {
   const message = error.message
     .split("\n")
@@ -293,5 +308,6 @@ function withoutHints(error: GitError): GitError {
     .join("\n")
     .trim();
   if (!message || message === error.message) return error;
-  return new GitError(message, error.args, error.exitCode, error.stderr);
+  const Class = error.constructor as typeof GitError;
+  return new Class(message, error.args, error.exitCode, error.stderr);
 }

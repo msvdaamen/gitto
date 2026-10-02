@@ -39,7 +39,8 @@ export function ToolbarButton(props: {
       aria-label={props.label}
       aria-busy={props.busy}
       disabled={props.disabled}
-      onClick={props.onClick}
+      // Read on each click: Solid binds a handler once.
+      onClick={() => props.onClick?.()}
     >
       <Dynamic
         component={props.busy ? LoaderCircle : props.icon}
