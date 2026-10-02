@@ -4,7 +4,7 @@ export {
   IndexLockedError,
   NoUpstreamError,
   NotARepositoryError,
-  PullConflictError,
+  PullInterruptedError,
   RepositoryNotFoundError,
 } from "./core/errors";
 export type { GitContext } from "./core/middleware";

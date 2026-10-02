@@ -20,8 +20,11 @@ export class NotARepositoryError extends GitError {}
 /** Another git process holds `index.lock`, e.g. one running in the user's terminal. */
 export class IndexLockedError extends GitError {}
 
-/** A pull that stopped at conflicts, which are left in the working tree to resolve. */
-export class PullConflictError extends GitError {}
+/**
+ * A pull that stopped partway, at conflicts or a rebase that couldn't go on, and is left for the
+ * user to finish.
+ */
+export class PullInterruptedError extends GitError {}
 
 /** There's nothing to pull from: HEAD isn't on a branch, or the branch doesn't track one. */
 export class NoUpstreamError extends Error {

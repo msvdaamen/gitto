@@ -6,7 +6,7 @@ import {
   IndexLockedError,
   NoUpstreamError,
   NotARepositoryError,
-  PullConflictError,
+  PullInterruptedError,
   RepositoryNotFoundError,
 } from "./errors";
 import type { GitRepos } from "./repo";
@@ -41,7 +41,7 @@ function toApiError(error: unknown): unknown {
   if (error instanceof NoUpstreamError) {
     return new ORPCError("PRECONDITION_FAILED", { message: error.message, cause: error });
   }
-  if (error instanceof IndexLockedError || error instanceof PullConflictError) {
+  if (error instanceof IndexLockedError || error instanceof PullInterruptedError) {
     return new ORPCError("CONFLICT", { message: error.message, cause: error });
   }
   if (error instanceof GitError) {

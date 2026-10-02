@@ -35,13 +35,8 @@ export function git(cwd: string, ...args: string[]) {
 
 /** Creates an empty repository on `main`, which `repos` opens as `name`, and returns its path. */
 export function createRepo(name: string): string {
-  const path = join(root, name);
   git(root, "init", "-q", "-b", "main", name);
-  git(path, "config", "user.name", "Test User");
-  git(path, "config", "user.email", "test@example.com");
-  git(path, "config", "commit.gpgsign", "false");
-  paths.set(name, path);
-  return path;
+  return register(name);
 }
 
 /**
@@ -49,8 +44,13 @@ export function createRepo(name: string): string {
  * `name`; its `main` tracks `from`'s. Returns its path.
  */
 export function cloneRepo(name: string, from: string): string {
-  const path = join(root, name);
   git(root, "clone", "-q", from, name);
+  return register(name);
+}
+
+/** Sets up the repository `name` in `root` for tests, which `repos` then opens as `name`. */
+function register(name: string): string {
+  const path = join(root, name);
   git(path, "config", "user.name", "Test User");
   git(path, "config", "user.email", "test@example.com");
   git(path, "config", "commit.gpgsign", "false");
