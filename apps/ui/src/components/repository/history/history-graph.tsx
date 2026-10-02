@@ -1,5 +1,7 @@
-import { Index, Show } from "solid-js";
+import { Index, Show, type JSX } from "solid-js";
 
+import { Avatar } from "@/components/ui/avatar";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { GraphEdge, GraphRow } from "@/git/graph";
 
 /** Width of a lane, and the space left and right of the lanes. */
@@ -64,7 +66,7 @@ function bottomPath(edge: GraphEdge): string {
 /**
  * A commit's row of the history graph. Commits are avatars ringed in their lane's colour, merges
  * small dots, and the uncommitted changes a dashed, hollow circle with a dashed line to HEAD. A
- * commit's node shows its author's name on hover.
+ * commit's node shows its author when hovered.
  */
 export function HistoryGraph(props: {
   row: GraphRow;
@@ -114,16 +116,11 @@ export function HistoryGraph(props: {
           />
         }
       >
-        <Show
-          when={!isMerge()}
-          fallback={
-            <circle cx={node()} cy={MIDDLE} r={4.5} fill={color()} stroke="none">
-              <title>{props.author}</title>
-            </circle>
-          }
-        >
-          <g>
-            <title>{props.author}</title>
+        <AuthorTooltip author={props.author} initials={props.initials} color={props.avatarColor}>
+          <Show
+            when={!isMerge()}
+            fallback={<circle cx={node()} cy={MIDDLE} r={4.5} fill={color()} stroke="none" />}
+          >
             <circle
               cx={node()}
               cy={MIDDLE}
@@ -143,10 +140,30 @@ export function HistoryGraph(props: {
             >
               {props.initials}
             </text>
-          </g>
-        </Show>
+          </Show>
+        </AuthorTooltip>
       </Show>
     </svg>
+  );
+}
+
+/** Shows a commit's author in a tooltip while its node, `children`, is hovered. */
+function AuthorTooltip(props: {
+  author?: string;
+  initials?: string;
+  color?: string;
+  children: JSX.Element;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger as="g" class="cursor-default">
+        {props.children}
+      </TooltipTrigger>
+      <TooltipContent class="flex items-center gap-2 py-1 pl-1 pr-2.5">
+        <Avatar initials={props.initials ?? ""} color={props.color} />
+        <span class="truncate font-[600]">{props.author}</span>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
