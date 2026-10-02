@@ -82,10 +82,10 @@ describe("amending the last commit", () => {
     rpc.git.commit.message.mockReturnValueOnce(new Promise((r) => (resolve = r)));
     const { summary, amend } = renderForm();
     await userEvent.click(amend);
-    expect(summary).toBeDisabled();
+    expect(summary).toHaveAttribute("readonly");
 
     resolve("Loaded");
-    expect(await screen.findByDisplayValue("Loaded")).toBeEnabled();
+    expect(await screen.findByDisplayValue("Loaded")).not.toHaveAttribute("readonly");
   });
 
   it("keeps both messages when switching between them, and the new one after amending", async () => {
@@ -127,7 +127,7 @@ describe("amending the last commit", () => {
     let finish!: () => void;
     rpc.git.commit.create.mockImplementationOnce(() => new Promise((r) => (finish = r)));
     await userEvent.click(screen.getByRole("button", { name: /Amend message/ }));
-    expect(screen.getByLabelText("Commit message")).toBeDisabled();
+    expect(screen.getByLabelText("Commit message")).toHaveAttribute("readonly");
 
     setLastCommit("b2");
     finish();
@@ -156,6 +156,17 @@ describe("amending the last commit", () => {
     const { amend } = renderForm();
     await userEvent.click(amend);
     expect(await screen.findByText(/already on origin\/side/)).toBeInTheDocument();
+  });
+
+  it("doesn't come back on when HEAD returns to the commit", async () => {
+    const { setLastCommit, summary, amend } = renderForm();
+    await userEvent.click(amend);
+    await screen.findByDisplayValue("Commit a1");
+
+    setLastCommit("b2");
+    setLastCommit("a1");
+    expect(amend).not.toBeChecked();
+    expect(summary).toHaveValue("");
   });
 
   it("doesn't call a failed push check an error", async () => {

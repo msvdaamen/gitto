@@ -1,9 +1,9 @@
-import { writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { HeadMovedError } from "../../core/errors";
+import { HeadMovedError, NotARepositoryError } from "../../core/errors";
 import type { Repo } from "../../core/repo";
 import { createRepo, git, page, paths, repos, root } from "../../test/fixtures";
 import { getLog } from "../history/commands";
@@ -59,6 +59,16 @@ describe("createCommit", () => {
     expect((await getLog(repo, page))[0]).toMatchObject({ subject: "Still empty" });
   });
 
+  it("amends before a commit queued while it checks HEAD, not that commit", async () => {
+    const amending = createCommit(repo, "Amended first", { amend: head() });
+    const other = repo.write(["commit", "-q", "--allow-empty", "-m", "Queued after"]);
+    await Promise.all([amending, other]);
+    expect((await getLog(repo, page)).map((commit) => commit.subject).slice(0, 2)).toEqual([
+      "Queued after",
+      "Amended first",
+    ]);
+  });
+
   it("explains why a commit failed", async () => {
     await expect(createCommit(repo, "nothing")).rejects.toMatchObject({
       message: expect.stringContaining("nothing to commit"),
@@ -72,6 +82,15 @@ describe("createCommit", () => {
       HeadMovedError,
     );
     expect((await getLog(repo, page))[0]).toMatchObject({ subject: "Made in a terminal" });
+  });
+
+  it("reports why it couldn't check HEAD", async () => {
+    const gone = createRepo("gone");
+    const goneRepo = await repos.open("gone");
+    rmSync(join(gone, ".git"), { recursive: true });
+    await expect(createCommit(goneRepo, "Amend", { amend: "a".repeat(40) })).rejects.toBeInstanceOf(
+      NotARepositoryError,
+    );
   });
 
   it("can't amend before the first commit", async () => {
@@ -112,6 +131,13 @@ describe("getPushedTo", () => {
     // Pushed without setting it as the upstream.
     git(path, "push", "-q", "origin", "feature");
     expect(await getPushedTo(repo, "HEAD")).toBe("origin/feature");
+
+    // Pushed under another name: found through the push config.
+    git(path, "switch", "-q", "-c", "mine");
+    git(path, "push", "-q", "-u", "origin", "mine:theirs");
+    expect(await getPushedTo(repo, "HEAD")).toBeNull();
+    git(path, "config", "push.default", "upstream");
+    expect(await getPushedTo(repo, "HEAD")).toBe("origin/theirs");
 
     git(path, "switch", "-q", "--detach");
     expect(await getPushedTo(repo, "HEAD")).toBeNull();

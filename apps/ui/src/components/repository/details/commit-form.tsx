@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/solid-query";
 import GitCommitHorizontal from "lucide-solid/icons/git-commit-horizontal";
 import PenLine from "lucide-solid/icons/pen-line";
-import { createMemo, createSignal, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, on, Show } from "solid-js";
 
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/ui/form-field";
@@ -20,9 +20,17 @@ export function CommitForm(props: {
   lastCommit: string | undefined;
 }) {
   const commit = useCreateCommit(() => props.repositoryId);
-  // The commit being amended. Amending stops once HEAD moves on from it: after the amend, or when a
-  // commit is made or HEAD switched elsewhere, so a stale message is never amended onto another.
+  // The commit being amended. Amending stops once HEAD moves: after the amend, or when a commit is
+  // made or HEAD switched elsewhere, so a stale message is never amended onto another commit.
   const [amending, setAmending] = createSignal<string>();
+  createEffect(
+    on(
+      () => props.lastCommit,
+      () => setAmending(undefined),
+      { defer: true },
+    ),
+  );
+  // Checked against HEAD too, as the effect only runs once HEAD has moved.
   const amend = () => !!amending() && amending() === props.lastCommit;
   const [draft, setDraft] = createSignal(emptyMessage);
   // Edits to the amended message, kept for the commit they were made to while amending is toggled.
@@ -52,8 +60,8 @@ export function CommitForm(props: {
     else setDraft((current) => ({ ...current, ...change }));
   }
 
-  function toggleAmend(on: boolean) {
-    setAmending(on ? props.lastCommit : undefined);
+  function toggleAmend(checked: boolean) {
+    setAmending(checked ? props.lastCommit : undefined);
     commit.reset();
   }
 
@@ -98,10 +106,10 @@ export function CommitForm(props: {
     >
       <FormField
         label="Commit message"
-        placeholder="Summary of your changes"
+        placeholder={amend() && !loaded() ? "Loading the last commit…" : "Summary of your changes"}
         value={message().summary}
         onChange={(summary) => edit({ summary })}
-        disabled={(amend() && !loaded()) || commit.isPending}
+        readOnly={(amend() && !loaded()) || commit.isPending}
       />
       <FormField
         label="Description"
@@ -110,12 +118,9 @@ export function CommitForm(props: {
         rows={3}
         value={message().description}
         onChange={(description) => edit({ description })}
-        disabled={(amend() && !loaded()) || commit.isPending}
+        readOnly={(amend() && !loaded()) || commit.isPending}
       />
-      <label
-        class="mb-2.5 flex w-fit cursor-pointer items-center gap-[7px] text-[11.5px] text-muted has-disabled:cursor-default has-disabled:opacity-50"
-        title={props.lastCommit ? undefined : "There's no commit to amend yet"}
-      >
+      <label class="mb-2.5 flex w-fit cursor-pointer items-center gap-[7px] text-[11.5px] text-muted has-disabled:cursor-default has-disabled:opacity-50">
         <input
           type="checkbox"
           class="m-0 size-3.5 cursor-[inherit] accent-primary"

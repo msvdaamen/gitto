@@ -12,6 +12,13 @@ export interface Repo {
   read(args: string[], options?: RunOptions): Promise<string>;
   /** Runs a command that changes the repository, after any earlier writes to it have finished. */
   write(args: string[], options?: RunOptions): Promise<string>;
+  /**
+   * Runs commands that change the repository as one write: after any earlier writes, and with no
+   * other write in between. They're run with `run`; `write` would wait for the task itself.
+   */
+  writeTogether<T>(
+    task: (run: (args: string[], options?: RunOptions) => Promise<string>) => Promise<T>,
+  ): Promise<T>;
   /** Whether HEAD points at a commit; it doesn't on a branch without commits yet. */
   hasHead(): Promise<boolean>;
   /** Writes the commit-graph, which speeds up the log, once per run (see `CommitGraphs`). */
@@ -48,6 +55,7 @@ export class GitReposImpl implements GitRepos {
       path,
       read: run,
       write: (args, options) => this.writes.run(path, () => run(args, options)),
+      writeTogether: (task) => this.writes.run(path, () => task(run)),
       hasHead: () =>
         runGit(path, ["rev-parse", "--verify", "--quiet", "HEAD"]).then(
           () => true,

@@ -1,4 +1,4 @@
-import { HeadMovedError } from "../../core/errors";
+import { GitError, HeadMovedError } from "../../core/errors";
 import type { Repo } from "../../core/repo";
 
 /**
@@ -10,16 +10,25 @@ export async function createCommit(
   message: string,
   options: { amend?: string } = {},
 ): Promise<void> {
-  if (options.amend) {
-    // Through the write queue, so a commit still waiting to run is seen.
-    const head = await repo.write(["rev-parse", "--verify", "HEAD"]).then(
-      (sha) => sha.trim(),
-      () => "",
-    );
-    if (head !== options.amend) throw new HeadMovedError(options.amend);
-  }
-  const args = ["commit", ...(options.amend ? ["--amend", "--allow-empty"] : []), "-F", "-"];
-  await repo.write(args, { stdin: message });
+  const { amend } = options;
+  // One write, so no other commit can land between checking HEAD and amending it.
+  await repo.writeTogether(async (run) => {
+    if (amend) {
+      const head = await run(["rev-parse", "--verify", "--quiet", "HEAD"]).then(
+        (sha) => sha.trim(),
+        unbornHead,
+      );
+      if (head !== amend) throw new HeadMovedError(amend);
+    }
+    const args = ["commit", ...(amend ? ["--amend", "--allow-empty"] : []), "-F", "-"];
+    await run(args, { stdin: message });
+  });
+}
+
+/** `rev-parse --verify --quiet` exits 1 without a word when HEAD has no commit; rethrows the rest. */
+function unbornHead(error: unknown): string {
+  if (error instanceof GitError && error.exitCode === 1 && !error.stderr.trim()) return "";
+  throw error;
 }
 
 /** A commit's message as it was written, unlike the log's subject, which joins its first lines. */
@@ -33,26 +42,36 @@ export async function getCommitMessage(
 }
 
 /**
- * The remote branch `git push` would update that already has the commit, e.g. `origin/feature`
- * for `feature`: one with the checked-out branch's name, as `push.default` picks by default. Not a
- * branch it was only created from, e.g. `origin/main`, which amending doesn't rewrite.
+ * The remote branch `git push` would update that already has the commit, e.g. `origin/feature`.
+ * Not a branch the checked-out one was only created from, e.g. `origin/main`, which amending
+ * doesn't rewrite; and none with HEAD detached, as amending then rewrites no branch.
  */
 export async function getPushedTo(
   repo: Repo,
   sha: string,
   signal?: AbortSignal,
 ): Promise<string | null> {
-  // With HEAD detached, amending rewrites no branch.
-  const head = await repo.read(["symbolic-ref", "--quiet", "--short", "HEAD"], { signal }).then(
-    (name) => name.trim(),
-    () => "",
-  );
-  if (!head) return null;
-  const output = await repo.read(
-    ["for-each-ref", "--contains", sha, "--format=%(refname:lstrip=2)", "refs/remotes"],
+  // Both exit with an error when there's nothing to find, which only means there's no warning.
+  const lookUp = (args: string[]) =>
+    repo.read(args, { signal }).then(
+      (output) => output.trim(),
+      () => "",
+    );
+  const branch = await lookUp(["symbolic-ref", "--quiet", "--short", "HEAD"]);
+  if (!branch) return null;
+  // Where the repository's config pushes it. When that can't say, e.g. because its upstream has
+  // another name, the branch of the same name on any remote, which `git push <remote>` updates.
+  const push = await lookUp(["rev-parse", "--symbolic-full-name", "@{push}"]);
+  const pushedTo = await repo.read(
+    [
+      "for-each-ref",
+      "--count=1",
+      "--contains",
+      sha,
+      "--format=%(refname:lstrip=2)",
+      push || `refs/remotes/*/${branch}`,
+    ],
     { signal },
   );
-  // `<remote>/<branch>`; a remote's name has no slash in practice.
-  const branch = output.split("\n").find((ref) => ref.slice(ref.indexOf("/") + 1) === head);
-  return branch ?? null;
+  return pushedTo.trim() || null;
 }

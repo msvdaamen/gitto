@@ -1,7 +1,7 @@
 import { oc } from "@orpc/contract";
 import * as z from "zod";
 
-import { RepositoryInput, Sha } from "../../input";
+import { FullSha, RepositoryInput, Sha } from "../../input";
 
 export const CommitContract = {
   /**
@@ -12,10 +12,7 @@ export const CommitContract = {
   create: oc.input(
     RepositoryInput.extend({
       message: z.string().trim().min(1),
-      amend: z
-        .string()
-        .regex(/^[0-9a-f]{40}([0-9a-f]{24})?$/)
-        .optional(),
+      amend: FullSha.optional(),
     }),
   ),
   /** A commit's full message, e.g. the last one's to amend it. */
