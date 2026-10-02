@@ -52,7 +52,7 @@ export function HistoryWipRow(
           {(row) => <HistoryGraph row={row()} wip nodeOnly={props.searching} />}
         </Show>
       </div>
-      <span class="col-span-3 flex min-w-0 items-center gap-2">
+      <span class="col-span-2 flex min-w-0 items-center gap-2">
         <strong class="truncate text-[13px] font-[620] text-text italic">{WIP_MESSAGE}</strong>
         <Show when={counts().staged}>
           <WipCount tone="mint">{counts().staged} staged</WipCount>

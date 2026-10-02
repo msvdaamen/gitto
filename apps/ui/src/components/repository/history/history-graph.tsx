@@ -63,10 +63,12 @@ function bottomPath(edge: GraphEdge): string {
 
 /**
  * A commit's row of the history graph. Commits are avatars ringed in their lane's colour, merges
- * small dots, and the uncommitted changes a dashed, hollow circle with a dashed line to HEAD.
+ * small dots, and the uncommitted changes a dashed, hollow circle with a dashed line to HEAD. A
+ * commit's node shows its author's name on hover.
  */
 export function HistoryGraph(props: {
   row: GraphRow;
+  author?: string;
   initials?: string;
   avatarColor?: string;
   wip?: boolean;
@@ -114,27 +116,34 @@ export function HistoryGraph(props: {
       >
         <Show
           when={!isMerge()}
-          fallback={<circle cx={node()} cy={MIDDLE} r={4.5} fill={color()} stroke="none" />}
+          fallback={
+            <circle cx={node()} cy={MIDDLE} r={4.5} fill={color()} stroke="none">
+              <title>{props.author}</title>
+            </circle>
+          }
         >
-          <circle
-            cx={node()}
-            cy={MIDDLE}
-            r={NODE_RADIUS}
-            fill={props.avatarColor ?? color()}
-            stroke={color()}
-          />
-          <text
-            x={node()}
-            y={MIDDLE}
-            fill="#fff"
-            stroke="none"
-            font-size="7"
-            font-weight="700"
-            text-anchor="middle"
-            dominant-baseline="central"
-          >
-            {props.initials}
-          </text>
+          <g>
+            <title>{props.author}</title>
+            <circle
+              cx={node()}
+              cy={MIDDLE}
+              r={NODE_RADIUS}
+              fill={props.avatarColor ?? color()}
+              stroke={color()}
+            />
+            <text
+              x={node()}
+              y={MIDDLE}
+              fill="#fff"
+              stroke="none"
+              font-size="7"
+              font-weight="700"
+              text-anchor="middle"
+              dominant-baseline="central"
+            >
+              {props.initials}
+            </text>
+          </g>
         </Show>
       </Show>
     </svg>

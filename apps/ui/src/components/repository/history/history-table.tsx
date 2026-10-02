@@ -61,7 +61,6 @@ function HistoryHeader(props: { updating?: boolean }) {
           <UpdatingIndicator />
         </Show>
       </span>
-      <span>Author</span>
       <span>Date</span>
     </div>
   );
