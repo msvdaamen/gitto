@@ -54,7 +54,7 @@ describe("the pull button", () => {
     const user = userEvent.setup();
     rpc.git.status.get.mockResolvedValue(status);
     rpc.git.remote.pull.mockResolvedValue(undefined);
-    const { client } = renderButton();
+    renderButton();
 
     const button = await loadedButton("Pull 2 commits from origin/main");
     expect(button).toBeEnabled();
@@ -62,9 +62,8 @@ describe("the pull button", () => {
 
     await user.click(button);
     expect(rpc.git.remote.pull).toHaveBeenCalledWith({ repositoryId: "repo" });
-    // The status is reloaded afterwards, and the pull isn't kept.
+    // The status is reloaded afterwards.
     await vi.waitFor(() => expect(rpc.git.status.get).toHaveBeenCalledTimes(2));
-    expect(client.getMutationCache().findAll({ mutationKey: ["pull", "repo"] })).toEqual([]);
   });
 
   it("says why a pull failed", async () => {
@@ -112,9 +111,6 @@ describe("the pull button", () => {
     );
     expect(client.getQueryState(gitKeys.status("other"))?.isInvalidated).toBe(false);
     expect(screen.queryByText("Pulling origin/main caused conflicts.")).not.toBeInTheDocument();
-    // Kept however long the user stays away.
-    const [failure] = client.getMutationCache().findAll({ mutationKey: ["pull", "repo"] });
-    expect(failure?.options.gcTime).toBe(Infinity);
 
     // Back in that repository, it does, without taking the focus from what the user's doing.
     const input = document.createElement("input");

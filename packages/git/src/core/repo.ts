@@ -2,7 +2,7 @@ import { stat } from "node:fs/promises";
 
 import type { RepositoryService } from "@gitto/repository/server";
 
-import { FolderNotFoundError, RepositoryNotFoundError } from "./errors";
+import { FolderNotFoundError, GitError, RepositoryNotFoundError } from "./errors";
 import { CommitGraphs, runGit, WriteQueue, type RunOptions } from "./runner";
 
 /** A repository on disk, with git commands bound to it. */
@@ -72,10 +72,13 @@ export class GitReposImpl implements GitRepos {
   }
 }
 
-/** Whether `ref` (e.g. `HEAD`, `MERGE_HEAD`) points at a commit. */
+/** Whether `ref` (e.g. `HEAD`, `MERGE_HEAD`) points at a commit; rejects if git couldn't tell. */
 export function refExists(run: GitCommand, ref: string): Promise<boolean> {
   return run(["rev-parse", "--verify", "--quiet", ref]).then(
     () => true,
-    () => false,
+    (error: unknown) => {
+      if (error instanceof GitError && error.exitCode === 1) return false;
+      throw error;
+    },
   );
 }

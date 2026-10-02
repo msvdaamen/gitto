@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/solid-query";
-import { createMemo, createSignal, onCleanup } from "solid-js";
+import { createStore, produce } from "solid-js/store";
 
 import { rpc } from "@/lib/rpc";
 
@@ -21,62 +21,45 @@ export function useFetch() {
 }
 
 /**
- * A repository's pulls, in the mutation cache: their state outlives the toolbar showing it, which
- * shows another repository's when switching, and the same one's again when switching back.
+ * Each repository's pull: whether one is running, and why the last one failed, until that's
+ * dismissed or it's pulled again. Kept here rather than in a component, so it outlives the
+ * toolbar showing it: switching repositories shows another one's, and the same one's again when
+ * switching back. Set by the mutation's own callbacks, which run whatever is on show.
  */
-const pullKey = (repositoryId: string) => ["pull", repositoryId] as const;
+const [pulls, setPulls] = createStore<Record<string, { running: boolean; error: Error | null }>>(
+  {},
+);
 
 /** Pulls the current branch's upstream; whether a pull is running, and why the last one failed. */
 export function usePull(repositoryId: () => string) {
   const queryClient = useQueryClient();
-  const cache = queryClient.getMutationCache();
   const mutation = useMutation(() => ({
-    mutationKey: pullKey(repositoryId()),
     // The repository is passed in, rather than read when the pull ends, so the one pulled is
-    // refreshed even if another one is on show by then.
+    // updated and refreshed even if another one is on show by then.
     mutationFn: (id: string) => rpc.git.remote.pull({ repositoryId: id }),
+    onMutate: (id) => setPulls(id, { running: true, error: null }),
+    onError: (error, id) => setPulls(id, { running: false, error }),
+    // Nothing to keep for one that went through.
+    onSuccess: (_data, id) => setPulls(produce((all) => delete all[id])),
     // Also after a failure: a pull that stopped at conflicts still brought in the upstream's commits.
     // Not awaited: the pull is done (and its error shown) before the history has reloaded.
     onSettled: (_data, _error, id) => {
       void queryClient.invalidateQueries({ queryKey: gitKeys.repository(id) });
     },
-    // A failed pull is kept until dismissed or pulled again, however long the user is in another
-    // repository; one that went through is dropped (below).
-    gcTime: Infinity,
   }));
 
-  // The repository's pulls, again whenever the repository or one of them changes. Not through
-  // `useMutationState`, which only reads its filters when the cache changes, not the repository.
-  const [changes, setChanges] = createSignal(0);
-  onCleanup(
-    cache.subscribe((event) => {
-      if (event.mutation?.options.mutationKey?.[0] !== "pull") return;
-      if (event.type === "updated" && event.action.type === "success") {
-        cache.remove(event.mutation);
-      }
-      setChanges((count) => count + 1);
-    }),
-  );
-  const pulls = createMemo(() => {
-    changes();
-    return cache.findAll({ mutationKey: pullKey(repositoryId()), exact: true });
-  });
-  const running = () => pulls().some((pull) => pull.state.status === "pending");
-  const failed = () => pulls().filter((pull) => pull.state.status === "error");
-
-  /** Forgets the repository's finished pulls, and so why they failed. */
-  function forget() {
-    for (const pull of pulls()) if (pull.state.status !== "pending") cache.remove(pull);
-  }
-
+  const pull = () => pulls[repositoryId()];
   return {
     pull() {
-      if (running()) return;
-      forget();
+      if (pull()?.running) return;
       mutation.mutate(repositoryId());
     },
-    isPending: running,
-    error: () => failed().at(-1)?.state.error ?? null,
-    dismiss: forget,
+    isPending: () => !!pull()?.running,
+    error: () => pull()?.error ?? null,
+    /** Forgets why the last pull failed. */
+    dismiss() {
+      const id = repositoryId();
+      if (!pulls[id]?.running) setPulls(produce((all) => delete all[id]));
+    },
   };
 }

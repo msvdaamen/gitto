@@ -26,7 +26,7 @@ export async function fetchAll(repo: Repo): Promise<void> {
 async function gitFetch(repo: Repo, args: string[], settings: string[] = []): Promise<void> {
   const all = ["gc.auto=0", "maintenance.auto=false", "fetch.writeCommitGraph=false", ...settings];
   try {
-    await repo.fetch([...all.flatMap((setting) => ["-c", setting]), "fetch", ...args]);
+    await repo.fetch(["fetch", ...args], { config: all });
   } catch (error) {
     throw error instanceof GitError ? withoutHints(error) : error;
   }
@@ -52,23 +52,28 @@ export async function pull(repo: Repo): Promise<void> {
   }
 
   await repo.exclusive(async (run) => {
-    // Read again, now that no other write can change them: one may have while fetching.
-    const [current, before, hasHead] = await Promise.all([
-      readBranch(run, repo.path),
+    // The branch and its settings again, now that no other write can change them: one may have
+    // while fetching. All that's read while holding up the other writes is read at once.
+    const [current, config, before, hasHead] = await Promise.all([
+      currentBranch(run),
+      readConfig(run),
       progress(run, repo.path),
       refExists(run, "HEAD"),
     ]);
-    if (current.branch !== branch) {
+    if (current !== branch) {
       throw new RepositoryChangedError(`Switched from ${branch} while pulling it. Pull again.`);
     }
-    if (current.upstream.remote !== upstream.remote || current.upstream.merge !== upstream.merge) {
+    if (
+      config.get(`branch.${branch}.remote`) !== upstream.remote ||
+      config.get(`branch.${branch}.merge`) !== upstream.merge
+    ) {
       throw new RepositoryChangedError(
         `${branch}'s upstream changed while pulling it. Pull again.`,
       );
     }
-    const tracking = current.upstream.tracking ?? (await trackingBranch(run, branch));
+    const tracking = upstream.tracking ?? (await trackingBranch(run, branch));
     if (!tracking) throw new NoUpstreamError(noUpstream(branch));
-    const args = integrateArgs(current.upstream.config, branch, tracking, hasHead);
+    const args = integrateArgs(config, branch, tracking, hasHead);
 
     let failure: GitError | undefined;
     try {
@@ -82,7 +87,11 @@ export async function pull(repo: Repo): Promise<void> {
     // Git won't merge or rebase over a merge, rebase or conflicts that were already there, and
     // says so; those aren't the pull's to explain.
     if (!before.conflicts && !before.merging && !before.rebasing && !before.applying) {
-      const after = await progress(run, repo.path);
+      // A merge or rebase that went through can only have left the conflicts of local changes
+      // it stashed and put back.
+      const after = failure
+        ? await progress(run, repo.path)
+        : { ...before, conflicts: await hasConflicts(run) };
       if (after.conflicts || after.merging || after.rebasing) {
         const name = tracking.replace(/^refs\/(remotes|heads)\//, "");
         throw interruptedError(name, after, args, failure);
@@ -119,10 +128,14 @@ async function readBranch(
       rebasing ? "A rebase is under way. Continue or abort it, then pull." : NO_BRANCH,
     );
   }
-  // From the config: a branch without commits yet has no ref to ask for its upstream.
+  // From the config: a branch without commits yet has no ref to ask for its upstream. A remote
+  // given as a URL, rather than one with a name (and so a URL setting), has no remote-tracking
+  // branches.
   const remote = config.get(`branch.${branch}.remote`);
   const merge = config.get(`branch.${branch}.merge`);
-  if (!remote || !merge) throw new NoUpstreamError(noUpstream(branch));
+  if (!remote || !merge || (remote !== "." && !config.has(`remote.${remote}.url`))) {
+    throw new NoUpstreamError(noUpstream(branch));
+  }
   // The remote-tracking branch it's fetched into, known (once the branch has a commit to be
   // listed) even before the first fetch. Without one, as for an upstream given as a URL,
   // `git status` reports no upstream either, so the UI doesn't offer to pull: refused before
@@ -164,7 +177,7 @@ async function currentBranch(run: GitCommand): Promise<string | null> {
  * git.
  */
 async function readConfig(run: GitCommand): Promise<Map<string, string>> {
-  const pattern = String.raw`^(pull\.(rebase|ff)|branch\..+\.(remote|merge|rebase))$`;
+  const pattern = String.raw`^(pull\.(rebase|ff)|branch\..+\.(remote|merge|rebase)|remote\..+\.url)$`;
   let output = "";
   try {
     output = await run(["config", "-z", "--get-regexp", pattern]);
@@ -232,9 +245,13 @@ interface Progress {
   applying: boolean;
 }
 
+async function hasConflicts(run: GitCommand): Promise<boolean> {
+  return (await run(["ls-files", "--unmerged"])) !== "";
+}
+
 async function progress(run: GitCommand, path: string): Promise<Progress> {
-  const [unmerged, merging, dirs] = await Promise.all([
-    run(["ls-files", "--unmerged"]),
+  const [conflicts, merging, dirs] = await Promise.all([
+    hasConflicts(run),
     refExists(run, "MERGE_HEAD"),
     run([
       "rev-parse",
@@ -259,7 +276,7 @@ async function progress(run: GitCommand, path: string): Promise<Progress> {
       ),
   );
   return {
-    conflicts: unmerged !== "",
+    conflicts,
     merging,
     rebasing: !!rebaseMerge || (!!rebaseApply && !applying),
     applying: !!applying,
@@ -273,21 +290,24 @@ function interruptedError(
   args: string[],
   failure: GitError | undefined,
 ): PullInterruptedError {
+  // Why git stopped, when it wasn't at conflicts: e.g. an untracked file in the way of a commit
+  // a rebase replays, or a hook that turned a merge commit down.
+  const reason = failure && withoutHints(failure).message;
+  const stopped = (what: string, next: string) =>
+    reason ? `${what}:\n${reason}\nFix that, then ${next}.` : `${what}. ${capitalize(next)}.`;
   let message: string;
   if (rebasing && !conflicts) {
-    // E.g. an untracked file in the way of a commit it replays.
-    const reason = failure && withoutHints(failure).message;
-    message = reason
-      ? `Rebasing onto ${upstream} stopped partway:\n${reason}\nFix that, then continue the rebase, or abort it.`
-      : `Rebasing onto ${upstream} stopped partway. Continue the rebase, or abort it.`;
+    message = stopped(
+      `Rebasing onto ${upstream} stopped partway`,
+      "continue the rebase, or abort it",
+    );
   } else if (rebasing) {
     message = `Pulling ${upstream} caused conflicts. Resolve them, then continue the rebase.`;
   } else if (merging && !conflicts) {
-    // E.g. a hook that turned the merge commit down, or a signature that couldn't be made.
-    const reason = failure && withoutHints(failure).message;
-    message = reason
-      ? `Merging ${upstream} stopped before committing:\n${reason}\nFix that, then commit the merge, or abort it.`
-      : `Merging ${upstream} stopped before committing. Commit the merge, or abort it.`;
+    message = stopped(
+      `Merging ${upstream} stopped before committing`,
+      "commit the merge, or abort it",
+    );
   } else if (merging) {
     message = `Pulling ${upstream} caused conflicts. Resolve them, then commit the merge.`;
   } else {
@@ -295,6 +315,10 @@ function interruptedError(
     message = `Pulled ${upstream}, but your local changes conflict with it. Resolve the conflicts; your changes are also kept in the stash.`;
   }
   return new PullInterruptedError(message, args, failure?.exitCode ?? 0, failure?.stderr ?? "");
+}
+
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 /**

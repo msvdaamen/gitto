@@ -4,12 +4,8 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import { createRepo, rejection, repos } from "../test/fixtures";
-import {
-  commandError,
-  FolderNotFoundError,
-  NotARepositoryError,
-  RepositoryNotFoundError,
-} from "./errors";
+import { FolderNotFoundError, NotARepositoryError, RepositoryNotFoundError } from "./errors";
+import { runGit } from "./runner";
 
 describe("opening repositories", () => {
   it("rejects unknown repositories", async () => {
@@ -63,12 +59,15 @@ describe("exclusive writes", () => {
   });
 });
 
-describe("errors", () => {
-  it("name the command when git says nothing, past any settings", () => {
+describe("settings for one command", () => {
+  it("apply to it, and stay out of its arguments", async () => {
+    const path = createRepo("settings");
     expect(
-      commandError("/repo", ["-c", "gc.auto=0", "fetch", "origin"], 128, "", ""),
-    ).toMatchObject({
-      message: "git fetch exited with code 128",
-    });
+      await runGit(path, ["config", "--get", "gitto.test"], { config: ["gitto.test=1"] }),
+    ).toBe("1\n");
+    const error = await rejection(
+      runGit(path, ["rev-parse", "--verify", "nope"], { config: ["gc.auto=0"] }),
+    );
+    expect(error).toMatchObject({ args: ["rev-parse", "--verify", "nope"] });
   });
 });

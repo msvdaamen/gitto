@@ -247,6 +247,14 @@ describe("pull", () => {
     const real = await repos.open("not-fetched");
     const fetched = vi.fn(real.fetch);
     await expect(pull({ ...real, fetch: fetched })).rejects.toBeInstanceOf(NoUpstreamError);
+
+    // Not even from a branch without commits, which has no ref to ask for its upstream.
+    git(path, "checkout", "-q", "--orphan", "new");
+    git(path, "config", "branch.new.remote", upstream);
+    git(path, "config", "branch.new.merge", "refs/heads/main");
+    await expect(pull({ ...real, fetch: fetched })).rejects.toEqual(
+      new NoUpstreamError("new doesn't track a remote branch."),
+    );
     expect(fetched).not.toHaveBeenCalled();
   });
 

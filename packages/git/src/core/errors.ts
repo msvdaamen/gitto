@@ -14,6 +14,14 @@ export class GitError extends Error {
   }
 }
 
+/** An error that's only a message for the user; `name` is its class's, as for `GitError`. */
+class MessageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = new.target.name;
+  }
+}
+
 /** The repository's folder is no longer a git repository, e.g. its `.git` was deleted. */
 export class NotARepositoryError extends GitError {}
 
@@ -27,34 +35,22 @@ export class IndexLockedError extends GitError {}
 export class PullInterruptedError extends GitError {}
 
 /** There's nothing to pull from: HEAD isn't on a branch, or the branch doesn't track one. */
-export class NoUpstreamError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = new.target.name;
-  }
-}
+export class NoUpstreamError extends MessageError {}
 
 /** The repository changed while an operation was under way, which trying again will get past. */
-export class RepositoryChangedError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = new.target.name;
-  }
-}
+export class RepositoryChangedError extends MessageError {}
 
 /** No repository with that id has been added to Gitto. */
-export class RepositoryNotFoundError extends Error {
+export class RepositoryNotFoundError extends MessageError {
   constructor(readonly repositoryId: string) {
     super("Repository not found.");
-    this.name = new.target.name;
   }
 }
 
 /** The repository's folder has been moved or deleted. */
-export class FolderNotFoundError extends Error {
+export class FolderNotFoundError extends MessageError {
   constructor(readonly path: string) {
     super(`${path} no longer exists.`);
-    this.name = new.target.name;
   }
 }
 
@@ -78,7 +74,6 @@ export function commandError(
     );
   }
   // Some failures, like "nothing to commit", are only explained on stdout.
-  const command = args.find((arg, i) => !arg.startsWith("-") && args[i - 1] !== "-c");
-  const message = stderr.trim() || stdout.trim() || `git ${command} exited with code ${exitCode}`;
+  const message = stderr.trim() || stdout.trim() || `git ${args[0]} exited with code ${exitCode}`;
   return new GitError(message, args, exitCode, stderr);
 }

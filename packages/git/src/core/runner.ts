@@ -9,6 +9,8 @@ export interface RunOptions {
   stdin?: string;
   /** Overrides the environment git runs with (see `ENV`), for a command one doesn't suit. */
   env?: Record<string, string>;
+  /** Settings for this command, e.g. `gc.auto=0`, as with `git -c`. */
+  config?: string[];
   /**
    * Runs git in a session of its own, without the terminal Gitto may have been started from, so
    * nothing it starts can ask questions there that no one would answer: ssh can't ask for a
@@ -42,25 +44,38 @@ const ENV = {
   GIT_PAGER: "cat",
 };
 
-/** The git processes running in a session of their own (see `RunOptions.noTerminal`). */
+/**
+ * The git processes running in a session of their own (see `RunOptions.noTerminal`). Out of the
+ * terminal's reach, Ctrl-C there doesn't stop them, so they're stopped when Gitto exits or is
+ * stopped by a signal. (Not when it's killed outright: they then finish or fail on their own,
+ * having no one to wait for.)
+ */
 const sessions = new Set<ChildProcess>();
-process.on("exit", () => {
+const stopSessions = () => {
   for (const child of sessions) child.kill();
-});
+};
+process.on("exit", stopSessions);
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+  process.once(signal, () => {
+    stopSessions();
+    // Handled as it would have been without this listener (once, so it's gone by now).
+    process.kill(process.pid, signal);
+  });
+}
 
 /** Runs `git` in `cwd` and resolves to its stdout; rejects with a `GitError` (or a more specific
  * subclass, see `commandError`) on a non-zero exit. */
 export function runGit(cwd: string, args: string[], options: RunOptions = {}): Promise<string> {
   const start = tracing ? performance.now() : 0;
   return new Promise((resolve, reject) => {
-    const child = spawn("git", [...CONFIG, ...args], {
+    const config = (options.config ?? []).flatMap((setting) => ["-c", setting]);
+    const child = spawn("git", [...CONFIG, ...config, ...args], {
       cwd,
       env: { ...process.env, ...ENV, ...options.env },
       signal: options.signal,
       stdio: ["pipe", "pipe", "pipe"],
       detached: options.noTerminal && process.platform !== "win32",
     });
-    // Out of the terminal's reach, Ctrl-C there doesn't stop it: it's stopped when Gitto is.
     if (options.noTerminal) {
       sessions.add(child);
       child.on("close", () => sessions.delete(child));
