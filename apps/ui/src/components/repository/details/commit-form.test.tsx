@@ -43,7 +43,11 @@ function renderForm(props: { stagedCount?: number; lastCommit?: string | null } 
 
 describe("amending the last commit", () => {
   afterEach(() => {
-    vi.clearAllMocks();
+    // Also drops one-off results a failed test didn't use, so they can't leak into the next.
+    vi.resetAllMocks();
+    rpc.git.commit.create.mockResolvedValue(undefined);
+    rpc.git.commit.message.mockImplementation(async ({ sha }) => `Commit ${sha}\n\nIts body`);
+    rpc.git.commit.pushedTo.mockResolvedValue(null);
   });
 
   it("edits the last commit's message, and amends it without anything staged", async () => {
@@ -65,15 +69,28 @@ describe("amending the last commit", () => {
     expect(amend).not.toBeChecked();
   });
 
-  it("amends an untouched message exactly as it was written", async () => {
-    rpc.git.commit.message.mockResolvedValueOnce("First line\nsecond line\n\n    code();");
-    const { amend } = renderForm({ stagedCount: 1 });
+  it("amends what wasn't edited exactly as it was written", async () => {
+    rpc.git.commit.message.mockResolvedValueOnce("First line\nsecond line\n\n    code();\n");
+    const { setLastCommit, amend } = renderForm({ stagedCount: 1 });
     await userEvent.click(amend);
     await userEvent.click(await screen.findByRole("button", { name: /Amend with 1 file/ }));
-    expect(rpc.git.commit.create).toHaveBeenCalledWith({
+    expect(rpc.git.commit.create).toHaveBeenLastCalledWith({
       repositoryId: "repo",
-      message: "First line\nsecond line\n\n    code();",
+      message: "First line\nsecond line\n\n    code();\n",
       amend: "a1",
+    });
+
+    setLastCommit("b2");
+    rpc.git.commit.message.mockResolvedValueOnce("First line\nsecond line\n\nBody\n");
+    await userEvent.click(amend);
+    const description = screen.getByLabelText(/Description/);
+    await vi.waitFor(() => expect(description).toHaveValue("Body"));
+    await userEvent.type(description, " edited");
+    await userEvent.click(screen.getByRole("button", { name: /Amend with 1 file/ }));
+    expect(rpc.git.commit.create).toHaveBeenLastCalledWith({
+      repositoryId: "repo",
+      message: "First line\nsecond line\n\nBody edited",
+      amend: "b2",
     });
   });
 
@@ -169,13 +186,16 @@ describe("amending the last commit", () => {
     expect(summary).toHaveValue("");
   });
 
-  it("unlocks the fields when the last commit's message can't be loaded", async () => {
+  it("says why the fields stay locked when the last commit's message can't be loaded", async () => {
     rpc.git.commit.message.mockRejectedValueOnce(new Error("log failed"));
     const { summary, amend } = renderForm();
     await userEvent.click(amend);
     expect(await screen.findByText("log failed")).toBeInTheDocument();
-    expect(summary).not.toHaveAttribute("readonly");
+    expect(summary).toHaveAttribute("readonly");
     expect(summary).toHaveAttribute("placeholder", "Summary of your changes");
+
+    await userEvent.click(amend);
+    expect(summary).not.toHaveAttribute("readonly");
   });
 
   it("waits for the push check before amending, so its warning is seen", async () => {

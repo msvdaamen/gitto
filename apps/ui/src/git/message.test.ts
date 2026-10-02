@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { joinMessage, splitMessage } from "./message";
+import { editMessage, joinMessage, splitMessage } from "./message";
 
 describe("commit messages", () => {
   it("splits off the first line as the summary", () => {
@@ -26,5 +26,20 @@ describe("commit messages", () => {
   it("round-trips a message, indented body and all", () => {
     const message = "Subject\n\n    code();\n\n## Notes";
     expect(joinMessage(splitMessage(message))).toBe(message);
+  });
+
+  it("keeps what wasn't edited exactly as written", () => {
+    const original = "Fix parser\nfor nested lists  \n\n\nBody  \n";
+    const split = splitMessage(original);
+    expect(editMessage(original, split)).toBe(original);
+    expect(editMessage(original, { ...split, description: "New body" })).toBe(
+      "Fix parser\nfor nested lists  \n\n\nNew body",
+    );
+    expect(editMessage(original, { ...split, summary: "Fix the parser" })).toBe(
+      "Fix the parser\n\n\nBody  \n",
+    );
+    expect(editMessage("Subject\n", { summary: "Subject", description: "Added" })).toBe(
+      "Subject\n\nAdded",
+    );
   });
 });

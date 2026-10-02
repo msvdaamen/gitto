@@ -69,11 +69,12 @@ describe("createCommit", () => {
     ]);
   });
 
-  it("keeps lines starting with # whatever commit.cleanup says", async () => {
+  it("commits the message exactly as written, whatever commit.cleanup says", async () => {
     git(path, "config", "commit.cleanup", "strip");
-    await createCommit(repo, "Kept\n\n#123 fixes it", { amend: head() });
+    const message = "Kept  \n\n\n#123 fixes it\nHard break  \n";
+    await createCommit(repo, message, { amend: head() });
     git(path, "config", "--unset", "commit.cleanup");
-    expect(git(path, "log", "-1", "--format=%B")).toBe("Kept\n\n#123 fixes it");
+    expect(await getCommitMessage(repo, "HEAD")).toBe(message);
   });
 
   it("explains why a commit failed", async () => {
@@ -116,7 +117,7 @@ describe("getCommitMessage", () => {
     const message = "First line\nsecond line\n\n#123 fixes it\n## Café";
     git(path, "commit", "-q", "--allow-empty", "-m", message);
     git(path, "config", "i18n.logOutputEncoding", "ISO-8859-1");
-    expect(await getCommitMessage(await repos.open("message"), "HEAD")).toBe(message);
+    expect(await getCommitMessage(await repos.open("message"), "HEAD")).toBe(`${message}\n`);
   });
 });
 

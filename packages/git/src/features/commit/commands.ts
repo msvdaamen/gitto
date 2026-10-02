@@ -2,8 +2,9 @@ import { GitError, HeadMovedError } from "../../core/errors";
 import type { Repo } from "../../core/repo";
 
 /**
- * Commits what's staged. With `amend`, HEAD's SHA, replaces that commit with it instead, as long as
- * HEAD is still that commit. An amend may leave the commit empty, so an empty one can be reworded.
+ * Commits what's staged, with `message` as it's written. With `amend`, HEAD's SHA, replaces that
+ * commit with it instead, as long as HEAD is still that commit. An amend may leave the commit empty,
+ * so an empty one can be reworded.
  */
 export async function createCommit(
   repo: Repo,
@@ -11,46 +12,50 @@ export async function createCommit(
   options: { amend?: string } = {},
 ): Promise<void> {
   const { amend } = options;
-  // One write, so no other commit can land between checking HEAD and amending it.
+  // One write, so no other commit of Gitto's can land between checking HEAD and amending it.
   await repo.writeTogether(async (run) => {
     if (amend) {
       const head = await run(["rev-parse", "--verify", "--quiet", "HEAD"]).then(
         (sha) => sha.trim(),
-        unbornHead,
+        nothingFound,
       );
       if (head !== amend) throw new HeadMovedError(amend);
     }
-    // `whitespace`, whatever `commit.cleanup` says: lines starting with `#` are only comments in
-    // the editor, which isn't used here, and an amended message is kept as written.
+    // `verbatim`, whatever `commit.cleanup` says: there's no editor whose comments (lines starting
+    // with `#`) to strip, and a message being amended is kept exactly as it was.
     const args = [
       "commit",
       ...(amend ? ["--amend", "--allow-empty"] : []),
-      "--cleanup=whitespace",
+      "--cleanup=verbatim",
       "-F",
       "-",
     ];
-    await run(args, { stdin: message });
+    await run(args, { stdin: message.endsWith("\n") ? message : `${message}\n` });
   });
 }
 
-/** `rev-parse --verify --quiet` exits 1 without a word when HEAD has no commit; rethrows the rest. */
-function unbornHead(error: unknown): string {
+/**
+ * For a lookup that exits 1 without a word when there's nothing to find, e.g. `rev-parse --quiet`
+ * before the first commit: `""` then, and any other failure rethrown.
+ */
+function nothingFound(error: unknown): string {
   if (error instanceof GitError && error.exitCode === 1 && !error.stderr.trim()) return "";
   throw error;
 }
 
-/** A commit's message as it was written, unlike the log's subject, which joins its first lines. */
+/** A commit's message exactly as it was written; the log's subject joins its first lines. */
 export async function getCommitMessage(
   repo: Repo,
   sha: string,
   signal?: AbortSignal,
 ): Promise<string> {
-  const message = await repo.read(
+  const output = await repo.read(
     // In UTF-8, as it's read, whatever `i18n.logOutputEncoding` says.
     ["log", "--max-count=1", "--encoding=UTF-8", "--format=%B", sha, "--"],
     { signal },
   );
-  return message.trimEnd();
+  // The log ends each entry with a newline of its own.
+  return output.endsWith("\n") ? output.slice(0, -1) : output;
 }
 
 /**
@@ -63,17 +68,17 @@ export async function getPushedTo(
   sha: string,
   signal?: AbortSignal,
 ): Promise<string | null> {
-  // Both exit with an error when there's nothing to find, which only means there's no warning.
-  const lookUp = (args: string[]) =>
-    repo.read(args, { signal }).then(
-      (output) => output.trim(),
-      () => "",
-    );
   const [head, push] = await Promise.all([
     // In full: `--short` can say `heads/<name>` when a tag has the same name.
-    lookUp(["symbolic-ref", "--quiet", "HEAD"]),
-    // Where the repository's config pushes the branch.
-    lookUp(["rev-parse", "--symbolic-full-name", "@{push}"]),
+    repo
+      .read(["symbolic-ref", "--quiet", "HEAD"], { signal })
+      .then((ref) => ref.trim(), nothingFound),
+    // Where the repository's config pushes the branch. It fails when the config can't say, as
+    // `git push` would; a broken repository fails the lookups around it too.
+    repo.read(["rev-parse", "--symbolic-full-name", "@{push}"], { signal }).then(
+      (ref) => ref.trim(),
+      () => "",
+    ),
   ]);
   if (!head) return null;
   const branch = head.replace(/^refs\/heads\//, "");

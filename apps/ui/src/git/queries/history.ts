@@ -36,7 +36,7 @@ export function useHistory(repositoryId: () => string, selectedId: () => string 
   // The layout only depends on the log, whether there are changes and HEAD; not on the rest of
   // the status, which is refetched whenever a file changes.
   const hasChanges = createMemo(() => hasUncommittedChanges(status.data));
-  const head = useHeadSha(repositoryId);
+  const head = useHeadSha(status);
   const graph = createMemo(() =>
     log.data ? historyGraph(log.data.commits, hasChanges(), head()) : [],
   );

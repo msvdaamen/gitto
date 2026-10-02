@@ -11,7 +11,8 @@ export const CommitContract = {
    */
   create: oc.input(
     RepositoryInput.extend({
-      message: z.string().trim().min(1),
+      // Not trimmed: the message is committed exactly as it's sent.
+      message: z.string().regex(/\S/, "The message is empty."),
       amend: FullSha.optional(),
     }),
   ),

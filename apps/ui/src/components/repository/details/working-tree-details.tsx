@@ -34,7 +34,7 @@ export function WorkingTreeDetails(props: { repositoryId: string }) {
   const stage = useStage(() => props.repositoryId);
   const unstage = useUnstage(() => props.repositoryId);
   const busy = () => stage.isPending || unstage.isPending;
-  const lastCommit = useHeadSha(() => props.repositoryId);
+  const lastCommit = useHeadSha(status);
   // The status is reloaded whenever a file changes, which takes a while in a big repository.
   const updating = useDelayed(() => status.isRefetching);
 

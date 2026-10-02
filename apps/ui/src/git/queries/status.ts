@@ -46,11 +46,10 @@ export function useStatus(repositoryId: () => string) {
 }
 
 /**
- * The commit HEAD points at; `undefined` before the first commit, or until the status loads. Only
- * changes when HEAD moves, not with every status refetch.
+ * The commit HEAD points at, from a `useStatus` query; `undefined` before the first commit, or until
+ * the status loads. Only changes when HEAD moves, not with every status refetch.
  */
-export function useHeadSha(repositoryId: () => string) {
-  const status = useStatus(repositoryId);
+export function useHeadSha(status: { data: StatusSummary | undefined }) {
   return createMemo(() => status.data && headSha(status.data.head));
 }
 

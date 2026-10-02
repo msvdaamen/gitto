@@ -6,7 +6,13 @@ import { createEffect, createMemo, createSignal, on, Show } from "solid-js";
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/ui/form-field";
 import { Kbd } from "@/components/ui/kbd";
-import { emptyMessage, joinMessage, splitMessage, type CommitMessage } from "@/git/message";
+import {
+  editMessage,
+  emptyMessage,
+  joinMessage,
+  splitMessage,
+  type CommitMessage,
+} from "@/git/message";
 import { commitMessageQuery, pushedToQuery, useCreateCommit } from "@/git/queries/commit";
 
 /**
@@ -48,9 +54,9 @@ export function CommitForm(props: {
   const loaded = createMemo(() =>
     lastMessage.isSuccess ? splitMessage(lastMessage.data) : undefined,
   );
-  // Locked while loading the message, not once loading it failed: the error says what went wrong.
   const loading = () => amend() && lastMessage.isPending;
-  const locked = () => loading() || commit.isPending;
+  // Also locked if the message failed to load (the error says so), so no edits stand in for it.
+  const locked = () => (amend() && !loaded()) || commit.isPending;
   const amendEdits = () => {
     const edited = edits();
     return edited && edited.sha === props.lastCommit ? edited.message : undefined;
@@ -77,8 +83,9 @@ export function CommitForm(props: {
   function submit() {
     if (!canCommit()) return;
     const amended = amend() ? props.lastCommit : undefined;
-    // An untouched message is amended as written, not as the form splits it into two fields.
-    const text = (amended && !amendEdits() && lastMessage.data) || joinMessage(message());
+    const original = amended && lastMessage.data;
+    // What wasn't edited is amended exactly as written, not as the form split it into two fields.
+    const text = original ? editMessage(original, message()) : joinMessage(message());
     commit.mutate(
       { message: text, amend: amended },
       {
