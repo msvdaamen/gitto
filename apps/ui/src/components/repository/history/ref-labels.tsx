@@ -9,7 +9,7 @@ import { describeRefLabel, refLabelMatches, type RefLabel } from "@/git/ref-labe
 
 /** A ref pill's shape, border and text, in its lane's colour (`--lane`). */
 const PILL =
-  "rounded-sm border border-[color-mix(in_srgb,var(--lane)_45%,var(--border))] py-[3px] text-[8px] text-text-soft";
+  "rounded-sm border border-[color-mix(in_srgb,var(--lane)_45%,var(--border))] py-[3px] text-[10.5px] text-text-soft";
 
 /**
  * The commit's branches and tags, tinted in its lane's colour like GitKraken: the first one, with

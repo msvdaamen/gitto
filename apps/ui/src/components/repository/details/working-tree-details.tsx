@@ -46,7 +46,7 @@ export function WorkingTreeDetails(props: { repositoryId: string }) {
           <h2 class="mt-[7px] mb-1.5 text-sm leading-[1.35] tracking-[-.2px]">
             Uncommitted changes
           </h2>
-          <p class="m-0 text-[9.5px] leading-[1.55] text-muted">
+          <p class="m-0 text-[12px] leading-[1.55] text-muted">
             On <strong class="text-text-soft">{status.data && headLabel(status.data.head)}</strong>
             {" · "}
             {changes.staged().length} staged, {changes.unstaged().length} unstaged
@@ -135,7 +135,7 @@ function FileSection(props: {
       <div ref={setScrollElement} class="min-h-0 flex-1 overflow-y-auto px-2.5 pb-3">
         <Show
           when={props.files.length}
-          fallback={<p class="m-0 px-1 pb-1 text-[9px] text-faint">{props.empty}</p>}
+          fallback={<p class="m-0 px-1 pb-1 text-[11.5px] text-faint">{props.empty}</p>}
         >
           <ChangedFileList
             files={props.files}

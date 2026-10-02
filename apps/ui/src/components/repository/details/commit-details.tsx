@@ -33,7 +33,7 @@ export function CommitDetails(props: { repositoryId: string; selectedId: string 
       fallback={<EmptyState icon={GitCommitHorizontal} title="Nothing selected" />}
     >
       <div ref={setScrollElement} class="flex h-full min-w-[280px] flex-col overflow-y-auto">
-        <div class="flex h-[38px] shrink-0 items-center justify-between border-b border-border py-0 pr-[9px] pl-[13px] text-[9px] font-[720] tracking-[.07em] text-muted uppercase">
+        <div class="flex h-[38px] shrink-0 items-center justify-between border-b border-border py-0 pr-[9px] pl-[13px] text-[11.5px] font-[720] tracking-[.07em] text-muted uppercase">
           <span>{selectedId() === WIP_ID ? "Working directory" : "Commit details"}</span>
           <IconButton label="More commit actions" icon={Ellipsis} />
         </div>
@@ -118,16 +118,16 @@ function CommitSummary(props: {
       <div class="flex items-center gap-[9px]">
         <Avatar initials={props.commit.initials} color={props.commit.avatarColor} size="md" />
         <div class="flex flex-col gap-0.5">
-          <strong class="text-[10.5px]">{props.commit.author}</strong>
-          <span class="text-[8.5px] text-faint">{props.commit.timestamp}</span>
+          <strong class="text-[13px]">{props.commit.author}</strong>
+          <span class="text-[11px] text-faint">{props.commit.timestamp}</span>
         </div>
       </div>
       <h2 class="mt-3.5 mb-1.5 text-sm leading-[1.35] tracking-[-.2px]">{props.commit.message}</h2>
       {props.commit.description && (
-        <p class="m-0 text-[9.5px] leading-[1.55] text-muted">{props.commit.description}</p>
+        <p class="m-0 text-[12px] leading-[1.55] text-muted">{props.commit.description}</p>
       )}
       <div class="mt-3 flex w-max items-center overflow-hidden rounded-[5px] border border-border-soft">
-        <code class="bg-bg px-[7px] py-1 text-[8.5px] text-text-soft">{props.commit.shortSha}</code>
+        <code class="bg-bg px-[7px] py-1 text-[11px] text-text-soft">{props.commit.shortSha}</code>
         <button
           class="grid h-[23px] w-6 cursor-pointer place-items-center border-0 border-l border-border-soft bg-panel-raised p-0 text-faint"
           aria-label="Copy commit SHA"
@@ -135,7 +135,7 @@ function CommitSummary(props: {
           <Copy size={13} />
         </button>
       </div>
-      <div class="mt-[13px] flex items-center gap-2 text-[9px] text-muted">
+      <div class="mt-[13px] flex items-center gap-2 text-[11.5px] text-muted">
         <span class="mr-auto">
           <strong>{props.fileCount}</strong> files changed
         </span>

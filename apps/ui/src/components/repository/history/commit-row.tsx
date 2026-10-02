@@ -50,7 +50,7 @@ export function HistoryCommitRow(
         </Show>
       </div>
       <span class="flex min-w-0 items-center justify-between gap-[7px]">
-        <strong class="truncate text-[10.5px] font-[570] text-text">{props.commit.message}</strong>
+        <strong class="truncate text-[13px] font-[570] text-text">{props.commit.message}</strong>
         <Show when={props.selected}>
           <Suspense>
             <CommitTotals commit={props.commit} />
@@ -59,7 +59,7 @@ export function HistoryCommitRow(
       </span>
       <span class="flex items-center gap-[7px]">
         <Avatar initials={props.commit.initials} color={props.commit.avatarColor} />
-        <span class="truncate text-[9.5px]">
+        <span class="truncate text-[12px]">
           {props.commit.author.split(" ").map((part, index) => (
             <>
               {index > 0 && " "}
@@ -68,7 +68,7 @@ export function HistoryCommitRow(
           ))}
         </span>
       </span>
-      <span class="truncate text-[9px]">{props.commit.timestamp}</span>
+      <span class="truncate text-[11.5px]">{props.commit.timestamp}</span>
     </HistoryOption>
   );
 }
@@ -83,7 +83,7 @@ function CommitTotals(props: { commit: CommitRow }) {
     <LineStats
       additions={totals().additions}
       deletions={totals().deletions}
-      class="shrink-0 text-[8px]"
+      class="shrink-0 text-[10.5px]"
     />
   );
 }

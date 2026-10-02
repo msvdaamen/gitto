@@ -48,7 +48,7 @@ export function RefsSidebar(props: { repositoryId: string; open: boolean }) {
           </Suspense>
         </nav>
       </Show>
-      <button class="absolute right-0 bottom-0 left-0 flex h-[34px] cursor-pointer items-center gap-[7px] border-0 border-t border-border-soft bg-panel px-3 text-[9px] text-faint hover:text-text-soft max-md:justify-center max-md:px-0 max-md:[&>span]:hidden">
+      <button class="absolute right-0 bottom-0 left-0 flex h-[34px] cursor-pointer items-center gap-[7px] border-0 border-t border-border-soft bg-panel px-3 text-[11.5px] text-faint hover:text-text-soft max-md:justify-center max-md:px-0 max-md:[&>span]:hidden">
         <Settings size={15} />
         <span>Configure sidebar</span>
       </button>

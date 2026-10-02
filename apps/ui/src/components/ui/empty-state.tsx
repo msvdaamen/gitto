@@ -26,9 +26,11 @@ export function EmptyState(props: {
         size={22}
         class={props.loading ? "animate-spin motion-reduce:animate-none" : undefined}
       />
-      <strong class="text-[11px] text-text-soft">{props.title}</strong>
+      <strong class="text-[13.5px] text-text-soft">{props.title}</strong>
       {props.children && (
-        <span class={cn("text-[9px] whitespace-pre-wrap", props.tone === "error" && "text-coral")}>
+        <span
+          class={cn("text-[11.5px] whitespace-pre-wrap", props.tone === "error" && "text-coral")}
+        >
           {props.children}
         </span>
       )}

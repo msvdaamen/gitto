@@ -16,7 +16,7 @@ export function Badge(props: { children: JSX.Element; tone?: Tone }) {
   return (
     <span
       class={cn(
-        "inline-flex min-h-[18px] items-center rounded-full border px-1.5 py-px text-[9px] leading-none font-[680]",
+        "inline-flex min-h-[18px] items-center rounded-full border px-1.5 py-px text-[11.5px] leading-none font-[680]",
         toneClasses[props.tone ?? "neutral"],
         borders[props.tone ?? "neutral"],
       )}

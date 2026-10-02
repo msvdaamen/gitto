@@ -34,12 +34,12 @@ export function RepositoryCard(props: { repository: RepositorySummary; onOpen: (
       </span>
       <span class="flex min-w-0 flex-col gap-1.2">
         <span class="flex items-center gap-2">
-          <strong class="text-[13px]">{props.repository.name}</strong>
+          <strong class="text-[14.5px]">{props.repository.name}</strong>
           {props.repository.pinned && <Pin class="text-amber" size={12} />}
           <Badge tone={providerTone[props.repository.provider]}>{props.repository.provider}</Badge>
         </span>
-        <span class="truncate text-[10.5px] text-muted">{props.repository.description}</span>
-        <span class="flex items-center gap-3.25 text-[9.5px] text-muted [&>span]:flex [&>span]:items-center [&>span]:gap-1.25 [&>span]:whitespace-nowrap">
+        <span class="truncate text-[13px] text-muted">{props.repository.description}</span>
+        <span class="flex items-center gap-3.25 text-[12px] text-muted [&>span]:flex [&>span]:items-center [&>span]:gap-1.25 [&>span]:whitespace-nowrap">
           <span>
             <GitBranch size={13} />
             {props.repository.branch}
@@ -61,7 +61,7 @@ export function RepositoryCard(props: { repository: RepositorySummary; onOpen: (
           </Show>
         </span>
       </span>
-      <span class="self-start pt-1 text-[9.5px] whitespace-nowrap text-faint max-sm:hidden">
+      <span class="self-start pt-1 text-[12px] whitespace-nowrap text-faint max-sm:hidden">
         {props.repository.lastOpened}
       </span>
       <span class="grid -translate-x-0.75 place-items-center text-faint opacity-0 transition-[opacity,transform] duration-150 group-hover:translate-x-0 group-hover:opacity-100 motion-reduce:transition-none">

@@ -6,7 +6,7 @@ import type { GraphEdge, GraphRow } from "@/git/graph";
 const LANE = 20;
 const PADDING = 6;
 /** Height of a history row, including its 1px bottom border. */
-export const ROW_HEIGHT = 47;
+export const ROW_HEIGHT = 38;
 /** Height of a row's graph: the row, without its bottom border. */
 const HEIGHT = ROW_HEIGHT - 1;
 const MIDDLE = HEIGHT / 2;
@@ -128,7 +128,7 @@ export function HistoryGraph(props: {
             y={MIDDLE}
             fill="#fff"
             stroke="none"
-            font-size="6.5"
+            font-size="7"
             font-weight="700"
             text-anchor="middle"
             dominant-baseline="central"

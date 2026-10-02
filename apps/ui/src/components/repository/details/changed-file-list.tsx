@@ -62,7 +62,7 @@ export function ChangedFileList(props: {
         <div class="group grid h-full w-full grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-[7px] rounded-md p-[7px] text-left hover:bg-panel-hover">
           <span
             class={cn(
-              "grid size-[17px] place-items-center rounded-sm font-mono text-[8px] font-bold",
+              "grid size-[17px] place-items-center rounded-sm font-mono text-[10.5px] font-bold",
               toneClasses[fileStatusTone[file().status]],
             )}
             title={file().status}
@@ -70,16 +70,16 @@ export function ChangedFileList(props: {
             {fileStatusLabel[file().status]}
           </span>
           <span class="flex min-w-0 flex-col gap-0.5">
-            <strong class="truncate text-[9.5px] font-[540]">
+            <strong class="truncate text-[12px] font-[540]">
               {file().path.split("/").slice(-1)[0]}
             </strong>
-            <small class="truncate text-[8px] text-faint">
+            <small class="truncate text-[10.5px] text-faint">
               {file().path.includes("/")
                 ? file().path.slice(0, file().path.lastIndexOf("/"))
                 : "root"}
             </small>
           </span>
-          <span class="flex items-center gap-[5px] text-[8px]">
+          <span class="flex items-center gap-[5px] text-[10.5px]">
             <Show
               when={file().additions !== null}
               fallback={

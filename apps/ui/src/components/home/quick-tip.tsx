@@ -14,8 +14,8 @@ export function QuickTip() {
         <Command size={17} />
       </span>
       <div class="flex-1">
-        <strong class="text-[10.5px]">Quick tip</strong>
-        <p class="mt-1 mb-0 text-[9.5px] leading-1.5 text-muted">
+        <strong class="text-[13px]">Quick tip</strong>
+        <p class="mt-1 mb-0 text-[12px] leading-1.5 text-muted">
           Press <Kbd>⌘ K</Kbd> to open the command palette.
         </p>
       </div>

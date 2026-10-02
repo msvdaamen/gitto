@@ -49,7 +49,7 @@ export function LinkButton(props: {
       type="button"
       disabled={props.disabled}
       class={cn(
-        "cursor-pointer border-0 bg-transparent p-0 text-[9px] text-primary-strong disabled:cursor-default disabled:opacity-50",
+        "cursor-pointer border-0 bg-transparent p-0 text-[11.5px] text-primary-strong disabled:cursor-default disabled:opacity-50",
         props.class,
       )}
       onClick={props.onClick}

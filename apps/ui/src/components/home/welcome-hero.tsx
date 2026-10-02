@@ -14,7 +14,7 @@ export function WelcomeHero(props: { onOpenRepository: () => void }) {
     <section class="relative mx-auto mb-5.5 flex min-h-52.5 max-w-322.5 items-center overflow-hidden rounded-[13px] border border-[color-mix(in_srgb,var(--primary)_30%,var(--border))] bg-[linear-gradient(122deg,color-mix(in_srgb,var(--panel)_90%,var(--primary)_10%),var(--panel))] px-9.5 py-8 shadow-app after:pointer-events-none after:absolute after:inset-0 after:bg-[radial-gradient(color-mix(in_srgb,var(--primary)_55%,transparent)_.65px,transparent_.65px)] after:bg-size-[17px_17px] after:opacity-[.18] after:mask-[linear-gradient(90deg,transparent,#000)] after:content-[''] max-sm:min-h-57.5 max-sm:p-6.5">
       <HeroDecoration />
       <div class="relative z-2">
-        <div class="mb-3 flex items-center gap-1.75 text-[10px] font-[720] tracking-[.11em] text-primary-strong uppercase">
+        <div class="mb-3 flex items-center gap-1.75 text-[12.5px] font-[720] tracking-[.11em] text-primary-strong uppercase">
           <span class="grid size-5.75 place-items-center rounded-[7px] bg-primary-soft text-primary-strong">
             <Sparkles size={13} />
           </span>{" "}
@@ -70,8 +70,8 @@ function SyncStatus() {
         <Check size={16} />
       </span>
       <div class="flex flex-col gap-0.5">
-        <strong class="text-[11px]">Everything is in sync</strong>
-        <span class="text-[9.5px] text-muted">Last fetched 2 minutes ago</span>
+        <strong class="text-[13.5px]">Everything is in sync</strong>
+        <span class="text-[12px] text-muted">Last fetched 2 minutes ago</span>
       </div>
     </div>
   );

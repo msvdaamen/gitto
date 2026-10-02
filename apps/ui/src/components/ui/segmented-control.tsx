@@ -10,7 +10,7 @@ export function SegmentedControl(props: {
       {props.options.map((option) => (
         <button
           class={cn(
-            "h-[25px] cursor-pointer rounded-[5px] border-0 bg-transparent text-[10.5px] text-muted",
+            "h-[25px] cursor-pointer rounded-[5px] border-0 bg-transparent text-[13px] text-muted",
             props.value === option && "bg-panel-hover text-text shadow-[0_1px_3px_rgba(0,0,0,.15)]",
           )}
           onClick={() => props.onChange(option)}

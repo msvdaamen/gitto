@@ -18,7 +18,7 @@ export function SectionHeader(props: {
     <div class={cn("flex shrink-0 items-center justify-between gap-2", props.class)}>
       <div class={cn("flex items-center gap-1.5", props.tone === "mint" && "text-mint")}>
         <Dynamic component={props.icon} size={15} />
-        <strong class="text-[10px] text-text">{props.title}</strong>
+        <strong class="text-[12.5px] text-text">{props.title}</strong>
         <Show when={props.count !== undefined}>
           <Badge tone={props.tone}>{props.count}</Badge>
         </Show>
