@@ -25,6 +25,13 @@ describe("commit messages", () => {
     });
   });
 
+  it("skips blank lines before the subject, as git does", () => {
+    expect(splitMessage("\n \nSubject\n\nBody")).toEqual({
+      summary: "Subject",
+      description: "Body",
+    });
+  });
+
   it("joins the summary and the description with a blank line", () => {
     expect(joinMessage({ summary: " Subject ", description: "\nBody\n" })).toBe("Subject\n\nBody");
     expect(joinMessage({ summary: "Subject", description: "  " })).toBe("Subject");

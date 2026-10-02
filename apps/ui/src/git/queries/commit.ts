@@ -10,9 +10,13 @@ export function useCreateCommit(repositoryId: () => string) {
   return useMutation(() => ({
     mutationFn: (commit: { message: string; amend?: string }) =>
       rpc.git.commit.create({ repositoryId: repositoryId(), ...commit }),
-    // After a failure too: one saying HEAD has moved means the status is behind.
-    onSettled: () =>
+    onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: gitKeys.repository(repositoryId()) }),
+    // A failure saying HEAD has moved means the status is behind; refetched without waiting for
+    // it, so the error shows right away.
+    onError: () => {
+      void queryClient.invalidateQueries({ queryKey: gitKeys.repository(repositoryId()) });
+    },
   }));
 }
 

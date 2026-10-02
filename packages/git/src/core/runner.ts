@@ -19,9 +19,11 @@ const CONFIG = [
   "color.ui=false",
   "-c",
   "log.showSignature=false",
-  // What Gitto writes, e.g. a commit message, comes from a JS string, sent to git in UTF-8.
+  // Text is read and written in UTF-8, e.g. commit messages, as JS strings are sent and decoded.
   "-c",
   "i18n.commitEncoding=UTF-8",
+  "-c",
+  "i18n.logOutputEncoding=UTF-8",
 ];
 
 const ENV = {

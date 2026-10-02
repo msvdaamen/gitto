@@ -1,7 +1,7 @@
 import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, onTestFinished } from "vitest";
 
 import { HeadMovedError, NotARepositoryError } from "../../core/errors";
 import type { Repo } from "../../core/repo";
@@ -19,6 +19,11 @@ describe("createCommit", () => {
   });
 
   const head = () => git(path, "rev-parse", "HEAD");
+  /** Sets config on the shared repository for one test, unset again however the test ends. */
+  const setConfig = (key: string, value: string) => {
+    git(path, "config", key, value);
+    onTestFinished(() => void git(path, "config", "--unset", key));
+  };
 
   it("commits what's staged, with the message's body", async () => {
     writeFileSync(join(path, "x y.txt"), "hi\n");
@@ -70,17 +75,15 @@ describe("createCommit", () => {
   });
 
   it("amends with the message exactly as written, whatever commit.cleanup says", async () => {
-    git(path, "config", "commit.cleanup", "strip");
+    setConfig("commit.cleanup", "strip");
     const message = "Kept  \n\n\n#123 fixes it\nHard break  \n";
     await createCommit(repo, message, { amend: head() });
-    git(path, "config", "--unset", "commit.cleanup");
     expect(await getCommitMessage(repo, "HEAD")).toBe(message);
   });
 
   it("records the message in UTF-8 whatever i18n.commitEncoding says", async () => {
-    git(path, "config", "i18n.commitEncoding", "ISO-8859-1");
+    setConfig("i18n.commitEncoding", "ISO-8859-1");
     await createCommit(repo, "Café", { amend: head() });
-    git(path, "config", "--unset", "i18n.commitEncoding");
     expect(await getCommitMessage(repo, "HEAD")).toBe("Café\n");
   });
 

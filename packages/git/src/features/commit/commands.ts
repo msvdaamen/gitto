@@ -48,11 +48,7 @@ export async function getCommitMessage(
   sha: string,
   signal?: AbortSignal,
 ): Promise<string> {
-  const output = await repo.read(
-    // In UTF-8, as it's read, whatever `i18n.logOutputEncoding` says.
-    ["log", "--max-count=1", "--encoding=UTF-8", "--format=%B", sha, "--"],
-    { signal },
-  );
+  const output = await repo.read(["log", "--max-count=1", "--format=%B", sha, "--"], { signal });
   // The log ends each entry with a newline of its own.
   return output.endsWith("\n") ? output.slice(0, -1) : output;
 }
