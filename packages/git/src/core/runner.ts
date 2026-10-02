@@ -84,6 +84,33 @@ export function runGit(cwd: string, args: string[], options: RunOptions = {}): P
 }
 
 /**
+ * Writes each repository's commit-graph, once per run of the app. With it, git looks commits up
+ * instead of parsing them, which makes the history (sorted over all refs) several times faster:
+ * 0.35s instead of 2.3s on vscode. Fresh clones don't have one: git only writes it in gc or
+ * maintenance.
+ *
+ * Split, so it only adds the commits that aren't in it yet (in ~30ms when there are none), and
+ * not through `WriteQueue`: it doesn't touch the index or refs, and can take seconds the first
+ * time, which a commit shouldn't wait for. It's only a cache, so a failure (another git writing
+ * it at the same time, a read-only repository) is left for next time.
+ */
+export class CommitGraphs {
+  private readonly writes = new Map<string, Promise<void>>();
+
+  /** Writes `path`'s commit-graph if that hasn't been done yet; resolves once it's written. */
+  update(path: string): Promise<void> {
+    let write = this.writes.get(path);
+    if (!write) {
+      write = runGit(path, ["commit-graph", "write", "--reachable", "--split", "--no-progress"])
+        .then(() => trace(`wrote the commit-graph of ${path}`))
+        .catch((error: unknown) => trace(`couldn't write the commit-graph of ${path}: ${error}`));
+      this.writes.set(path, write);
+    }
+    return write;
+  }
+}
+
+/**
  * Runs write commands for a repository one at a time. Reads don't go through here: with
  * GIT_OPTIONAL_LOCKS=0 they take no locks, so they can run alongside anything.
  */

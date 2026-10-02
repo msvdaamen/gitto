@@ -30,6 +30,8 @@ export async function getLog(
     ],
     { signal },
   );
+  // After the log, not alongside it: the first write can take seconds, and would slow it down.
+  void repo.updateCommitGraph();
   return parseLog(output);
 }
 
