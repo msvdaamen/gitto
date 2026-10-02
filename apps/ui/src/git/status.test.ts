@@ -52,7 +52,7 @@ describe("pullTitle", () => {
   it("says why there's nothing to pull", () => {
     expect(pullTitle(status)).toBe("main doesn't track a remote branch.");
     expect(pullTitle({ ...tracking, head: { kind: "detached", sha: "abc" } })).toBe(
-      "No branch is checked out to pull into.",
+      "Not on a branch: HEAD is detached, or a rebase is under way.",
     );
   });
 });

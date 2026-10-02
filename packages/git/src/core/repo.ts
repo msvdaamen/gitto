@@ -64,7 +64,7 @@ export class GitReposImpl implements GitRepos {
       read: run,
       write: (args, options) => this.writes.run(path, () => run(args, options)),
       fetch: (args, options) =>
-        this.fetches.run(path, () => run(args, { ...options, noTerminal: true })),
+        this.fetches.run(path, () => run(args, { ...options, noTerminal: true, stopOnExit: true })),
       exclusive: (task) => this.writes.run(path, () => task(run)),
       hasHead: () => refExists(run, "HEAD"),
       updateCommitGraph: () => this.commitGraphs.update(path),

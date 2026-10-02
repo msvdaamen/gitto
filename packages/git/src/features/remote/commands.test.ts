@@ -13,6 +13,7 @@ import {
 import type { Repo } from "../../core/repo";
 import { cloneRepo, createRepo, git, paths, rejection, repos, root } from "../../test/fixtures";
 import { fetchAll, pull } from "./commands";
+import { NO_BRANCH, REBASING } from "./pull-blocker";
 
 /** Writes `content` to `file` in `path` and commits it with `message`. */
 function commit(path: string, file: string, content: string, message: string) {
@@ -142,9 +143,7 @@ describe("pull", () => {
       message: "Pulling origin/main caused conflicts. Resolve them, then continue the rebase.",
     });
     // HEAD is detached until the rebase is done; that's what's in the way of pulling again.
-    await expect(pull(repo)).rejects.toEqual(
-      new NoUpstreamError("A rebase is under way. Continue or abort it, then pull."),
-    );
+    await expect(pull(repo)).rejects.toEqual(new NoUpstreamError(REBASING));
   });
 
   it("rebases without opening an editor when the config says to rebase interactively", async () => {
@@ -171,6 +170,19 @@ describe("pull", () => {
         "Pulled origin/main, but your local changes conflict with it. Resolve the conflicts; your changes are also kept in the stash.",
     });
     expect(subjects(path)).toEqual(["theirs", "first"]);
+  });
+
+  it("doesn't rebase when told to only fast-forward", async () => {
+    const { upstream, path } = createClone("ff-only-rebase");
+    git(path, "config", "pull.rebase", "true");
+    git(path, "config", "pull.ff", "only");
+    commit(upstream, "theirs.txt", "theirs\n", "theirs");
+    commit(path, "ours.txt", "ours\n", "ours");
+    const ours = git(path, "rev-parse", "HEAD");
+    await expect(pull(await repos.open("ff-only-rebase"))).rejects.toMatchObject({
+      message: "fatal: Not possible to fast-forward, aborting.",
+    });
+    expect(git(path, "rev-parse", "HEAD")).toBe(ours);
   });
 
   it("leaves git's hints out of why it failed", async () => {
@@ -268,9 +280,7 @@ describe("pull", () => {
         "--- a/missing.txt\n+++ b/missing.txt\n@@ -1 +1 @@\n-x\n+y\n",
     );
     expect(() => git(path, "am", join(root, "bad.patch"))).toThrow();
-    await expect(pull(await repos.open("am"))).rejects.toEqual(
-      new NoUpstreamError("No branch is checked out to pull into."),
-    );
+    await expect(pull(await repos.open("am"))).rejects.toEqual(new NoUpstreamError(NO_BRANCH));
   });
 
   it("says how to finish a rebase that stopped without conflicts", async () => {
@@ -403,8 +413,6 @@ describe("pull", () => {
     );
 
     git(path, "checkout", "-q", "--detach");
-    await expect(pull(repo)).rejects.toEqual(
-      new NoUpstreamError("No branch is checked out to pull into."),
-    );
+    await expect(pull(repo)).rejects.toEqual(new NoUpstreamError(NO_BRANCH));
   });
 });

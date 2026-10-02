@@ -8,7 +8,7 @@ import {
   RepositoryChangedError,
 } from "../../core/errors";
 import { refExists, type GitCommand, type Repo } from "../../core/repo";
-import { NO_BRANCH, noUpstream } from "./pull-blocker";
+import { NO_BRANCH, noUpstream, REBASING } from "./pull-blocker";
 
 /**
  * Fetches every remote, and drops remote-tracking branches whose branch was deleted on the remote,
@@ -111,8 +111,6 @@ interface Upstream {
    * `null` until the branch has a commit (see `trackingBranch`).
    */
   tracking: string | null;
-  /** The rest of the settings a pull depends on, by key; see `readConfig`. */
-  config: Map<string, string>;
 }
 
 /** The checked-out branch, and the upstream it pulls from; rejects if there isn't one. */
@@ -124,9 +122,7 @@ async function readBranch(
   if (branch === null) {
     // HEAD is detached while a rebase stops: it's that to finish, not a branch to check out.
     const { rebasing } = await progress(run, path);
-    throw new NoUpstreamError(
-      rebasing ? "A rebase is under way. Continue or abort it, then pull." : NO_BRANCH,
-    );
+    throw new NoUpstreamError(rebasing ? REBASING : NO_BRANCH);
   }
   // From the config: a branch without commits yet has no ref to ask for its upstream. A remote
   // given as a URL, rather than one with a name (and so a URL setting), has no remote-tracking
@@ -143,7 +139,7 @@ async function readBranch(
   const listed = await run(["for-each-ref", "--format=x%(upstream)", `refs/heads/${branch}`]);
   const tracking = listed ? listed.trim().slice(1) : null;
   if (tracking === "") throw new NoUpstreamError(noUpstream(branch));
-  return { branch, upstream: { remote, merge, tracking, config } };
+  return { branch, upstream: { remote, merge, tracking } };
 }
 
 /**
@@ -154,7 +150,16 @@ async function readBranch(
 function trackingBranch(run: GitCommand, branch: string): Promise<string | null> {
   return run(["rev-parse", "--symbolic-full-name", `${branch}@{upstream}`]).then(
     (ref) => ref.trim() || null,
-    () => null,
+    (error: unknown) => {
+      // Git says there's no upstream, or none fetched; anything else is for the caller.
+      if (
+        error instanceof GitError &&
+        /upstream|remote-tracking|unknown revision/.test(error.stderr)
+      ) {
+        return null;
+      }
+      throw error;
+    },
   );
 }
 
@@ -213,8 +218,10 @@ function integrateArgs(
   const rebase = (
     config.get(`branch.${branch}.rebase`) ?? config.get("pull.rebase")
   )?.toLowerCase();
+  const ff = config.get("pull.ff")?.toLowerCase();
   // A branch without commits yet has nothing to rebase: it's merged, which just moves it there.
-  if (hasHead && rebase !== undefined && !FALSE.has(rebase)) {
+  // And as in `git pull`, `pull.ff=only` wins over rebasing.
+  if (hasHead && ff !== "only" && rebase !== undefined && !FALSE.has(rebase)) {
     return [
       "rebase",
       "--quiet",
@@ -224,7 +231,6 @@ function integrateArgs(
       tracking,
     ];
   }
-  const ff = config.get("pull.ff")?.toLowerCase();
   const ffArgs =
     !hasHead || ff === undefined
       ? []

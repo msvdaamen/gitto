@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 
 import { commandError, GitError } from "./errors";
 import { trace, tracing } from "./trace";
@@ -19,6 +19,13 @@ export interface RunOptions {
    * where there's no such terminal to keep away from.
    */
   noTerminal?: boolean;
+  /**
+   * Stopped (with all it started, like ssh) when Gitto exits, rather than left running in its
+   * session, out of reach: for a command that's safe to stop partway, like a fetch. Others, like a
+   * rebase, are left to finish. Either way, without a terminal, none waits on an answer that
+   * won't come, so even left behind (when Gitto is stopped by a signal, say) they end.
+   */
+  stopOnExit?: boolean;
 }
 
 // Settings that keep git's output stable and machine-readable, whatever the user's config says.
@@ -44,24 +51,17 @@ const ENV = {
   GIT_PAGER: "cat",
 };
 
-/**
- * The git processes running in a session of their own (see `RunOptions.noTerminal`). Out of the
- * terminal's reach, Ctrl-C there doesn't stop them, so they're stopped when Gitto exits or is
- * stopped by a signal. (Not when it's killed outright: they then finish or fail on their own,
- * having no one to wait for.)
- */
-const sessions = new Set<ChildProcess>();
-const stopSessions = () => {
-  for (const child of sessions) child.kill();
-};
-process.on("exit", stopSessions);
-for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-  process.once(signal, () => {
-    stopSessions();
-    // Handled as it would have been without this listener (once, so it's gone by now).
-    process.kill(process.pid, signal);
-  });
-}
+/** The process groups of the commands to stop when Gitto exits (see `RunOptions.stopOnExit`). */
+const stopOnExit = new Set<number>();
+process.on("exit", () => {
+  for (const group of stopOnExit) {
+    try {
+      process.kill(-group);
+    } catch {
+      // Already gone.
+    }
+  }
+});
 
 /** Runs `git` in `cwd` and resolves to its stdout; rejects with a `GitError` (or a more specific
  * subclass, see `commandError`) on a non-zero exit. */
@@ -76,9 +76,11 @@ export function runGit(cwd: string, args: string[], options: RunOptions = {}): P
       stdio: ["pipe", "pipe", "pipe"],
       detached: options.noTerminal && process.platform !== "win32",
     });
-    if (options.noTerminal) {
-      sessions.add(child);
-      child.on("close", () => sessions.delete(child));
+    // Its own session is its own process group too, numbered after it.
+    const group = options.noTerminal && options.stopOnExit && child.pid;
+    if (group && process.platform !== "win32") {
+      stopOnExit.add(group);
+      child.on("close", () => stopOnExit.delete(group));
     }
 
     const stdout: Buffer[] = [];
