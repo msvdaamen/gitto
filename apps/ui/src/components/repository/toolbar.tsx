@@ -1,3 +1,4 @@
+import { cn } from "cn";
 import Archive from "lucide-solid/icons/archive";
 import ArchiveRestore from "lucide-solid/icons/archive-restore";
 import GitBranch from "lucide-solid/icons/git-branch";
@@ -13,6 +14,7 @@ import { Suspense } from "solid-js";
 import { IconButton } from "@/components/ui/button";
 import { Divider } from "@/components/ui/divider";
 import { TextInput } from "@/components/ui/text-input";
+import { useFetch } from "@/git/queries/remote";
 import { useStatus } from "@/git/queries/status";
 import { headLabel } from "@/git/status";
 import { useRepository } from "@/hooks/repositories";
@@ -58,7 +60,7 @@ export function RepositoryToolbar(props: {
         <ToolbarButton icon={GitBranch} label="Branch" hideBelow="sm" />
         <ToolbarButton icon={Archive} label="Stash" hideBelow="lg" />
         <ToolbarButton icon={ArchiveRestore} label="Pop" hideBelow="lg" />
-        <ToolbarButton icon={RefreshCw} label="Fetch" hideBelow="sm" />
+        <FetchButton repositoryId={props.repositoryId} />
       </div>
       <div class="ml-auto max-md:min-w-[115px] max-sm:min-w-[90px]">
         <TextInput
@@ -76,6 +78,28 @@ export function RepositoryToolbar(props: {
       />
       <IconButton label="Repository settings" icon={Settings} />
     </header>
+  );
+}
+
+/** Fetches every remote; spins while it runs, and turns red with the reason when it fails. */
+function FetchButton(props: { repositoryId: string }) {
+  const fetchRemotes = useFetch();
+  // The last fetch, if it was of this repository; one of another stays with that repository.
+  const current = () => fetchRemotes.variables === props.repositoryId;
+  const pending = () => current() && fetchRemotes.isPending;
+  const error = () => (current() ? fetchRemotes.error : null);
+
+  return (
+    <ToolbarButton
+      icon={RefreshCw}
+      label="Fetch"
+      hideBelow="sm"
+      title={error() ? `Fetch failed: ${error()!.message}` : "Fetch all remotes"}
+      disabled={pending()}
+      class={cn(error() && "text-coral")}
+      iconClass={cn(pending() && "animate-spin motion-reduce:animate-none")}
+      onClick={() => fetchRemotes.mutate(props.repositoryId)}
+    />
   );
 }
 

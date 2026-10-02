@@ -6,6 +6,34 @@ import { refExists, type GitCommand, type Repo } from "../../core/repo";
 import { pullBlocker } from "./pull-blocker";
 
 /**
+ * Fetches every remote, and drops remote-tracking branches whose branch was deleted on the remote,
+ * so the sidebar and history show the remotes as they are.
+ */
+export async function fetchAll(repo: Repo): Promise<void> {
+  await fetch(repo, ["--all", "--prune", "--no-progress"]);
+}
+
+/**
+ * Runs `git fetch` with `args`, without the upkeep it may start (gc, maintenance, the
+ * commit-graph): fetches run alongside the queued writes, which that could get in the way of.
+ * `settings` adds to those; `config` is the repository's, if it's been read already.
+ */
+async function fetch(
+  repo: Repo,
+  args: string[],
+  { settings = [], config }: { settings?: string[]; config?: Map<string, string> } = {},
+): Promise<void> {
+  const all = ["gc.auto=0", "maintenance.auto=false", "fetch.writeCommitGraph=false", ...settings];
+  try {
+    await repo.fetch([...all.flatMap((setting) => ["-c", setting]), "fetch", ...args], {
+      env: remoteEnv(config ?? (await readConfig(repo.read))),
+    });
+  } catch (error) {
+    throw error instanceof GitError ? withoutHints(error) : error;
+  }
+}
+
+/**
  * Fetches the current branch's upstream and merges it in, or rebases onto it if the user's config
  * says to, like `git pull`. Conflicts are left in the working tree, to resolve and commit.
  *
@@ -96,24 +124,11 @@ async function fetchUpstream(repo: Repo, branch: string, upstream: Upstream): Pr
   ).trim();
   if (upstream.remote === "." && tracking) return { rev: tracking, tracking: true };
 
-  // Without the upkeep a fetch may start (gc, maintenance, the commit-graph): it runs alongside
-  // the queued writes, which that could get in the way of. And FETCH_HEAD only when it's needed.
-  const config = ["gc.auto=0", "maintenance.auto=false", "fetch.writeCommitGraph=false"];
-  if (tracking) config.push("fetch.writeFetchHead=false");
-  try {
-    await repo.remote(
-      [
-        ...config.flatMap((setting) => ["-c", setting]),
-        "fetch",
-        "--quiet",
-        upstream.remote,
-        upstream.merge,
-      ],
-      { env: remoteEnv(upstream.config) },
-    );
-  } catch (error) {
-    throw error instanceof GitError ? withoutHints(error) : error;
-  }
+  // FETCH_HEAD only when it's read.
+  await fetch(repo, ["--quiet", upstream.remote, upstream.merge], {
+    settings: tracking ? ["fetch.writeFetchHead=false"] : [],
+    config: upstream.config,
+  });
   if (tracking) return { rev: tracking, tracking: true };
   // Read straight away, before another fetch replaces it.
   const fetched = await repo.read(["rev-parse", "--verify", "--quiet", "FETCH_HEAD^{commit}"]);

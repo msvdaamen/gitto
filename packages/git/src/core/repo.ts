@@ -13,11 +13,11 @@ export interface Repo {
   /** Runs a command that changes the repository, after any earlier writes to it have finished. */
   write(args: string[], options?: RunOptions): Promise<string>;
   /**
-   * Runs a command that talks to a remote, like `fetch`. Not queued with the writes: it can take
-   * as long as the network does, and it only changes refs they don't (remote-tracking branches,
-   * FETCH_HEAD).
+   * Runs a fetch. Not queued with writes: it waits on the network, which a commit or staging a file
+   * shouldn't wait for, and it only updates remote-tracking refs and FETCH_HEAD, which they don't
+   * touch. Fetches of the same repository do run one at a time.
    */
-  remote(args: string[], options?: RunOptions): Promise<string>;
+  fetch(args: string[], options?: RunOptions): Promise<string>;
   /**
    * Runs `task`, which runs commands through `run`, as one write: no other write to the repository
    * runs before it's done. For a write that checks the repository before and after.
@@ -38,6 +38,7 @@ export interface GitRepos {
 
 export class GitReposImpl implements GitRepos {
   private readonly writes = new WriteQueue();
+  private readonly fetches = new WriteQueue();
   private readonly commitGraphs = new CommitGraphs();
 
   constructor(private readonly repositories: RepositoryService) {}
@@ -61,7 +62,7 @@ export class GitReposImpl implements GitRepos {
       path,
       read: run,
       write: (args, options) => this.writes.run(path, () => run(args, options)),
-      remote: run,
+      fetch: (args, options) => this.fetches.run(path, () => run(args, options)),
       exclusive: (task) => this.writes.run(path, () => task(run)),
       hasHead: () => refExists(run, "HEAD"),
       updateCommitGraph: () => this.commitGraphs.update(path),

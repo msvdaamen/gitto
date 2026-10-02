@@ -1,12 +1,12 @@
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { GitError, NoUpstreamError, PullInterruptedError } from "../../core/errors";
 import type { Repo } from "../../core/repo";
 import { cloneRepo, createRepo, git, paths, rejection, repos, root } from "../../test/fixtures";
-import { pull, remoteEnv } from "./commands";
+import { fetchAll, pull, remoteEnv } from "./commands";
 
 /** Writes `content` to `file` in `path` and commits it with `message`. */
 function commit(path: string, file: string, content: string, message: string) {
@@ -27,6 +27,53 @@ const subjects = (path: string) => git(path, "log", "--format=%s").split("\n");
 
 afterEach(() => {
   vi.unstubAllEnvs();
+});
+
+describe("fetchAll", () => {
+  let upstream: string;
+  let path: string;
+  let repo: Repo;
+
+  // `upstream` plays the remote: a repository the clone fetches from as `origin`.
+  const commitUpstream = (message: string) =>
+    git(upstream, "commit", "--allow-empty", "-qm", message);
+  const remoteBranches = () =>
+    git(path, "for-each-ref", "--format=%(refname:lstrip=2) %(subject)", "refs/remotes").split(
+      "\n",
+    );
+
+  beforeAll(async () => {
+    upstream = join(root, "upstream");
+    git(root, "init", "-q", "-b", "main", upstream);
+    git(upstream, "config", "user.name", "Test User");
+    git(upstream, "config", "user.email", "test@example.com");
+    commitUpstream("first");
+    git(upstream, "branch", "feature");
+    path = join(root, "clone");
+    git(root, "clone", "-q", upstream, path);
+    paths.set("clone", path);
+    repo = await repos.open("clone");
+  });
+
+  it("fetches new commits and drops branches deleted on the remote", async () => {
+    commitUpstream("second");
+    git(upstream, "branch", "-D", "feature");
+    await fetchAll(repo);
+    expect(remoteBranches()).toEqual(["origin/HEAD second", "origin/main second"]);
+  });
+
+  it("does nothing without remotes", async () => {
+    git(root, "init", "-q", "lonely");
+    paths.set("lonely", join(root, "lonely"));
+    await expect(fetchAll(await repos.open("lonely"))).resolves.toBeUndefined();
+  });
+
+  it("explains why a fetch failed", async () => {
+    git(path, "remote", "set-url", "origin", join(root, "gone"));
+    await expect(fetchAll(repo)).rejects.toMatchObject({
+      message: expect.stringContaining("does not appear to be a git repository"),
+    });
+  });
 });
 
 describe("pull", () => {
@@ -195,8 +242,8 @@ describe("pull", () => {
     const real = await repos.open("switched");
     const repo: Repo = {
       ...real,
-      remote: async (args, options) => {
-        const output = await real.remote(args, options);
+      fetch: async (args, options) => {
+        const output = await real.fetch(args, options);
         git(path, "checkout", "-q", "other");
         return output;
       },
@@ -257,8 +304,8 @@ describe("pull", () => {
     const real = await repos.open("upstream-changed");
     const repo: Repo = {
       ...real,
-      remote: async (args, options) => {
-        const output = await real.remote(args, options);
+      fetch: async (args, options) => {
+        const output = await real.fetch(args, options);
         git(path, "config", "branch.main.merge", "refs/heads/release");
         return output;
       },
