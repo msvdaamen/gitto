@@ -7,6 +7,8 @@ export interface RunOptions {
   signal?: AbortSignal;
   /** Written to git's stdin, e.g. a commit message for `commit -F -`. */
   stdin?: string;
+  /** Overrides the environment git runs with (see `ENV`), for a command one doesn't suit. */
+  env?: Record<string, string>;
 }
 
 // Settings that keep git's output stable and machine-readable, whatever the user's config says.
@@ -39,7 +41,7 @@ export function runGit(cwd: string, args: string[], options: RunOptions = {}): P
   return new Promise((resolve, reject) => {
     const child = spawn("git", [...CONFIG, ...args], {
       cwd,
-      env: { ...process.env, ...ENV },
+      env: { ...process.env, ...ENV, ...options.env },
       signal: options.signal,
       stdio: ["pipe", "pipe", "pipe"],
     });
