@@ -1,32 +1,25 @@
-import { useMutation, useQueryClient } from "@tanstack/solid-query";
+import { queryOptions, useMutation, useQueryClient } from "@tanstack/solid-query";
 
 import { rpc } from "@/lib/rpc";
 
-import { commitQuery } from "./history";
 import { gitKeys } from "./keys";
 
-/** A commit to make: its message, and whether it replaces the last commit. */
-export interface NewCommit {
-  message: string;
-  amend: boolean;
-}
-
-/** Commits what's staged, as described by the `NewCommit` passed to `mutate`. */
+/** Commits what's staged; with `amend`, replaces the last commit instead. */
 export function useCreateCommit(repositoryId: () => string) {
   const queryClient = useQueryClient();
   return useMutation(() => ({
-    mutationFn: (commit: NewCommit) =>
+    mutationFn: (commit: { message: string; amend: boolean }) =>
       rpc.git.commit.create({ repositoryId: repositoryId(), ...commit }),
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: gitKeys.repository(repositoryId()) }),
   }));
 }
 
-/** Loads a commit's full message, e.g. the last one's to amend it. */
-export function useCommitMessage(repositoryId: () => string) {
-  const queryClient = useQueryClient();
-  return async (sha: string) => {
-    const commit = await queryClient.fetchQuery(commitQuery(repositoryId(), sha));
-    return { summary: commit.subject, description: commit.body };
-  };
+/** A commit's full message, as written; it never changes. */
+export function commitMessageQuery(repositoryId: string, sha: string) {
+  return queryOptions({
+    queryKey: gitKeys.commitMessage(repositoryId, sha),
+    queryFn: ({ signal }) => rpc.git.commit.message({ repositoryId, sha }, { signal }),
+    staleTime: Infinity,
+  });
 }

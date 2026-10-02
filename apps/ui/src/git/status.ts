@@ -10,15 +10,18 @@ export function headSha(head: Head): string | undefined {
   return head.kind === "unborn" ? undefined : head.sha;
 }
 
-/**
- * The upstream branch that already has the commit HEAD points at, if any: amending that commit
- * rewrites history others may have.
- */
-export function lastCommitUpstream(
-  status: Pick<StatusSummary, "head" | "upstream" | "ahead">,
-): string | undefined {
-  if (status.head.kind === "unborn" || !status.upstream || status.ahead > 0) return undefined;
-  return status.upstream;
+/** The commit HEAD points at, which can be amended, and the upstream it's already on, if any. */
+export interface LastCommit {
+  sha: string;
+  pushedTo: string | undefined;
+}
+
+/** The commit HEAD points at; `undefined` on a branch without commits yet. */
+export function lastCommit(status: StatusSummary): LastCommit | undefined {
+  const sha = headSha(status.head);
+  if (!sha) return undefined;
+  const pushedTo = status.upstream && status.ahead === 0 ? status.upstream : undefined;
+  return { sha, pushedTo };
 }
 
 export function hasUncommittedChanges(status: StatusSummary | undefined): boolean {

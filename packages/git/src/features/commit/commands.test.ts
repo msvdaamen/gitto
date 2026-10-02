@@ -6,7 +6,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { Repo } from "../../core/repo";
 import { createRepo, git, page, repos } from "../../test/fixtures";
 import { getLog } from "../history/commands";
-import { createCommit } from "./commands";
+import { createCommit, getCommitMessage } from "./commands";
 
 describe("createCommit", () => {
   let path: string;
@@ -63,5 +63,14 @@ describe("createCommit", () => {
     await expect(
       createCommit(await repos.open("unborn"), "Amend", { amend: true }),
     ).rejects.toMatchObject({ message: expect.stringContaining("nothing to amend") });
+  });
+});
+
+describe("getCommitMessage", () => {
+  it("is the message as written, first lines and all", async () => {
+    const path = createRepo("message");
+    const message = "First line\nsecond line\n\n#123 fixes it\n## Notes";
+    git(path, "commit", "-q", "--allow-empty", "-m", message);
+    expect(await getCommitMessage(await repos.open("message"), "HEAD")).toBe(message);
   });
 });

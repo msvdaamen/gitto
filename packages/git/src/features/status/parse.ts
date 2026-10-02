@@ -65,10 +65,11 @@ export function parseStatus(output: string): Status {
     }
   }
 
+  // git leaves out `branch.ab` when the upstream branch is gone, e.g. deleted on the remote.
   const ab = /^\+(\d+) -(\d+)$/.exec(headers.get("branch.ab") ?? "");
   return {
     head: toHead(headers.get("branch.oid") ?? "", headers.get("branch.head") ?? ""),
-    upstream: headers.get("branch.upstream") ?? null,
+    upstream: ab ? (headers.get("branch.upstream") ?? null) : null,
     ahead: ab ? Number(ab[1]) : 0,
     behind: ab ? Number(ab[2]) : 0,
     files,

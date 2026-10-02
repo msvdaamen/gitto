@@ -12,4 +12,6 @@ export const gitKeys = {
   commit: (repositoryId: string, sha: string) => ["git-commit", repositoryId, sha] as const,
   commitFiles: (repositoryId: string, sha: string) =>
     [...gitKeys.commit(repositoryId, sha), "files"] as const,
+  commitMessage: (repositoryId: string, sha: string) =>
+    [...gitKeys.commit(repositoryId, sha), "message"] as const,
 };

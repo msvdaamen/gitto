@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/solid-query";
 import GitCommitHorizontal from "lucide-solid/icons/git-commit-horizontal";
 import PenLine from "lucide-solid/icons/pen-line";
 import { createSignal, Show } from "solid-js";
@@ -5,84 +6,63 @@ import { createSignal, Show } from "solid-js";
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/ui/form-field";
 import { Kbd } from "@/components/ui/kbd";
-import { useCommitMessage, useCreateCommit } from "@/git/queries/commit";
-
-interface Message {
-  summary: string;
-  description: string;
-}
-
-const emptyMessage: Message = { summary: "", description: "" };
+import { emptyMessage, joinMessage, splitMessage, type CommitMessage } from "@/git/message";
+import { commitMessageQuery, useCreateCommit } from "@/git/queries/commit";
+import type { LastCommit } from "@/git/status";
 
 /**
- * Commits what's staged in the repository, or amends the last commit with it. Amending loads the
- * last commit's message to edit, and puts back the message being written when it's turned off.
+ * Commits what's staged in the repository, or amends the last commit with it. The new commit's
+ * message and the amended one are kept apart, so switching between them loses neither.
  */
 export function CommitForm(props: {
   repositoryId: string;
   stagedCount: number;
-  /** The commit HEAD points at, to amend; `undefined` before the first commit. */
-  lastCommit: string | undefined;
-  /** The upstream branch the last commit has already been pushed to, if any. */
-  pushedTo: string | undefined;
+  /** The commit to amend; `undefined` before the first commit. */
+  lastCommit: LastCommit | undefined;
 }) {
   const commit = useCreateCommit(() => props.repositoryId);
-  const loadMessage = useCommitMessage(() => props.repositoryId);
-  const [message, setMessage] = createSignal(emptyMessage);
   const [amend, setAmend] = createSignal(false);
-  const [loading, setLoading] = createSignal(false);
-  const [loadError, setLoadError] = createSignal<Error>();
-  // What was being written before amending, to put back when amending is turned off.
-  let draft = emptyMessage;
+  const [draft, setDraft] = createSignal(emptyMessage);
+  // Edits to the last commit's message, for the commit it was loaded from: if HEAD moves, the new
+  // last commit's message is loaded instead, so it's never amended with another one's.
+  const [edits, setEdits] = createSignal<{ sha: string; message: CommitMessage }>();
+
+  const lastMessage = useQuery(() => ({
+    ...commitMessageQuery(props.repositoryId, props.lastCommit?.sha ?? ""),
+    enabled: amend() && !!props.lastCommit,
+  }));
+  // Read only once loaded: reading `data` while it loads would suspend the details panel.
+  const amended = (): CommitMessage => {
+    const sha = props.lastCommit?.sha;
+    const edited = edits();
+    if (edited && edited.sha === sha) return edited.message;
+    return lastMessage.isSuccess ? splitMessage(lastMessage.data) : emptyMessage;
+  };
+
+  const message = () => (amend() ? amended() : draft());
+  function edit(change: Partial<CommitMessage>) {
+    const sha = props.lastCommit?.sha;
+    if (amend() && sha) setEdits({ sha, message: { ...amended(), ...change } });
+    else setDraft((current) => ({ ...current, ...change }));
+  }
+
+  function toggleAmend(on: boolean) {
+    setAmend(on);
+    setEdits(undefined);
+    commit.reset();
+  }
 
   const canCommit = () =>
     !!message().summary.trim() &&
-    (amend() || props.stagedCount > 0) &&
-    !loading() &&
+    (amend() ? lastMessage.isSuccess : props.stagedCount > 0) &&
     !commit.isPending;
-
-  // Counts toggles, so a message that finishes loading after another toggle is dropped.
-  let toggles = 0;
-
-  async function toggleAmend(on: boolean) {
-    const toggle = ++toggles;
-    setLoadError(undefined);
-    setLoading(false);
-    if (!on) {
-      setAmend(false);
-      setMessage(draft);
-      return;
-    }
-    const sha = props.lastCommit;
-    if (!sha) return;
-    draft = message();
-    setAmend(true);
-    setLoading(true);
-    try {
-      const last = await loadMessage(sha);
-      if (toggle === toggles) setMessage(last);
-    } catch (error) {
-      if (toggle !== toggles) return;
-      setLoadError(error as Error);
-      setAmend(false);
-    } finally {
-      if (toggle === toggles) setLoading(false);
-    }
-  }
 
   function submit() {
     if (!canCommit()) return;
-    const summary = message().summary.trim();
-    const body = message().description.trim();
+    const amending = amend();
     commit.mutate(
-      { message: body ? `${summary}\n\n${body}` : summary, amend: amend() },
-      {
-        onSuccess: () => {
-          draft = emptyMessage;
-          setMessage(emptyMessage);
-          setAmend(false);
-        },
-      },
+      { message: joinMessage(message()), amend: amending },
+      { onSuccess: () => (amending ? toggleAmend(false) : setDraft(emptyMessage)) },
     );
   }
 
@@ -107,7 +87,7 @@ export function CommitForm(props: {
         label="Commit message"
         placeholder="Summary of your changes"
         value={message().summary}
-        onChange={(summary) => setMessage((current) => ({ ...current, summary }))}
+        onChange={(summary) => edit({ summary })}
       />
       <FormField
         label="Description"
@@ -115,7 +95,7 @@ export function CommitForm(props: {
         placeholder="Add more context…"
         rows={3}
         value={message().description}
-        onChange={(description) => setMessage((current) => ({ ...current, description }))}
+        onChange={(description) => edit({ description })}
       />
       <label
         class="mb-2.5 flex w-fit cursor-pointer items-center gap-[7px] text-[11.5px] text-muted has-disabled:cursor-default has-disabled:opacity-50"
@@ -126,11 +106,11 @@ export function CommitForm(props: {
           class="m-0 size-3.5 cursor-[inherit] accent-primary"
           checked={amend()}
           disabled={!props.lastCommit || commit.isPending}
-          onChange={(event) => void toggleAmend(event.currentTarget.checked)}
+          onChange={(event) => toggleAmend(event.currentTarget.checked)}
         />
         Amend last commit
       </label>
-      <Show when={amend() && props.pushedTo}>
+      <Show when={amend() && props.lastCommit?.pushedTo}>
         {(upstream) => (
           <p class="m-0 mb-2.5 text-[11.5px] leading-[1.45] text-amber">
             The last commit is already on {upstream()}; amending it means force-pushing.
@@ -149,7 +129,7 @@ export function CommitForm(props: {
           ⌘ ↵
         </Kbd>
       </Button>
-      <Show when={commit.error ?? loadError()} keyed>
+      <Show when={commit.error ?? (amend() && lastMessage.error)} keyed>
         {(error) => (
           <p class="m-0 mt-2.5 text-[11.5px] whitespace-pre-wrap text-coral">{error.message}</p>
         )}
