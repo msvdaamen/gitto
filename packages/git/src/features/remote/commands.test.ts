@@ -197,6 +197,16 @@ describe("pull", () => {
     );
   });
 
+  it("merges what it fetched, even when told not to write FETCH_HEAD", async () => {
+    const { upstream, path } = createClone("no-fetch-head");
+    git(path, "config", "fetch.writeFetchHEAD", "false");
+    commit(upstream, "theirs.txt", "theirs\n", "theirs");
+    commit(path, "ours.txt", "ours\n", "ours");
+    await pull(await repos.open("no-fetch-head"));
+    expect(git(path, "log", "-1", "--format=%s")).toBe(`Merge branch 'main' of ${upstream}`);
+    expect(subjects(path)).toContain("theirs");
+  });
+
   it("rebases when the config says to", async () => {
     const { upstream, path } = createClone("rebased");
     git(path, "config", "pull.rebase", "true");

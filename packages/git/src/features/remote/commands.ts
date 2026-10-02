@@ -20,12 +20,12 @@ export async function fetchAll(repo: Repo): Promise<void> {
 }
 
 /** `git fetch` with `args`, through `run` (`repo.fetch`, or a command of `repo.fetching`). */
-async function gitFetch(run: GitCommand, args: string[]): Promise<void> {
+async function gitFetch(run: GitCommand, args: string[], settings: string[] = []): Promise<void> {
   try {
     // Without the upkeep a fetch may start (gc, maintenance, the commit-graph): fetches run
     // alongside the queued writes, which that could get in the way of.
     await run(["fetch", ...args], {
-      config: ["gc.auto=0", "maintenance.auto=false", "fetch.writeCommitGraph=false"],
+      config: ["gc.auto=0", "maintenance.auto=false", "fetch.writeCommitGraph=false", ...settings],
     });
   } catch (error) {
     throw error instanceof GitError ? withoutHints(error) : error;
@@ -42,16 +42,13 @@ async function gitFetch(run: GitCommand, args: string[]): Promise<void> {
 export async function pull(repo: Repo): Promise<void> {
   // Where git keeps FETCH_HEAD and the state of a rebase; asked for once.
   const dirs = gitDirs(repo);
+  // Awaited only once the branch is read, which can fail first; that's the error to report.
+  dirs.catch(() => undefined);
   const { branch, upstream, config: settings } = await readBranch(repo.read, dirs);
   const { gitDir } = await dirs;
   // Its merge commit is worded unless the pull will rebase, or only fast-forward, which makes none
   // (as the settings say before fetching).
-  const fetched = await fetchUpstream(
-    repo,
-    gitDir,
-    upstream,
-    !rebases(settings, branch) && settings.get("pull.ff")?.toLowerCase() !== "only",
-  );
+  const fetched = await fetchUpstream(repo, gitDir, upstream, makesMergeCommit(settings, branch));
 
   await repo.exclusive(async (run) => {
     // The branch and its settings again, now that no other write can change them: one may have
@@ -190,11 +187,14 @@ async function fetchUpstream(
     fetchHead = `${sha}\t\tbranch '${merge.replace(/^refs\/heads\//, "")}' of .\n`;
   } else {
     fetchHead = await repo.fetching(async (run) => {
-      await gitFetch(run, ["--quiet", "--", remote, merge]);
+      // FETCH_HEAD is read next, so it's written whatever `fetch.writeFetchHEAD` says.
+      await gitFetch(run, ["--quiet", "--", remote, merge], ["fetch.writeFetchHEAD=true"]);
       return readFile(join(gitDir, "FETCH_HEAD"), "utf8");
     });
   }
-  const sha = fetchHead.slice(0, fetchHead.indexOf("\t"));
+  // The line of what's to be merged, the one that isn't marked not-for-merge.
+  const line = fetchHead.split("\n").find((entry) => /^[0-9a-f]+\t\t/.test(entry));
+  const sha = line?.slice(0, line.indexOf("\t"));
   if (!sha || !word) return null;
   // Worded from FETCH_HEAD, as `git pull` has it: e.g. "Merge branch 'main' of <URL>", the URL
   // as the fetch wrote it there (without credentials). Nothing to word for a branch already up
@@ -278,6 +278,11 @@ const FALSE = new Set(["false", "no", "off", "0", ""]);
 /** How `branch` is set to be rebased when pulled, lowercased; `undefined` when it isn't set. */
 function rebaseSetting(config: Map<string, string>, branch: string): string | undefined {
   return (config.get(`branch.${branch}.rebase`) ?? config.get("pull.rebase"))?.toLowerCase();
+}
+
+/** Whether a pull of `branch` can make a merge commit, going by `config`. */
+function makesMergeCommit(config: Map<string, string>, branch: string): boolean {
+  return !rebases(config, branch) && config.get("pull.ff")?.toLowerCase() !== "only";
 }
 
 /** Whether a pull of `branch` rebases, going by `config`: as in `git pull`, `pull.ff=only` wins. */
