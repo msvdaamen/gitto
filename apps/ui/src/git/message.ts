@@ -35,6 +35,7 @@ export function editMessage(original: string, edited: CommitMessage): string {
   const split = splitMessage(original);
   const newSummary = edited.summary.trim();
   const newDescription = trimBody(edited.description);
+  if (newSummary === split.summary && newDescription === split.description) return original;
   const summary = newSummary === split.summary ? subject : newSummary;
   const description = newDescription === split.description ? body : newDescription;
   return description.trim() ? `${summary}${separator}${description}` : summary;

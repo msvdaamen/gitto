@@ -26,21 +26,18 @@ export function CommitForm(props: {
   lastCommit: string | undefined;
 }) {
   const commit = useCreateCommit(() => props.repositoryId);
-  // The commit being amended. Amending stops once HEAD moves to another commit: after the amend, or
-  // when a commit is made or checked out elsewhere, so a stale message is never amended onto it.
+  // HEAD, told apart from the same commit in another repository, e.g. another worktree.
+  const head = () => props.lastCommit && `${props.repositoryId} ${props.lastCommit}`;
+  // The commit being amended (as `head`). Amending stops once HEAD moves to another commit: after
+  // the amend, or when one is made or checked out elsewhere, so a stale message is never amended
+  // onto it.
   const [amending, setAmending] = createSignal<string>();
-  createEffect(
-    on(
-      () => props.lastCommit,
-      () => setAmending(undefined),
-      { defer: true },
-    ),
-  );
+  createEffect(on(head, () => setAmending(undefined), { defer: true }));
   // Checked against HEAD too, as the effect only runs once HEAD has moved.
-  const amend = () => !!amending() && amending() === props.lastCommit;
+  const amend = () => !!amending() && amending() === head();
   const [draft, setDraft] = createSignal(emptyMessage);
   // Edits to the amended message, kept for the commit they were made to while amending is toggled.
-  const [edits, setEdits] = createSignal<{ sha: string; message: CommitMessage }>();
+  const [edits, setEdits] = createSignal<{ head: string; message: CommitMessage }>();
 
   const lastMessage = useQuery(() => ({
     ...commitMessageQuery(props.repositoryId, props.lastCommit ?? ""),
@@ -59,33 +56,41 @@ export function CommitForm(props: {
   const locked = () => (amend() && !loaded()) || commit.isPending;
   const amendEdits = () => {
     const edited = edits();
-    return edited && edited.sha === props.lastCommit ? edited.message : undefined;
+    return edited && edited.head === head() ? edited.message : undefined;
   };
 
   const message = () => (amend() ? (amendEdits() ?? loaded() ?? emptyMessage) : draft());
   function edit(change: Partial<CommitMessage>) {
-    const sha = props.lastCommit;
-    if (amend() && sha) setEdits({ sha, message: { ...message(), ...change } });
+    const amended = head();
+    if (amend() && amended) setEdits({ head: amended, message: { ...message(), ...change } });
     else setDraft((current) => ({ ...current, ...change }));
   }
 
   function toggleAmend(checked: boolean) {
-    setAmending(checked ? props.lastCommit : undefined);
+    setAmending(checked ? head() : undefined);
     commit.reset();
   }
+
+  // The message to amend with, once the last one has loaded: what wasn't edited of it exactly as
+  // written, not as the form split it into two fields.
+  const amendedMessage = () => {
+    const original = loaded() && lastMessage.data;
+    return original ? editMessage(original, message()) : undefined;
+  };
+  // Amending with nothing staged and the same message would only rewrite the commit's date.
+  const amendChanges = () =>
+    props.stagedCount > 0 || (!!amendedMessage() && amendedMessage() !== lastMessage.data);
 
   const canCommit = () =>
     !!message().summary.trim() &&
     // Once the push check is done too, so its warning is seen before amending.
-    (amend() ? !!loaded() && !pushedTo.isPending : props.stagedCount > 0) &&
+    (amend() ? amendChanges() && !pushedTo.isPending : props.stagedCount > 0) &&
     !commit.isPending;
 
   function submit() {
     if (!canCommit()) return;
     const amended = amend() ? props.lastCommit : undefined;
-    const original = amended && lastMessage.data;
-    // What wasn't edited is amended exactly as written, not as the form split it into two fields.
-    const text = original ? editMessage(original, message()) : joinMessage(message());
+    const text = (amended && amendedMessage()) || joinMessage(message());
     commit.mutate(
       { message: text, amend: amended },
       {

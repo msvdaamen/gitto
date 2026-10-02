@@ -46,6 +46,7 @@ describe("commit messages", () => {
       "Fix the parser\n\n\nBody  \n",
     );
     expect(editMessage(original, { ...split, summary: `${split.summary} ` })).toBe(original);
+    expect(editMessage("Subject\n", splitMessage("Subject\n"))).toBe("Subject\n");
     expect(editMessage("Subject\n", { summary: "Subject", description: "Added" })).toBe(
       "Subject\n\nAdded",
     );

@@ -138,12 +138,12 @@ describe("amending the last commit", () => {
   });
 
   it("stops amending once the amend moves HEAD, before it's done", async () => {
-    const { setLastCommit, amend } = renderForm();
+    const { setLastCommit, amend } = renderForm({ stagedCount: 1 });
     await userEvent.click(amend);
     await screen.findByDisplayValue("Commit a1");
     let finish!: () => void;
     rpc.git.commit.create.mockImplementationOnce(() => new Promise((r) => (finish = r)));
-    await userEvent.click(screen.getByRole("button", { name: /Amend message/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Amend with 1 file/ }));
     expect(screen.getByLabelText("Commit message")).toHaveAttribute("readonly");
 
     setLastCommit("b2");
@@ -201,24 +201,54 @@ describe("amending the last commit", () => {
   it("waits for the push check before amending, so its warning is seen", async () => {
     let finish!: (branch: string | null) => void;
     rpc.git.commit.pushedTo.mockReturnValueOnce(new Promise((r) => (finish = r)));
-    const { amend } = renderForm();
+    const { amend } = renderForm({ stagedCount: 1 });
     await userEvent.click(amend);
     await screen.findByDisplayValue("Commit a1");
-    expect(screen.getByRole("button", { name: /Amend message/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Amend with 1 file/ })).toBeDisabled();
 
     finish("origin/feature");
     expect(await screen.findByText(/already on origin\/feature/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Amend message/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /Amend with 1 file/ })).toBeEnabled();
+  });
+
+  it("doesn't amend with nothing staged and the same message", async () => {
+    const { summary, amend } = renderForm();
+    await userEvent.click(amend);
+    await screen.findByDisplayValue("Commit a1");
+    const button = screen.getByRole("button", { name: /Amend message/ });
+    expect(button).toBeDisabled();
+
+    await userEvent.type(summary, " ");
+    expect(button).toBeDisabled();
+    await userEvent.type(summary, "!");
+    expect(button).toBeEnabled();
+  });
+
+  it("doesn't carry amending over to another repository at the same commit", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const [repositoryId, setRepositoryId] = createSignal("repo");
+    render(() => (
+      <QueryClientProvider client={client}>
+        <CommitForm repositoryId={repositoryId()} stagedCount={1} lastCommit="a1" />
+      </QueryClientProvider>
+    ));
+    const amend = screen.getByLabelText("Amend last commit");
+    await userEvent.click(amend);
+    await screen.findByDisplayValue("Commit a1");
+
+    setRepositoryId("other worktree");
+    expect(amend).not.toBeChecked();
+    expect(screen.getByLabelText("Commit message")).toHaveValue("");
   });
 
   it("doesn't call a failed push check an error", async () => {
     rpc.git.commit.pushedTo.mockRejectedValueOnce(new Error("for-each-ref failed"));
-    const { amend } = renderForm();
+    const { amend } = renderForm({ stagedCount: 1 });
     await userEvent.click(amend);
     await screen.findByDisplayValue("Commit a1");
     await vi.waitFor(() => expect(rpc.git.commit.pushedTo).toHaveBeenCalled());
     expect(screen.queryByText("for-each-ref failed")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Amend message/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /Amend with 1 file/ })).toBeEnabled();
   });
 
   it("can't amend before the first commit", () => {
