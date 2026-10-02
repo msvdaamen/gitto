@@ -57,6 +57,21 @@ describe("the router", () => {
     });
   });
 
+  it("skips a page of the log the caller already has", async () => {
+    const input = { repositoryId: ids.history };
+    const page = await call(gitRouter.history.log, input, { context });
+    if ("unchanged" in page) return expect.fail("expected the commits");
+    expect(page.commits).toHaveLength(4);
+
+    expect(
+      await call(gitRouter.history.log, { ...input, since: page.version }, { context }),
+    ).toEqual({ unchanged: true });
+    // Another page isn't the one the caller has.
+    expect(
+      await call(gitRouter.history.log, { ...input, limit: 2, since: page.version }, { context }),
+    ).toMatchObject({ commits: [{}, {}] });
+  });
+
   it("skips a status the caller already has", async () => {
     const input = { repositoryId: ids.history };
     const status = await call(gitRouter.status.get, input, { context });

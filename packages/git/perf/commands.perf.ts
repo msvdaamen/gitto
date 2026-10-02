@@ -1,7 +1,8 @@
 // Times every read the UI makes on real repositories. Each is split into the git process, which
-// runs alongside the main process, and the work that blocks the main process while it runs:
-// starting git, parsing its output, checking it against the contract and encoding it for the
-// renderer. `decode` is the renderer's share: turning the message back into objects.
+// runs alongside the backend process serving the UI, and the work that keeps that one busy (so its
+// other calls wait): starting git, parsing its output, checking it against the contract and
+// encoding it for the renderer. `decode` is the renderer's share: turning the message back into
+// objects.
 //
 //   GITTO_PERF_REPOS=~/code/vscode,~/code/linux pnpm perf
 // Measurements run one at a time on purpose, so they don't slow each other down.
@@ -13,8 +14,9 @@ import type { AnyContractProcedure } from "@orpc/contract";
 import { describe, it } from "vitest";
 
 import type { Repo } from "../src/core/repo";
-import { getCommitFiles } from "../src/features/diff/commands";
+import { getCommitFiles, getLineCounts } from "../src/features/diff/commands";
 import { DiffContract } from "../src/features/diff/contract";
+import type { FileChange } from "../src/features/diff/schema";
 import { getCommit, getLog } from "../src/features/history/commands";
 import { HistoryContract } from "../src/features/history/contract";
 import { listRefs } from "../src/features/refs/commands";
@@ -60,12 +62,25 @@ interface Timing {
   bytes: number;
 }
 
-function operations(head: string): Operation[] {
+/** How many changed files the details panel shows at once, and so counts the lines of. */
+const FILES_IN_VIEW = 30;
+
+/**
+ * @param head the commit HEAD is at
+ * @param inView the changed files in view in the details panel, whose lines it counts
+ */
+function operations(head: string, inView: FileChange[]): Operation[] {
   return [
     {
       name: "status",
       run: (repo) => getStatus(repo),
       procedure: StatusContract.get,
+      refetchedOn: "uncommitted",
+    },
+    {
+      name: `line counts (${inView.length} files in view)`,
+      run: async (repo) => (inView.length > 0 ? getLineCounts(repo, "unstaged", inView) : []),
+      procedure: DiffContract.lineCounts,
       refetchedOn: "uncommitted",
     },
     {
@@ -176,7 +191,7 @@ async function measure(repo: Repo, operation: Operation): Promise<Timing> {
 
 /**
  * Everything a change on disk refetches, at once, like the UI does. `busy` is how much of that
- * time the main process was occupied (and so couldn't handle input); `stall` its longest block.
+ * time the process serving the UI was occupied (so other calls waited); `stall` its longest block.
  */
 async function measureRefresh(repo: Repo, refetched: Operation[]) {
   const delay = monitorEventLoopDelay({ resolution: 1 });
@@ -195,7 +210,11 @@ async function measureRefresh(repo: Repo, refetched: Operation[]) {
 describe.each(perfRepoPaths())("%s", (path) => {
   it("git commands", async () => {
     const repo = await openRepo(path);
-    const all = operations(git(path, "rev-parse", "HEAD"));
+    const status = await getStatus(repo);
+    const inView = status.changes.unstaged
+      .filter((file) => file.status !== "untracked")
+      .slice(0, FILES_IN_VIEW);
+    const all = operations(git(path, "rev-parse", "HEAD"), inView);
 
     const rows = [];
     for (const operation of all) {
@@ -205,7 +224,7 @@ describe.each(perfRepoPaths())("%s", (path) => {
         if (run > 0) timings.push(timing);
       }
       const med = (key: keyof Timing) => median(timings.map((timing) => timing[key]));
-      const mainThread = med("spawn") + med("parse") + med("validate") + med("encode");
+      const blocking = med("spawn") + med("parse") + med("validate") + med("encode");
       rows.push({
         operation: operation.name,
         total: ms(med("total")),
@@ -220,7 +239,7 @@ describe.each(perfRepoPaths())("%s", (path) => {
         parse: ms(med("parse")),
         validate: ms(med("validate")),
         encode: ms(med("encode")),
-        "main thread": ms(mainThread),
+        blocking: ms(blocking),
         "decode (ui)": ms(med("decode")),
         message: bytes(med("bytes")),
       });
@@ -245,7 +264,7 @@ describe.each(perfRepoPaths())("%s", (path) => {
         change,
         refetches: refetchedOps.map((operation) => operation.name).join(", "),
         total: ms(median(refreshes.map((r) => r.total))),
-        "main thread busy": ms(median(refreshes.map((r) => r.busy))),
+        busy: ms(median(refreshes.map((r) => r.busy))),
         "longest stall": ms(median(refreshes.map((r) => r.stall))),
         "worst stall": ms(Math.max(...refreshes.map((r) => r.stall))),
       });

@@ -1,13 +1,13 @@
 import { realpath } from "node:fs/promises";
-import { basename, dirname, relative, sep } from "node:path";
+import { basename, dirname } from "node:path";
 
 import { subscribe, type AsyncSubscription } from "@parcel/watcher";
 
 import type { Repo } from "../../core/repo";
 import { trace } from "../../core/trace";
 import { Batches } from "./batches";
-import { classify, gitDirs, inside } from "./git-dirs";
-import type { GitDirChange } from "./schema";
+import { classify, gitDirs, indexSignature, inside } from "./git-dirs";
+import type { GitDirChange, TreeEvent } from "./schema";
 
 /**
  * Folders in the git directory that are big or churn a lot, but never change what the UI shows.
@@ -32,6 +32,12 @@ export async function* watchGitDir(
 
   const changes = new Batches<GitDirChange>(signal);
   const subscriptions: AsyncSubscription[] = [];
+  // The index as Gitto's own last write left it. While it's still that, a change to it was that
+  // write, which the UI refetches after by itself; reporting it would refetch the same thing again.
+  let ownIndex: string | undefined;
+  const stopListening = repo.onWrite(async () => {
+    ownIndex = await indexSignature(dirs);
+  });
   try {
     const subscribed = await Promise.allSettled(
       roots.map((root) =>
@@ -55,11 +61,19 @@ export async function* watchGitDir(
     const failed = subscribed.find((result) => result.status === "rejected");
     if (failed) throw failed.reason;
     for await (const batch of changes.stream()) {
-      const unique = [...new Set(batch)];
-      trace(`git dir changed in ${repo.path}: ${unique.join(", ")}`);
-      yield unique;
+      const own =
+        ownIndex !== undefined &&
+        batch.includes("index") &&
+        (await indexSignature(dirs)) === ownIndex;
+      const reported = own ? batch.filter((change) => change !== "index") : batch;
+      trace(
+        `git dir changed in ${repo.path}: ${reported.join(", ")}` +
+          (own ? " (index: Gitto's own write, not reported)" : ""),
+      );
+      if (reported.length > 0) yield reported;
     }
   } finally {
+    stopListening();
     changes.close();
     await Promise.all(subscriptions.map((subscription) => subscription.unsubscribe()));
   }
@@ -69,8 +83,14 @@ export async function* watchGitDir(
 type TreeChange = string | typeof EXCLUDES;
 const EXCLUDES = Symbol("excludes");
 
-/** Yields (debounced) whenever a file in the working tree changes, until `signal` aborts. */
-export async function* watchWorkingTree(repo: Repo, signal?: AbortSignal): AsyncGenerator<null> {
+/**
+ * Yields `ready` once it's watching, then `changed` (debounced) whenever a file in the working tree
+ * changes, until `signal` aborts.
+ */
+export async function* watchWorkingTree(
+  repo: Repo,
+  signal?: AbortSignal,
+): AsyncGenerator<TreeEvent> {
   if (signal?.aborted) return;
   const [root, dirs] = await Promise.all([realpath(repo.path), gitDirs(repo)]);
   // Checked again: `Batches` throws if it's given a signal that's already aborted.
@@ -101,7 +121,7 @@ export async function* watchWorkingTree(repo: Repo, signal?: AbortSignal): Async
       (error, events) => {
         if (error) return changes.fail(error);
         for (const event of events) {
-          const path = relative(root, event.path).split(sep).join("/");
+          const path = inside(root, event.path);
           if (path) changes.add(path);
         }
       },
@@ -122,26 +142,43 @@ export async function* watchWorkingTree(repo: Repo, signal?: AbortSignal): Async
         changes.add(EXCLUDES);
       }
     }).catch(() => undefined);
+    yield "ready";
 
     for await (const batch of changes.stream()) {
-      const paths = [...new Set(batch.filter((change) => change !== EXCLUDES))];
+      const paths = batch.filter((change) => change !== EXCLUDES);
       if (batch.includes(EXCLUDES) || paths.some((path) => basename(path) === ".gitignore")) {
         trace(`ignore rules changed in ${root}`);
         await watchTree();
-        yield null;
+        yield "changed";
         continue;
       }
+      if (paths.length === 0) continue;
 
       // Only a snapshot of what git ignores is left out, so a folder it ignores that's new since,
       // like fresh build output, is still watched. Changes in it don't show, so they're dropped.
-      const dropped = await ignoredAmong(repo, paths);
-      const shown = paths.filter((path) => !dropped.has(path));
-      trace(
-        `working tree changed in ${root}: ${shown.length} files (${shown.slice(0, 5).join(", ")})` +
-          (dropped.size ? `, ${dropped.size} ignored` : ""),
-      );
-      if (shown.length > 0) yield null;
-      if (dropped.size > 0) await leaveOutNewIgnoredFolders([...dropped]);
+      // Asking git takes a while per path, and thousands can change at once (a checkout, a
+      // formatter), so it's asked about a few at a time, until one turns out to show: that's all
+      // it takes to report the batch.
+      let shown: string | undefined;
+      // Paths git said it ignores: what a new ignored folder could be among. The ones it wasn't
+      // asked about are left out; if a new ignored folder hides among them, the next batch with
+      // only its changes finds it.
+      const ignoredNow: string[] = [];
+      for (const some of growingChunks(paths)) {
+        // oxlint-disable-next-line no-await-in-loop -- one at a time: the next is only needed if this one shows nothing
+        const dropped = await ignoredAmong(repo, some);
+        // Not spread into `push`: there can be more than a call takes arguments.
+        for (const path of dropped) ignoredNow.push(path);
+        shown = some.find((path) => !dropped.has(path));
+        if (shown !== undefined) break;
+      }
+      if (shown !== undefined) {
+        trace(`working tree changed in ${root}: ${paths.length} paths (${shown}, …)`);
+        yield "changed";
+      } else {
+        trace(`${paths.length} ignored paths changed in ${root}`);
+      }
+      if (ignoredNow.length > 0) await leaveOutNewIgnoredFolders(ignoredNow);
     }
   } finally {
     closed = true;
@@ -150,19 +187,42 @@ export async function* watchWorkingTree(repo: Repo, signal?: AbortSignal): Async
   }
 
   /**
-   * Starts over without the folders `dropped` (ignored paths that changed) are in, if they weren't
-   * left out yet, so their changes stop coming in. Not for single files, which are dropped as they
-   * come: they're cheap, and starting over walks the whole tree on Linux.
+   * Starts over without the ignored folders that `changed` paths are in, if they weren't left out
+   * yet, so their changes stop coming in. Not for single files, which are dropped as they come:
+   * they're cheap, and starting over walks the whole tree on Linux.
    */
-  async function leaveOutNewIgnoredFolders(dropped: string[]) {
+  async function leaveOutNewIgnoredFolders(changed: string[]) {
     const nowIgnored = await ignoredPaths(repo);
-    const newFolders = nowIgnored.filter(
-      (path) => !ignored.has(path) && dropped.some((changed) => changed.startsWith(`${path}/`)),
-    );
+    const folders = foldersOf(changed);
+    const newFolders = nowIgnored.filter((path) => !ignored.has(path) && folders.has(path));
     if (newFolders.length === 0) return;
     trace(`leaving out new ignored folders in ${root}: ${newFolders.join(", ")}`);
     await watchTree(nowIgnored);
   }
+}
+
+/** How many paths git is asked about first; 100 take it about 15ms. */
+const FIRST_CHUNK = 100;
+
+/** `paths` in chunks, each four times the size of the one before. */
+function* growingChunks(paths: string[]): Generator<string[]> {
+  for (let start = 0, size = FIRST_CHUNK; start < paths.length; start += size, size *= 4) {
+    yield paths.slice(start, start + size);
+  }
+}
+
+/** Every folder `paths` (`/`-separated) are in, at any depth. */
+function foldersOf(paths: string[]): Set<string> {
+  const folders = new Set<string>();
+  for (const path of paths) {
+    for (let end = path.lastIndexOf("/"); end > 0; end = path.lastIndexOf("/", end - 1)) {
+      const folder = path.slice(0, end);
+      // Its parents were added along with it.
+      if (folders.has(folder)) break;
+      folders.add(folder);
+    }
+  }
+  return folders;
 }
 
 /** Which of `paths` (relative, `/`-separated) git ignores; tracked files never are. */

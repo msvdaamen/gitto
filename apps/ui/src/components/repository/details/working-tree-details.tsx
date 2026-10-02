@@ -1,4 +1,4 @@
-import type { ChangedFile } from "@gitto/git/types";
+import type { FileChange } from "@gitto/git/types";
 import type { LucideIcon } from "lucide-solid";
 import CircleCheck from "lucide-solid/icons/circle-check";
 import FilePen from "lucide-solid/icons/file-pen";
@@ -14,7 +14,7 @@ import { Mascot } from "@/components/ui/mascot";
 import { SectionHeader } from "@/components/ui/section-header";
 import { UpdatingIndicator } from "@/components/ui/updating-indicator";
 import { stagingPaths } from "@/git/changes";
-import { useWorkingTreeChanges } from "@/git/queries/diff";
+import { useLineCounts, useWorkingTreeChanges } from "@/git/queries/diff";
 import { useStage, useUnstage } from "@/git/queries/staging";
 import { useStatus } from "@/git/queries/status";
 import { headLabel } from "@/git/status";
@@ -71,6 +71,8 @@ export function WorkingTreeDetails(props: { repositoryId: string }) {
       </Show>
 
       <FileSection
+        repositoryId={props.repositoryId}
+        side="unstaged"
         title="Unstaged changes"
         icon={FilePen}
         files={changes.unstaged()}
@@ -86,6 +88,8 @@ export function WorkingTreeDetails(props: { repositoryId: string }) {
         }}
       />
       <FileSection
+        repositoryId={props.repositoryId}
+        side="staged"
         title="Staged changes"
         icon={CircleCheck}
         tone="mint"
@@ -108,10 +112,13 @@ export function WorkingTreeDetails(props: { repositoryId: string }) {
 }
 
 function FileSection(props: {
+  repositoryId: string;
+  /** Which side of the index the files' changes are on. */
+  side: "staged" | "unstaged";
   title: string;
   icon: LucideIcon;
   tone?: "mint";
-  files: ChangedFile[];
+  files: FileChange[];
   empty: JSX.Element;
   bulkLabel: string;
   busy: boolean;
@@ -119,6 +126,9 @@ function FileSection(props: {
   action: FileAction;
 }) {
   const [scrollElement, setScrollElement] = createSignal<HTMLDivElement>();
+  // Lines are only counted for the files on show: there can be tens of thousands.
+  const [visible, setVisible] = createSignal<FileChange[]>([]);
+  const lineCounts = useLineCounts(() => props.repositoryId, props.side, visible);
   return (
     <section class="flex min-h-[130px] flex-1 basis-0 flex-col border-b border-border pt-3">
       <SectionHeader
@@ -140,6 +150,8 @@ function FileSection(props: {
           <ChangedFileList
             files={props.files}
             scrollElement={scrollElement()}
+            lineCounts={lineCounts}
+            onVisible={setVisible}
             action={props.action}
           />
         </Show>

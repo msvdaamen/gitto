@@ -21,7 +21,7 @@ describe("createCommit", () => {
     writeFileSync(join(path, "x y.txt"), "hi\n");
     git(path, "add", "x y.txt");
     await createCommit(repo, "Initial commit\n\nWith body");
-    expect(await getLog(repo, page)).toEqual([
+    expect((await getLog(repo, page)).commits).toEqual([
       expect.objectContaining({
         subject: "Initial commit",
         body: "With body",

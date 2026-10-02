@@ -2,13 +2,14 @@ import { stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { createDb } from "@gitto/db";
 import { RPC_CONNECT_CHANNEL } from "@gitto/rpc";
-import { createContainer, createRpcHandler } from "@gitto/rpc/server";
+import { createMainRpcHandler } from "@gitto/rpc/main";
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, protocol, shell } from "electron";
 
 import iconDataUrl from "../assets/icon.png?inline";
+import { startBackend } from "./backend-process";
 import { resolveRendererPath } from "./renderer-path";
+import { traceEventLoopStalls } from "./trace";
 
 // Production builds are served from a custom protocol instead of file:// so the UI can use
 // regular browser history routing (e.g. app://gitto/about).
@@ -62,14 +63,15 @@ function registerAppProtocol() {
   });
 }
 
-function openDatabase() {
-  // Packaged builds ship the migrations as an extra resource (see forge.config.ts).
-  const migrationsFolder = app.isPackaged
-    ? join(process.resourcesPath, "migrations")
-    : resolve(app.getAppPath(), "migrations");
-  const db = createDb(join(app.getPath("userData"), "gitto.db"), migrationsFolder);
-  app.on("will-quit", () => db.$client.close());
-  return db;
+/** Where the backend process finds the database and its migrations. */
+function databasePaths() {
+  return {
+    database: join(app.getPath("userData"), "gitto.db"),
+    // Packaged builds ship the migrations as an extra resource (see forge.config.ts).
+    migrations: app.isPackaged
+      ? join(process.resourcesPath, "migrations")
+      : resolve(app.getAppPath(), "migrations"),
+  };
 }
 
 async function selectFolder() {
@@ -80,16 +82,23 @@ async function selectFolder() {
   return result.canceled ? null : (result.filePaths[0] ?? null);
 }
 
+/**
+ * Serves the API. Only what needs the main process (native dialogs) is handled here; the rest,
+ * everything that reads the disk or runs git, by the backend process, so none of it can keep this
+ * one busy.
+ */
 function registerRpc() {
-  const handler = createRpcHandler();
-  const context = createContainer(openDatabase(), { selectFolder });
+  const handler = createMainRpcHandler();
+  const backend = startBackend(databasePaths());
 
-  // Each renderer connection sends one end of a MessageChannel (see the preload).
+  // Each renderer connection sends an end of two MessageChannels (see the preload): one for this
+  // process, one for the backend.
   ipcMain.on(RPC_CONNECT_CHANNEL, (event) => {
-    const [port] = event.ports;
-    if (!port) return;
-    handler.upgrade(port, { context });
-    port.start();
+    const [mainPort, backendPort] = event.ports;
+    if (!mainPort || !backendPort) return;
+    handler.upgrade(mainPort, { context: { selectFolder } });
+    mainPort.start();
+    backend.connect(backendPort);
   });
 }
 
@@ -134,25 +143,9 @@ app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });
 
-/**
- * With GITTO_TRACE=1, logs whenever something keeps the main process busy long enough to stall the
- * UI: it routes the renderer's input and IPC, so while it's blocked, the window can't respond.
- */
-function traceEventLoopStalls() {
-  const INTERVAL_MS = 20;
-  const STALL_MS = 50;
-  let last = performance.now();
-  setInterval(() => {
-    const now = performance.now();
-    const stall = now - last - INTERVAL_MS;
-    if (stall >= STALL_MS) console.log(`[main] event loop blocked for ${stall.toFixed(0)}ms`);
-    last = now;
-  }, INTERVAL_MS).unref();
-}
-
 // Not `await app.whenReady()`: top-level await in the ESM entry blocks Electron's startup.
 app.on("ready", () => {
-  if (process.env.GITTO_TRACE) traceEventLoopStalls();
+  if (process.env.GITTO_TRACE) traceEventLoopStalls("main");
   registerAppProtocol();
   registerRpc();
   createWindow();

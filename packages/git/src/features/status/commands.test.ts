@@ -6,6 +6,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { Repo } from "../../core/repo";
 import { createHistoryRepo, createRepo, git, repos } from "../../test/fixtures";
 import { parseDiff } from "../diff/parse";
+import type { FileChange } from "../diff/schema";
 import { getStatus } from "./commands";
 
 describe("a repository with history", () => {
@@ -26,31 +27,28 @@ describe("a repository with history", () => {
     expect(status.counts).toEqual({ files: 2, staged: 0, unstaged: 2, conflicted: 0 });
   });
 
-  it("diffs the working tree against the index", async () => {
+  it("lists the changed files, the untracked ones last", async () => {
     expect((await getStatus(repo)).changes).toEqual({
       staged: [],
       unstaged: [
-        { path: "a file.txt", status: "modified", origPath: null, additions: 1, deletions: 2 },
-        {
-          path: "new file.txt",
-          status: "untracked",
-          origPath: null,
-          additions: null,
-          deletions: null,
-        },
+        { path: "a file.txt", status: "modified", origPath: null },
+        { path: "new file.txt", status: "untracked", origPath: null },
       ],
     });
   });
 });
 
 describe("the version", () => {
-  it("stays the same until something changes", async () => {
+  it("stays the same until the status changes", async () => {
     const repo = await createHistoryRepo("versioned");
     const { version } = await getStatus(repo);
     expect((await getStatus(repo)).version).toBe(version);
 
-    // Only the line counts change: git status reports the same, but the diff doesn't.
+    // Only the line counts change, which aren't part of the status: git reports the same.
     writeFileSync(join(repo.path, "a file.txt"), "changed\nagain\n");
+    expect((await getStatus(repo)).version).toBe(version);
+
+    git(repo.path, "add", "a file.txt");
     expect((await getStatus(repo)).version).not.toBe(version);
   });
 });
@@ -67,27 +65,26 @@ describe("a repository without commits", () => {
   });
 });
 
-/** What the changed files were before they came from the status: full diffs and ls-files. */
+/** The files in a raw diff, without line counts. */
+function rawChanges(output: string): FileChange[] {
+  return parseDiff(output).map(({ path, status, origPath }) => ({ path, status, origPath }));
+}
+
+/** The changed files as full diffs and ls-files have them, which the status has to agree with. */
 async function fullDiffs(repo: Repo) {
   const [staged, unstaged, untracked] = await Promise.all([
-    repo.read(["diff", "--cached", "--raw", "--numstat", "-z", "-M"]),
-    repo.read(["diff", "--raw", "--numstat", "-z"]),
+    repo.read(["diff", "--cached", "--raw", "-z", "-M"]),
+    repo.read(["diff", "--raw", "-z"]),
     repo.read(["ls-files", "--others", "--exclude-standard", "-z"]),
   ]);
   return {
-    staged: parseDiff(staged),
+    staged: rawChanges(staged),
     unstaged: [
-      ...parseDiff(unstaged),
+      ...rawChanges(unstaged),
       ...untracked
         .split("\0")
         .filter(Boolean)
-        .map((path) => ({
-          path,
-          status: "untracked",
-          origPath: null,
-          additions: null,
-          deletions: null,
-        })),
+        .map((path) => ({ path, status: "untracked", origPath: null })),
     ],
   };
 }
@@ -116,6 +113,11 @@ describe("the changed files", () => {
 
     const { changes } = await getStatus(repo);
     expect(changes).toEqual(await fullDiffs(repo));
+    expect(changes.staged).toContainEqual({
+      path: "moved.txt",
+      status: "renamed",
+      origPath: "move.txt",
+    });
     expect(changes.unstaged.map((file) => file.path)).toEqual(
       expect.arrayContaining([
         "edit.txt",
@@ -128,7 +130,7 @@ describe("the changed files", () => {
     );
   });
 
-  it("are the same as full diffs with a merge conflict", async () => {
+  it("have a merge conflict on both sides", async () => {
     const path = createRepo("conflict");
     writeFileSync(join(path, "file.txt"), "base\n");
     git(path, "add", ".");
@@ -143,8 +145,10 @@ describe("the changed files", () => {
     const repo = await repos.open("conflict");
 
     const { changes, counts } = await getStatus(repo);
-    expect(changes).toEqual(await fullDiffs(repo));
-    expect(changes.unstaged).toEqual([expect.objectContaining({ path: "file.txt" })]);
+    // The diffs list it on both sides too, but the unstaged one calls it modified.
+    const conflict = { path: "file.txt", status: "conflicted", origPath: null };
+    expect(changes).toEqual({ staged: [conflict], unstaged: [conflict] });
+    expect((await fullDiffs(repo)).staged).toEqual([conflict]);
     expect(counts).toEqual({ files: 1, staged: 0, unstaged: 0, conflicted: 1 });
   });
 

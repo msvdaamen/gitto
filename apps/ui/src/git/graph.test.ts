@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { computeGraph } from "./graph";
+import { computeGraph, layOutGraph } from "./graph";
 
 describe("computeGraph", () => {
   it("keeps a linear history in a single lane", () => {
@@ -125,5 +125,25 @@ describe("computeGraph", () => {
 
     // Lane 1 ends at `m`, so its merged parent `y` goes to lane 2, not lane 1.
     expect(rows[2]!.bottom).toContainEqual({ from: 0, to: 2 });
+  });
+});
+
+describe("layOutGraph", () => {
+  it("lays out more commits after a layout the same as all of them at once", () => {
+    const commits = [
+      { sha: "wip", parents: ["f"], dashed: true },
+      { sha: "g", parents: ["e"] },
+      { sha: "f", parents: ["d", "e"] },
+      { sha: "e", parents: ["c"] },
+      { sha: "d", parents: ["c"] },
+      { sha: "c", parents: ["a", "b"] },
+      { sha: "b", parents: ["a"] },
+      { sha: "a", parents: [] },
+    ];
+    for (let split = 0; split <= commits.length; split++) {
+      const first = layOutGraph(commits.slice(0, split));
+      const rest = layOutGraph(commits.slice(split), first.state);
+      expect([...first.rows, ...rest.rows]).toEqual(computeGraph(commits));
+    }
   });
 });

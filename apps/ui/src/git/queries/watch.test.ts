@@ -8,11 +8,25 @@ import { UNWATCH_AFTER_MS, useRepositoryWatcher } from "./watch";
 
 const rpc = vi.hoisted(() => {
   const gitDir = procedure<("index" | "refs")[]>();
-  const workingTree = procedure<null>();
+  const workingTree = procedure<"ready" | "changed">();
   return {
     gitDir,
     workingTree,
-    git: { watch: { gitDir: gitDir.call, workingTree: workingTree.call } },
+    git: {
+      watch: { gitDir: gitDir.call, workingTree: workingTree.call },
+      // The working tree is only watched once the status is in.
+      status: {
+        get: async () => ({
+          head: { kind: "branch", name: "main", sha: "abc" },
+          upstream: null,
+          ahead: 0,
+          behind: 0,
+          counts: { files: 0, staged: 0, unstaged: 0, conflicted: 0 },
+          changes: { staged: [], unstaged: [] },
+          version: "v1",
+        }),
+      },
+    },
   };
 });
 
@@ -93,16 +107,27 @@ describe("watching a repository", () => {
     rpc.gitDir.push(["index", "refs"]);
     await vi.waitFor(() => expect(invalidated()).toEqual([gitKeys.repository("repo")]));
 
+    // No longer watched, so no longer known to be right: stale, but not refetched for nobody.
+    invalidate.mockClear();
     cleanup();
     expect(rpc.gitDir.open).toBe(0);
+    expect(invalidate).toHaveBeenCalledExactlyOnceWith({
+      queryKey: gitKeys.repository("repo"),
+      refetchType: "none",
+    });
   });
 
   it("refetches changes to the working tree right away while the window has focus", async () => {
-    const { invalidated, cleanup } = watch(true);
+    const { invalidate, invalidated, cleanup } = watch(true);
     await vi.waitFor(() => expect(rpc.workingTree.open).toBe(1));
     expect(invalidated()).toEqual([]);
 
-    rpc.workingTree.push(null);
+    // Once it's watching, whatever changed while it started is looked at again.
+    rpc.workingTree.push("ready");
+    await vi.waitFor(() => expect(invalidated()).toEqual([gitKeys.uncommitted("repo")]));
+    invalidate.mockClear();
+
+    rpc.workingTree.push("changed");
     await vi.waitFor(() => expect(invalidated()).toEqual([gitKeys.uncommitted("repo")]));
 
     cleanup();
@@ -121,9 +146,9 @@ describe("watching a repository", () => {
 
     // Changes while unfocused are refetched once, when the window gets focus back.
     window.dispatchEvent(new Event("blur"));
-    rpc.workingTree.push(null);
+    rpc.workingTree.push("changed");
     await Promise.resolve();
-    rpc.workingTree.push(null);
+    rpc.workingTree.push("changed");
     await vi.advanceTimersByTimeAsync(UNWATCH_AFTER_MS - 1);
     expect(invalidated()).toEqual([]);
     window.dispatchEvent(new Event("focus"));
@@ -147,8 +172,11 @@ describe("watching a repository", () => {
     expect(rpc.gitDir.open).toBe(1);
 
     window.dispatchEvent(new Event("focus"));
-    expect(invalidated()).toEqual([gitKeys.uncommitted("repo")]);
+    // Not until the new watch is ready, which may have missed changes meanwhile.
+    expect(invalidated()).toEqual([]);
     await vi.waitFor(() => expect(rpc.workingTree.open).toBe(1));
+    rpc.workingTree.push("ready");
+    await vi.waitFor(() => expect(invalidated()).toEqual([gitKeys.uncommitted("repo")]));
 
     cleanup();
   });
@@ -160,7 +188,9 @@ describe("watching a repository", () => {
 
     window.dispatchEvent(new Event("focus"));
     await vi.waitFor(() => expect(rpc.workingTree.open).toBe(1));
-    expect(invalidated()).toEqual([gitKeys.uncommitted("repo")]);
+    expect(invalidated()).toEqual([]);
+    rpc.workingTree.push("ready");
+    await vi.waitFor(() => expect(invalidated()).toEqual([gitKeys.uncommitted("repo")]));
 
     cleanup();
   });
@@ -176,8 +206,11 @@ describe("watching a repository", () => {
 
     window.dispatchEvent(new Event("blur"));
     window.dispatchEvent(new Event("focus"));
-    expect(invalidated()).toEqual([gitKeys.uncommitted("repo")]);
+    // Not until the new watch is ready, which may have missed changes meanwhile.
+    expect(invalidated()).toEqual([]);
     await vi.waitFor(() => expect(rpc.workingTree.open).toBe(1));
+    rpc.workingTree.push("ready");
+    await vi.waitFor(() => expect(invalidated()).toEqual([gitKeys.uncommitted("repo")]));
 
     cleanup();
   });
@@ -190,8 +223,11 @@ describe("watching a repository", () => {
     await vi.advanceTimersByTimeAsync(0);
     window.dispatchEvent(new Event("blur"));
     window.dispatchEvent(new Event("focus"));
-    expect(invalidated()).toEqual([gitKeys.uncommitted("repo")]);
+    // Not until the new watch is ready, which may have missed changes meanwhile.
+    expect(invalidated()).toEqual([]);
     await vi.waitFor(() => expect(rpc.workingTree.open).toBe(1));
+    rpc.workingTree.push("ready");
+    await vi.waitFor(() => expect(invalidated()).toEqual([gitKeys.uncommitted("repo")]));
 
     cleanup();
   });

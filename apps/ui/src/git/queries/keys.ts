@@ -6,6 +6,9 @@ export const gitKeys = {
     [...gitKeys.repository(repositoryId), "uncommitted"] as const,
   /** The status, with the changed files: one query, so the working tree is only walked once. */
   status: (repositoryId: string) => [...gitKeys.uncommitted(repositoryId), "status"] as const,
+  /** Line counts of the uncommitted changes to `paths`, on one side of the index. */
+  lineCounts: (repositoryId: string, side: "staged" | "unstaged", paths: string[]) =>
+    [...gitKeys.uncommitted(repositoryId), "lines", side, paths] as const,
   log: (repositoryId: string) => [...gitKeys.repository(repositoryId), "log"] as const,
   refs: (repositoryId: string) => [...gitKeys.repository(repositoryId), "refs"] as const,
   /** A commit never changes, so it and its files are kept outside `repository(id)`. */

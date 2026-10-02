@@ -102,7 +102,11 @@ function SelectedCommit(props: {
           count={changes.files().length}
           class="px-1 pb-2"
         />
-        <ChangedFileList files={changes.files()} scrollElement={props.scrollElement} />
+        <ChangedFileList
+          files={changes.files()}
+          scrollElement={props.scrollElement}
+          lineCounts={(file) => file}
+        />
       </div>
     </div>
   );

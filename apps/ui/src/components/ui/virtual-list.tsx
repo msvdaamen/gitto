@@ -80,6 +80,11 @@ export function VirtualRows<T>(props: {
   gap?: number;
   /** The element that scrolls the rows, along with whatever is above and below them. */
   scrollElement: HTMLElement | undefined;
+  /**
+   * Told which items are rendered, and the index of the last one, whenever that changes: e.g. to
+   * load more about just those, or more items near the end.
+   */
+  onVisible?: (items: T[], last: number) => void;
   /** Renders the item at `index`; the item can change, as rows are rendered by position. */
   children: (item: () => T, index: number) => JSX.Element;
 }) {
@@ -137,6 +142,17 @@ export function VirtualRows<T>(props: {
         return [...indexes, index].toSorted((a, b) => a - b);
       };
     },
+  });
+
+  createEffect(() => {
+    if (!props.onVisible) return;
+    const items = props.items;
+    const rows = virtualizer.getVirtualItems();
+    const rendered = rows.flatMap((row) => {
+      const item = items[row.index];
+      return item === undefined ? [] : [item];
+    });
+    props.onVisible(rendered, rows.at(-1)?.index ?? -1);
   });
 
   return (

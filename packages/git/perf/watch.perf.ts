@@ -161,8 +161,8 @@ describe.each(perfRepoPaths())("%s", (source) => {
         }
       })(),
       (async () => {
-        for await (const _ of watchWorkingTree(repo, controller.signal)) {
-          reports.push({ at: performance.now(), refetch: "uncommitted" });
+        for await (const event of watchWorkingTree(repo, controller.signal)) {
+          if (event === "changed") reports.push({ at: performance.now(), refetch: "uncommitted" });
         }
       })(),
     ]);

@@ -1,4 +1,4 @@
-import type { ChangedFile } from "@gitto/git/types";
+import type { ChangedFile, FileChange } from "@gitto/git/types";
 
 /** Lines added and deleted across `files`; binary files don't count. */
 export function lineTotals(files: ChangedFile[]) {
@@ -12,6 +12,6 @@ export function lineTotals(files: ChangedFile[]) {
 }
 
 /** Paths to stage or unstage for files; renames need their old path too, for the deletion side. */
-export function stagingPaths(files: ChangedFile[]): string[] {
+export function stagingPaths(files: Pick<FileChange, "path" | "origPath">[]): string[] {
   return files.flatMap((file) => (file.origPath ? [file.path, file.origPath] : [file.path]));
 }

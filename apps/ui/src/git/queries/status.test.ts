@@ -19,7 +19,7 @@ const status: Uncommitted = {
   counts: { files: 1, staged: 0, unstaged: 1, conflicted: 0 },
   changes: {
     staged: [],
-    unstaged: [{ path: "a.txt", status: "modified", origPath: null, additions: 1, deletions: 0 }],
+    unstaged: [{ path: "a.txt", status: "modified", origPath: null }],
   },
   version: "v1",
 };
@@ -46,8 +46,8 @@ describe("the uncommitted changes", () => {
   it("are only sent again when they changed", async () => {
     rpc.git.status.get.mockResolvedValueOnce(status);
     const { result, client } = render(() => useUncommittedFiles(() => "repo"));
-    await vi.waitFor(() => expect(result.data).toEqual(status.changes));
-    const file = result.data!.unstaged[0];
+    await vi.waitFor(() => expect(result.data?.value).toEqual(status.changes));
+    const file = result.data!.value.unstaged[0];
     const cached = client.getQueryData(gitKeys.status("repo"));
 
     rpc.git.status.get.mockResolvedValueOnce({ unchanged: true });
@@ -57,7 +57,7 @@ describe("the uncommitted changes", () => {
       expect.anything(),
     );
     expect(client.getQueryData(gitKeys.status("repo"))).toBe(cached);
-    expect(result.data!.unstaged[0]).toBe(file);
+    expect(result.data!.value.unstaged[0]).toBe(file);
   });
 
   it("are left out of the summary", async () => {

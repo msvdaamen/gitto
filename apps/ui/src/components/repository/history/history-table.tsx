@@ -4,6 +4,7 @@ import Search from "lucide-solid/icons/search";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
 import { createEffect, createMemo, createSignal, Match, Show, Suspense, Switch } from "solid-js";
 
+import { LinkButton } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { UpdatingIndicator } from "@/components/ui/updating-indicator";
 import { VirtualRows } from "@/components/ui/virtual-list";
@@ -15,6 +16,9 @@ import { COLUMNS, MIN_WIDTH } from "./columns";
 import { HistoryCommitRow } from "./commit-row";
 import { graphWidth, ROW_HEIGHT } from "./history-graph";
 import { HistoryWipRow } from "./wip-row";
+
+/** How close to the end of the loaded commits the rows in view get before more are loaded. */
+const LOAD_MORE_WITHIN = 100;
 
 export function HistoryTable(props: {
   repositoryId: string;
@@ -93,12 +97,35 @@ function HistoryRows(props: {
   });
   // The log is reloaded whenever a branch or tag changes, which takes a while in a big repository.
   const updating = useDelayed(() => history.log.isRefetching);
-  const lanes = createMemo(() =>
-    Math.max(1, ...history.rows().map((row) => row.graph?.width ?? 1)),
-  );
+  const lanes = createMemo(() => {
+    // Not `Math.max(...)`: a long history has more rows than a call takes arguments.
+    let widest = 1;
+    for (const row of history.rows()) widest = Math.max(widest, row.graph?.width ?? 1);
+    return widest;
+  });
   const needle = createMemo(() => searchNeedle(props.search));
   const visibleRows = createMemo(() =>
     needle() ? history.rows().filter((row) => matchesSearch(row, needle())) : history.rows(),
+  );
+
+  // More of the history is loaded when the rows in view get near the end of what's there. Not
+  // while searching: few matches would never fill the view, and it'd go through all of the
+  // history. There, more is loaded when asked (see `SearchedSoFar`).
+  const [lastShown, setLastShown] = createSignal(-1);
+  createEffect(() => {
+    if (needle() || history.complete() || history.loadingMore() || history.loadFailed()) return;
+    if (lastShown() >= visibleRows().length - LOAD_MORE_WITHIN) void history.loadMore();
+  });
+  /** While searching: how far it looked, with a way to look further. */
+  const SearchedSoFar = () => (
+    <Show when={needle() && !history.complete()}>
+      <span class="flex items-center justify-center gap-1.5 text-[9px] text-faint">
+        Searched the newest {history.loadedCount()} commits.
+        <LinkButton disabled={history.loadingMore()} onClick={() => void history.loadMore()}>
+          Search older ones
+        </LinkButton>
+      </span>
+    </Show>
   );
 
   return (
@@ -118,6 +145,7 @@ function HistoryRows(props: {
             fallback={
               <EmptyState icon={Search} title="No commits found">
                 Try a different message, author, or SHA.
+                <SearchedSoFar />
               </EmptyState>
             }
           >
@@ -127,6 +155,7 @@ function HistoryRows(props: {
               items={visibleRows()}
               rowHeight={ROW_HEIGHT}
               scrollElement={props.scrollElement}
+              onVisible={(_, last) => setLastShown(last)}
             >
               {(row, index) => {
                 const asWip = () => {
@@ -163,6 +192,25 @@ function HistoryRows(props: {
           </Show>
         </Show>
       </div>
+      <Show
+        when={
+          visibleRows().length > 0 && (history.loadingMore() || history.loadFailed() || needle())
+        }
+      >
+        <div class="flex items-center justify-center py-2.5">
+          <Switch fallback={<SearchedSoFar />}>
+            <Match when={history.loadingMore()}>
+              <UpdatingIndicator label="Loading older commits…" />
+            </Match>
+            <Match when={history.loadFailed()}>
+              <span class="flex items-center gap-1.5 text-[9px] text-coral">
+                Couldn't load older commits.
+                <LinkButton onClick={() => void history.loadMore()}>Try again</LinkButton>
+              </span>
+            </Match>
+          </Switch>
+        </div>
+      </Show>
     </div>
   );
 }

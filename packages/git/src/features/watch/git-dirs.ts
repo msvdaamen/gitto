@@ -1,5 +1,5 @@
-import { realpath } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { realpath, stat } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import type { Repo } from "../../core/repo";
 import type { GitDirChange } from "./schema";
@@ -56,9 +56,20 @@ export function classify(dirs: GitDirs, path: string): GitDirChange | undefined 
   return undefined;
 }
 
+/**
+ * Identifies the index file as it is now: git replaces the file on every write, so this changes
+ * whenever anything is staged or unstaged. `undefined` without an index, as in a new repository.
+ */
+export async function indexSignature(dirs: GitDirs): Promise<string | undefined> {
+  const stats = await stat(join(dirs.gitDir, "index"), { bigint: true }).catch(() => undefined);
+  return stats && `${stats.ino}:${stats.size}:${stats.mtimeNs}`;
+}
+
 /** `path` relative to `dir` and `/`-separated, or `undefined` if it's not inside `dir`. */
 export function inside(dir: string, path: string): string | undefined {
-  const rel = relative(dir, path);
+  // The watcher reports whole, absolute paths, thousands at a time after a checkout, so the common
+  // case skips `relative`, which is slow.
+  const rel = path.startsWith(dir + sep) ? path.slice(dir.length + 1) : relative(dir, path);
   if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return undefined;
-  return rel.split(sep).join("/");
+  return sep === "/" ? rel : rel.split(sep).join("/");
 }

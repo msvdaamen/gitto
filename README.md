@@ -7,10 +7,21 @@ Electron desktop app with a SolidJS + TanStack Router UI.
 ```
 apps/
   ui/        SolidJS + TanStack Router (file-based routes), standalone Vite app
-  electron/  Electron main + preload, built and packaged with Electron Forge + its Vite plugin
+  electron/  Electron main, backend + preload, built and packaged with Electron Forge + its Vite plugin
+packages/
+  git/         Runs git and watches repositories; one folder per feature (status, history, …)
+  repository/  The repositories added to Gitto
+  system/      Native OS capabilities (dialogs)
+  rpc/         The typed API between the UI and the app's processes
+  db/          SQLite database
 ```
 
-Electron Forge's Vite plugin builds everything: main and preload via `apps/electron/vite.*.config.ts`,
+The app runs in three processes. The main process owns the window and native dialogs. The backend
+(an Electron utility process, `apps/electron/src/backend.ts`) owns the database, runs git and
+watches files, so none of that can keep the main process, which routes the window's input, busy.
+The UI talks to each over a MessagePort of its own (`packages/rpc`).
+
+Electron Forge's Vite plugin builds everything: main, backend and preload via `apps/electron/vite.*.config.ts`,
 and the renderer via `apps/electron/vite.renderer.config.ts`, which reuses `apps/ui/vite.config.ts`.
 
 In development the renderer is served by the Vite dev server. In production it is served from a

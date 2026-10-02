@@ -1,4 +1,4 @@
-import type { ChangedFile, FileStatus } from "@gitto/git/types";
+import type { FileChange, FileStatus, LineCounts } from "@gitto/git/types";
 import { cn } from "cn";
 import type { LucideIcon } from "lucide-solid";
 import { Show } from "solid-js";
@@ -31,11 +31,11 @@ const fileStatusTone: Record<FileStatus, Tone> = {
 };
 
 /** An action shown on each file when it's hovered, like staging it. */
-export interface FileAction {
+export interface FileAction<T extends FileChange = FileChange> {
   label: string;
   icon: LucideIcon;
   disabled?: boolean;
-  run: (file: ChangedFile) => void;
+  run: (file: T) => void;
 }
 
 /** Height of a file's row, and the space below it. */
@@ -46,10 +46,17 @@ const ROW_GAP = 2;
  * The files, in `scrollElement`, which scrolls them along with whatever is around them. Only the
  * ones in view are rendered: a commit or the working tree can have tens of thousands.
  */
-export function ChangedFileList(props: {
-  files: ChangedFile[];
+export function ChangedFileList<T extends FileChange>(props: {
+  files: T[];
   scrollElement: HTMLElement | undefined;
-  action?: FileAction;
+  /**
+   * A file's line counts; `undefined` while they aren't known (yet), which shows nothing, or
+   * "new" for an untracked file, which has none.
+   */
+  lineCounts: (file: T) => LineCounts | undefined;
+  /** Told which files are rendered, so their line counts can be loaded. */
+  onVisible?: (files: T[]) => void;
+  action?: FileAction<T>;
 }) {
   return (
     <VirtualRows
@@ -57,6 +64,7 @@ export function ChangedFileList(props: {
       rowHeight={ROW_HEIGHT}
       gap={ROW_GAP}
       scrollElement={props.scrollElement}
+      onVisible={props.onVisible}
     >
       {(file) => (
         <div class="group grid h-full w-full grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-[7px] rounded-md p-[7px] text-left hover:bg-panel-hover">
@@ -81,14 +89,24 @@ export function ChangedFileList(props: {
           </span>
           <span class="flex items-center gap-[5px] text-[8px]">
             <Show
-              when={file().additions !== null}
+              when={props.lineCounts(file())}
               fallback={
-                <em class="text-faint not-italic">
-                  {file().status === "untracked" ? "new" : "binary"}
-                </em>
+                <Show when={file().status === "untracked"}>
+                  <em class="text-faint not-italic">new</em>
+                </Show>
               }
             >
-              <LineStats additions={file().additions ?? 0} deletions={file().deletions ?? 0} />
+              {(counts) => (
+                <Show
+                  when={counts().additions !== null}
+                  fallback={<em class="text-faint not-italic">binary</em>}
+                >
+                  <LineStats
+                    additions={counts().additions ?? 0}
+                    deletions={counts().deletions ?? 0}
+                  />
+                </Show>
+              )}
             </Show>
             <Show when={props.action}>
               {(action) => (

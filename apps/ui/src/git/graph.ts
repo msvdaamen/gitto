@@ -36,18 +36,35 @@ export interface GraphCommit {
   dashed?: boolean;
 }
 
+/** Where a layout left off: what it takes to lay out the commits that come after it. */
+export interface GraphState {
+  /** The commit each lane is heading towards; `null` for a free lane. */
+  lanes: (string | null)[];
+  /** Lanes drawn dashed, from a `dashed` commit down to its parent. */
+  dashed: number[];
+}
+
 /**
  * Lays commits (newest first; children always before their parents) out in lanes, the way
  * GitKraken does: a branch keeps its lane from its tip down to where it forked off, merges curve
  * in from the merged branch's lane, and forks curve out of the commit they started at.
  */
 export function computeGraph(commits: GraphCommit[]): GraphRow[] {
-  // The commit each lane is heading towards; `null` for a free lane.
-  const lanes: (string | null)[] = [];
-  // Lanes drawn dashed, from a `dashed` commit down to its parent.
-  const dashed = new Set<number>();
+  return layOutGraph(commits).rows;
+}
 
-  return commits.map((commit) => {
+/**
+ * The same, for commits that follow the ones a layout ended with (`after`, its `state`): only they
+ * are laid out, so loading more of a long history doesn't lay all of it out again.
+ */
+export function layOutGraph(
+  commits: GraphCommit[],
+  after?: GraphState,
+): { rows: GraphRow[]; state: GraphState } {
+  const lanes = [...(after?.lanes ?? [])];
+  const dashed = new Set(after?.dashed);
+
+  const rows = commits.map((commit) => {
     const { sha, parents } = commit;
     const incoming = lanes.flatMap((lane, i) => (lane === sha ? [i] : []));
     // A branch tip nothing leads to yet starts in the first free lane.
@@ -85,6 +102,7 @@ export function computeGraph(commits: GraphCommit[]): GraphRow[] {
     const used = [column, ...incoming, ...[...through, ...bottom].map((line) => line.to)];
     return { column, through, top, bottom, width: Math.max(...used) + 1 };
   });
+  return { rows, state: { lanes, dashed: [...dashed] } };
 }
 
 function edge(from: number, to: number, dashed: boolean): GraphEdge {

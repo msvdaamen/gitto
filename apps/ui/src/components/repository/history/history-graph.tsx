@@ -1,4 +1,4 @@
-import { Index, Show } from "solid-js";
+import { createMemo, Index, Show } from "solid-js";
 
 import type { GraphEdge, GraphRow } from "@/git/graph";
 
@@ -27,9 +27,26 @@ export function laneColor(lane: number): string {
   return LANE_COLORS[lane % LANE_COLORS.length]!;
 }
 
+/** The graph column is never wider than this; lanes past it are cut off. */
+const MAX_WIDTH = 260;
+/** How many lanes fit in the column at its widest, the last one partly. */
+const MAX_LANES = Math.ceil((MAX_WIDTH - PADDING) / LANE);
+
 /** Width of the graph column for rows that use at most `lanes` lanes. */
 export function graphWidth(lanes: number): number {
-  return Math.min(Math.max(lanes * LANE + PADDING * 2, 64), 260);
+  return Math.min(Math.max(lanes * LANE + PADDING * 2, 64), MAX_WIDTH);
+}
+
+/**
+ * The lines that are (partly) inside the column at its widest. Deep in a history with many
+ * branches a row has dozens of lanes, most of them cut off: not worth an element each.
+ */
+function inColumn(edges: GraphEdge[]): GraphEdge[] {
+  return edges.every(isInColumn) ? edges : edges.filter(isInColumn);
+}
+
+function isInColumn(edge: GraphEdge): boolean {
+  return edge.from < MAX_LANES || edge.to < MAX_LANES;
 }
 
 function x(lane: number): number {
@@ -76,6 +93,9 @@ export function HistoryGraph(props: {
   const node = () => x(props.row.column);
   const color = () => (props.wip ? "var(--amber)" : laneColor(props.row.column));
   const isMerge = () => props.row.bottom.length > 1;
+  const through = createMemo(() => inColumn(props.row.through));
+  const top = createMemo(() => inColumn(props.row.top));
+  const bottom = createMemo(() => inColumn(props.row.bottom));
 
   return (
     <svg
@@ -89,13 +109,13 @@ export function HistoryGraph(props: {
       <Show when={!props.nodeOnly}>
         {/* By position: the edges are new objects whenever the history is refetched, and `<For>`
             would re-create every path for them. */}
-        <Index each={props.row.through}>
+        <Index each={through()}>
           {(edge) => <Line d={throughPath(edge())} edge={edge()} lane={edge().from} />}
         </Index>
-        <Index each={props.row.top}>
+        <Index each={top()}>
           {(edge) => <Line d={topPath(edge())} edge={edge()} lane={edge().from} />}
         </Index>
-        <Index each={props.row.bottom}>
+        <Index each={bottom()}>
           {(edge) => <Line d={bottomPath(edge())} edge={edge()} lane={edge().to} />}
         </Index>
       </Show>

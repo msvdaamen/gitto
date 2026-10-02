@@ -1,20 +1,22 @@
 import { createHash } from "node:crypto";
 
 import type { Repo } from "../../core/repo";
-import { parseDiff } from "../diff/parse";
-import type { ChangedFile } from "../diff/schema";
+import type { FileStatus } from "../../schema";
+import type { FileChange } from "../diff/schema";
 import { parseStatus, STATUS_ARGS } from "./parse";
 import type { StatusCounts, StatusFile, Uncommitted, WorkingTreeFiles } from "./schema";
 
-/** The status, and the changed files with their line counts: all the uncommitted changes show. */
+/**
+ * The status and the changed files: everything `git status` reports, in one run. It says what
+ * changed on both sides of the index, so no diffs are needed on top; those only add line counts,
+ * which take diffing every changed file (see `getLineCounts`).
+ */
 export async function getStatus(repo: Repo, signal?: AbortSignal): Promise<Uncommitted> {
   const output = await repo.read(STATUS_ARGS, { signal });
   const { files, ...status } = parseStatus(output);
-  const { changes, outputs } = await getWorkingTreeFiles(repo, files, signal);
   // Everything shown comes from git's output, so the same output means the same status.
-  const hash = createHash("sha1");
-  for (const part of [output, ...outputs]) hash.update(part).update("\0");
-  return { ...status, counts: countFiles(files), changes, version: hash.digest("hex") };
+  const version = createHash("sha1").update(output).digest("hex");
+  return { ...status, counts: countFiles(files), changes: toChanges(files), version };
 }
 
 function countFiles(files: StatusFile[]): StatusCounts {
@@ -32,50 +34,23 @@ function countFiles(files: StatusFile[]): StatusCounts {
 }
 
 /**
- * Past this many characters of paths, the unstaged diff isn't limited to the changed files: the
- * command line would get too long (Windows allows 32k characters, git's own arguments included).
+ * The files split into what's staged and what isn't, in git's order (by path), with the untracked
+ * files after the other unstaged ones. A conflict is on both sides, like git's diffs have it.
  */
-const MAX_PATHSPEC_LENGTH = 16_000;
+function toChanges(files: StatusFile[]): WorkingTreeFiles {
+  const staged: FileChange[] = [];
+  const unstaged: FileChange[] = [];
+  const untracked: FileChange[] = [];
+  for (const file of files) {
+    if (file.staged) staged.push(change(file, file.staged));
+    if (file.unstaged === "untracked") untracked.push(change(file, file.unstaged));
+    else if (file.unstaged) unstaged.push(change(file, file.unstaged));
+  }
+  return { staged, unstaged: [...unstaged, ...untracked] };
+}
 
-/**
- * Staged and unstaged changes, with their line counts, for the files `git status` reported. The
- * status already walked the working tree, so this doesn't again: the untracked files come from
- * it, and the unstaged diff only looks at the files it says changed.
- */
-async function getWorkingTreeFiles(
-  repo: Repo,
-  files: StatusFile[],
-  signal?: AbortSignal,
-): Promise<{ changes: WorkingTreeFiles; outputs: string[] }> {
-  const hasStaged = files.some((file) => file.staged !== null);
-  const unstagedPaths = files
-    .filter((file) => file.unstaged !== null && file.unstaged !== "untracked")
-    .map((file) => file.path);
-  // Each path also takes a space and, on Windows, quotes if it has spaces.
-  const length = unstagedPaths.reduce((sum, path) => sum + path.length + 3, 0);
-  const pathspec = length > MAX_PATHSPEC_LENGTH ? [] : ["--", ...unstagedPaths];
-
-  const [staged, unstaged] = await Promise.all([
-    // Without a HEAD commit, `--cached` diffs the index against the empty tree.
-    hasStaged ? repo.read(["diff", "--cached", "--raw", "--numstat", "-z", "-M"], { signal }) : "",
-    unstagedPaths.length > 0
-      ? repo.read(["diff", "--raw", "--numstat", "-z", ...pathspec], { signal })
-      : "",
-  ]);
-  const changes = {
-    staged: parseDiff(staged),
-    unstaged: [
-      ...parseDiff(unstaged),
-      ...files
-        .filter((file) => file.unstaged === "untracked")
-        .map<ChangedFile>((file) => ({
-          path: file.path,
-          status: "untracked",
-          origPath: null,
-          additions: null,
-          deletions: null,
-        })),
-    ],
-  };
-  return { changes, outputs: [staged, unstaged] };
+/** `file`'s change on one side of the index; its previous path belongs to the side that moved it. */
+function change(file: StatusFile, status: FileStatus): FileChange {
+  const moved = status === "renamed" || status === "copied";
+  return { path: file.path, status, origPath: moved ? file.origPath : null };
 }

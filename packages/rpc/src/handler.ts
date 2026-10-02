@@ -1,25 +1,12 @@
-import { gitRouter } from "@gitto/git/server";
-import { repositoryRouter } from "@gitto/repository/server";
-import { systemRouter } from "@gitto/system/server";
-import { implement, onError } from "@orpc/server";
+import { onError, type Context, type Router } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/message-port";
-
-import type { AppContext } from "./container";
-import { contract } from "./contract";
-
-export { createContainer } from "./container";
 
 // GITTO_TRACE=1 also logs each call's duration, next to the git commands it ran.
 const tracing = !!process.env.GITTO_TRACE;
 
-export const router = implement(contract).$context<AppContext>().router({
-  system: systemRouter,
-  repository: repositoryRouter,
-  git: gitRouter,
-});
-
-/** Serves the router over MessagePorts; call `upgrade(port, { context })` for each renderer connection. */
-export function createRpcHandler() {
+/** Serves `router` over MessagePorts; call `upgrade(port, { context })` for each renderer connection. */
+// oxlint-disable-next-line typescript/no-explicit-any -- any contract: the handler doesn't care which
+export function createRpcHandler<T extends Context>(router: Router<any, T>) {
   return new RPCHandler(router, {
     interceptors: [
       async ({ next, request }) => {

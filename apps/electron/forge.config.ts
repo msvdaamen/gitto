@@ -10,7 +10,7 @@ import { FuseV1Options, FuseVersion } from "@electron/fuses";
 
 import { copyDependencies, findDependencies } from "./src/native-deps";
 
-/** Native modules: left out of the bundle (see vite.main.config.ts), so they're copied in. */
+/** Native modules: left out of the bundle (see vite.node.config.ts), so they're copied in. */
 const NATIVE_DEPENDENCIES = ["@parcel/watcher"];
 
 const config: ForgeConfig = {
@@ -52,6 +52,8 @@ const config: ForgeConfig = {
     new VitePlugin({
       build: [
         { entry: "src/main.ts", config: "vite.main.config.ts", target: "main" },
+        // The backend process, which the main process starts.
+        { entry: "src/backend.ts", config: "vite.backend.config.ts", target: "main" },
         { entry: "src/preload.ts", config: "vite.preload.config.ts", target: "preload" },
       ],
       renderer: [{ name: "main_window", config: "vite.renderer.config.ts" }],

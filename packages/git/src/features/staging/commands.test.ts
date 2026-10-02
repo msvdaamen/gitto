@@ -18,20 +18,8 @@ async function statusFiles(repo: Repo) {
 describe("staging files", () => {
   it("moves staged changes between the working tree and the index", async () => {
     const repo = await createHistoryRepo();
-    const change = {
-      path: "a file.txt",
-      status: "modified",
-      origPath: null,
-      additions: 1,
-      deletions: 2,
-    };
-    const untrackedFile = {
-      path: "new file.txt",
-      status: "untracked",
-      origPath: null,
-      additions: null,
-      deletions: null,
-    };
+    const change = { path: "a file.txt", status: "modified", origPath: null };
+    const untrackedFile = { path: "new file.txt", status: "untracked", origPath: null };
 
     await stage(repo, ["a file.txt"]);
     expect((await getStatus(repo)).changes).toEqual({
@@ -56,7 +44,7 @@ describe("staging files", () => {
       { path: "x y.txt", origPath: null, staged: "added", unstaged: null },
     ]);
     expect((await getStatus(repo)).changes).toEqual({
-      staged: [{ path: "x y.txt", status: "added", origPath: null, additions: 1, deletions: 0 }],
+      staged: [{ path: "x y.txt", status: "added", origPath: null }],
       unstaged: [],
     });
 

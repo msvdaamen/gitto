@@ -2,7 +2,7 @@ import { eventIterator, oc } from "@orpc/contract";
 import * as z from "zod";
 
 import { RepositoryInput } from "../../input";
-import { GitDirChangeSchema } from "./schema";
+import { GitDirChangeSchema, TreeEventSchema } from "./schema";
 
 export const WatchContract = {
   /**
@@ -11,8 +11,10 @@ export const WatchContract = {
    */
   gitDir: oc.input(RepositoryInput).output(eventIterator(z.array(GitDirChangeSchema))),
   /**
-   * Emits whenever a file in the working tree changes. This watches the whole tree (except what
-   * git ignores), so only keep it open while someone is looking.
+   * Emits `ready` once it's watching, then `changed` whenever a file in the working tree changes.
+   * Changes from before it's ready aren't reported, so whatever was loaded before needs loading
+   * again then. This watches the whole tree (except what git ignores), so only keep it open while
+   * someone is looking.
    */
-  workingTree: oc.input(RepositoryInput).output(eventIterator(z.null())),
+  workingTree: oc.input(RepositoryInput).output(eventIterator(TreeEventSchema)),
 };

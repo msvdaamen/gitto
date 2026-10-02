@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { FileStatusSchema } from "../../schema";
-import { ChangedFileSchema } from "../diff/schema";
+import { FileChangeSchema } from "../diff/schema";
 
 export const StatusFileSchema = z.object({
   path: z.string(),
@@ -37,11 +37,15 @@ export const StatusSchema = z.object({
 
 export type Status = z.infer<typeof StatusSchema>;
 
+/**
+ * The changed files, without line counts: counting lines means diffing every file, so they're
+ * asked for separately, for the files on show (see `lineCounts` in the diff contract).
+ */
 export const WorkingTreeFilesSchema = z.object({
   /** Changes in the index, compared to HEAD: what the next commit will contain. */
-  staged: z.array(ChangedFileSchema),
+  staged: z.array(FileChangeSchema),
   /** Changes in the working tree, compared to the index, followed by the untracked files. */
-  unstaged: z.array(ChangedFileSchema),
+  unstaged: z.array(FileChangeSchema),
 });
 
 export type WorkingTreeFiles = z.infer<typeof WorkingTreeFilesSchema>;
@@ -66,7 +70,7 @@ export const StatusSummarySchema = StatusSchema.omit({ files: true }).extend({
 
 export type StatusSummary = z.infer<typeof StatusSummarySchema>;
 
-/** Everything uncommitted: the summary and the changed files, with their line counts. */
+/** Everything uncommitted: the summary and the changed files. */
 export const UncommittedSchema = StatusSummarySchema.extend({
   changes: WorkingTreeFilesSchema,
   /** Changes whenever anything above does, so a caller can ask to skip a status it already has. */

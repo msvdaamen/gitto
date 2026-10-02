@@ -35,3 +35,12 @@ export const CommitSchema = z.object({
 });
 
 export type Commit = z.infer<typeof CommitSchema>;
+
+/** A stretch of the history. */
+export const LogPageSchema = z.object({
+  commits: z.array(CommitSchema),
+  /** Changes whenever the commits or their refs do, so a caller can ask to skip a page it has. */
+  version: z.string(),
+});
+
+export type LogPage = z.infer<typeof LogPageSchema>;

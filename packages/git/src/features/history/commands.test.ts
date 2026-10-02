@@ -13,7 +13,7 @@ describe("a repository with history", () => {
   });
 
   it("reads the log of branches and tags, but not other refs", async () => {
-    const log = await getLog(repo, page);
+    const { commits: log } = await getLog(repo, page);
     // Both sides of the merge have the same timestamp, so their order is up to git.
     expect(log.map((commit) => commit.subject).toSorted()).toEqual([
       "Merge side",
@@ -31,8 +31,22 @@ describe("a repository with history", () => {
     expect(log[0]!.parents).toHaveLength(2);
   });
 
+  it("reads the log a page at a time, with a version that follows the refs", async () => {
+    const all = await getLog(repo, page);
+    const first = await getLog(repo, { limit: 3, skip: 0 });
+    const rest = await getLog(repo, { limit: 3, skip: 3 });
+    expect([...first.commits, ...rest.commits]).toEqual(all.commits);
+    // Fewer than asked for: that's where the history ends.
+    expect(rest.commits).toHaveLength(1);
+
+    expect((await getLog(repo, page)).version).toBe(all.version);
+    git(repo.path, "tag", "v2");
+    expect((await getLog(repo, page)).version).not.toBe(all.version);
+    git(repo.path, "tag", "-d", "v2");
+  });
+
   it("reads a single commit", async () => {
-    const [head] = await getLog(repo, page);
+    const [head] = (await getLog(repo, page)).commits;
     expect(await getCommit(repo, head!.sha.slice(0, 7))).toEqual(head);
 
     const tree = git(repo.path, "rev-parse", "HEAD^{tree}");
@@ -45,6 +59,6 @@ describe("a repository with history", () => {
 describe("a repository without commits", () => {
   it("has an empty log", async () => {
     createRepo("empty");
-    expect(await getLog(await repos.open("empty"), page)).toEqual([]);
+    expect((await getLog(await repos.open("empty"), page)).commits).toEqual([]);
   });
 });

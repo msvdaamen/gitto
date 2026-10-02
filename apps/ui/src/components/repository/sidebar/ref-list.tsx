@@ -13,7 +13,7 @@ import type { JSX } from "solid-js";
 
 import { EmptyState } from "@/components/ui/empty-state";
 import { useRefs } from "@/git/queries/refs";
-import { useStatus } from "@/git/queries/status";
+import { useStatusNow } from "@/git/queries/status";
 import { buildRefTree, flattenRefTree } from "@/git/ref-tree";
 import type { RefTreeRow } from "@/git/ref-tree";
 import { useCollapsed } from "@/hooks/collapsed";
@@ -30,10 +30,11 @@ const STASHES = [{ label: "WIP: layout experiment" }];
 
 /** The sidebar's sections: the working directory, branches, remotes, pull requests, tags, stashes. */
 export function RefList(props: { repositoryId: string }) {
-  const status = useStatus(() => props.repositoryId);
+  // Not waited for: the branches show before the status is in.
+  const status = useStatusNow(() => props.repositoryId);
   const refs = useRefs(() => props.repositoryId);
 
-  const ofKind = (kind: Ref["kind"]) => (refs.data ?? []).filter((ref) => ref.kind === kind);
+  const ofKind = (kind: Ref["kind"]) => (refs.data?.value ?? []).filter((ref) => ref.kind === kind);
   const localBranches = createMemo(() => ofKind("local"));
   const remoteBranches = createMemo(() => ofKind("remote"));
   const tags = createMemo(() => ofKind("tag"));
@@ -41,12 +42,11 @@ export function RefList(props: { repositoryId: string }) {
   // Sections and ref folders share one saved state; folder ids are full ref paths like
   // `refs/heads/feature`, so they can't clash with the section ids.
   const collapsed = useCollapsed(() => props.repositoryId, { tags: true, stashes: true });
-  const localRows = createMemo(() =>
-    flattenRefTree(buildRefTree(localBranches()), collapsed.isCollapsed),
-  );
-  const remoteRows = createMemo(() =>
-    flattenRefTree(buildRefTree(remoteBranches()), collapsed.isCollapsed),
-  );
+  // The trees only change with the refs; folding a folder just lists their lines again.
+  const localTree = createMemo(() => buildRefTree(localBranches()));
+  const remoteTree = createMemo(() => buildRefTree(remoteBranches()));
+  const localRows = createMemo(() => flattenRefTree(localTree(), collapsed.isCollapsed));
+  const remoteRows = createMemo(() => flattenRefTree(remoteTree(), collapsed.isCollapsed));
 
   /** A ref tree's line: a collapsible folder, or a ref drawn by `ref`. */
   const treeRow = (
@@ -99,7 +99,7 @@ export function RefList(props: { repositoryId: string }) {
             icon={File}
             label="Working directory"
             active
-            count={status.data?.counts.files ?? 0}
+            count={status().data?.counts.files ?? 0}
             tone="amber"
           />
         )}

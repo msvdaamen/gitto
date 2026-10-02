@@ -3,7 +3,7 @@ import PencilLine from "lucide-solid/icons/pencil-line";
 import { Show, type JSX } from "solid-js";
 
 import { toneClasses, type Tone } from "@/components/ui/tone";
-import { useStatus } from "@/git/queries/status";
+import { useStatusNow } from "@/git/queries/status";
 import { WIP_MESSAGE, type WipRow } from "@/git/rows";
 import { headLabel } from "@/git/status";
 
@@ -21,8 +21,9 @@ export function HistoryWipRow(
     searching: boolean;
   },
 ) {
-  const status = useStatus(() => props.row.repositoryId);
-  const counts = () => status.data?.counts ?? { staged: 0, unstaged: 0, conflicted: 0 };
+  // The row is only there once the status is in, so there's nothing to wait for.
+  const status = useStatusNow(() => props.row.repositoryId);
+  const counts = () => status().data?.counts ?? { staged: 0, unstaged: 0, conflicted: 0 };
 
   return (
     <HistoryOption
@@ -64,7 +65,7 @@ export function HistoryWipRow(
           <WipCount tone="coral">{counts().conflicted} conflicted</WipCount>
         </Show>
         <span class="ml-auto shrink-0 text-[9px] text-faint">
-          on {status.data && headLabel(status.data.head)}
+          on {status().data && headLabel(status().data!.head)}
         </span>
       </span>
     </HistoryOption>

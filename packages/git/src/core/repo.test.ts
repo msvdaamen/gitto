@@ -20,6 +20,28 @@ describe("opening repositories", () => {
   });
 });
 
+describe("writing in the background", () => {
+  it("gives way to other writes, and isn't reported as one", async () => {
+    createRepo("background");
+    const repo = await repos.open("background");
+    let reported = 0;
+    const stop = repo.onWrite(() => void reported++);
+
+    // Queued behind a write, then another write comes in before it gets its turn.
+    const first = repo.write(["update-index", "--refresh"]);
+    const background = repo.writeInBackground(["update-index", "--refresh"]);
+    const second = repo.write(["update-index", "--refresh"]);
+    await expect(background).rejects.toMatchObject({ name: "AbortError" });
+    await Promise.all([first, second]);
+    expect(reported).toBe(2);
+
+    // On its own, it runs, without telling the listeners.
+    await repo.writeInBackground(["update-index", "--refresh"]);
+    expect(reported).toBe(2);
+    stop();
+  });
+});
+
 describe("running commands", () => {
   it("recognises a folder that's no longer a repository", async () => {
     const path = createRepo("unrepo");

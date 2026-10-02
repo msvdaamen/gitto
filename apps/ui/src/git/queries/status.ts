@@ -1,14 +1,17 @@
 import type { StatusSummary, Uncommitted, WorkingTreeFiles } from "@gitto/git/types";
 import { useQuery, type QueryFunctionContext } from "@tanstack/solid-query";
 
+import { useQueryResult } from "@/lib/query";
+import { Raw } from "@/lib/raw";
 import { rpc } from "@/lib/rpc";
 
 import { gitKeys } from "./keys";
 
 /**
  * The uncommitted changes come in one query (so the working tree is only walked once), but most of
- * the UI only shows the summary. Each `useQuery` keeps its own copy of what it selects, so the file
- * lists, which can be huge, are only selected (and kept up to date) where they're shown.
+ * the UI only shows the summary. Each `useQuery` keeps what it selects in a store of its own, so
+ * the file lists, which can be huge, are only selected where they're shown, and kept out of the
+ * store there (see `Raw`).
  */
 function uncommittedQuery<T>(id: string, select: (data: Uncommitted) => T) {
   const queryKey = gitKeys.status(id);
@@ -36,22 +39,30 @@ const selectSummary = ({ head, upstream, ahead, behind, counts }: Uncommitted): 
   behind,
   counts,
 });
-const selectChanges = (data: Uncommitted): WorkingTreeFiles => data.changes;
+const selectChanges = (data: Uncommitted): Raw<WorkingTreeFiles> => new Raw(data.changes);
 
 /** Where HEAD is, and how many files changed. */
 export function useStatus(repositoryId: () => string) {
   return useQuery(() => uncommittedQuery(repositoryId(), selectSummary));
 }
 
-/** The staged and unstaged changes, with their line counts. */
+/**
+ * The same, as far as it's loaded: its `data` is `undefined` until then, instead of making
+ * everything around it wait. The status walks the working tree, which takes a while in a big one,
+ * and the history and the branches can show meanwhile.
+ */
+export function useStatusNow(repositoryId: () => string) {
+  return useQueryResult(() => uncommittedQuery(repositoryId(), selectSummary));
+}
+
+/**
+ * The staged and unstaged changes. New lists whenever they changed; the rows showing them are
+ * rendered by position, so only what's different in the ones in view is drawn again.
+ */
 export function useUncommittedFiles(repositoryId: () => string) {
   return useQuery(() => ({
     ...uncommittedQuery(repositoryId(), selectChanges),
-    // Merged into the previous lists, file by file, so a refetch only updates what changed:
-    // otherwise every file is a new object and its row is rendered again.
-    reconcile: "path",
-    // Merging is slow for thousands of files, so it's only done when they changed, not also when a
-    // refetch starts and ends.
+    // Nothing that shows the lists cares when a refetch starts and ends.
     notifyOnChangeProps: ["data", "error"],
   }));
 }

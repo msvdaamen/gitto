@@ -1,11 +1,12 @@
 import type { GitDirChange } from "@gitto/git/types";
 import { useQueryClient } from "@tanstack/solid-query";
-import { createEffect, onCleanup } from "solid-js";
+import { createEffect, createSignal, onCleanup } from "solid-js";
 
 import { useWindowFocus } from "@/hooks/window-focus";
 import { rpc } from "@/lib/rpc";
 
 import { gitKeys } from "./keys";
+import { useStatusNow } from "./status";
 
 /**
  * How long the working tree stays watched after the window loses focus. Starting to watch walks
@@ -18,11 +19,18 @@ export const UNWATCH_AFTER_MS = 5 * 60_000;
  * checkouts, staging) is watched all the time. The working tree is watched while the window has
  * focus and for a while after; changes to it while the window doesn't have focus are refetched
  * once it gets focus back, and not at all if there weren't any. A watch that stopped (e.g. Linux
- * ran out of file watches) is started again, with a refetch, when the window gets focus.
+ * ran out of file watches) is started again, with a refetch, when the window gets focus. Each time
+ * the working tree watch starts, the uncommitted changes are refetched once it's ready: changes
+ * from before that, like ones made while the status was being loaded, aren't reported.
+ *
+ * The data counts as up to date for as long as this watches (see `staleTime` in the query client);
+ * once it stops, what's loaded is marked stale, so it's loaded again when the repository is opened
+ * next.
  */
 export function useRepositoryWatcher(repositoryId: () => string) {
   const queryClient = useQueryClient();
   const focused = useWindowFocus();
+  const status = useStatusNow(repositoryId);
 
   createEffect(() => {
     const id = repositoryId();
@@ -40,6 +48,10 @@ export function useRepositoryWatcher(repositoryId: () => string) {
     // Whether the working tree changed while the window didn't have focus.
     let changed = false;
     let unwatchTimer: ReturnType<typeof setTimeout> | undefined;
+    // Whether the working tree is to be watched as soon as the status is in. Starting to watch
+    // lists what git ignores, which walks the working tree like the status does: at the same time,
+    // each takes a few times longer, and the status is what the UI is waiting for.
+    const [starting, setStarting] = createSignal(false);
 
     const watchGitDir = () =>
       gitDir.start((changes: GitDirChange[]) => {
@@ -47,6 +59,7 @@ export function useRepositoryWatcher(repositoryId: () => string) {
         else refetchUncommitted();
       });
     const watchWorkingTree = () =>
+      // `changed`, or `ready`: whatever changed until then wasn't seen, so it's looked at again.
       workingTree.start(() => {
         if (focused()) refetchUncommitted();
         else changed = true;
@@ -54,10 +67,10 @@ export function useRepositoryWatcher(repositoryId: () => string) {
 
     watchGitDir();
 
-    createEffect((wasFocused: boolean | undefined) => {
+    createEffect(() => {
       if (!focused()) {
         unwatchTimer = setTimeout(() => workingTree.stop(), UNWATCH_AFTER_MS);
-        return false;
+        return;
       }
       clearTimeout(unwatchTimer);
 
@@ -65,19 +78,30 @@ export function useRepositoryWatcher(repositoryId: () => string) {
         // A commit or a checkout might have been missed, so everything's refetched.
         refetchAll();
         watchGitDir();
-      } else if (workingTree.running ? changed : wasFocused === false) {
-        // Without a working tree watch, anything might have changed; with one, only if it did.
+      } else if (workingTree.running && changed) {
+        // Without a working tree watch, anything might have changed: the one started below
+        // refetches once it's ready.
         refetchUncommitted();
       }
       changed = false;
+      if (!workingTree.running) setStarting(true);
+    });
+
+    createEffect(() => {
+      if (!starting() || status().isPending || status().isFetching) return;
+      setStarting(false);
       if (!workingTree.running) watchWorkingTree();
-      return true;
     });
 
     onCleanup(() => {
       clearTimeout(unwatchTimer);
       gitDir.stop();
       workingTree.stop();
+      // Not refetched now: nothing shows it anymore.
+      void queryClient.invalidateQueries({
+        queryKey: gitKeys.repository(id),
+        refetchType: "none",
+      });
     });
   });
 }

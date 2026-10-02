@@ -1,8 +1,11 @@
 import { cn } from "cn";
 import LoaderCircle from "lucide-solid/icons/loader-circle";
 
-/** A spinner saying the data on show is being reloaded; it stays on show meanwhile. */
-export function UpdatingIndicator(props: { class?: string }) {
+/**
+ * A spinner saying the data on show is being reloaded (or, with a `label`, what else is going on);
+ * it stays on show meanwhile.
+ */
+export function UpdatingIndicator(props: { class?: string; label?: string }) {
   return (
     <span
       role="status"
@@ -12,7 +15,7 @@ export function UpdatingIndicator(props: { class?: string }) {
       )}
     >
       <LoaderCircle size={10} class="animate-spin motion-reduce:animate-none" />
-      Updating…
+      {props.label ?? "Updating…"}
     </span>
   );
 }
