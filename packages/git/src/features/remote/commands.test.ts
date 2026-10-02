@@ -148,6 +148,30 @@ describe("pull", () => {
     );
   });
 
+  it("says to commit a squash that stopped at conflicts", async () => {
+    const { upstream, path } = createClone("squash-conflict");
+    git(path, "config", "branch.main.mergeOptions", "--squash");
+    commit(upstream, "a.txt", "theirs\n", "theirs");
+    commit(path, "a.txt", "ours\n", "ours");
+    await expect(pull(await repos.open("squash-conflict"))).rejects.toEqual(
+      new PullInterruptedError(
+        "Pulling origin/main caused conflicts. Resolve them, then commit the squashed changes.",
+      ),
+    );
+  });
+
+  it("isn't put off by a squash message left behind", async () => {
+    const { upstream, path } = createClone("stale-squash");
+    writeFileSync(join(path, ".git", "SQUASH_MSG"), "an old squash\n");
+    commit(upstream, "a.txt", "theirs\n", "theirs");
+    commit(path, "a.txt", "ours\n", "ours");
+    await expect(pull(await repos.open("stale-squash"))).rejects.toEqual(
+      new PullInterruptedError(
+        "Pulling origin/main caused conflicts. Resolve them, then commit the merge.",
+      ),
+    );
+  });
+
   it("says when a local upstream no longer exists", async () => {
     const path = createRepo("gone-upstream");
     commit(path, "a.txt", "a\n", "first");

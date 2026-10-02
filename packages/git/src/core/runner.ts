@@ -84,9 +84,10 @@ export function runGit(cwd: string, args: string[], options: RunOptions = {}): P
     const group = process.platform !== "win32" ? child.pid : undefined;
     if (group) {
       if (options.stopOnExit) stopOnExit.add(group);
-      child.on("close", () => {
+      // On exit rather than close: what git started (ssh, say) can hold its output open.
+      child.on("exit", () => {
         stopOnExit.delete(group);
-        // Cancelling only stops git: what it started (ssh, say) is stopped with its group.
+        // Cancelling only stops git: what it started is stopped with its group.
         if (options.signal?.aborted) stopGroup(group);
       });
     }

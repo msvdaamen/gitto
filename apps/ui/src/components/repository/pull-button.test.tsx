@@ -1,11 +1,12 @@
 import type { Uncommitted } from "@gitto/git/types";
 import { render, screen } from "@solidjs/testing-library";
-import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
+import { onlineManager, QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import userEvent from "@testing-library/user-event";
 import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { gitKeys } from "@/git/queries/keys";
+import { queryClient } from "@/lib/query-client";
 
 import { PullButton } from "./pull-button";
 
@@ -35,7 +36,7 @@ async function loadedButton(title: string) {
 
 /** Renders the pull button; `switchTo` shows another repository's. */
 function renderButton() {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const client = new QueryClient({ defaultOptions: queryClient.getDefaultOptions() });
   const [repositoryId, setRepositoryId] = createSignal("repo");
   render(() => (
     <QueryClientProvider client={client}>
@@ -137,5 +138,20 @@ describe("the pull button", () => {
     );
     expect(screen.getByRole("button", { name: "Pull" })).toBeDisabled();
     expect(rpc.git.remote.pull).toHaveBeenCalledTimes(1);
+  });
+
+  it("pulls while the browser thinks it's offline", async () => {
+    const user = userEvent.setup();
+    rpc.git.status.get.mockResolvedValue(status);
+    rpc.git.remote.pull.mockResolvedValue(undefined);
+    renderButton();
+    const button = await loadedButton("Pull 2 commits from origin/main");
+    onlineManager.setOnline(false);
+    try {
+      await user.click(button);
+      await vi.waitFor(() => expect(rpc.git.remote.pull).toHaveBeenCalled());
+    } finally {
+      onlineManager.setOnline(true);
+    }
   });
 });

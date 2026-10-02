@@ -40,8 +40,13 @@ async function gitFetch(run: GitCommand, args: string[]): Promise<void> {
  */
 export async function pull(repo: Repo): Promise<void> {
   const { branch, upstream, config: settings } = await readBranch(repo.read, repo.path);
-  // Its merge commit is worded unless the pull will rebase (as the settings say before fetching).
-  const fetched = await fetchUpstream(repo, upstream, !rebases(settings, branch));
+  // Its merge commit is worded unless the pull will rebase, or only fast-forward, which makes none
+  // (as the settings say before fetching).
+  const fetched = await fetchUpstream(
+    repo,
+    upstream,
+    !rebases(settings, branch) && settings.get("pull.ff")?.toLowerCase() !== "only",
+  );
 
   await repo.exclusive(async (run) => {
     // The branch and its settings again, now that no other write can change them: one may have
@@ -76,13 +81,14 @@ export async function pull(repo: Repo): Promise<void> {
     }
     // Git won't merge or rebase over a merge, rebase or conflicts that were already there, and
     // says so; those aren't the pull's to explain.
-    if (Object.values(before).every((unfinished) => !unfinished)) {
+    if (!before.conflicts && !before.merging && !before.rebasing && !before.applying) {
       // Even one that went through: putting back local changes it stashed can conflict, and
       // `branch.<name>.mergeOptions` can stop a merge before committing, or squash it.
       const after = await progress(run, repo.path);
-      if (after.conflicts || after.merging || after.rebasing || after.squashing) {
+      const squashing = after.squashed !== null && after.squashed !== before.squashed;
+      if (after.conflicts || after.merging || after.rebasing || squashing) {
         const name = tracking.replace(/^refs\/(remotes|heads)\//, "");
-        throw interruptedError(name, after, failure);
+        throw interruptedError(name, { ...after, squashing }, failure);
       }
     }
     if (failure) throw withoutHints(failure);
@@ -174,7 +180,7 @@ async function fetchUpstream(
     fetchHead = `${sha}\t\tbranch '${merge.replace(/^refs\/heads\//, "")}' of .\n`;
   } else {
     fetchHead = await repo.fetching(async (run) => {
-      await gitFetch(run, ["--quiet", remote, merge]);
+      await gitFetch(run, ["--quiet", "--", remote, merge]);
       const file = (await run(["rev-parse", "--git-path", "FETCH_HEAD"])).trim();
       return readFile(resolve(repo.path, file), "utf8");
     });
@@ -259,10 +265,13 @@ async function readConfig(run: GitCommand): Promise<Map<string, string>> {
 const FALSE = new Set(["false", "no", "off", "0", ""]);
 
 /** Whether a pull of `branch` rebases, going by `config`: as in `git pull`, `pull.ff=only` wins. */
+/** How `branch` is set to be rebased when pulled, lowercased; `undefined` when it isn't set. */
+function rebaseSetting(config: Map<string, string>, branch: string): string | undefined {
+  return (config.get(`branch.${branch}.rebase`) ?? config.get("pull.rebase"))?.toLowerCase();
+}
+
 function rebases(config: Map<string, string>, branch: string): boolean {
-  const rebase = (
-    config.get(`branch.${branch}.rebase`) ?? config.get("pull.rebase")
-  )?.toLowerCase();
+  const rebase = rebaseSetting(config, branch);
   return (
     config.get("pull.ff")?.toLowerCase() !== "only" && rebase !== undefined && !FALSE.has(rebase)
   );
@@ -284,9 +293,7 @@ function integrateArgs(
   const ff = config.get("pull.ff")?.toLowerCase();
   // A branch without commits yet has nothing to rebase: it's merged, which just moves it there.
   if (hasHead && rebases(config, branch)) {
-    const rebase = (
-      config.get(`branch.${branch}.rebase`) ?? config.get("pull.rebase")
-    )?.toLowerCase();
+    const rebase = rebaseSetting(config, branch);
     return [
       "rebase",
       "--quiet",
@@ -317,8 +324,12 @@ interface Progress {
   rebasing: boolean;
   /** Applying patches with `git am`, which keeps its state where some rebases do. */
   applying: boolean;
-  /** A squash merge staged, to commit. */
-  squashing: boolean;
+  /**
+   * When SQUASH_MSG, which a squash merge leaves to commit with, was last written; `null` without
+   * one. A time rather than a flag: committing by other means (or discarding the squash) can leave
+   * an old one behind.
+   */
+  squashed: number | null;
 }
 
 async function hasConflicts(run: GitCommand): Promise<boolean> {
@@ -340,30 +351,30 @@ async function progress(run: GitCommand, path: string): Promise<Progress> {
   // A rebase keeps its state in one of these while it's stopped, with or without conflicts; `am`
   // in the second, with a file saying so. Relative to the repository, or absolute, e.g. in a
   // linked worktree.
-  const [rebaseMerge, rebaseApply, applying, squashing] = await Promise.all(
+  const [rebaseMerge, rebaseApply, applying, squashed] = await Promise.all(
     dirs
       .split("\n")
       .filter(Boolean)
       .map((dir) =>
         stat(resolve(path, dir)).then(
-          () => true,
-          () => false,
+          (stats) => stats.mtimeMs,
+          () => null,
         ),
       ),
   );
   return {
     conflicts,
     merging,
-    rebasing: !!rebaseMerge || (!!rebaseApply && !applying),
-    applying: !!applying,
-    squashing: !!squashing,
+    rebasing: rebaseMerge != null || (rebaseApply != null && applying == null),
+    applying: applying != null,
+    squashed: squashed ?? null,
   };
 }
 
 /** Says where the pull stopped, and what to do to finish it. */
 function interruptedError(
   upstream: string,
-  { conflicts, merging, rebasing, squashing }: Progress,
+  { conflicts, merging, rebasing, squashing }: Progress & { squashing: boolean },
   failure: GitError | undefined,
 ): PullInterruptedError {
   // Why git stopped, when it wasn't at conflicts: e.g. an untracked file in the way of a commit
@@ -388,6 +399,8 @@ function interruptedError(
     message = `Pulling ${upstream} caused conflicts. Resolve them, then commit the merge.`;
   } else if (squashing && !conflicts) {
     message = `Squashed ${upstream} into the staged changes, without committing. Commit them to finish pulling.`;
+  } else if (squashing) {
+    message = `Pulling ${upstream} caused conflicts. Resolve them, then commit the squashed changes.`;
   } else {
     // The pull stashed local changes (rebase.autoStash, merge.autoStash) and they conflict.
     message = `Pulled ${upstream}, but your local changes conflict with it. Resolve the conflicts; your changes are also kept in the stash.`;
