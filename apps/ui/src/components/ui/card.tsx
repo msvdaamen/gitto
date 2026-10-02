@@ -16,7 +16,7 @@ export function Card(props: {
       <div class="mb-1.25 flex h-7 items-center justify-between">
         <div class="flex items-center gap-1.75">
           <Dynamic component={props.icon} size={15} class="text-primary" />
-          <h3 class="m-0 text-[11.5px]">{props.title}</h3>
+          <h3 class="m-0 text-[14px]">{props.title}</h3>
         </div>
         {props.action}
       </div>

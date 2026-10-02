@@ -1,12 +1,14 @@
-import { Index, Show } from "solid-js";
+import { Index, Show, type JSX } from "solid-js";
 
+import { Avatar } from "@/components/ui/avatar";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { GraphEdge, GraphRow } from "@/git/graph";
 
 /** Width of a lane, and the space left and right of the lanes. */
 const LANE = 20;
 const PADDING = 6;
 /** Height of a history row, including its 1px bottom border. */
-export const ROW_HEIGHT = 47;
+export const ROW_HEIGHT = 38;
 /** Height of a row's graph: the row, without its bottom border. */
 const HEIGHT = ROW_HEIGHT - 1;
 const MIDDLE = HEIGHT / 2;
@@ -63,10 +65,12 @@ function bottomPath(edge: GraphEdge): string {
 
 /**
  * A commit's row of the history graph. Commits are avatars ringed in their lane's colour, merges
- * small dots, and the uncommitted changes a dashed, hollow circle with a dashed line to HEAD.
+ * small dots, and the uncommitted changes a dashed, hollow circle with a dashed line to HEAD. A
+ * commit's node shows its author when hovered.
  */
 export function HistoryGraph(props: {
   row: GraphRow;
+  author?: string;
   initials?: string;
   avatarColor?: string;
   wip?: boolean;
@@ -112,32 +116,54 @@ export function HistoryGraph(props: {
           />
         }
       >
-        <Show
-          when={!isMerge()}
-          fallback={<circle cx={node()} cy={MIDDLE} r={4.5} fill={color()} stroke="none" />}
-        >
-          <circle
-            cx={node()}
-            cy={MIDDLE}
-            r={NODE_RADIUS}
-            fill={props.avatarColor ?? color()}
-            stroke={color()}
-          />
-          <text
-            x={node()}
-            y={MIDDLE}
-            fill="#fff"
-            stroke="none"
-            font-size="6.5"
-            font-weight="700"
-            text-anchor="middle"
-            dominant-baseline="central"
+        <AuthorTooltip author={props.author} initials={props.initials} color={props.avatarColor}>
+          <Show
+            when={!isMerge()}
+            fallback={<circle cx={node()} cy={MIDDLE} r={4.5} fill={color()} stroke="none" />}
           >
-            {props.initials}
-          </text>
-        </Show>
+            <circle
+              cx={node()}
+              cy={MIDDLE}
+              r={NODE_RADIUS}
+              fill={props.avatarColor ?? color()}
+              stroke={color()}
+            />
+            <text
+              x={node()}
+              y={MIDDLE}
+              fill="#fff"
+              stroke="none"
+              font-size="7"
+              font-weight="700"
+              text-anchor="middle"
+              dominant-baseline="central"
+            >
+              {props.initials}
+            </text>
+          </Show>
+        </AuthorTooltip>
       </Show>
     </svg>
+  );
+}
+
+/** Shows a commit's author in a tooltip while its node, `children`, is hovered. */
+function AuthorTooltip(props: {
+  author?: string;
+  initials?: string;
+  color?: string;
+  children: JSX.Element;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger as="g" class="cursor-default">
+        {props.children}
+      </TooltipTrigger>
+      <TooltipContent class="flex items-center gap-2 py-1 pl-1 pr-2.5">
+        <Avatar initials={props.initials ?? ""} color={props.color} />
+        <span class="truncate font-[600]">{props.author}</span>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

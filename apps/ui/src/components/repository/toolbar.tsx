@@ -88,7 +88,7 @@ export function RepositoryToolbar(props: {
                 title={action.label}
               >
                 <Dynamic component={action.icon} size={16} />
-                <span class="text-[8px]">{action.label}</span>
+                <span class="text-[10.5px]">{action.label}</span>
               </button>
             </>
           )}
@@ -119,8 +119,8 @@ function RepositoryName(props: { repositoryId: string }) {
 
   return (
     <>
-      <strong class="truncate text-[11px]">{repository()?.name}</strong>
-      <span class="truncate text-[8.5px] text-faint">
+      <strong class="truncate text-[13.5px]">{repository()?.name}</strong>
+      <span class="truncate text-[11px] text-faint">
         {status.data ? headLabel(status.data.head) : ""}
       </span>
     </>

@@ -30,8 +30,8 @@ export function SidebarFolder(props: {
     >
       {props.collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
       {props.collapsed ? <Folder size={13} /> : <FolderOpen size={13} />}
-      <span class="truncate text-[10px]">{props.name}</span>
-      <small class="text-[8px] text-faint">{props.count}</small>
+      <span class="truncate text-[12.5px]">{props.name}</span>
+      <small class="text-[10.5px] text-faint">{props.count}</small>
     </button>
   );
 }
@@ -57,12 +57,12 @@ export function SidebarRow(props: {
       title={props.title ?? props.label}
     >
       <props.icon size={13} />
-      <span class="truncate text-[10px]">{props.label}</span>
-      {props.meta && <small class="text-[8px] text-blue">{props.meta}</small>}
+      <span class="truncate text-[12.5px]">{props.label}</span>
+      {props.meta && <small class="text-[10.5px] text-blue">{props.meta}</small>}
       {props.count !== undefined && (
         <em
           class={cn(
-            "min-w-[17px] rounded-lg px-1 py-0.5 text-center text-[8px] not-italic",
+            "min-w-[17px] rounded-lg px-1 py-0.5 text-center text-[10.5px] not-italic",
             toneClasses[props.tone ?? "neutral"],
           )}
         >

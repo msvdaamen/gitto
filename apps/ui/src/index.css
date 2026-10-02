@@ -13,8 +13,8 @@
   --border-soft: #2e2635;
   --text: #f2edf6;
   --text-soft: #c5b9ce;
-  --muted: #8e8198;
-  --faint: #6e6278;
+  --muted: #9d91a7;
+  --faint: #857a8f;
   --primary: #a879df;
   --primary-strong: #bc8cf0;
   --primary-soft: rgba(168, 121, 223, 0.15);
@@ -41,8 +41,8 @@
   --border-soft: #e8e3eb;
   --text: #241d2a;
   --text-soft: #544b5c;
-  --muted: #746a7d;
-  --faint: #94899d;
+  --muted: #675e70;
+  --faint: #7d7287;
   --primary: #7d4fba;
   --primary-strong: #693ca9;
   --primary-soft: rgba(125, 79, 186, 0.11);
@@ -84,6 +84,7 @@
   --color-coral-soft: var(--coral-soft);
   --shadow-app: var(--app-shadow);
   --animate-toast-in: toast-in 0.2s ease-out;
+  --animate-tooltip-in: tooltip-in 0.12s ease-out;
 }
 
 /* The widths the layout changes at, used as `max-sm:`, `max-md:` and `max-lg:`. Below `lg` the
@@ -109,6 +110,13 @@
   &:focus-visible {
     outline: 2px solid var(--primary);
     outline-offset: -2px;
+  }
+}
+
+@keyframes tooltip-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
   }
 }
 

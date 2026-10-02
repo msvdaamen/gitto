@@ -39,7 +39,7 @@ export function HistoryWipRow(
       <span class="flex">
         <span
           class={cn(
-            "inline-flex items-center gap-1 rounded-sm border border-[color-mix(in_srgb,var(--amber)_40%,var(--border))] px-[5px] py-[3px] text-[8px] font-[680]",
+            "inline-flex items-center gap-1 rounded-sm border border-[color-mix(in_srgb,var(--amber)_40%,var(--border))] px-[5px] py-[3px] text-[10.5px] font-[680]",
             toneClasses.amber,
           )}
         >
@@ -52,8 +52,8 @@ export function HistoryWipRow(
           {(row) => <HistoryGraph row={row()} wip nodeOnly={props.searching} />}
         </Show>
       </div>
-      <span class="col-span-3 flex min-w-0 items-center gap-2">
-        <strong class="truncate text-[10.5px] font-[620] text-text italic">{WIP_MESSAGE}</strong>
+      <span class="col-span-2 flex min-w-0 items-center gap-2">
+        <strong class="truncate text-[13px] font-[620] text-text italic">{WIP_MESSAGE}</strong>
         <Show when={counts().staged}>
           <WipCount tone="mint">{counts().staged} staged</WipCount>
         </Show>
@@ -63,7 +63,7 @@ export function HistoryWipRow(
         <Show when={counts().conflicted}>
           <WipCount tone="coral">{counts().conflicted} conflicted</WipCount>
         </Show>
-        <span class="ml-auto shrink-0 text-[9px] text-faint">
+        <span class="ml-auto shrink-0 text-[11.5px] text-faint">
           on {status.data && headLabel(status.data.head)}
         </span>
       </span>
@@ -75,7 +75,7 @@ function WipCount(props: { tone: Tone; children: JSX.Element }) {
   return (
     <small
       class={cn(
-        "shrink-0 rounded-full px-1.5 py-0.5 text-[8px] font-[680]",
+        "shrink-0 rounded-full px-1.5 py-0.5 text-[10.5px] font-[680]",
         toneClasses[props.tone],
       )}
     >

@@ -50,7 +50,7 @@ function HistoryHeader(props: { updating?: boolean }) {
       class={cn(
         "sticky top-0 z-10 grid h-[31px] items-center",
         COLUMNS,
-        "border-b border-border bg-bg-soft text-[8px] font-[720] tracking-[.055em] text-faint uppercase [&>span]:flex [&>span]:h-full [&>span]:items-center [&>span]:border-r [&>span]:border-border-soft [&>span]:px-[9px]",
+        "border-b border-border bg-bg-soft text-[10.5px] font-[720] tracking-[.055em] text-faint uppercase [&>span]:flex [&>span]:h-full [&>span]:items-center [&>span]:border-r [&>span]:border-border-soft [&>span]:px-[9px]",
       )}
     >
       <span>Branch / tag</span>
@@ -61,7 +61,6 @@ function HistoryHeader(props: { updating?: boolean }) {
           <UpdatingIndicator />
         </Show>
       </span>
-      <span>Author</span>
       <span>Date</span>
     </div>
   );

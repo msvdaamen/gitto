@@ -86,10 +86,10 @@ export function SidebarSection<T>(props: {
 function SectionTitle(props: { title: string; count: number }) {
   return (
     <>
-      <span class="min-w-0 flex-1 truncate text-[9px] font-[720] tracking-[.06em] uppercase">
+      <span class="min-w-0 flex-1 truncate text-[11.5px] font-[720] tracking-[.06em] uppercase">
         {props.title}
       </span>
-      <span class="shrink-0 rounded-full bg-bg px-1.5 py-px text-[8px] font-[650] text-faint tabular-nums">
+      <span class="shrink-0 rounded-full bg-bg px-1.5 py-px text-[10.5px] font-[650] text-faint tabular-nums">
         {props.count}
       </span>
     </>
@@ -116,7 +116,7 @@ function RailSection<T>(props: {
       >
         <props.icon size={16} />
         <Show when={props.count > 0}>
-          <span class="absolute -top-0.5 -right-1 min-w-[16px] rounded-full border-2 border-panel bg-panel-active px-[3px] text-center text-[7.5px] leading-[11px] font-[700] text-text-soft tabular-nums">
+          <span class="absolute -top-0.5 -right-1 min-w-[16px] rounded-full border-2 border-panel bg-panel-active px-[3px] text-center text-[10px] leading-[11px] font-[700] text-text-soft tabular-nums">
             {compactCount(props.count)}
           </span>
         </Show>
@@ -129,7 +129,9 @@ function RailSection<T>(props: {
           </Popover.Title>
           <Show
             when={props.items.length}
-            fallback={<p class="px-3 py-4 text-center text-[10px] text-faint">Nothing here yet</p>}
+            fallback={
+              <p class="px-3 py-4 text-center text-[12.5px] text-faint">Nothing here yet</p>
+            }
           >
             <VirtualList
               items={props.items}

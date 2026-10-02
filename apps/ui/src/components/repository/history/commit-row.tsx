@@ -1,7 +1,6 @@
 import { cn } from "cn";
 import { Show, Suspense } from "solid-js";
 
-import { Avatar } from "@/components/ui/avatar";
 import { LineStats } from "@/components/ui/line-stats";
 import { useCommitFiles } from "@/git/queries/diff";
 import type { CommitRow } from "@/git/rows";
@@ -10,7 +9,7 @@ import { HistoryGraph, laneColor } from "./history-graph";
 import { HistoryOption, type HistoryRowProps } from "./history-option";
 import { HistoryRefLabels } from "./ref-labels";
 
-/** A commit in the history: its branches and tags, graph node, message, author and date. */
+/** A commit in the history: its branches and tags, graph node (named for its author), message and date. */
 export function HistoryCommitRow(
   props: HistoryRowProps & {
     commit: CommitRow;
@@ -43,6 +42,7 @@ export function HistoryCommitRow(
             <HistoryGraph
               row={row()}
               nodeOnly={!!props.search}
+              author={props.commit.author}
               initials={props.commit.initials}
               avatarColor={props.commit.avatarColor}
             />
@@ -50,25 +50,16 @@ export function HistoryCommitRow(
         </Show>
       </div>
       <span class="flex min-w-0 items-center justify-between gap-[7px]">
-        <strong class="truncate text-[10.5px] font-[570] text-text">{props.commit.message}</strong>
+        <strong class="truncate text-[13px] font-[570] text-text">{props.commit.message}</strong>
+        {/* The author is otherwise only in the graph's tooltip, which assistive tech skips. */}
+        <span class="sr-only">{`, by ${props.commit.author}`}</span>
         <Show when={props.selected}>
           <Suspense>
             <CommitTotals commit={props.commit} />
           </Suspense>
         </Show>
       </span>
-      <span class="flex items-center gap-[7px]">
-        <Avatar initials={props.commit.initials} color={props.commit.avatarColor} />
-        <span class="truncate text-[9.5px]">
-          {props.commit.author.split(" ").map((part, index) => (
-            <>
-              {index > 0 && " "}
-              <span>{part}</span>
-            </>
-          ))}
-        </span>
-      </span>
-      <span class="truncate text-[9px]">{props.commit.timestamp}</span>
+      <span class="truncate text-[11.5px]">{props.commit.timestamp}</span>
     </HistoryOption>
   );
 }
@@ -83,7 +74,7 @@ function CommitTotals(props: { commit: CommitRow }) {
     <LineStats
       additions={totals().additions}
       deletions={totals().deletions}
-      class="shrink-0 text-[8px]"
+      class="shrink-0 text-[10.5px]"
     />
   );
 }

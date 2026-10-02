@@ -55,18 +55,18 @@ export function CommitForm(props: { repositoryId: string; stagedCount: number })
         variant="primary"
         icon={GitCommitHorizontal}
         disabled={!canCommit()}
-        class="h-8 w-full gap-[7px] rounded-[7px] text-[10px] font-[680] shadow-none"
+        class="h-8 w-full gap-[7px] rounded-[7px] text-[12.5px] font-[680] shadow-none"
       >
         {props.stagedCount > 0
           ? `Commit ${props.stagedCount} ${props.stagedCount === 1 ? "file" : "files"}`
           : "Nothing staged"}
-        <Kbd class="ml-auto border-0 bg-transparent p-0 pr-[7px] text-[8px] text-[rgba(34,20,42,.65)]">
+        <Kbd class="ml-auto border-0 bg-transparent p-0 pr-[7px] text-[10.5px] text-[rgba(34,20,42,.65)]">
           ⌘ ↵
         </Kbd>
       </Button>
       <Show when={commit.error} keyed>
         {(error) => (
-          <p class="m-0 mt-2.5 text-[9px] whitespace-pre-wrap text-coral">{error.message}</p>
+          <p class="m-0 mt-2.5 text-[11.5px] whitespace-pre-wrap text-coral">{error.message}</p>
         )}
       </Show>
     </form>

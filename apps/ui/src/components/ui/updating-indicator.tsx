@@ -7,7 +7,7 @@ export function UpdatingIndicator(props: { class?: string }) {
     <span
       role="status"
       class={cn(
-        "inline-flex shrink-0 items-center gap-1 text-[8px] font-[650] tracking-normal text-faint normal-case",
+        "inline-flex shrink-0 items-center gap-1 text-[10.5px] font-[650] tracking-normal text-faint normal-case",
         props.class,
       )}
     >

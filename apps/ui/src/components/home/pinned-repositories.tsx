@@ -25,8 +25,8 @@ export function PinnedRepositories(props: {
           >
             <span class="size-1.5 rounded-full bg-primary shadow-[0_0_8px_color-mix(in_srgb,var(--primary)_55%,transparent)]" />
             <span class="flex min-w-0 flex-col gap-0.5">
-              <strong class="text-[10.5px]">{repository.name}</strong>
-              <small class="text-[9px] text-faint">{repository.owner}</small>
+              <strong class="text-[13px]">{repository.name}</strong>
+              <small class="text-[11.5px] text-faint">{repository.owner}</small>
             </span>
             <ChevronRight size={14} />
           </button>

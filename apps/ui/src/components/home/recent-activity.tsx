@@ -23,7 +23,7 @@ export function RecentActivity(props: { activities: ActivityEntry[] }) {
     <Card
       icon={RotateCcwClock}
       title="Recent activity"
-      action={<LinkButton class="text-[9.5px]">View all</LinkButton>}
+      action={<LinkButton class="text-[12px]">View all</LinkButton>}
     >
       <div class="flex flex-col">
         <For each={props.activities}>
@@ -38,12 +38,12 @@ export function RecentActivity(props: { activities: ActivityEntry[] }) {
                 <Dynamic component={activityIcons[activity.kind]} size={13} />
               </span>
               <div class="flex min-w-0 flex-col gap-0.5">
-                <strong class="truncate text-[9.5px]">{activity.action}</strong>
-                <span class="text-[8.5px] text-faint">
+                <strong class="truncate text-[12px]">{activity.action}</strong>
+                <span class="text-[11px] text-faint">
                   {activity.repository} · {activity.branch}
                 </span>
               </div>
-              <time class="text-[8.5px] whitespace-nowrap text-faint">{activity.time}</time>
+              <time class="text-[11px] whitespace-nowrap text-faint">{activity.time}</time>
             </div>
           )}
         </For>
