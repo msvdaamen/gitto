@@ -50,9 +50,9 @@ describe("pullTitle", () => {
   });
 
   it("says why there's nothing to pull", () => {
-    expect(pullTitle(status)).toBe("main doesn't track a remote branch");
+    expect(pullTitle(status)).toBe("main doesn't track a remote branch.");
     expect(pullTitle({ ...tracking, head: { kind: "detached", sha: "abc" } })).toBe(
-      "Check out a branch to pull into it",
+      "Check out a branch to pull into it.",
     );
   });
 });

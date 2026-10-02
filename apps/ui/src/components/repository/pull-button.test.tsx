@@ -2,7 +2,10 @@ import type { Uncommitted } from "@gitto/git/types";
 import { render, screen } from "@solidjs/testing-library";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import userEvent from "@testing-library/user-event";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { gitKeys } from "@/git/queries/keys";
 
 import { PullButton } from "./pull-button";
 
@@ -30,13 +33,16 @@ async function loadedButton(title: string) {
   return screen.getByRole("button", { name: "Pull" });
 }
 
+/** Renders the pull button; `switchTo` shows another repository's. */
 function renderButton() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const [repositoryId, setRepositoryId] = createSignal("repo");
   render(() => (
     <QueryClientProvider client={client}>
-      <PullButton repositoryId="repo" />
+      <PullButton repositoryId={repositoryId()} />
     </QueryClientProvider>
   ));
+  return { client, switchTo: setRepositoryId };
 }
 
 afterEach(() => {
@@ -79,6 +85,31 @@ describe("the pull button", () => {
     rpc.git.status.get.mockResolvedValue({ ...status, upstream: null, behind: 0 });
     renderButton();
 
-    expect(await loadedButton("main doesn't track a remote branch")).toBeDisabled();
+    expect(await loadedButton("main doesn't track a remote branch.")).toBeDisabled();
+  });
+
+  it("keeps a pull to the repository it was started in", async () => {
+    const user = userEvent.setup();
+    rpc.git.status.get.mockResolvedValue(status);
+    let fail!: (error: Error) => void;
+    rpc.git.remote.pull.mockReturnValue(new Promise((_, reject) => (fail = reject)));
+    const { client, switchTo } = renderButton();
+
+    await user.click(await loadedButton("Pull 2 commits from origin/main"));
+    expect(screen.getByRole("button", { name: "Pull" })).toHaveAttribute("aria-busy", "true");
+
+    switchTo("other");
+    const other = await loadedButton("Pull 2 commits from origin/main");
+    expect(other).toBeEnabled();
+    expect(other).not.toHaveAttribute("aria-busy", "true");
+
+    // The repository that was pulled is the one reloaded (once it's on show again), and its error
+    // isn't shown over the other one.
+    fail(new Error("Pulling origin/main caused conflicts."));
+    await vi.waitFor(() =>
+      expect(client.getQueryState(gitKeys.status("repo"))?.isInvalidated).toBe(true),
+    );
+    expect(client.getQueryState(gitKeys.status("other"))?.isInvalidated).toBe(false);
+    expect(screen.queryByText("Pulling origin/main caused conflicts.")).not.toBeInTheDocument();
   });
 });

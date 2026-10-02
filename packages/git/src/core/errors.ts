@@ -67,16 +67,6 @@ export function commandError(
     );
   }
   // Some failures, like "nothing to commit", are only explained on stdout.
-  const message =
-    withoutHints(stderr) || stdout.trim() || `git ${args[0]} exited with code ${exitCode}`;
+  const message = stderr.trim() || stdout.trim() || `git ${args[0]} exited with code ${exitCode}`;
   return new GitError(message, args, exitCode, stderr);
-}
-
-/** `output` without git's hints, which suggest commands to type and so don't help in the app. */
-function withoutHints(output: string): string {
-  return output
-    .split("\n")
-    .filter((line) => !line.startsWith("hint:"))
-    .join("\n")
-    .trim();
 }

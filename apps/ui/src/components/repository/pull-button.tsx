@@ -1,11 +1,11 @@
 import { Popover } from "@kobalte/core/popover";
 import Download from "lucide-solid/icons/download";
 import X from "lucide-solid/icons/x";
-import { Suspense } from "solid-js";
+import { Show, Suspense } from "solid-js";
 
 import { usePull } from "@/git/queries/remote";
 import { useStatus } from "@/git/queries/status";
-import { pullBlocker, pullTitle } from "@/git/status";
+import { headPullBlocker, pullTitle } from "@/git/status";
 
 import { ToolbarButton } from "./toolbar-button";
 
@@ -13,14 +13,18 @@ import { ToolbarButton } from "./toolbar-button";
 export function PullButton(props: { repositoryId: string }) {
   return (
     <Suspense fallback={<ToolbarButton icon={Download} label="Pull" accent disabled />}>
-      <Pull repositoryId={props.repositoryId} />
+      {/* Made again for each repository, so one's pull (running, or why it failed) doesn't show
+          on another's toolbar: the route's components are reused when switching repositories. */}
+      <Show when={props.repositoryId} keyed>
+        {(repositoryId) => <Pull repositoryId={repositoryId} />}
+      </Show>
     </Suspense>
   );
 }
 
 function Pull(props: { repositoryId: string }) {
   const status = useStatus(() => props.repositoryId);
-  const pull = usePull(() => props.repositoryId);
+  const pull = usePull();
 
   return (
     <Popover
@@ -35,10 +39,10 @@ function Pull(props: { repositoryId: string }) {
           label="Pull"
           accent
           title={status.data ? pullTitle(status.data) : "Pull"}
-          disabled={!status.data || !!pullBlocker(status.data) || pull.isPending}
+          disabled={!status.data || !!headPullBlocker(status.data) || pull.isPending}
           busy={pull.isPending}
           count={status.data?.behind}
-          onClick={() => pull.mutate()}
+          onClick={() => pull.mutate(props.repositoryId)}
         />
       </Popover.Anchor>
       <Popover.Portal>

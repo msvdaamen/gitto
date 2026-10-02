@@ -1,7 +1,7 @@
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createRepo, rejection, repos } from "../test/fixtures";
 import { FolderNotFoundError, NotARepositoryError, RepositoryNotFoundError } from "./errors";
@@ -36,5 +36,24 @@ describe("running commands", () => {
     await expect(repo.read(["log"], { signal: AbortSignal.abort() })).rejects.toMatchObject({
       name: "AbortError",
     });
+  });
+});
+
+describe("exclusive writes", () => {
+  it("keep other writes out until they're done", async () => {
+    createRepo("exclusive");
+    const repo = await repos.open("exclusive");
+    const order: string[] = [];
+    let finish!: () => void;
+    const exclusive = repo.exclusive(async (run) => {
+      await run(["status"]);
+      await new Promise<void>((resolve) => (finish = resolve));
+      order.push("exclusive");
+    });
+    const write = repo.write(["status"]).then(() => order.push("write"));
+    await vi.waitFor(() => expect(finish).toBeDefined());
+    finish();
+    await Promise.all([exclusive, write]);
+    expect(order).toEqual(["exclusive", "write"]);
   });
 });

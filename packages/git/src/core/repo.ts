@@ -12,11 +12,18 @@ export interface Repo {
   read(args: string[], options?: RunOptions): Promise<string>;
   /** Runs a command that changes the repository, after any earlier writes to it have finished. */
   write(args: string[], options?: RunOptions): Promise<string>;
+  /**
+   * Runs `task`, which runs commands through `run`, as one write: no other write to the repository
+   * runs before it's done. For a write that checks the repository before and after.
+   */
+  exclusive<T>(task: (run: GitCommand) => Promise<T>): Promise<T>;
   /** Whether HEAD points at a commit; it doesn't on a branch without commits yet. */
   hasHead(): Promise<boolean>;
   /** Writes the commit-graph, which speeds up the log, once per run (see `CommitGraphs`). */
   updateCommitGraph(): Promise<void>;
 }
+
+export type GitCommand = (args: string[], options?: RunOptions) => Promise<string>;
 
 /** Opens the repositories that have been added to Gitto. */
 export interface GitRepos {
@@ -42,12 +49,13 @@ export class GitReposImpl implements GitRepos {
     );
     if (!isFolder) throw new FolderNotFoundError(path);
 
-    const run = (args: string[], options?: RunOptions) => runGit(path, args, options);
+    const run: GitCommand = (args, options) => runGit(path, args, options);
 
     return {
       path,
       read: run,
       write: (args, options) => this.writes.run(path, () => run(args, options)),
+      exclusive: (task) => this.writes.run(path, () => task(run)),
       hasHead: () =>
         runGit(path, ["rev-parse", "--verify", "--quiet", "HEAD"]).then(
           () => true,

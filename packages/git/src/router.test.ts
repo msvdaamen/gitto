@@ -60,7 +60,7 @@ describe("the router", () => {
       await apiError(call(gitRouter.remote.pull, { repositoryId: ids.history }, { context })),
     ).toMatchObject({
       code: "PRECONDITION_FAILED",
-      message: "main doesn't track a remote branch, so there's nothing to pull.",
+      message: "main doesn't track a remote branch.",
     });
   });
 
