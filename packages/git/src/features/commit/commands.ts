@@ -24,7 +24,9 @@ export async function createCommit(
     // An amended message is kept exactly as sent, whatever `commit.cleanup` says, as what wasn't
     // edited of it is as it was written. It's sent in UTF-8, so it's recorded as that.
     const args = [
-      ...["-c", "i18n.commitEncoding=UTF-8", "commit"],
+      "-c",
+      "i18n.commitEncoding=UTF-8",
+      "commit",
       ...(amend ? ["--amend", "--allow-empty", "--cleanup=verbatim"] : []),
       "-F",
       "-",
