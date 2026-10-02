@@ -17,6 +17,7 @@ import { Dynamic } from "solid-js/web";
 import { IconButton } from "@/components/ui/button";
 import { Divider } from "@/components/ui/divider";
 import { TextInput } from "@/components/ui/text-input";
+import { useFetch } from "@/git/queries/remote";
 import { useStatus } from "@/git/queries/status";
 import { headLabel } from "@/git/status";
 import { useRepository } from "@/hooks/repositories";
@@ -42,7 +43,6 @@ const toolbarActions: ToolbarAction[] = [
   { icon: GitBranch, label: "Branch", hideBelow: "sm" },
   { icon: Archive, label: "Stash", hideBelow: "lg" },
   { icon: ArchiveRestore, label: "Pop", hideBelow: "lg" },
-  { icon: RefreshCw, label: "Fetch", hideBelow: "sm" },
 ];
 
 export function RepositoryToolbar(props: {
@@ -79,20 +79,11 @@ export function RepositoryToolbar(props: {
           {(action) => (
             <>
               {action.startsGroup && <Divider class="h-6" />}
-              <button
-                class={cn(
-                  "flex h-[38px] min-w-[43px] cursor-pointer flex-col items-center justify-center gap-0.5 rounded-md border-0 bg-transparent px-1.5 text-muted hover:bg-panel-hover hover:text-text max-md:min-w-9 max-md:[&>span]:hidden",
-                  action.accent && "text-blue",
-                  action.hideBelow && HIDDEN_BELOW[action.hideBelow],
-                )}
-                title={action.label}
-              >
-                <Dynamic component={action.icon} size={16} />
-                <span class="text-[10.5px]">{action.label}</span>
-              </button>
+              <ToolbarButton {...action} />
             </>
           )}
         </For>
+        <FetchButton repositoryId={props.repositoryId} />
       </div>
       <div class="ml-auto max-md:min-w-[115px] max-sm:min-w-[90px]">
         <TextInput
@@ -110,6 +101,56 @@ export function RepositoryToolbar(props: {
       />
       <IconButton label="Repository settings" icon={Settings} />
     </header>
+  );
+}
+
+function ToolbarButton(
+  props: ToolbarAction & {
+    title?: string;
+    disabled?: boolean;
+    class?: string;
+    iconClass?: string;
+    onClick?: () => void;
+  },
+) {
+  return (
+    <button
+      type="button"
+      class={cn(
+        "flex h-[38px] min-w-[43px] cursor-pointer flex-col items-center justify-center gap-0.5 rounded-md border-0 bg-transparent px-1.5 text-muted enabled:hover:bg-panel-hover enabled:hover:text-text disabled:cursor-default max-md:min-w-9 max-md:[&>span]:hidden",
+        props.accent && "text-blue",
+        props.hideBelow && HIDDEN_BELOW[props.hideBelow],
+        props.class,
+      )}
+      title={props.title ?? props.label}
+      disabled={props.disabled}
+      onClick={() => props.onClick?.()}
+    >
+      <Dynamic component={props.icon} size={16} class={props.iconClass} />
+      <span class="text-[10.5px]">{props.label}</span>
+    </button>
+  );
+}
+
+/** Fetches every remote; spins while it runs, and turns red with the reason when it fails. */
+function FetchButton(props: { repositoryId: string }) {
+  const fetchRemotes = useFetch();
+  // The last fetch, if it was of this repository; one of another stays with that repository.
+  const current = () => fetchRemotes.variables === props.repositoryId;
+  const pending = () => current() && fetchRemotes.isPending;
+  const error = () => (current() ? fetchRemotes.error : null);
+
+  return (
+    <ToolbarButton
+      icon={RefreshCw}
+      label="Fetch"
+      hideBelow="sm"
+      title={error() ? `Fetch failed: ${error()!.message}` : "Fetch all remotes"}
+      disabled={pending()}
+      class={cn(error() && "text-coral")}
+      iconClass={cn(pending() && "animate-spin motion-reduce:animate-none")}
+      onClick={() => fetchRemotes.mutate(props.repositoryId)}
+    />
   );
 }
 
