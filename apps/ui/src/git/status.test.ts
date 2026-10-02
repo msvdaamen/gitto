@@ -1,7 +1,7 @@
 import type { StatusSummary } from "@gitto/git/types";
 import { describe, expect, it } from "vitest";
 
-import { hasUncommittedChanges, headLabel, headSha, syncLabel } from "./status";
+import { hasUncommittedChanges, headLabel, headSha, lastCommitUpstream, syncLabel } from "./status";
 
 const status: StatusSummary = {
   head: { kind: "branch", name: "main", sha: "abc" },
@@ -20,6 +20,17 @@ describe("HEAD", () => {
   it("has no commit on an unborn branch", () => {
     expect(headSha(status.head)).toBe("abc");
     expect(headSha({ kind: "unborn", name: "main" })).toBeUndefined();
+  });
+});
+
+describe("lastCommitUpstream", () => {
+  it("is the upstream when it has HEAD's commit", () => {
+    expect(lastCommitUpstream({ ...status, upstream: "origin/main" })).toBe("origin/main");
+    expect(lastCommitUpstream({ ...status, upstream: "origin/main", ahead: 1 })).toBeUndefined();
+    expect(lastCommitUpstream(status)).toBeUndefined();
+    expect(
+      lastCommitUpstream({ ...status, head: { kind: "unborn", name: "main" }, upstream: "o/main" }),
+    ).toBeUndefined();
   });
 });
 

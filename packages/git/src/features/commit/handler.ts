@@ -9,5 +9,7 @@ const os = implement(CommitContract).$context<GitContext>();
 export const commitRouter = os.router({
   create: os.create
     .use(withRepo)
-    .handler(({ context, input }) => createCommit(context.repo, input.message)),
+    .handler(({ context, input }) =>
+      createCommit(context.repo, input.message, { amend: input.amend }),
+    ),
 });

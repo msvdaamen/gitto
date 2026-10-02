@@ -17,7 +17,7 @@ import { stagingPaths } from "@/git/changes";
 import { useWorkingTreeChanges } from "@/git/queries/diff";
 import { useStage, useUnstage } from "@/git/queries/staging";
 import { useStatus } from "@/git/queries/status";
-import { headLabel } from "@/git/status";
+import { headLabel, headSha, lastCommitUpstream } from "@/git/status";
 import { useDelayed } from "@/hooks/delayed";
 
 import { ChangedFileList, type FileAction } from "./changed-file-list";
@@ -102,7 +102,12 @@ export function WorkingTreeDetails(props: { repositoryId: string }) {
         }}
       />
 
-      <CommitForm repositoryId={props.repositoryId} stagedCount={changes.staged().length} />
+      <CommitForm
+        repositoryId={props.repositoryId}
+        stagedCount={changes.staged().length}
+        lastCommit={status.data && headSha(status.data.head)}
+        pushedTo={status.data && lastCommitUpstream(status.data)}
+      />
     </div>
   );
 }

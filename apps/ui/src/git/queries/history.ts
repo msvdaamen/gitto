@@ -48,20 +48,23 @@ export function useHistory(repositoryId: () => string, selectedId: () => string 
   return { log, rows, selected };
 }
 
+/** Loads a single commit; it never changes, so it's never refetched. */
+export function commitQuery(repositoryId: string, sha: string) {
+  return {
+    queryKey: gitKeys.commit(repositoryId, sha),
+    queryFn: ({ signal }: { signal: AbortSignal }) =>
+      rpc.git.history.commit({ repositoryId, sha }, { signal }),
+    staleTime: Infinity,
+  };
+}
+
 /** A single commit, loaded on its own, e.g. for the details of the selected one. */
 export function useCommitDetails(repositoryId: () => string, sha: () => string) {
-  const query = useQuery(() => {
-    const id = repositoryId();
-    const commitSha = sha();
-    return {
-      queryKey: gitKeys.commit(id, commitSha),
-      queryFn: ({ signal }: { signal: AbortSignal }) =>
-        rpc.git.history.commit({ repositoryId: id, sha: commitSha }, { signal }),
-      staleTime: Infinity,
-      // Keep showing the previous selection while the next one loads, instead of suspending.
-      placeholderData: keepPreviousData,
-    };
-  });
+  const query = useQuery(() => ({
+    ...commitQuery(repositoryId(), sha()),
+    // Keep showing the previous selection while the next one loads, instead of suspending.
+    placeholderData: keepPreviousData,
+  }));
 
   const commit = createMemo(() => query.data && toCommitRow(repositoryId(), query.data));
 
