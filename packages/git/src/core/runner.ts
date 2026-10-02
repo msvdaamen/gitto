@@ -12,18 +12,10 @@ export interface RunOptions {
   /** Settings for this command, e.g. `gc.auto=0`, as with `git -c`. */
   config?: string[];
   /**
-   * Runs git in a session of its own, without the terminal Gitto may have been started from, so
-   * nothing it starts can ask questions there that no one would answer: ssh can't ask for a
-   * passphrase or to trust a host, and asks with the user's askpass program instead, if they have
-   * one, or fails. (GIT_TERMINAL_PROMPT only covers git's own HTTPS prompts.) Not on Windows,
-   * where there's no such terminal to keep away from.
-   */
-  noTerminal?: boolean;
-  /**
    * Stopped (with all it started, like ssh) when Gitto exits, rather than left running in its
-   * session, out of reach: for a command that's safe to stop partway, like a fetch. Others, like a
-   * rebase, are left to finish. Either way, without a terminal, none waits on an answer that
-   * won't come, so even left behind (when Gitto is stopped by a signal, say) they end.
+   * session (see `runGit`), out of reach: for a command that's safe to stop partway, like a fetch.
+   * Others, like a rebase, are left to finish. Either way, without a terminal, none waits on an
+   * answer that won't come, so even left behind (when Gitto is stopped by a signal, say) they end.
    */
   stopOnExit?: boolean;
 }
@@ -54,17 +46,29 @@ const ENV = {
 /** The process groups of the commands to stop when Gitto exits (see `RunOptions.stopOnExit`). */
 const stopOnExit = new Set<number>();
 process.on("exit", () => {
-  for (const group of stopOnExit) {
-    try {
-      process.kill(-group);
-    } catch {
-      // Already gone.
-    }
-  }
+  for (const group of stopOnExit) stopGroup(group);
 });
 
-/** Runs `git` in `cwd` and resolves to its stdout; rejects with a `GitError` (or a more specific
- * subclass, see `commandError`) on a non-zero exit. */
+/** Stops the process group `group`, if it's still there. */
+function stopGroup(group: number): void {
+  try {
+    process.kill(-group);
+  } catch {
+    // Already gone.
+  }
+}
+
+/**
+ * Runs `git` in `cwd` and resolves to its stdout; rejects with a `GitError` (or a more specific
+ * subclass, see `commandError`) on a non-zero exit.
+ *
+ * Git runs in a session of its own, without the terminal Gitto may have been started from, so
+ * nothing it starts can ask questions there that no one would answer and hold up the repository
+ * meanwhile: ssh can't ask for a passphrase or to trust a host (it asks with the user's askpass
+ * program instead, if they have one, or fails), nor gpg for one to sign with. GIT_TERMINAL_PROMPT
+ * only covers git's own HTTPS prompts. Not on Windows, which has no such terminal to keep away
+ * from.
+ */
 export function runGit(cwd: string, args: string[], options: RunOptions = {}): Promise<string> {
   const start = tracing ? performance.now() : 0;
   return new Promise((resolve, reject) => {
@@ -74,13 +78,17 @@ export function runGit(cwd: string, args: string[], options: RunOptions = {}): P
       env: { ...process.env, ...ENV, ...options.env },
       signal: options.signal,
       stdio: ["pipe", "pipe", "pipe"],
-      detached: options.noTerminal && process.platform !== "win32",
+      detached: process.platform !== "win32",
     });
     // Its own session is its own process group too, numbered after it.
-    const group = options.noTerminal && options.stopOnExit && child.pid;
-    if (group && process.platform !== "win32") {
-      stopOnExit.add(group);
-      child.on("close", () => stopOnExit.delete(group));
+    const group = process.platform !== "win32" ? child.pid : undefined;
+    if (group) {
+      if (options.stopOnExit) stopOnExit.add(group);
+      child.on("close", () => {
+        stopOnExit.delete(group);
+        // Cancelling only stops git: what it started (ssh, say) is stopped with its group.
+        if (options.signal?.aborted) stopGroup(group);
+      });
     }
 
     const stdout: Buffer[] = [];

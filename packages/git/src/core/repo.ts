@@ -15,10 +15,14 @@ export interface Repo {
   /**
    * Runs a fetch. Not queued with writes: it waits on the network, which a commit or staging a file
    * shouldn't wait for, and it only updates remote-tracking refs and FETCH_HEAD, which they don't
-   * touch. Fetches of the same repository do run one at a time, and without a terminal to ask
-   * questions on (see `RunOptions.noTerminal`).
+   * touch. Fetches of the same repository do run one at a time, and are stopped if Gitto exits.
    */
   fetch(args: string[], options?: RunOptions): Promise<string>;
+  /**
+   * Runs `task`, which runs commands through `run`, as one fetch (see `fetch`): no other fetch of
+   * the repository runs before it's done, e.g. to read the FETCH_HEAD a fetch wrote.
+   */
+  fetching<T>(task: (run: GitCommand) => Promise<T>): Promise<T>;
   /**
    * Runs `task`, which runs commands through `run`, as one write: no other write to the repository
    * runs before it's done. For a write that checks the repository before and after.
@@ -64,9 +68,14 @@ export class GitReposImpl implements GitRepos {
       read: run,
       write: (args, options) => this.writes.run(path, () => run(args, options)),
       fetch: (args, options) =>
-        this.fetches.run(path, () => run(args, { ...options, noTerminal: true, stopOnExit: true })),
+        this.fetches.run(path, () => run(args, { ...options, stopOnExit: true })),
+      fetching: (task) =>
+        this.fetches.run(path, () =>
+          task((args, options) => run(args, { ...options, stopOnExit: true })),
+        ),
       exclusive: (task) => this.writes.run(path, () => task(run)),
-      hasHead: () => refExists(run, "HEAD"),
+      // Any failure is taken for no HEAD, as callers have always had it.
+      hasHead: () => refExists(run, "HEAD").catch(() => false),
       updateCommitGraph: () => this.commitGraphs.update(path),
     };
   }

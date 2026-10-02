@@ -107,6 +107,35 @@ describe("pull", () => {
     expect(subjects(path)).toEqual(expect.arrayContaining(["theirs", "ours", "first"]));
   });
 
+  it("words the merge commit as git pull does", async () => {
+    const { upstream, path } = createClone("worded");
+    git(path, "checkout", "-qb", "feature", "--track", "origin/main");
+    const twin = cloneRepo("worded-twin", upstream);
+    git(twin, "checkout", "-qb", "feature", "--track", "origin/main");
+    commit(upstream, "theirs.txt", "theirs\n", "theirs");
+    commit(path, "ours.txt", "ours\n", "ours");
+    commit(twin, "ours.txt", "ours\n", "ours");
+
+    await pull(await repos.open("worded"));
+    git(twin, "pull", "-q", "--no-rebase");
+    const subject = git(path, "log", "-1", "--format=%s");
+    expect(subject).toBe(`Merge branch 'main' of ${upstream} into feature`);
+    expect(subject).toBe(git(twin, "log", "-1", "--format=%s"));
+  });
+
+  it("says when a merge is left to commit", async () => {
+    const { upstream, path } = createClone("no-commit");
+    git(path, "config", "branch.main.mergeOptions", "--no-commit");
+    commit(upstream, "theirs.txt", "theirs\n", "theirs");
+    commit(path, "ours.txt", "ours\n", "ours");
+    await expect(pull(await repos.open("no-commit"))).rejects.toEqual(
+      expect.objectContaining({
+        name: "PullInterruptedError",
+        message: "Merging origin/main stopped before committing. Commit the merge, or abort it.",
+      }),
+    );
+  });
+
   it("rebases when the config says to", async () => {
     const { upstream, path } = createClone("rebased");
     git(path, "config", "pull.rebase", "true");
@@ -257,17 +286,24 @@ describe("pull", () => {
     const { upstream, path } = createClone("not-fetched");
     git(path, "config", "branch.main.remote", upstream);
     const real = await repos.open("not-fetched");
-    const fetched = vi.fn(real.fetch);
-    await expect(pull({ ...real, fetch: fetched })).rejects.toBeInstanceOf(NoUpstreamError);
+    let fetches = 0;
+    const repo: Repo = {
+      ...real,
+      fetching: (task) => {
+        fetches++;
+        return real.fetching(task);
+      },
+    };
+    await expect(pull(repo)).rejects.toBeInstanceOf(NoUpstreamError);
 
     // Not even from a branch without commits, which has no ref to ask for its upstream.
     git(path, "checkout", "-q", "--orphan", "new");
     git(path, "config", "branch.new.remote", upstream);
     git(path, "config", "branch.new.merge", "refs/heads/main");
-    await expect(pull({ ...real, fetch: fetched })).rejects.toEqual(
+    await expect(pull(repo)).rejects.toEqual(
       new NoUpstreamError("new doesn't track a remote branch."),
     );
-    expect(fetched).not.toHaveBeenCalled();
+    expect(fetches).toBe(0);
   });
 
   it("doesn't take patches being applied for a rebase", async () => {
@@ -327,8 +363,8 @@ describe("pull", () => {
     const real = await repos.open("switched");
     const repo: Repo = {
       ...real,
-      fetch: async (args, options) => {
-        const output = await real.fetch(args, options);
+      fetching: async (task) => {
+        const output = await real.fetching(task);
         git(path, "checkout", "-q", "other");
         return output;
       },
@@ -380,8 +416,8 @@ describe("pull", () => {
     const real = await repos.open("upstream-changed");
     const repo: Repo = {
       ...real,
-      fetch: async (args, options) => {
-        const output = await real.fetch(args, options);
+      fetching: async (task) => {
+        const output = await real.fetching(task);
         git(path, "config", "branch.main.merge", "refs/heads/release");
         return output;
       },

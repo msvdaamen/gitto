@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from "@tanstack/solid-query";
+import { useMutation, useQueryClient, type QueryClient } from "@tanstack/solid-query";
 import { createStore, produce } from "solid-js/store";
 
 import { rpc } from "@/lib/rpc";
@@ -20,19 +20,27 @@ export function useFetch() {
   }));
 }
 
+type Pulls = Record<string, { running: boolean; error: Error | null }>;
+
 /**
- * Each repository's pull: whether one is running, and why the last one failed, until that's
- * dismissed or it's pulled again. Kept here rather than in a component, so it outlives the
- * toolbar showing it: switching repositories shows another one's, and the same one's again when
- * switching back. Set by the mutation's own callbacks, which run whatever is on show.
+ * Each repository's pull, by query client: whether one is running, and why the last one failed,
+ * until that's dismissed or it's pulled again. Kept here rather than in a component, so it
+ * outlives the toolbar showing it: switching repositories shows another one's, and the same one's
+ * again when switching back. Set by the mutation's own callbacks, which run whatever is on show.
+ * (Not in the mutation cache: `useMutationState` doesn't follow a change of repository.)
  */
-const [pulls, setPulls] = createStore<Record<string, { running: boolean; error: Error | null }>>(
-  {},
-);
+const pullsByClient = new WeakMap<QueryClient, ReturnType<typeof createStore<Pulls>>>();
+
+function pullsOf(client: QueryClient) {
+  let pulls = pullsByClient.get(client);
+  if (!pulls) pullsByClient.set(client, (pulls = createStore<Pulls>({})));
+  return pulls;
+}
 
 /** Pulls the current branch's upstream; whether a pull is running, and why the last one failed. */
 export function usePull(repositoryId: () => string) {
   const queryClient = useQueryClient();
+  const [pulls, setPulls] = pullsOf(queryClient);
   const mutation = useMutation(() => ({
     // The repository is passed in, rather than read when the pull ends, so the one pulled is
     // updated and refreshed even if another one is on show by then.

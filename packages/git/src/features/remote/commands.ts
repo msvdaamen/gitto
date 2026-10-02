@@ -1,4 +1,4 @@
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import {
@@ -8,6 +8,7 @@ import {
   RepositoryChangedError,
 } from "../../core/errors";
 import { refExists, type GitCommand, type Repo } from "../../core/repo";
+import type { RunOptions } from "../../core/runner";
 import { NO_BRANCH, noUpstream, REBASING } from "./pull-blocker";
 
 /**
@@ -15,18 +16,20 @@ import { NO_BRANCH, noUpstream, REBASING } from "./pull-blocker";
  * so the sidebar and history show the remotes as they are.
  */
 export async function fetchAll(repo: Repo): Promise<void> {
-  await gitFetch(repo, ["--all", "--prune", "--no-progress"]);
+  await gitFetch(repo.fetch, ["--all", "--prune", "--no-progress"]);
 }
 
-/**
- * Runs `git fetch` with `args`, without the upkeep it may start (gc, maintenance, the
- * commit-graph): fetches run alongside the queued writes, which that could get in the way of.
- * `settings` adds to those.
- */
-async function gitFetch(repo: Repo, args: string[], settings: string[] = []): Promise<void> {
-  const all = ["gc.auto=0", "maintenance.auto=false", "fetch.writeCommitGraph=false", ...settings];
+/** `git fetch` with `args`, through `run` (`repo.fetch`, or a command of `repo.fetching`). */
+async function gitFetch(
+  run: (args: string[], options: RunOptions) => Promise<string>,
+  args: string[],
+): Promise<void> {
   try {
-    await repo.fetch(["fetch", ...args], { config: all });
+    // Without the upkeep a fetch may start (gc, maintenance, the commit-graph): fetches run
+    // alongside the queued writes, which that could get in the way of.
+    await run(["fetch", ...args], {
+      config: ["gc.auto=0", "maintenance.auto=false", "fetch.writeCommitGraph=false"],
+    });
   } catch (error) {
     throw error instanceof GitError ? withoutHints(error) : error;
   }
@@ -41,15 +44,7 @@ async function gitFetch(repo: Repo, args: string[], settings: string[] = []): Pr
  */
 export async function pull(repo: Repo): Promise<void> {
   const { branch, upstream } = await readBranch(repo.read, repo.path);
-  // Just the upstream branch, as `git pull` fetches it, which updates its remote-tracking branch.
-  // A local upstream (remote ".") has nothing to fetch.
-  if (upstream.remote !== ".") {
-    await gitFetch(
-      repo,
-      ["--quiet", upstream.remote, upstream.merge],
-      ["fetch.writeFetchHead=false"],
-    );
-  }
+  const fetched = await fetchUpstream(repo, upstream);
 
   await repo.exclusive(async (run) => {
     // The branch and its settings again, now that no other write can change them: one may have
@@ -73,13 +68,11 @@ export async function pull(repo: Repo): Promise<void> {
     }
     const tracking = upstream.tracking ?? (await trackingBranch(run, branch));
     if (!tracking) throw new NoUpstreamError(noUpstream(branch));
-    const args = integrateArgs(config, branch, tracking, hasHead);
+    const args = integrateArgs(config, branch, tracking, fetched, hasHead);
 
     let failure: GitError | undefined;
     try {
-      // Without a terminal, like the fetch: signing the merge commit, say, mustn't ask there and
-      // hold up the repository's writes waiting for an answer.
-      await run(args, { noTerminal: true });
+      await run(args);
     } catch (error) {
       if (!(error instanceof GitError)) throw error;
       failure = error;
@@ -88,10 +81,16 @@ export async function pull(repo: Repo): Promise<void> {
     // says so; those aren't the pull's to explain.
     if (!before.conflicts && !before.merging && !before.rebasing && !before.applying) {
       // A merge or rebase that went through can only have left the conflicts of local changes
-      // it stashed and put back.
-      const after = failure
-        ? await progress(run, repo.path)
-        : { ...before, conflicts: await hasConflicts(run) };
+      // it stashed and put back, or a merge to commit (`branch.<name>.mergeOptions=--no-commit`).
+      let after = before;
+      if (failure) after = await progress(run, repo.path);
+      else {
+        const [conflicts, merging] = await Promise.all([
+          hasConflicts(run),
+          refExists(run, "MERGE_HEAD"),
+        ]);
+        after = { ...before, conflicts, merging };
+      }
       if (after.conflicts || after.merging || after.rebasing) {
         const name = tracking.replace(/^refs\/(remotes|heads)\//, "");
         throw interruptedError(name, after, args, failure);
@@ -136,10 +135,57 @@ async function readBranch(
   // listed) even before the first fetch. Without one, as for an upstream given as a URL,
   // `git status` reports no upstream either, so the UI doesn't offer to pull: refused before
   // fetching.
-  const listed = await run(["for-each-ref", "--format=x%(upstream)", `refs/heads/${branch}`]);
-  const tracking = listed ? listed.trim().slice(1) : null;
+  // Asked for by its full name, but `for-each-ref` also lists the refs under it (`main/x`, when
+  // `main` has no commits): the branch's own line is picked out.
+  const ref = `refs/heads/${branch}`;
+  const listed = await run(["for-each-ref", "--format=%(refname)%00%(upstream)", ref]);
+  const line = listed.split("\n").find((entry) => entry.startsWith(`${ref}\0`));
+  const tracking = line === undefined ? null : line.slice(ref.length + 1);
   if (tracking === "") throw new NoUpstreamError(noUpstream(branch));
   return { branch, upstream: { remote, merge, tracking } };
+}
+
+/** What a pull fetched, to merge. */
+interface Fetched {
+  /** The upstream's commit, as it was fetched. */
+  sha: string;
+  /** The merge commit's message, worded by git as `git pull` would; `null` if it had none. */
+  message: string | null;
+}
+
+/**
+ * Fetches the branch's upstream as `git pull` does: just that branch, which updates its
+ * remote-tracking branch, and FETCH_HEAD, read before another fetch replaces it. A local upstream
+ * (remote ".") has nothing to fetch. `null` when what was fetched isn't known yet: for a branch
+ * without commits, which just moves to its upstream.
+ */
+async function fetchUpstream(
+  repo: Repo,
+  { remote, merge, tracking }: Upstream,
+): Promise<Fetched | null> {
+  let fetchHead: string;
+  if (remote === ".") {
+    if (!tracking) return null;
+    // As `git pull` words FETCH_HEAD for a local branch.
+    const sha = (await repo.read(["rev-parse", "--verify", `${tracking}^{commit}`])).trim();
+    fetchHead = `${sha}\t\tbranch '${merge.replace(/^refs\/heads\//, "")}' of .\n`;
+  } else {
+    fetchHead = await repo.fetching(async (run) => {
+      await gitFetch(run, ["--quiet", remote, merge]);
+      const file = (await run(["rev-parse", "--git-path", "FETCH_HEAD"])).trim();
+      return readFile(resolve(repo.path, file), "utf8");
+    });
+  }
+  const sha = fetchHead.slice(0, fetchHead.indexOf("\t"));
+  if (!sha) return null;
+  // Worded from FETCH_HEAD, as `git pull` has it: e.g. "Merge branch 'main' of <URL>", the URL
+  // as the fetch wrote it there (without credentials). Nothing to word for a branch already up
+  // to date, or without commits.
+  const message = await repo.read(["fmt-merge-msg"], { stdin: fetchHead }).then(
+    (output) => output.trim() || null,
+    () => null,
+  );
+  return { sha, message };
 }
 
 /**
@@ -213,6 +259,7 @@ function integrateArgs(
   config: Map<string, string>,
   branch: string,
   tracking: string,
+  fetched: Fetched | null,
   hasHead: boolean,
 ): string[] {
   const rebase = (
@@ -239,7 +286,10 @@ function integrateArgs(
         : FALSE.has(ff)
           ? ["--no-ff"]
           : ["--ff"];
-  return ["merge", "--quiet", "--no-edit", ...ffArgs, tracking];
+  // What was fetched, with the message `git pull` would give it; or, before there's a commit to
+  // word one against, the remote-tracking branch.
+  const message = fetched?.message ? ["-m", fetched.message] : [];
+  return ["merge", "--quiet", "--no-edit", ...ffArgs, ...message, fetched?.sha ?? tracking];
 }
 
 /** What a merge, rebase or `git am` left unfinished in the repository at `path`. */
