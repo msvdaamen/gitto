@@ -1,24 +1,37 @@
-import type { Head } from "@gitto/git/types";
-import { useQuery } from "@tanstack/solid-query";
-
-import { rpc } from "@/lib/rpc";
-
-import { gitKeys } from "./keys";
-
-export function useStatus(repositoryId: () => string) {
-  return useQuery(() => {
-    const id = repositoryId();
-    return {
-      queryKey: gitKeys.status(id),
-      queryFn: ({ signal }) => rpc.git.status.get({ repositoryId: id }, { signal }),
-      // Merged into the previous status, file by file, so a refetch only updates what changed:
-      // otherwise every file is a new object and its row is rendered again.
-      reconcile: "path",
-    };
-  });
-}
+import type { Head, Status } from "@gitto/git/types";
 
 /** What to call HEAD: the branch name, or "detached HEAD". */
 export function headLabel(head: Head): string {
   return head.kind === "detached" ? "detached HEAD" : head.name;
+}
+
+/** The commit HEAD points at; `undefined` on a branch without commits yet. */
+export function headSha(head: Head): string | undefined {
+  return head.kind === "unborn" ? undefined : head.sha;
+}
+
+export function hasUncommittedChanges(status: Status | undefined): boolean {
+  return !!status && status.files.length > 0;
+}
+
+/**
+ * How many files have staged changes, unstaged changes and conflicts. A conflict isn't counted as
+ * staged or unstaged, though git reports it on both sides.
+ */
+export function statusCounts(status: Status | undefined) {
+  const files = status?.files ?? [];
+  return {
+    staged: files.filter((file) => file.staged && file.staged !== "conflicted").length,
+    unstaged: files.filter((file) => file.unstaged && file.unstaged !== "conflicted").length,
+    conflicted: files.filter((file) => file.staged === "conflicted").length,
+  };
+}
+
+/** How HEAD compares to its upstream: "synced", or how many commits ahead and behind, e.g. "↑2 ↓1". */
+export function syncLabel(status: Pick<Status, "ahead" | "behind">): string {
+  const parts = [
+    ...(status.ahead ? [`↑${status.ahead}`] : []),
+    ...(status.behind ? [`↓${status.behind}`] : []),
+  ];
+  return parts.length ? parts.join(" ") : "synced";
 }

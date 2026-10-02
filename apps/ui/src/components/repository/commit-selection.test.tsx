@@ -4,8 +4,8 @@ import userEvent from "@testing-library/user-event";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { CommitDetails } from "./commit-details";
-import { HistoryTable } from "./history-table";
+import { CommitDetails } from "./details/commit-details";
+import { HistoryTable } from "./history/history-table";
 
 const rpc = vi.hoisted(() => {
   let statusCalls = 0;

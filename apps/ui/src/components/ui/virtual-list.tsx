@@ -1,6 +1,15 @@
 import { createVirtualizer, defaultRangeExtractor, type Range } from "@tanstack/solid-virtual";
 import { cn } from "cn";
-import { createEffect, createSignal, For, onCleanup, onMount, Show, type JSX } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  onCleanup,
+  onMount,
+  Show,
+  type JSX,
+} from "solid-js";
 
 /** Rows rendered past each edge of the viewport, so scrolling doesn't reveal blank space. */
 const OVERSCAN = 10;
@@ -139,18 +148,24 @@ export function VirtualRows<T>(props: {
       onFocusOut={onFocusOut}
     >
       <For each={virtualizer.getVirtualItems()}>
-        {(row) => (
-          <div
-            data-index={row.index}
-            class="absolute inset-x-0 top-0"
-            style={{
-              height: `${props.rowHeight}px`,
-              transform: `translateY(${row.start - offset()}px)`,
-            }}
-          >
-            <Show when={props.items[row.index]}>{(item) => props.children(item, row.index)}</Show>
-          </div>
-        )}
+        {(row) => {
+          // The row's item; when the list shrinks past the row, the last one until the row is
+          // removed. Effects in the row can still run in between (e.g. ones a loading Suspense
+          // boundary held back), and reading a <Show>'s stale value there would throw.
+          const item = createMemo<T | undefined>((last) => props.items[row.index] ?? last);
+          return (
+            <div
+              data-index={row.index}
+              class="absolute inset-x-0 top-0"
+              style={{
+                height: `${props.rowHeight}px`,
+                transform: `translateY(${row.start - offset()}px)`,
+              }}
+            >
+              <Show when={item() !== undefined}>{props.children(item as () => T, row.index)}</Show>
+            </div>
+          );
+        }}
       </For>
     </div>
   );

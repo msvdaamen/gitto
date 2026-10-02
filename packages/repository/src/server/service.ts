@@ -1,10 +1,10 @@
 import { stat } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 
-import { ORPCError } from "@orpc/server";
 import { v7 as uuidv7 } from "uuid";
 
 import type { Repository } from "../types";
+import { NotAGitRepositoryError } from "./errors";
 import type { RepositoryStore } from "./store";
 
 export interface RepositoryService {
@@ -36,9 +36,7 @@ export class RepositoryServiceImpl implements RepositoryService {
       () => true,
       () => false,
     );
-    if (!isRepository) {
-      throw new ORPCError("BAD_REQUEST", { message: `${repoPath} is not a git repository.` });
-    }
+    if (!isRepository) throw new NotAGitRepositoryError(repoPath);
 
     const repository: Repository = { id: uuidv7(), name: basename(repoPath), path: repoPath };
     await this.store.create(repository);

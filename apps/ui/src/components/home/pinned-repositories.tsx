@@ -5,7 +5,7 @@ import { For } from "solid-js";
 
 import { IconButton } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import type { RepositorySummary } from "@/types/git";
+import type { RepositorySummary } from "@/data/mock-data";
 
 export function PinnedRepositories(props: {
   repositories: RepositorySummary[];

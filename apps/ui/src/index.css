@@ -86,6 +86,32 @@
   --animate-toast-in: toast-in 0.2s ease-out;
 }
 
+/* The widths the layout changes at, used as `max-sm:`, `max-md:` and `max-lg:`. Below `lg` the
+   details panel slides over the history, below `md` the sidebar shrinks to a rail of icons, and
+   below `sm` the toolbar and header keep only their essentials. */
+@theme {
+  --breakpoint-*: initial;
+  --breakpoint-sm: 700px;
+  --breakpoint-md: 900px;
+  --breakpoint-lg: 1100px;
+}
+
+/* The keyboard focus outline: around the element, or inside it for rows and list items that sit
+   flush against their neighbours. */
+@utility focus-ring {
+  &:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+  }
+}
+
+@utility focus-ring-inset {
+  &:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: -2px;
+  }
+}
+
 @keyframes toast-in {
   from {
     opacity: 0;

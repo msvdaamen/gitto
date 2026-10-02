@@ -4,11 +4,11 @@ import { createSignal, Show } from "solid-js";
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/ui/form-field";
 import { Kbd } from "@/components/ui/kbd";
-import { useCommit } from "@/git/commit";
+import { useCreateCommit } from "@/git/queries/commit";
 
 /** Commits what's staged in the repository. */
 export function CommitForm(props: { repositoryId: string; stagedCount: number }) {
-  const commit = useCommit(() => props.repositoryId);
+  const commit = useCreateCommit(() => props.repositoryId);
   const [summary, setSummary] = createSignal("");
   const [description, setDescription] = createSignal("");
 
@@ -64,9 +64,9 @@ export function CommitForm(props: { repositoryId: string; stagedCount: number })
           ⌘ ↵
         </Kbd>
       </Button>
-      <Show when={commit.error}>
+      <Show when={commit.error} keyed>
         {(error) => (
-          <p class="m-0 mt-2.5 text-[9px] whitespace-pre-wrap text-coral">{error().message}</p>
+          <p class="m-0 mt-2.5 text-[9px] whitespace-pre-wrap text-coral">{error.message}</p>
         )}
       </Show>
     </form>

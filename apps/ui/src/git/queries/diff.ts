@@ -1,7 +1,7 @@
-import type { ChangedFile } from "@gitto/git/types";
 import { keepPreviousData, useQuery } from "@tanstack/solid-query";
 import { createMemo } from "solid-js";
 
+import { lineTotals } from "@/git/changes";
 import { rpc } from "@/lib/rpc";
 
 import { gitKeys } from "./keys";
@@ -42,14 +42,4 @@ export function useWorkingTreeChanges(repositoryId: () => string) {
   const unstaged = createMemo(() => query.data?.changes.unstaged ?? []);
 
   return { query, staged, unstaged };
-}
-
-function lineTotals(files: ChangedFile[]) {
-  return files.reduce(
-    (sum, file) => ({
-      additions: sum.additions + (file.additions ?? 0),
-      deletions: sum.deletions + (file.deletions ?? 0),
-    }),
-    { additions: 0, deletions: 0 },
-  );
 }

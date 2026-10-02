@@ -8,7 +8,7 @@ import { Show } from "solid-js";
 import { Badge } from "@/components/ui/badge";
 import { StatusDot } from "@/components/ui/status-dot";
 import type { Tone } from "@/components/ui/tone";
-import type { RepositorySummary } from "@/types/git";
+import type { RepositorySummary } from "@/data/mock-data";
 
 const providerTone: Record<RepositorySummary["provider"], Tone> = {
   GitHub: "purple",
@@ -25,7 +25,7 @@ export function RepositoryCard(props: { repository: RepositorySummary; onOpen: (
 
   return (
     <button
-      class="group grid min-h-20.5 w-full cursor-pointer grid-cols-[42px_minmax(0,1fr)_auto_24px] items-center gap-3 rounded-[9px] border border-transparent bg-transparent py-2.75 pr-2.75 pl-3 text-left text-text [-webkit-tap-highlight-color:transparent] hover:border-border hover:bg-panel-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary max-[700px]:grid-cols-[38px_minmax(0,1fr)_18px]"
+      class="group grid min-h-20.5 w-full cursor-pointer grid-cols-[42px_minmax(0,1fr)_auto_24px] items-center gap-3 rounded-[9px] border border-transparent bg-transparent py-2.75 pr-2.75 pl-3 text-left text-text [-webkit-tap-highlight-color:transparent] hover:border-border hover:bg-panel-hover focus-ring max-sm:grid-cols-[38px_minmax(0,1fr)_18px]"
       onClick={props.onOpen}
       data-repository={props.repository.id}
     >
@@ -61,7 +61,7 @@ export function RepositoryCard(props: { repository: RepositorySummary; onOpen: (
           </Show>
         </span>
       </span>
-      <span class="self-start pt-1 text-[9.5px] whitespace-nowrap text-faint max-[700px]:hidden">
+      <span class="self-start pt-1 text-[9.5px] whitespace-nowrap text-faint max-sm:hidden">
         {props.repository.lastOpened}
       </span>
       <span class="grid -translate-x-0.75 place-items-center text-faint opacity-0 transition-[opacity,transform] duration-150 group-hover:translate-x-0 group-hover:opacity-100 motion-reduce:transition-none">

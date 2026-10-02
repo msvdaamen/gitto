@@ -1,4 +1,5 @@
-import type { FileStatus, Head, Status, StatusFile } from "./schema";
+import type { FileStatus } from "../../schema";
+import type { Head, Status, StatusFile } from "./schema";
 
 // `git status --porcelain=v2 -z --branch`; see "Porcelain Format Version 2" in git-status(1).
 export const STATUS_ARGS = ["status", "--porcelain=v2", "-z", "--branch", "--untracked-files=all"];
