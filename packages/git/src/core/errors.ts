@@ -22,8 +22,8 @@ export class IndexLockedError extends GitError {}
 
 /** HEAD isn't the commit that was meant to be amended, e.g. one was made in a terminal since. */
 export class HeadMovedError extends Error {
-  constructor(readonly expected: string) {
-    super("The last commit has changed since you started amending it. Check it and try again.");
+  constructor() {
+    super("The last commit changed before it could be amended, so nothing was amended.");
     this.name = new.target.name;
   }
 }

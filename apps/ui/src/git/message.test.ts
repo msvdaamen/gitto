@@ -18,6 +18,13 @@ describe("commit messages", () => {
     });
   });
 
+  it("only counts a line of ASCII whitespace as blank, as git does", () => {
+    expect(splitMessage("Subject\n\u00a0\nBody")).toEqual({
+      summary: "Subject \u00a0 Body",
+      description: "",
+    });
+  });
+
   it("joins the summary and the description with a blank line", () => {
     expect(joinMessage({ summary: " Subject ", description: "\nBody\n" })).toBe("Subject\n\nBody");
     expect(joinMessage({ summary: "Subject", description: "  " })).toBe("Subject");
@@ -38,6 +45,7 @@ describe("commit messages", () => {
     expect(editMessage(original, { ...split, summary: "Fix the parser" })).toBe(
       "Fix the parser\n\n\nBody  \n",
     );
+    expect(editMessage(original, { ...split, summary: `${split.summary} ` })).toBe(original);
     expect(editMessage("Subject\n", { summary: "Subject", description: "Added" })).toBe(
       "Subject\n\nAdded",
     );

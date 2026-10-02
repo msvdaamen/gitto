@@ -6,13 +6,17 @@ export interface CommitMessage {
 
 export const emptyMessage: CommitMessage = { summary: "", description: "" };
 
+// Whitespace as git sees it: ASCII only, so e.g. a line of a no-break space isn't blank.
+const BLANK_LINES = /\n(?:[ \t\v\f\r]*\n)+/;
+const LINE_BREAK = /[ \t\v\f\r]*\n[ \t\v\f\r]*/g;
+
 /**
  * Splits a commit message into its subject, the first paragraph on one line as git shows it, and
  * the body after it.
  */
 export function splitMessage(message: string): CommitMessage {
   const { subject, body } = parts(message);
-  return { summary: subject.replace(/\s*\n\s*/g, " ").trim(), description: trimBody(body) };
+  return { summary: subject.replace(LINE_BREAK, " ").trim(), description: trimBody(body) };
 }
 
 /** The message to commit: the summary, then a blank line and the description if there is one. */
@@ -22,21 +26,23 @@ export function joinMessage({ summary, description }: CommitMessage): string {
 }
 
 /**
- * `original` with the edits made to it as `splitMessage` split it. A part left as it was is kept
- * exactly as written, e.g. a subject over several lines when only the description changed.
+ * `original` with the edits made to it as `splitMessage` split it. A part left as it was, or only
+ * changed around its ends, is kept exactly as written, e.g. a subject over several lines when only
+ * the description changed.
  */
 export function editMessage(original: string, edited: CommitMessage): string {
   const { subject, separator, body } = parts(original);
   const split = splitMessage(original);
-  const summary = edited.summary === split.summary ? subject : edited.summary.trim();
-  const description =
-    edited.description === split.description ? body : trimBody(edited.description);
+  const newSummary = edited.summary.trim();
+  const newDescription = trimBody(edited.description);
+  const summary = newSummary === split.summary ? subject : newSummary;
+  const description = newDescription === split.description ? body : newDescription;
   return description.trim() ? `${summary}${separator}${description}` : summary;
 }
 
 /** The first paragraph, the blank lines after it, and the rest, as written. */
 function parts(message: string) {
-  const blankLines = /\n\s*\n/.exec(message);
+  const blankLines = BLANK_LINES.exec(message);
   if (!blankLines) return { subject: message.replace(/\n+$/, ""), separator: "\n\n", body: "" };
   const end = blankLines.index + blankLines[0].length;
   return {
@@ -48,5 +54,5 @@ function parts(message: string) {
 
 /** Drops blank lines around the body, but keeps its first line's indentation, e.g. for code. */
 function trimBody(body: string): string {
-  return body.replace(/^\s*\n/, "").trimEnd();
+  return body.replace(/^(?:[ \t\v\f\r]*\n)+/, "").trimEnd();
 }

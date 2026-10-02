@@ -19,14 +19,13 @@ export async function createCommit(
         (sha) => sha.trim(),
         nothingFound,
       );
-      if (head !== amend) throw new HeadMovedError(amend);
+      if (head !== amend) throw new HeadMovedError();
     }
-    // `verbatim`, whatever `commit.cleanup` says: there's no editor whose comments (lines starting
-    // with `#`) to strip, and a message being amended is kept exactly as it was.
+    // An amended message is kept exactly as sent, whatever `commit.cleanup` says, as what wasn't
+    // edited of it is as it was written. It's sent in UTF-8, so it's recorded as that.
     const args = [
-      "commit",
-      ...(amend ? ["--amend", "--allow-empty"] : []),
-      "--cleanup=verbatim",
+      ...["-c", "i18n.commitEncoding=UTF-8", "commit"],
+      ...(amend ? ["--amend", "--allow-empty", "--cleanup=verbatim"] : []),
       "-F",
       "-",
     ];
@@ -80,7 +79,8 @@ export async function getPushedTo(
       () => "",
     ),
   ]);
-  if (!head) return null;
+  // Pushing to a branch of this repository (its remote is `.`) rewrites nothing published.
+  if (!head || (push && !push.startsWith("refs/remotes/"))) return null;
   const branch = head.replace(/^refs\/heads\//, "");
   // When the config can't say, e.g. because the upstream has another name, a guess: the branch of
   // the same name on any remote, which `git push <remote>` updates.

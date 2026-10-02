@@ -69,12 +69,19 @@ describe("createCommit", () => {
     ]);
   });
 
-  it("commits the message exactly as written, whatever commit.cleanup says", async () => {
+  it("amends with the message exactly as written, whatever commit.cleanup says", async () => {
     git(path, "config", "commit.cleanup", "strip");
     const message = "Kept  \n\n\n#123 fixes it\nHard break  \n";
     await createCommit(repo, message, { amend: head() });
     git(path, "config", "--unset", "commit.cleanup");
     expect(await getCommitMessage(repo, "HEAD")).toBe(message);
+  });
+
+  it("records the message in UTF-8 whatever i18n.commitEncoding says", async () => {
+    git(path, "config", "i18n.commitEncoding", "ISO-8859-1");
+    await createCommit(repo, "Café", { amend: head() });
+    git(path, "config", "--unset", "i18n.commitEncoding");
+    expect(await getCommitMessage(repo, "HEAD")).toBe("Café\n");
   });
 
   it("explains why a commit failed", async () => {
@@ -153,6 +160,12 @@ describe("getPushedTo", () => {
     git(path, "switch", "-q", "feature");
     git(path, "tag", "feature");
     expect(await getPushedTo(repo, "HEAD")).toBe("origin/feature");
+
+    // Pushed to a branch of this repository.
+    git(path, "config", "push.default", "upstream");
+    git(path, "branch", "-q", "--set-upstream-to=main");
+    git(path, "config", "branch.feature.remote", ".");
+    expect(await getPushedTo(repo, "HEAD")).toBeNull();
 
     git(path, "switch", "-q", "--detach");
     expect(await getPushedTo(repo, "HEAD")).toBeNull();
