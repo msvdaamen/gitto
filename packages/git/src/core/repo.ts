@@ -3,7 +3,7 @@ import { stat } from "node:fs/promises";
 import type { RepositoryService } from "@gitto/repository/server";
 
 import { FolderNotFoundError, RepositoryNotFoundError } from "./errors";
-import { runGit, WriteQueue, type RunOptions } from "./runner";
+import { CommitGraphs, runGit, WriteQueue, type RunOptions } from "./runner";
 
 /** A repository on disk, with git commands bound to it. */
 export interface Repo {
@@ -14,6 +14,8 @@ export interface Repo {
   write(args: string[], options?: RunOptions): Promise<string>;
   /** Whether HEAD points at a commit; it doesn't on a branch without commits yet. */
   hasHead(): Promise<boolean>;
+  /** Writes the commit-graph, which speeds up the log, once per run (see `CommitGraphs`). */
+  updateCommitGraph(): Promise<void>;
 }
 
 /** Opens the repositories that have been added to Gitto. */
@@ -23,6 +25,7 @@ export interface GitRepos {
 
 export class GitReposImpl implements GitRepos {
   private readonly writes = new WriteQueue();
+  private readonly commitGraphs = new CommitGraphs();
 
   constructor(private readonly repositories: RepositoryService) {}
 
@@ -50,6 +53,7 @@ export class GitReposImpl implements GitRepos {
           () => true,
           () => false,
         ),
+      updateCommitGraph: () => this.commitGraphs.update(path),
     };
   }
 }
