@@ -62,17 +62,17 @@ export class GitReposImpl implements GitRepos {
     if (!isFolder) throw new FolderNotFoundError(path);
 
     const run: GitCommand = (args, options) => runGit(path, args, options);
+    const fetching = <T>(task: (run: GitCommand) => Promise<T>) =>
+      this.fetches.run(path, () =>
+        task((args, options) => run(args, { ...options, stopOnExit: true })),
+      );
 
     return {
       path,
       read: run,
       write: (args, options) => this.writes.run(path, () => run(args, options)),
-      fetch: (args, options) =>
-        this.fetches.run(path, () => run(args, { ...options, stopOnExit: true })),
-      fetching: (task) =>
-        this.fetches.run(path, () =>
-          task((args, options) => run(args, { ...options, stopOnExit: true })),
-        ),
+      fetch: (args, options) => fetching((run) => run(args, options)),
+      fetching,
       exclusive: (task) => this.writes.run(path, () => task(run)),
       // Any failure is taken for no HEAD, as callers have always had it.
       hasHead: () => refExists(run, "HEAD").catch(() => false),

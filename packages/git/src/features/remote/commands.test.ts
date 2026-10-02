@@ -136,6 +136,39 @@ describe("pull", () => {
     );
   });
 
+  it("says when a merge is squashed into the staged changes", async () => {
+    const { upstream, path } = createClone("squash");
+    git(path, "config", "branch.main.mergeOptions", "--squash");
+    commit(upstream, "theirs.txt", "theirs\n", "theirs");
+    commit(path, "ours.txt", "ours\n", "ours");
+    await expect(pull(await repos.open("squash"))).rejects.toEqual(
+      new PullInterruptedError(
+        "Squashed origin/main into the staged changes, without committing. Commit them to finish pulling.",
+      ),
+    );
+  });
+
+  it("says when a local upstream no longer exists", async () => {
+    const path = createRepo("gone-upstream");
+    commit(path, "a.txt", "a\n", "first");
+    git(path, "branch", "other");
+    git(path, "branch", "-q", "--set-upstream-to", "other");
+    git(path, "branch", "-D", "other");
+    await expect(pull(await repos.open("gone-upstream"))).rejects.toEqual(
+      new NoUpstreamError("other no longer exists."),
+    );
+  });
+
+  it("leaves a branch that tracks several to git pull", async () => {
+    const { path } = createClone("octopus");
+    git(path, "config", "--add", "branch.main.merge", "refs/heads/other");
+    await expect(pull(await repos.open("octopus"))).rejects.toEqual(
+      new NoUpstreamError(
+        "main tracks several branches, which only git pull, in a terminal, merges at once.",
+      ),
+    );
+  });
+
   it("rebases when the config says to", async () => {
     const { upstream, path } = createClone("rebased");
     git(path, "config", "pull.rebase", "true");

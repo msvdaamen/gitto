@@ -30,9 +30,10 @@ export class IndexLockedError extends GitError {}
 
 /**
  * A pull that stopped partway, at conflicts or a rebase that couldn't go on, and is left for the
- * user to finish.
+ * user to finish. Not a `GitError`: git may well have succeeded, e.g. stopping a merge before
+ * committing because it was told to.
  */
-export class PullInterruptedError extends GitError {}
+export class PullInterruptedError extends MessageError {}
 
 /** There's nothing to pull from: HEAD isn't on a branch, or the branch doesn't track one. */
 export class NoUpstreamError extends MessageError {}
