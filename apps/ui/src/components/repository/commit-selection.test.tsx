@@ -26,13 +26,14 @@ const rpc = vi.hoisted(() => {
             upstream: null,
             ahead: 0,
             behind: 0,
-            files: [{ path: "wip.txt", origPath: null, staged: null, unstaged: "modified" }],
+            counts: { files: 1, staged: 0, unstaged: 1, conflicted: 0 },
             changes: {
               staged: [],
               unstaged: [
                 { path: "wip.txt", status: "modified", origPath: null, additions: 1, deletions: 0 },
               ],
             },
+            version: "1",
           };
         },
       },

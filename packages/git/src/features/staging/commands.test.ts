@@ -4,9 +4,16 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { IndexLockedError } from "../../core/errors";
+import type { Repo } from "../../core/repo";
 import { createHistoryRepo, createRepo, git, repos } from "../../test/fixtures";
 import { getStatus } from "../status/commands";
+import { parseStatus, STATUS_ARGS } from "../status/parse";
 import { stage, stageAll, unstage, unstageAll } from "./commands";
+
+/** Each changed file, with whether its change is staged and unstaged. */
+async function statusFiles(repo: Repo) {
+  return parseStatus(await repo.read(STATUS_ARGS)).files;
+}
 
 describe("staging files", () => {
   it("moves staged changes between the working tree and the index", async () => {
@@ -45,7 +52,7 @@ describe("staging files", () => {
     writeFileSync(join(path, "x y.txt"), "hi\n");
 
     await stage(repo, ["x y.txt"]);
-    expect((await getStatus(repo)).files).toEqual([
+    expect(await statusFiles(repo)).toEqual([
       { path: "x y.txt", origPath: null, staged: "added", unstaged: null },
     ]);
     expect((await getStatus(repo)).changes).toEqual({
@@ -54,7 +61,7 @@ describe("staging files", () => {
     });
 
     await unstage(repo, ["x y.txt"]);
-    expect((await getStatus(repo)).files).toEqual([
+    expect(await statusFiles(repo)).toEqual([
       { path: "x y.txt", origPath: null, staged: null, unstaged: "untracked" },
     ]);
   });
@@ -95,8 +102,9 @@ describe("a big working tree", () => {
     const repo = await repos.open("all");
 
     await stageAll(repo);
-    const staged = await getStatus(repo);
-    expect(staged.files.map((file) => [file.path, file.staged, file.unstaged])).toEqual([
+    expect(
+      (await statusFiles(repo)).map((file) => [file.path, file.staged, file.unstaged]),
+    ).toEqual([
       ["deleted.txt", "deleted", null],
       ["kept.txt", "modified", null],
       ["new file.txt", "added", null],
@@ -104,9 +112,8 @@ describe("a big working tree", () => {
     ]);
 
     await unstageAll(repo);
-    const unstaged = await getStatus(repo);
-    expect(unstaged.changes.staged).toEqual([]);
-    expect(unstaged.files.map((file) => [file.path, file.unstaged])).toEqual([
+    expect((await getStatus(repo)).changes.staged).toEqual([]);
+    expect((await statusFiles(repo)).map((file) => [file.path, file.unstaged])).toEqual([
       ["deleted.txt", "deleted"],
       ["kept.txt", "modified"],
       ["moved.txt", "deleted"],
@@ -133,7 +140,7 @@ describe("a big working tree", () => {
     const repo = await repos.open("all-conflict");
 
     await unstageAll(repo);
-    expect((await getStatus(repo)).files).toEqual([
+    expect(await statusFiles(repo)).toEqual([
       { path: "other.txt", origPath: null, staged: null, unstaged: "modified" },
       { path: "both.txt", origPath: null, staged: "conflicted", unstaged: "conflicted" },
     ]);
@@ -149,7 +156,7 @@ describe("a big working tree", () => {
     await stageAll(repo);
     expect((await getStatus(repo)).changes.staged).toHaveLength(1);
     await unstageAll(repo);
-    expect((await getStatus(repo)).files).toEqual([
+    expect(await statusFiles(repo)).toEqual([
       { path: "a.txt", origPath: null, staged: null, unstaged: "untracked" },
     ]);
   });

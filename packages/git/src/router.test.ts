@@ -56,4 +56,17 @@ describe("the router", () => {
       message: expect.stringContaining("bad object"),
     });
   });
+
+  it("skips a status the caller already has", async () => {
+    const input = { repositoryId: ids.history };
+    const status = await call(gitRouter.status.get, input, { context });
+    if ("unchanged" in status) return expect.fail("expected a full status");
+
+    expect(
+      await call(gitRouter.status.get, { ...input, since: status.version }, { context }),
+    ).toEqual({ unchanged: true });
+    expect(
+      await call(gitRouter.status.get, { ...input, since: "an older version" }, { context }),
+    ).toEqual(status);
+  });
 });

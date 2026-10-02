@@ -45,3 +45,32 @@ export const WorkingTreeFilesSchema = z.object({
 });
 
 export type WorkingTreeFiles = z.infer<typeof WorkingTreeFilesSchema>;
+
+/**
+ * How many files changed. A conflict isn't counted as staged or unstaged, though git reports it on
+ * both sides; `files` counts each changed file once.
+ */
+export const StatusCountsSchema = z.object({
+  files: z.number(),
+  staged: z.number(),
+  unstaged: z.number(),
+  conflicted: z.number(),
+});
+
+export type StatusCounts = z.infer<typeof StatusCountsSchema>;
+
+/** Where HEAD is, and how much changed: what the UI shows outside the list of changed files. */
+export const StatusSummarySchema = StatusSchema.omit({ files: true }).extend({
+  counts: StatusCountsSchema,
+});
+
+export type StatusSummary = z.infer<typeof StatusSummarySchema>;
+
+/** Everything uncommitted: the summary and the changed files, with their line counts. */
+export const UncommittedSchema = StatusSummarySchema.extend({
+  changes: WorkingTreeFilesSchema,
+  /** Changes whenever anything above does, so a caller can ask to skip a status it already has. */
+  version: z.string(),
+});
+
+export type Uncommitted = z.infer<typeof UncommittedSchema>;

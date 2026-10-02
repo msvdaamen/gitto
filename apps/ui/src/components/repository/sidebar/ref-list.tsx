@@ -99,7 +99,7 @@ export function RefList(props: { repositoryId: string }) {
             icon={File}
             label="Working directory"
             active
-            count={status.data?.files.length ?? 0}
+            count={status.data?.counts.files ?? 0}
             tone="amber"
           />
         )}
