@@ -39,7 +39,10 @@ async function gitFetch(run: GitCommand, args: string[]): Promise<void> {
  * for (and holds up) the other writes to the repository: the fetch takes as long as the network.
  */
 export async function pull(repo: Repo): Promise<void> {
-  const { branch, upstream, config: settings } = await readBranch(repo.read, repo.path);
+  const [{ branch, upstream, config: settings }, paths] = await Promise.all([
+    readBranch(repo.read, repo.path),
+    statePaths(repo.read, repo.path),
+  ]);
   // Its merge commit is worded unless the pull will rebase, or only fast-forward, which makes none
   // (as the settings say before fetching).
   const fetched = await fetchUpstream(
@@ -54,7 +57,7 @@ export async function pull(repo: Repo): Promise<void> {
     const [current, config, before, hasHead] = await Promise.all([
       currentBranch(run),
       readConfig(run),
-      progress(run, repo.path),
+      progress(run, paths),
       refExists(run, "HEAD"),
     ]);
     if (current !== branch) {
@@ -83,9 +86,19 @@ export async function pull(repo: Repo): Promise<void> {
     // says so; those aren't the pull's to explain.
     if (!before.conflicts && !before.merging && !before.rebasing && !before.applying) {
       // Even one that went through: putting back local changes it stashed can conflict, and
-      // `branch.<name>.mergeOptions` can stop a merge before committing, or squash it.
-      const after = await progress(run, repo.path);
-      const squashing = after.squashed !== null && after.squashed !== before.squashed;
+      // `branch.<name>.mergeOptions` can stop a merge before committing, or squash it: then
+      // what was merged isn't in HEAD.
+      const after = await progress(run, paths);
+      // A merge that went through, or stopped at conflicts, without a merge to commit: squashed,
+      // if what it merged isn't in HEAD.
+      const squashing =
+        args[0] === "merge" &&
+        !after.merging &&
+        (!failure || after.conflicts) &&
+        (await run(["merge-base", "--is-ancestor", args.at(-1)!, "HEAD"]).then(
+          () => false,
+          () => true,
+        ));
       if (after.conflicts || after.merging || after.rebasing || squashing) {
         const name = tracking.replace(/^refs\/(remotes|heads)\//, "");
         throw interruptedError(name, { ...after, squashing }, failure);
@@ -115,7 +128,7 @@ async function readBranch(
   const [branch, config] = await Promise.all([currentBranch(run), readConfig(run)]);
   if (branch === null) {
     // HEAD is detached while a rebase stops: it's that to finish, not a branch to check out.
-    const { rebasing } = await progress(run, path);
+    const { rebasing } = await progress(run, await statePaths(run, path));
     throw new NoUpstreamError(rebasing ? REBASING : NO_BRANCH);
   }
   // From the config: a branch without commits yet has no ref to ask for its upstream. A remote
@@ -172,7 +185,11 @@ async function fetchUpstream(
     // As `git pull` words FETCH_HEAD for a local branch.
     const sha = await repo.read(["rev-parse", "--verify", "--quiet", `${tracking}^{commit}`]).then(
       (output) => output.trim(),
-      () => "",
+      (error: unknown) => {
+        // Exits with 1, saying nothing, when there's no such commit.
+        if (error instanceof GitError && error.exitCode === 1) return "";
+        throw error;
+      },
     );
     if (!sha) {
       throw new NoUpstreamError(`${tracking.replace(/^refs\/heads\//, "")} no longer exists.`);
@@ -206,9 +223,11 @@ function trackingBranch(run: GitCommand, branch: string): Promise<string | null>
   return run(["rev-parse", "--symbolic-full-name", `${branch}@{upstream}`]).then(
     (ref) => ref.trim() || null,
     (error: unknown) => {
-      // Git says there's no upstream, or none fetched; anything else is for the caller.
+      // Git says there's no upstream, or none fetched; anything else (no longer a repository,
+      // say, a GitError of its own) is for the caller.
       if (
         error instanceof GitError &&
+        error.constructor === GitError &&
         /upstream|remote-tracking|unknown revision/.test(error.stderr)
       ) {
         return null;
@@ -264,12 +283,12 @@ async function readConfig(run: GitCommand): Promise<Map<string, string>> {
 
 const FALSE = new Set(["false", "no", "off", "0", ""]);
 
-/** Whether a pull of `branch` rebases, going by `config`: as in `git pull`, `pull.ff=only` wins. */
 /** How `branch` is set to be rebased when pulled, lowercased; `undefined` when it isn't set. */
 function rebaseSetting(config: Map<string, string>, branch: string): string | undefined {
   return (config.get(`branch.${branch}.rebase`) ?? config.get("pull.rebase"))?.toLowerCase();
 }
 
+/** Whether a pull of `branch` rebases, going by `config`: as in `git pull`, `pull.ff=only` wins. */
 function rebases(config: Map<string, string>, branch: string): boolean {
   const rebase = rebaseSetting(config, branch);
   return (
@@ -317,57 +336,58 @@ function integrateArgs(
   return ["merge", "--quiet", "--no-edit", ...ffArgs, ...target];
 }
 
-/** What a merge, rebase or `git am` left unfinished in the repository at `path`. */
+/** What a merge, rebase or `git am` left unfinished in a repository. */
 interface Progress {
   conflicts: boolean;
   merging: boolean;
   rebasing: boolean;
   /** Applying patches with `git am`, which keeps its state where some rebases do. */
   applying: boolean;
-  /**
-   * When SQUASH_MSG, which a squash merge leaves to commit with, was last written; `null` without
-   * one. A time rather than a flag: committing by other means (or discarding the squash) can leave
-   * an old one behind.
-   */
-  squashed: number | null;
+}
+
+/** Where a repository keeps the state of a rebase or `git am` while it's stopped. */
+interface StatePaths {
+  rebaseMerge: string;
+  rebaseApply: string;
+  /** In `rebaseApply`, saying it's `git am`'s. */
+  applying: string;
+}
+
+async function statePaths(run: GitCommand, path: string): Promise<StatePaths> {
+  const names = ["rebase-merge", "rebase-apply", "rebase-apply/applying"];
+  const output = await run(["rev-parse", ...names.flatMap((name) => ["--git-path", name])]);
+  // Relative to the repository, or absolute, e.g. in a linked worktree.
+  const [rebaseMerge, rebaseApply, applying] = output
+    .split("\n")
+    .filter(Boolean)
+    .map((file) => resolve(path, file));
+  return { rebaseMerge: rebaseMerge!, rebaseApply: rebaseApply!, applying: applying! };
 }
 
 async function hasConflicts(run: GitCommand): Promise<boolean> {
   return (await run(["ls-files", "--unmerged"])) !== "";
 }
 
-async function progress(run: GitCommand, path: string): Promise<Progress> {
-  const [conflicts, merging, dirs] = await Promise.all([
+function exists(file: string): Promise<boolean> {
+  return stat(file).then(
+    () => true,
+    () => false,
+  );
+}
+
+async function progress(run: GitCommand, paths: StatePaths): Promise<Progress> {
+  const [conflicts, merging, rebaseMerge, rebaseApply, applying] = await Promise.all([
     hasConflicts(run),
     refExists(run, "MERGE_HEAD"),
-    run([
-      "rev-parse",
-      ...["rebase-merge", "rebase-apply", "rebase-apply/applying", "SQUASH_MSG"].flatMap((p) => [
-        "--git-path",
-        p,
-      ]),
-    ]),
+    exists(paths.rebaseMerge),
+    exists(paths.rebaseApply),
+    exists(paths.applying),
   ]);
-  // A rebase keeps its state in one of these while it's stopped, with or without conflicts; `am`
-  // in the second, with a file saying so. Relative to the repository, or absolute, e.g. in a
-  // linked worktree.
-  const [rebaseMerge, rebaseApply, applying, squashed] = await Promise.all(
-    dirs
-      .split("\n")
-      .filter(Boolean)
-      .map((dir) =>
-        stat(resolve(path, dir)).then(
-          (stats) => stats.mtimeMs,
-          () => null,
-        ),
-      ),
-  );
   return {
     conflicts,
     merging,
-    rebasing: rebaseMerge != null || (rebaseApply != null && applying == null),
-    applying: applying != null,
-    squashed: squashed ?? null,
+    rebasing: rebaseMerge || (rebaseApply && !applying),
+    applying,
   };
 }
 

@@ -9,7 +9,7 @@ import { headPullBlocker, pullTitle } from "@/git/status";
 
 import { ToolbarButton } from "./toolbar-button";
 
-/** Pulls the current branch's upstream, and says why if that failed. */
+/** Pulls the current branch's upstream, and says why if that failed or was left to finish. */
 export function PullButton(props: { repositoryId: string }) {
   return (
     <Suspense fallback={<ToolbarButton icon={Download} label="Pull" accent disabled />}>
@@ -48,7 +48,7 @@ function Pull(props: { repositoryId: string }) {
           class="z-50 flex max-w-[360px] animate-toast-in items-start gap-2 rounded-lg border border-[color-mix(in_srgb,var(--coral)_30%,var(--border))] bg-panel-raised p-3 text-text shadow-app motion-reduce:animate-none"
         >
           <div class="min-w-0">
-            <Popover.Title class="m-0 text-[12.5px] font-[680]">Couldn't pull</Popover.Title>
+            <Popover.Title class="m-0 text-[12.5px] font-[680]">Pull</Popover.Title>
             <Popover.Description class="m-0 mt-1 text-[11.5px] break-words whitespace-pre-wrap text-coral">
               {pull.error()?.message}
             </Popover.Description>

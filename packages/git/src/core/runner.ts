@@ -14,8 +14,9 @@ export interface RunOptions {
   /**
    * Stopped (with all it started, like ssh) when Gitto exits, rather than left running in its
    * session (see `runGit`), out of reach: for a command that's safe to stop partway, like a fetch.
-   * Others, like a rebase, are left to finish. Either way, without a terminal, none waits on an
-   * answer that won't come, so even left behind (when Gitto is stopped by a signal, say) they end.
+   * Others, like a rebase, aren't stopped on purpose, though one that writes output once Gitto
+   * has gone stops then, its pipe closed. Without a terminal, none waits on an answer that won't
+   * come, so even left behind (when Gitto is stopped by a signal, say) they end.
    */
   stopOnExit?: boolean;
 }
