@@ -21,18 +21,12 @@ export async function fetchAll(repo: Repo): Promise<void> {
 /**
  * Runs `git fetch` with `args`, without the upkeep it may start (gc, maintenance, the
  * commit-graph): fetches run alongside the queued writes, which that could get in the way of.
- * `settings` adds to those; `config` is the repository's, if it's been read already.
+ * `settings` adds to those.
  */
-async function fetch(
-  repo: Repo,
-  args: string[],
-  { settings = [], config }: { settings?: string[]; config?: Map<string, string> } = {},
-): Promise<void> {
+async function fetch(repo: Repo, args: string[], settings: string[] = []): Promise<void> {
   const all = ["gc.auto=0", "maintenance.auto=false", "fetch.writeCommitGraph=false", ...settings];
   try {
-    await repo.fetch([...all.flatMap((setting) => ["-c", setting]), "fetch", ...args], {
-      env: remoteEnv(config ?? (await readConfig(repo.read))),
-    });
+    await repo.fetch([...all.flatMap((setting) => ["-c", setting]), "fetch", ...args]);
   } catch (error) {
     throw error instanceof GitError ? withoutHints(error) : error;
   }
@@ -50,17 +44,13 @@ export async function pull(repo: Repo): Promise<void> {
   // Just the upstream branch, as `git pull` fetches it, which updates its remote-tracking branch.
   // A local upstream (remote ".") has nothing to fetch.
   if (upstream.remote !== ".") {
-    await fetch(repo, ["--quiet", upstream.remote, upstream.merge], {
-      settings: ["fetch.writeFetchHead=false"],
-      config: upstream.config,
-    });
+    await fetch(repo, ["--quiet", upstream.remote, upstream.merge], ["fetch.writeFetchHead=false"]);
   }
 
   await repo.exclusive(async (run) => {
     // Read again, now that no other write can change them: one may have while fetching.
-    const [current, tracking, before, hasHead] = await Promise.all([
+    const [current, before, hasHead] = await Promise.all([
       readBranch(run, repo.path),
-      trackingBranch(run, branch),
       progress(run, repo.path),
       refExists(run, "HEAD"),
     ]);
@@ -72,6 +62,7 @@ export async function pull(repo: Repo): Promise<void> {
         `${branch}'s upstream changed while pulling it. Pull again.`,
       );
     }
+    const tracking = current.upstream.tracking ?? (await trackingBranch(run, branch));
     if (!tracking) throw new NoUpstreamError(noUpstream(branch));
     const args = integrateArgs(current.upstream.config, branch, tracking, hasHead);
 
@@ -84,7 +75,7 @@ export async function pull(repo: Repo): Promise<void> {
     }
     // Git won't merge or rebase over a merge, rebase or conflicts that were already there, and
     // says so; those aren't the pull's to explain.
-    if (!before.conflicts && !before.merging && !before.rebasing) {
+    if (!before.conflicts && !before.merging && !before.rebasing && !before.applying) {
       const after = await progress(run, repo.path);
       if (after.conflicts || after.merging || after.rebasing) {
         const name = tracking.replace(/^refs\/(remotes|heads)\//, "");
@@ -100,6 +91,11 @@ interface Upstream {
   remote: string;
   /** The branch's full name on the remote, e.g. `refs/heads/main`. */
   merge: string;
+  /**
+   * Its remote-tracking branch, e.g. `refs/remotes/origin/main`, or the local branch it is;
+   * `null` until the branch has a commit (see `trackingBranch`).
+   */
+  tracking: string | null;
   /** The rest of the settings a pull depends on, by key; see `readConfig`. */
   config: Map<string, string>;
 }
@@ -121,13 +117,20 @@ async function readBranch(
   const remote = config.get(`branch.${branch}.remote`);
   const merge = config.get(`branch.${branch}.merge`);
   if (!remote || !merge) throw new NoUpstreamError(noUpstream(branch));
-  return { branch, upstream: { remote, merge, config } };
+  // The remote-tracking branch it's fetched into, known (once the branch has a commit to be
+  // listed) even before the first fetch. Without one, as for an upstream given as a URL,
+  // `git status` reports no upstream either, so the UI doesn't offer to pull: refused before
+  // fetching.
+  const listed = await run(["for-each-ref", "--format=x%(upstream)", `refs/heads/${branch}`]);
+  const tracking = listed ? listed.trim().slice(1) : null;
+  if (tracking === "") throw new NoUpstreamError(noUpstream(branch));
+  return { branch, upstream: { remote, merge, tracking, config } };
 }
 
 /**
- * The remote-tracking branch `branch`'s upstream was fetched into, e.g. `refs/remotes/origin/main`
- * (or the local branch it tracks). `null` without one, as for an upstream given as a URL: then
- * `git status` reports no upstream either, so the UI doesn't offer to pull.
+ * The remote-tracking branch `branch`'s upstream was fetched into, for a branch without commits,
+ * which `for-each-ref` doesn't list: it's only found once that exists, after the fetch. `null`
+ * without one.
  */
 function trackingBranch(run: GitCommand, branch: string): Promise<string | null> {
   return run(["rev-parse", "--symbolic-full-name", `${branch}@{upstream}`]).then(
@@ -155,7 +158,7 @@ async function currentBranch(run: GitCommand): Promise<string | null> {
  * git.
  */
 async function readConfig(run: GitCommand): Promise<Map<string, string>> {
-  const pattern = String.raw`^(pull\.(rebase|ff)|core\.sshcommand|http\.(.+\.)?lowspeed(limit|time)|branch\..+\.(remote|merge|rebase))$`;
+  const pattern = String.raw`^(pull\.(rebase|ff)|branch\..+\.(remote|merge|rebase))$`;
   let output = "";
   try {
     output = await run(["config", "-z", "--get-regexp", pattern]);
@@ -214,63 +217,47 @@ function integrateArgs(
   return ["merge", "--quiet", "--no-edit", ...ffArgs, tracking];
 }
 
-/**
- * Keeps ssh from asking for a passphrase or to trust a host on the terminal Gitto may have been
- * started from (GIT_TERMINAL_PROMPT, see the runner, only covers HTTPS), unless there's an askpass
- * program to ask with instead, and gives up on an HTTP transfer that stalls. Settings of the
- * user's own win: their ssh command, and any HTTP low-speed setting. Exported for tests.
- */
-export function remoteEnv(
-  config: Map<string, string>,
-  env: NodeJS.ProcessEnv = process.env,
-): Record<string, string> {
-  const result: Record<string, string> = {};
-  if (env.SSH_ASKPASS) {
-    // A program to ask with, e.g. the desktop's: always ask with it, never on the terminal.
-    if (!env.SSH_ASKPASS_REQUIRE) result.SSH_ASKPASS_REQUIRE = "force";
-  } else if (!env.GIT_SSH_COMMAND && !env.GIT_SSH && !config.has("core.sshcommand")) {
-    // Only BatchMode: other options on the command line would override the user's ssh config.
-    result.GIT_SSH_COMMAND = "ssh -o BatchMode=yes";
-  }
-  const hasLowSpeed =
-    env.GIT_HTTP_LOW_SPEED_LIMIT ||
-    env.GIT_HTTP_LOW_SPEED_TIME ||
-    [...config.keys()].some((key) => /^http\..*lowspeed(limit|time)$/.test(key));
-  if (!hasLowSpeed) {
-    // Slower than 1KB/s for a minute: stalled.
-    result.GIT_HTTP_LOW_SPEED_LIMIT = "1000";
-    result.GIT_HTTP_LOW_SPEED_TIME = "60";
-  }
-  return result;
-}
-
-/** What a merge or rebase left unfinished in the repository at `path`. */
+/** What a merge, rebase or `git am` left unfinished in the repository at `path`. */
 interface Progress {
   conflicts: boolean;
   merging: boolean;
   rebasing: boolean;
+  /** Applying patches with `git am`, which keeps its state where some rebases do. */
+  applying: boolean;
 }
 
 async function progress(run: GitCommand, path: string): Promise<Progress> {
-  const [unmerged, merging, rebaseDirs] = await Promise.all([
+  const [unmerged, merging, dirs] = await Promise.all([
     run(["ls-files", "--unmerged"]),
     refExists(run, "MERGE_HEAD"),
-    run(["rev-parse", "--git-path", "rebase-merge", "--git-path", "rebase-apply"]),
+    run([
+      "rev-parse",
+      ...["rebase-merge", "rebase-apply", "rebase-apply/applying"].flatMap((p) => [
+        "--git-path",
+        p,
+      ]),
+    ]),
   ]);
-  // A rebase keeps its state in one of these while it's stopped, with or without conflicts.
-  const rebasing = await Promise.all(
-    rebaseDirs
+  // A rebase keeps its state in one of these while it's stopped, with or without conflicts; `am`
+  // in the second, with a file saying so. Relative to the repository, or absolute, e.g. in a
+  // linked worktree.
+  const [rebaseMerge, rebaseApply, applying] = await Promise.all(
+    dirs
       .split("\n")
       .filter(Boolean)
       .map((dir) =>
-        // Relative to the repository, or absolute, e.g. in a linked worktree.
         stat(resolve(path, dir)).then(
           () => true,
           () => false,
         ),
       ),
   );
-  return { conflicts: unmerged !== "", merging, rebasing: rebasing.includes(true) };
+  return {
+    conflicts: unmerged !== "",
+    merging,
+    rebasing: !!rebaseMerge || (!!rebaseApply && !applying),
+    applying: !!applying,
+  };
 }
 
 /** Says where the pull stopped, and what to do to finish it. */

@@ -42,7 +42,8 @@ export function usePull(repositoryId: () => string) {
     gcTime: Infinity,
   }));
 
-  // The repository's pulls, again whenever the repository or one of them changes.
+  // The repository's pulls, again whenever the repository or one of them changes. Not through
+  // `useMutationState`, which only reads its filters when the cache changes, not the repository.
   const [changes, setChanges] = createSignal(0);
   onCleanup(cache.subscribe(() => setChanges((count) => count + 1)));
   const pulls = createMemo(() => {

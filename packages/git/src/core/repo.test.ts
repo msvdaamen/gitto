@@ -4,7 +4,12 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import { createRepo, rejection, repos } from "../test/fixtures";
-import { FolderNotFoundError, NotARepositoryError, RepositoryNotFoundError } from "./errors";
+import {
+  commandError,
+  FolderNotFoundError,
+  NotARepositoryError,
+  RepositoryNotFoundError,
+} from "./errors";
 
 describe("opening repositories", () => {
   it("rejects unknown repositories", async () => {
@@ -55,5 +60,15 @@ describe("exclusive writes", () => {
     finish();
     await Promise.all([exclusive, write]);
     expect(order).toEqual(["exclusive", "write"]);
+  });
+});
+
+describe("errors", () => {
+  it("name the command when git says nothing, past any settings", () => {
+    expect(
+      commandError("/repo", ["-c", "gc.auto=0", "fetch", "origin"], 128, "", ""),
+    ).toMatchObject({
+      message: "git fetch exited with code 128",
+    });
   });
 });

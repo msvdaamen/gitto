@@ -78,6 +78,7 @@ export function commandError(
     );
   }
   // Some failures, like "nothing to commit", are only explained on stdout.
-  const message = stderr.trim() || stdout.trim() || `git ${args[0]} exited with code ${exitCode}`;
+  const command = args.find((arg, i) => !arg.startsWith("-") && args[i - 1] !== "-c");
+  const message = stderr.trim() || stdout.trim() || `git ${command} exited with code ${exitCode}`;
   return new GitError(message, args, exitCode, stderr);
 }

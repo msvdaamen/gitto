@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -11,7 +12,7 @@ import {
 } from "../../core/errors";
 import type { Repo } from "../../core/repo";
 import { cloneRepo, createRepo, git, paths, rejection, repos, root } from "../../test/fixtures";
-import { fetchAll, pull, remoteEnv } from "./commands";
+import { fetchAll, pull } from "./commands";
 
 /** Writes `content` to `file` in `path` and commits it with `message`. */
 function commit(path: string, file: string, content: string, message: string) {
@@ -182,30 +183,58 @@ describe("pull", () => {
     });
   });
 
-  it("doesn't let ssh ask questions, unless the user set their own ssh command", async () => {
-    // An `ssh` that records how it was run, and fails.
-    const bin = join(root, "bin");
-    const log = join(root, "ssh.log");
-    mkdirSync(bin, { recursive: true });
-    writeFileSync(join(bin, "ssh"), `#!/bin/sh\necho "$@" >> "${log}"\nexit 1\n`);
-    chmodSync(join(bin, "ssh"), 0o755);
-    vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
-    vi.stubEnv("GIT_SSH_COMMAND", undefined);
-    vi.stubEnv("GIT_SSH", undefined);
-    vi.stubEnv("SSH_ASKPASS", undefined);
+  it.skipIf(process.platform === "win32")(
+    "fetches without a terminal for ssh to ask questions on, with the user's ssh command",
+    async () => {
+      // An `ssh` that records its session and how it was run, and fails.
+      const bin = join(root, "bin");
+      const log = join(root, "ssh.log");
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(
+        join(bin, "ssh"),
+        `#!/bin/sh\necho "$(ps -o sid= -p $$) $*" >> "${log}"\nexit 1\n`,
+      );
+      chmodSync(join(bin, "ssh"), 0o755);
+      vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+      vi.stubEnv("GIT_SSH_COMMAND", undefined);
+      vi.stubEnv("GIT_SSH", undefined);
 
-    const { path } = createClone("ssh");
-    git(path, "remote", "set-url", "origin", "git@example.invalid:repo.git");
-    const repo = await repos.open("ssh");
-    await expect(pull(repo)).rejects.toBeInstanceOf(GitError);
-    expect(readFileSync(log, "utf8")).toContain("-o BatchMode=yes");
+      const { path } = createClone("ssh");
+      git(path, "remote", "set-url", "origin", "git@example.invalid:repo.git");
+      git(path, "config", "core.sshCommand", "ssh -o User=me");
+      await expect(pull(await repos.open("ssh"))).rejects.toBeInstanceOf(GitError);
 
-    writeFileSync(log, "");
-    git(path, "config", "core.sshCommand", "ssh -o User=me");
-    await expect(pull(repo)).rejects.toBeInstanceOf(GitError);
-    const run = readFileSync(log, "utf8");
-    expect(run).toContain("-o User=me");
-    expect(run).not.toContain("BatchMode");
+      const [session, ...args] = readFileSync(log, "utf8").trim().split(/\s+/);
+      const ours = execFileSync("ps", ["-o", "sid=", "-p", String(process.pid)], {
+        encoding: "utf8",
+      }).trim();
+      expect(session).not.toBe(ours);
+      expect(args.join(" ")).toContain("-o User=me");
+    },
+  );
+
+  it("doesn't fetch an upstream it couldn't merge", async () => {
+    const { upstream, path } = createClone("not-fetched");
+    git(path, "config", "branch.main.remote", upstream);
+    const real = await repos.open("not-fetched");
+    const fetched = vi.fn(real.fetch);
+    await expect(pull({ ...real, fetch: fetched })).rejects.toBeInstanceOf(NoUpstreamError);
+    expect(fetched).not.toHaveBeenCalled();
+  });
+
+  it("doesn't take patches being applied for a rebase", async () => {
+    const { path } = createClone("am");
+    git(path, "checkout", "-q", "--detach");
+    // A patch that doesn't apply leaves `git am` stopped.
+    writeFileSync(
+      join(root, "bad.patch"),
+      "From: A <a@example.com>\nSubject: [PATCH] bad\n\n---\n" +
+        "--- a/missing.txt\n+++ b/missing.txt\n@@ -1 +1 @@\n-x\n+y\n",
+    );
+    expect(() => git(path, "am", join(root, "bad.patch"))).toThrow();
+    await expect(pull(await repos.open("am"))).rejects.toEqual(
+      new NoUpstreamError("No branch is checked out to pull into."),
+    );
   });
 
   it("says how to finish a rebase that stopped without conflicts", async () => {
@@ -341,47 +370,5 @@ describe("pull", () => {
     await expect(pull(repo)).rejects.toEqual(
       new NoUpstreamError("No branch is checked out to pull into."),
     );
-  });
-});
-
-describe("the environment for talking to remotes", () => {
-  const none = new Map<string, string>();
-
-  it("keeps ssh from asking, and gives up on a stalled transfer", () => {
-    expect(remoteEnv(none, {})).toEqual({
-      GIT_SSH_COMMAND: "ssh -o BatchMode=yes",
-      GIT_HTTP_LOW_SPEED_LIMIT: "1000",
-      GIT_HTTP_LOW_SPEED_TIME: "60",
-    });
-  });
-
-  it("asks with the user's askpass program instead, if there is one", () => {
-    expect(remoteEnv(none, { SSH_ASKPASS: "/usr/bin/ksshaskpass" })).toMatchObject({
-      SSH_ASKPASS_REQUIRE: "force",
-    });
-    expect(remoteEnv(none, { SSH_ASKPASS: "/usr/bin/ksshaskpass" })).not.toHaveProperty(
-      "GIT_SSH_COMMAND",
-    );
-    expect(
-      remoteEnv(none, { SSH_ASKPASS: "askpass", SSH_ASKPASS_REQUIRE: "prefer" }),
-    ).not.toHaveProperty("SSH_ASKPASS_REQUIRE");
-  });
-
-  it("leaves the user's own settings be", () => {
-    expect(remoteEnv(none, { GIT_SSH: "plink", GIT_HTTP_LOW_SPEED_TIME: "600" })).toEqual({});
-    expect(
-      remoteEnv(none, { GIT_SSH_COMMAND: "ssh -i key", GIT_HTTP_LOW_SPEED_LIMIT: "1" }),
-    ).toEqual({});
-    for (const key of ["http.lowspeedtime", "http.https://example.com/.lowspeedlimit"]) {
-      expect(
-        remoteEnv(
-          new Map([
-            ["core.sshcommand", "ssh"],
-            [key, "1"],
-          ]),
-          {},
-        ),
-      ).toEqual({});
-    }
   });
 });

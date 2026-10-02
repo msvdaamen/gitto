@@ -15,7 +15,8 @@ export interface Repo {
   /**
    * Runs a fetch. Not queued with writes: it waits on the network, which a commit or staging a file
    * shouldn't wait for, and it only updates remote-tracking refs and FETCH_HEAD, which they don't
-   * touch. Fetches of the same repository do run one at a time.
+   * touch. Fetches of the same repository do run one at a time, and without a terminal to ask
+   * questions on (see `RunOptions.noTerminal`).
    */
   fetch(args: string[], options?: RunOptions): Promise<string>;
   /**
@@ -62,7 +63,8 @@ export class GitReposImpl implements GitRepos {
       path,
       read: run,
       write: (args, options) => this.writes.run(path, () => run(args, options)),
-      fetch: (args, options) => this.fetches.run(path, () => run(args, options)),
+      fetch: (args, options) =>
+        this.fetches.run(path, () => run(args, { ...options, noTerminal: true })),
       exclusive: (task) => this.writes.run(path, () => task(run)),
       hasHead: () => refExists(run, "HEAD"),
       updateCommitGraph: () => this.commitGraphs.update(path),

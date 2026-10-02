@@ -9,6 +9,14 @@ export interface RunOptions {
   stdin?: string;
   /** Overrides the environment git runs with (see `ENV`), for a command one doesn't suit. */
   env?: Record<string, string>;
+  /**
+   * Runs git in a session of its own, without the terminal Gitto may have been started from, so
+   * nothing it starts can ask questions there that no one would answer: ssh can't ask for a
+   * passphrase or to trust a host, and asks with the user's askpass program instead, if they have
+   * one, or fails. (GIT_TERMINAL_PROMPT only covers git's own HTTPS prompts.) Not on Windows,
+   * where there's no such terminal to keep away from.
+   */
+  noTerminal?: boolean;
 }
 
 // Settings that keep git's output stable and machine-readable, whatever the user's config says.
@@ -44,6 +52,7 @@ export function runGit(cwd: string, args: string[], options: RunOptions = {}): P
       env: { ...process.env, ...ENV, ...options.env },
       signal: options.signal,
       stdio: ["pipe", "pipe", "pipe"],
+      detached: options.noTerminal && process.platform !== "win32",
     });
 
     const stdout: Buffer[] = [];
