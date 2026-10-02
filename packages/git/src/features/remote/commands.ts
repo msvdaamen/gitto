@@ -1,9 +1,14 @@
 import { stat } from "node:fs/promises";
 import { resolve } from "node:path";
 
-import { GitError, NoUpstreamError, PullInterruptedError } from "../../core/errors";
+import {
+  GitError,
+  NoUpstreamError,
+  PullInterruptedError,
+  RepositoryChangedError,
+} from "../../core/errors";
 import { refExists, type GitCommand, type Repo } from "../../core/repo";
-import { pullBlocker } from "./pull-blocker";
+import { NO_BRANCH, noUpstream } from "./pull-blocker";
 
 /**
  * Fetches every remote, and drops remote-tracking branches whose branch was deleted on the remote,
@@ -41,28 +46,34 @@ async function fetch(
  * for (and holds up) the other writes to the repository: the fetch takes as long as the network.
  */
 export async function pull(repo: Repo): Promise<void> {
-  const { branch, upstream } = await readBranch(repo.read);
-  const target = await fetchUpstream(repo, branch, upstream);
+  const { branch, upstream } = await readBranch(repo.read, repo.path);
+  // Just the upstream branch, as `git pull` fetches it, which updates its remote-tracking branch.
+  // A local upstream (remote ".") has nothing to fetch.
+  if (upstream.remote !== ".") {
+    await fetch(repo, ["--quiet", upstream.remote, upstream.merge], {
+      settings: ["fetch.writeFetchHead=false"],
+      config: upstream.config,
+    });
+  }
 
   await repo.exclusive(async (run) => {
     // Read again, now that no other write can change them: one may have while fetching.
-    const [current, before, hasHead] = await Promise.all([
-      readBranch(run),
+    const [current, tracking, before, hasHead] = await Promise.all([
+      readBranch(run, repo.path),
+      trackingBranch(run, branch),
       progress(run, repo.path),
       refExists(run, "HEAD"),
     ]);
     if (current.branch !== branch) {
-      throw new GitError(`Switched from ${branch} while pulling it. Pull again.`, [], null, "");
+      throw new RepositoryChangedError(`Switched from ${branch} while pulling it. Pull again.`);
     }
     if (current.upstream.remote !== upstream.remote || current.upstream.merge !== upstream.merge) {
-      throw new GitError(
+      throw new RepositoryChangedError(
         `${branch}'s upstream changed while pulling it. Pull again.`,
-        [],
-        null,
-        "",
       );
     }
-    const args = integrateArgs(current.upstream, branch, target, hasHead);
+    if (!tracking) throw new NoUpstreamError(noUpstream(branch));
+    const args = integrateArgs(current.upstream.config, branch, tracking, hasHead);
 
     let failure: GitError | undefined;
     try {
@@ -76,7 +87,8 @@ export async function pull(repo: Repo): Promise<void> {
     if (!before.conflicts && !before.merging && !before.rebasing) {
       const after = await progress(run, repo.path);
       if (after.conflicts || after.merging || after.rebasing) {
-        throw interruptedError(upstreamName(upstream), after, args, failure);
+        const name = tracking.replace(/^refs\/(remotes|heads)\//, "");
+        throw interruptedError(name, after, args, failure);
       }
     }
     if (failure) throw withoutHints(failure);
@@ -84,55 +96,44 @@ export async function pull(repo: Repo): Promise<void> {
 }
 
 interface Upstream {
-  /** The remote's name (or URL); "." for a local branch. */
+  /** The remote's name; "." for a local branch. */
   remote: string;
-  /** The upstream branch's full name on the remote, e.g. `refs/heads/main`. */
+  /** The branch's full name on the remote, e.g. `refs/heads/main`. */
   merge: string;
   /** The rest of the settings a pull depends on, by key; see `readConfig`. */
   config: Map<string, string>;
 }
 
-/** What to merge or rebase onto: a ref, or a commit the fetch brought in. */
-interface Target {
-  rev: string;
-  /** Whether `rev` is the upstream's remote-tracking branch, whose reflog finds a fork point. */
-  tracking: boolean;
-}
-
 /** The checked-out branch, and the upstream it pulls from; rejects if there isn't one. */
-async function readBranch(run: GitCommand): Promise<{ branch: string; upstream: Upstream }> {
+async function readBranch(
+  run: GitCommand,
+  path: string,
+): Promise<{ branch: string; upstream: Upstream }> {
   const [branch, config] = await Promise.all([currentBranch(run), readConfig(run)]);
-  // From the config rather than `@{upstream}`, which also needs the remote-tracking branch:
-  // that's missing before the first fetch, and the pull fetches it.
-  const remote = branch === null ? undefined : config.get(`branch.${branch}.remote`);
-  const merge = branch === null ? undefined : config.get(`branch.${branch}.merge`);
-  const blocker = pullBlocker(branch, remote && merge ? merge : null);
-  // Never without a blocker; the rest only tells TypeScript what that means.
-  if (blocker || branch === null || !remote || !merge) throw new NoUpstreamError(blocker!);
+  if (branch === null) {
+    // HEAD is detached while a rebase stops: it's that to finish, not a branch to check out.
+    const { rebasing } = await progress(run, path);
+    throw new NoUpstreamError(
+      rebasing ? "A rebase is under way. Continue or abort it, then pull." : NO_BRANCH,
+    );
+  }
+  // From the config: a branch without commits yet has no ref to ask for its upstream.
+  const remote = config.get(`branch.${branch}.remote`);
+  const merge = config.get(`branch.${branch}.merge`);
+  if (!remote || !merge) throw new NoUpstreamError(noUpstream(branch));
   return { branch, upstream: { remote, merge, config } };
 }
 
 /**
- * Fetches `branch`'s upstream as `git pull` does: just that branch, which also updates its
- * remote-tracking branch. Most remotes map it to one (e.g. `origin/main`), which is then what's
- * merged; otherwise (a remote given as a URL, a narrower refspec) it's the commit fetched. A local
- * upstream (remote ".") has nothing to fetch.
+ * The remote-tracking branch `branch`'s upstream was fetched into, e.g. `refs/remotes/origin/main`
+ * (or the local branch it tracks). `null` without one, as for an upstream given as a URL: then
+ * `git status` reports no upstream either, so the UI doesn't offer to pull.
  */
-async function fetchUpstream(repo: Repo, branch: string, upstream: Upstream): Promise<Target> {
-  const tracking = (
-    await repo.read(["for-each-ref", "--format=%(upstream)", `refs/heads/${branch}`])
-  ).trim();
-  if (upstream.remote === "." && tracking) return { rev: tracking, tracking: true };
-
-  // FETCH_HEAD only when it's read.
-  await fetch(repo, ["--quiet", upstream.remote, upstream.merge], {
-    settings: tracking ? ["fetch.writeFetchHead=false"] : [],
-    config: upstream.config,
-  });
-  if (tracking) return { rev: tracking, tracking: true };
-  // Read straight away, before another fetch replaces it.
-  const fetched = await repo.read(["rev-parse", "--verify", "--quiet", "FETCH_HEAD^{commit}"]);
-  return { rev: fetched.trim(), tracking: false };
+function trackingBranch(run: GitCommand, branch: string): Promise<string | null> {
+  return run(["rev-parse", "--symbolic-full-name", `${branch}@{upstream}`]).then(
+    (ref) => ref.trim() || null,
+    () => null,
+  );
 }
 
 /** The checked-out branch's name; `null` when HEAD is detached. */
@@ -173,16 +174,6 @@ async function readConfig(run: GitCommand): Promise<Map<string, string>> {
   return config;
 }
 
-/** How `upstream` is called in messages, e.g. `origin/main`. */
-function upstreamName({ remote, merge }: Upstream): string {
-  return remote === "." ? branchName(merge) : `${remote}/${branchName(merge)}`;
-}
-
-/** `ref`'s name as a branch, e.g. `main` for `refs/heads/main`. */
-function branchName(ref: string): string {
-  return ref.replace(/^refs\/heads\//, "");
-}
-
 const FALSE = new Set(["false", "no", "off", "0", ""]);
 
 /**
@@ -192,9 +183,9 @@ const FALSE = new Set(["false", "no", "off", "0", ""]);
  * interactively, which would open an editor with no one to use it.
  */
 function integrateArgs(
-  { remote, merge, config }: Upstream,
+  config: Map<string, string>,
   branch: string,
-  target: Target,
+  tracking: string,
   hasHead: boolean,
 ): string[] {
   const rebase = (
@@ -207,8 +198,8 @@ function integrateArgs(
       "--quiet",
       ...(rebase === "merges" || rebase === "m" ? ["--rebase-merges"] : []),
       // From where the branch forked from its upstream, like `git pull --rebase`.
-      ...(target.tracking ? ["--fork-point"] : []),
-      target.rev,
+      "--fork-point",
+      tracking,
     ];
   }
   const ff = config.get("pull.ff")?.toLowerCase();
@@ -220,9 +211,7 @@ function integrateArgs(
         : FALSE.has(ff)
           ? ["--no-ff"]
           : ["--ff"];
-  // A commit is named in the message as `git pull` names it; a ref names itself.
-  const message = target.tracking ? [] : ["-m", `Merge branch '${branchName(merge)}' of ${remote}`];
-  return ["merge", "--quiet", "--no-edit", ...ffArgs, ...message, target.rev];
+  return ["merge", "--quiet", "--no-edit", ...ffArgs, tracking];
 }
 
 /**
@@ -294,8 +283,10 @@ function interruptedError(
   let message: string;
   if (rebasing && !conflicts) {
     // E.g. an untracked file in the way of a commit it replays.
-    const reason = failure ? withoutHints(failure).message : "";
-    message = `Rebasing onto ${upstream} stopped partway:\n${reason}\nFix that, then continue the rebase, or abort it.`;
+    const reason = failure && withoutHints(failure).message;
+    message = reason
+      ? `Rebasing onto ${upstream} stopped partway:\n${reason}\nFix that, then continue the rebase, or abort it.`
+      : `Rebasing onto ${upstream} stopped partway. Continue the rebase, or abort it.`;
   } else if (rebasing) {
     message = `Pulling ${upstream} caused conflicts. Resolve them, then continue the rebase.`;
   } else if (merging) {

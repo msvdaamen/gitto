@@ -34,6 +34,14 @@ export class NoUpstreamError extends Error {
   }
 }
 
+/** The repository changed while an operation was under way, which trying again will get past. */
+export class RepositoryChangedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = new.target.name;
+  }
+}
+
 /** No repository with that id has been added to Gitto. */
 export class RepositoryNotFoundError extends Error {
   constructor(readonly repositoryId: string) {

@@ -97,7 +97,7 @@ function FetchButton(props: { repositoryId: string }) {
       title={error() ? `Fetch failed: ${error()!.message}` : "Fetch all remotes"}
       disabled={pending()}
       class={cn(error() && "text-coral")}
-      iconClass={cn(pending() && "animate-spin motion-reduce:animate-none")}
+      busy={pending()}
       onClick={() => fetchRemotes.mutate(props.repositoryId)}
     />
   );

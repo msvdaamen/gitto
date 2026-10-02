@@ -5,6 +5,7 @@ export {
   NoUpstreamError,
   NotARepositoryError,
   PullInterruptedError,
+  RepositoryChangedError,
   RepositoryNotFoundError,
 } from "./core/errors";
 export type { GitContext } from "./core/middleware";

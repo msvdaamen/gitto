@@ -1,11 +1,5 @@
-import type { Mutation } from "@tanstack/solid-query";
-import {
-  useIsMutating,
-  useMutation,
-  useMutationState,
-  useQueryClient,
-} from "@tanstack/solid-query";
-import { createMemo } from "solid-js";
+import { useMutation, useQueryClient } from "@tanstack/solid-query";
+import { createMemo, createSignal, onCleanup } from "solid-js";
 
 import { rpc } from "@/lib/rpc";
 
@@ -35,6 +29,7 @@ const pullKey = (repositoryId: string) => ["pull", repositoryId] as const;
 /** Pulls the current branch's upstream; whether a pull is running, and why the last one failed. */
 export function usePull(repositoryId: () => string) {
   const queryClient = useQueryClient();
+  const cache = queryClient.getMutationCache();
   const mutation = useMutation(() => ({
     mutationKey: pullKey(repositoryId()),
     // The repository is passed in, rather than read when the pull ends, so the one pulled is
@@ -43,26 +38,33 @@ export function usePull(repositoryId: () => string) {
     // Also after a failure: a pull that stopped at conflicts still brought in the upstream's commits.
     onSettled: (_data, _error, id) =>
       queryClient.invalidateQueries({ queryKey: gitKeys.repository(id) }),
-  }));
-  const running = useIsMutating(() => ({ mutationKey: pullKey(repositoryId()) }));
-  const failed = useMutationState(() => ({
-    filters: { mutationKey: pullKey(repositoryId()), status: "error" },
-    select: (failure) => failure as Mutation<unknown, Error, string>,
+    // Kept until dismissed or pulled again, however long the user is in another repository.
+    gcTime: Infinity,
   }));
 
-  /** Forgets why the repository's pulls failed. */
-  function dismiss() {
-    for (const failure of failed()) queryClient.getMutationCache().remove(failure);
+  // The repository's pulls, again whenever the repository or one of them changes.
+  const [changes, setChanges] = createSignal(0);
+  onCleanup(cache.subscribe(() => setChanges((count) => count + 1)));
+  const pulls = createMemo(() => {
+    changes();
+    return cache.findAll({ mutationKey: pullKey(repositoryId()), exact: true });
+  });
+  const running = () => pulls().some((pull) => pull.state.status === "pending");
+  const failed = () => pulls().filter((pull) => pull.state.status === "error");
+
+  /** Forgets the repository's finished pulls, and so why they failed. */
+  function forget() {
+    for (const pull of pulls()) if (pull.state.status !== "pending") cache.remove(pull);
   }
 
   return {
     pull() {
-      if (running() > 0) return;
-      dismiss();
+      if (running()) return;
+      forget();
       mutation.mutate(repositoryId());
     },
-    isPending: () => running() > 0,
-    error: createMemo(() => failed().at(-1)?.state.error ?? null),
-    dismiss,
+    isPending: running,
+    error: () => failed().at(-1)?.state.error ?? null,
+    dismiss: forget,
   };
 }

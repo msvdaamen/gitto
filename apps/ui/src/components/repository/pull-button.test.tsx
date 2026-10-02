@@ -111,6 +111,9 @@ describe("the pull button", () => {
     );
     expect(client.getQueryState(gitKeys.status("other"))?.isInvalidated).toBe(false);
     expect(screen.queryByText("Pulling origin/main caused conflicts.")).not.toBeInTheDocument();
+    // Kept however long the user stays away.
+    const [failure] = client.getMutationCache().findAll({ mutationKey: ["pull", "repo"] });
+    expect(failure?.options.gcTime).toBe(Infinity);
 
     // Back in that repository, it does, without taking the focus from what the user's doing.
     const input = document.createElement("input");

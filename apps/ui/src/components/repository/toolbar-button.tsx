@@ -20,7 +20,6 @@ export function ToolbarButton(props: {
   /** Running: a spinner takes the icon's place. */
   busy?: boolean;
   class?: string;
-  iconClass?: string;
   /** A count in the icon's corner, e.g. how many commits there are to pull; hidden when 0. */
   count?: number;
   onClick?: () => void;
@@ -29,9 +28,11 @@ export function ToolbarButton(props: {
     <button
       type="button"
       class={cn(
-        "relative flex h-[38px] min-w-[43px] cursor-pointer flex-col items-center justify-center gap-0.5 rounded-md border-0 bg-transparent px-1.5 text-muted enabled:hover:bg-panel-hover enabled:hover:text-text focus-ring disabled:cursor-default disabled:opacity-50 max-md:min-w-9 max-md:[&>span]:hidden",
+        "relative flex h-[38px] min-w-[43px] cursor-pointer flex-col items-center justify-center gap-0.5 rounded-md border-0 bg-transparent px-1.5 text-muted enabled:hover:bg-panel-hover enabled:hover:text-text focus-ring disabled:cursor-default max-md:min-w-9 max-md:[&>span]:hidden",
         props.accent && "text-blue",
         props.hideBelow && HIDDEN_BELOW[props.hideBelow],
+        // Faded when it can't be used, but not while it's busy: that's still going on.
+        props.disabled && !props.busy && "opacity-50",
         props.class,
       )}
       title={props.title ?? props.label}
@@ -43,7 +44,7 @@ export function ToolbarButton(props: {
       <Dynamic
         component={props.busy ? LoaderCircle : props.icon}
         size={16}
-        class={cn(props.busy && "animate-spin motion-reduce:animate-none", props.iconClass)}
+        class={cn(props.busy && "animate-spin motion-reduce:animate-none")}
       />
       <span class="text-[10.5px]">{props.label}</span>
       <Show when={props.count}>

@@ -3,7 +3,12 @@ import { join } from "node:path";
 
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { GitError, NoUpstreamError, PullInterruptedError } from "../../core/errors";
+import {
+  GitError,
+  NoUpstreamError,
+  PullInterruptedError,
+  RepositoryChangedError,
+} from "../../core/errors";
 import type { Repo } from "../../core/repo";
 import { cloneRepo, createRepo, git, paths, rejection, repos, root } from "../../test/fixtures";
 import { fetchAll, pull, remoteEnv } from "./commands";
@@ -131,9 +136,14 @@ describe("pull", () => {
     git(path, "config", "pull.rebase", "true");
     commit(upstream, "a.txt", "theirs\n", "theirs");
     commit(path, "a.txt", "ours\n", "ours");
-    await expect(pull(await repos.open("rebase-conflict"))).rejects.toMatchObject({
+    const repo = await repos.open("rebase-conflict");
+    await expect(pull(repo)).rejects.toMatchObject({
       message: "Pulling origin/main caused conflicts. Resolve them, then continue the rebase.",
     });
+    // HEAD is detached until the rebase is done; that's what's in the way of pulling again.
+    await expect(pull(repo)).rejects.toEqual(
+      new NoUpstreamError("A rebase is under way. Continue or abort it, then pull."),
+    );
   });
 
   it("rebases without opening an editor when the config says to rebase interactively", async () => {
@@ -248,9 +258,9 @@ describe("pull", () => {
         return output;
       },
     };
-    await expect(pull(repo)).rejects.toMatchObject({
-      message: "Switched from main while pulling it. Pull again.",
-    });
+    await expect(pull(repo)).rejects.toEqual(
+      new RepositoryChangedError("Switched from main while pulling it. Pull again."),
+    );
     expect(subjects(path)).toEqual(["first"]);
   });
 
@@ -269,22 +279,13 @@ describe("pull", () => {
     });
   });
 
-  it("pulls an upstream that has no remote-tracking branch", async () => {
-    const upstream = createRepo("untracked-upstream");
-    commit(upstream, "a.txt", "a\n", "first");
-    git(upstream, "branch", "dev");
-    const path = cloneRepo("untracked", upstream);
-    // Only `main` is fetched into a remote-tracking branch.
-    git(path, "config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main");
-    git(path, "checkout", "-qb", "dev");
-    git(path, "config", "branch.dev.remote", "origin");
-    git(path, "config", "branch.dev.merge", "refs/heads/dev");
-    git(upstream, "checkout", "-q", "dev");
-    commit(upstream, "theirs.txt", "theirs\n", "theirs");
-    commit(path, "ours.txt", "ours\n", "ours");
-    await pull(await repos.open("untracked"));
-    expect(git(path, "log", "-1", "--format=%s")).toBe("Merge branch 'dev' of origin");
-    expect(subjects(path)).toEqual(expect.arrayContaining(["theirs", "ours"]));
+  it("needs an upstream with a remote-tracking branch, as git status does", async () => {
+    const { upstream, path } = createClone("by-url");
+    git(path, "config", "branch.main.remote", upstream);
+    await expect(pull(await repos.open("by-url"))).rejects.toEqual(
+      new NoUpstreamError("main doesn't track a remote branch."),
+    );
+    expect(git(path, "status", "--porcelain=v2", "--branch")).not.toContain("branch.upstream");
   });
 
   it("pulls the first commits into a branch without any, even when set to rebase", async () => {
@@ -310,9 +311,9 @@ describe("pull", () => {
         return output;
       },
     };
-    await expect(pull(repo)).rejects.toMatchObject({
-      message: "main's upstream changed while pulling it. Pull again.",
-    });
+    await expect(pull(repo)).rejects.toEqual(
+      new RepositoryChangedError("main's upstream changed while pulling it. Pull again."),
+    );
     expect(subjects(path)).toEqual(["first"]);
   });
 
@@ -338,7 +339,7 @@ describe("pull", () => {
 
     git(path, "checkout", "-q", "--detach");
     await expect(pull(repo)).rejects.toEqual(
-      new NoUpstreamError("Check out a branch to pull into it."),
+      new NoUpstreamError("No branch is checked out to pull into."),
     );
   });
 });

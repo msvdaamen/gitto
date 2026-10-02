@@ -54,6 +54,9 @@ describe("the fetch button", () => {
       expect(rpc.git.remote.fetch).toHaveBeenCalledWith({ repositoryId: "a" }),
     );
     expect(button()).toBeDisabled();
+    // Busy, not unavailable: it isn't faded.
+    expect(button()).toHaveAttribute("aria-busy", "true");
+    expect(button()).not.toHaveClass("opacity-50");
 
     // Another repository's fetch is its own.
     setRepositoryId("b");
