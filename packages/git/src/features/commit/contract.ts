@@ -11,7 +11,7 @@ export const CommitContract = {
    */
   create: oc.input(
     RepositoryInput.extend({
-      // Not trimmed: an amend commits it exactly as it's sent; a new commit cleans it up as git does.
+      // Not trimmed: an amend commits it exactly as it's sent, ending in a newline or not.
       message: z.string().regex(/\S/, "The message is empty."),
       amend: FullSha.optional(),
     }),

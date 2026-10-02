@@ -29,7 +29,8 @@ export async function createCommit(
       "-F",
       "-",
     ];
-    await run(args, { stdin: message.endsWith("\n") ? message : `${message}\n` });
+    // A new commit's message is cleaned up by git, but for the spaces it'd leave before the subject.
+    await run(args, { stdin: amend ? message : message.trim() });
   });
 }
 

@@ -83,8 +83,17 @@ describe("createCommit", () => {
 
   it("records the message in UTF-8 whatever i18n.commitEncoding says", async () => {
     setConfig("i18n.commitEncoding", "ISO-8859-1");
-    await createCommit(repo, "Café", { amend: head() });
+    await createCommit(repo, "Café\n", { amend: head() });
     expect(await getCommitMessage(repo, "HEAD")).toBe("Café\n");
+  });
+
+  it("trims a new commit's message, and amends with one exactly as sent", async () => {
+    writeFileSync(join(path, "trim.txt"), "trim\n");
+    git(path, "add", "trim.txt");
+    await createCommit(repo, "  New  \n");
+    expect(await getCommitMessage(repo, "HEAD")).toBe("New\n");
+    await createCommit(repo, "No newline", { amend: head() });
+    expect(await getCommitMessage(repo, "HEAD")).toBe("No newline");
   });
 
   it("explains why a commit failed", async () => {

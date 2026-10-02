@@ -15,7 +15,7 @@ export function useCreateCommit(repositoryId: () => string) {
     // A failure saying HEAD has moved means the status is behind; refetched without waiting for
     // it, so the error shows right away.
     onError: () => {
-      void queryClient.invalidateQueries({ queryKey: gitKeys.repository(repositoryId()) });
+      void queryClient.invalidateQueries({ queryKey: gitKeys.uncommitted(repositoryId()) });
     },
   }));
 }
@@ -34,5 +34,7 @@ export function pushedToQuery(repositoryId: string, sha: string) {
   return queryOptions({
     queryKey: gitKeys.pushedTo(repositoryId, sha),
     queryFn: ({ signal }) => rpc.git.commit.pushedTo({ repositoryId, sha }, { signal }),
+    // Refetched when the refs change (it's under `repository(id)`), not on every window focus.
+    staleTime: Infinity,
   });
 }

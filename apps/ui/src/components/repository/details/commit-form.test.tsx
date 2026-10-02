@@ -63,7 +63,7 @@ describe("amending the last commit", () => {
     await userEvent.click(screen.getByRole("button", { name: /Amend message/ }));
     expect(rpc.git.commit.create).toHaveBeenCalledWith({
       repositoryId: "repo",
-      message: "Reworded\n\nIts body",
+      message: "Reworded\n\nIts body\n",
       amend: "a1",
     });
     expect(amend).not.toBeChecked();
@@ -89,7 +89,7 @@ describe("amending the last commit", () => {
     await userEvent.click(screen.getByRole("button", { name: /Amend with 1 file/ }));
     expect(rpc.git.commit.create).toHaveBeenLastCalledWith({
       repositoryId: "repo",
-      message: "First line\nsecond line\n\nBody edited",
+      message: "First line\nsecond line\n\nBody edited\n",
       amend: "b2",
     });
   });
@@ -241,13 +241,16 @@ describe("amending the last commit", () => {
     expect(screen.getByLabelText("Commit message")).toHaveValue("");
   });
 
-  it("doesn't call a failed push check an error", async () => {
+  it("doesn't call a failed push check an error, but says it couldn't check", async () => {
     rpc.git.commit.pushedTo.mockRejectedValueOnce(new Error("for-each-ref failed"));
     const { amend } = renderForm({ stagedCount: 1 });
     await userEvent.click(amend);
     await screen.findByDisplayValue("Commit a1");
     await vi.waitFor(() => expect(rpc.git.commit.pushedTo).toHaveBeenCalled());
     expect(screen.queryByText("for-each-ref failed")).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/Couldn't check whether the last commit has been pushed/),
+    ).toBeVisible();
     expect(screen.getByRole("button", { name: /Amend with 1 file/ })).toBeEnabled();
   });
 

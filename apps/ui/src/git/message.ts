@@ -28,9 +28,9 @@ export function joinMessage({ summary, description }: CommitMessage): string {
 }
 
 /**
- * `original` with the edits made to it as `splitMessage` split it. A part left as it was, or only
- * changed around its ends, is kept exactly as written, e.g. a subject over several lines when only
- * the description changed.
+ * `original` with the edits made to it as `splitMessage` split it, to be committed as it is. A part
+ * left as it was, or only changed around its ends, is kept exactly as written, e.g. a subject over
+ * several lines when only the description changed. Ends in a newline, as git's messages do.
  */
 export function editMessage(original: string, edited: CommitMessage): string {
   const { subject, separator, body } = parts(original);
@@ -40,7 +40,8 @@ export function editMessage(original: string, edited: CommitMessage): string {
   if (newSummary === split.summary && newDescription === split.description) return original;
   const summary = newSummary === split.summary ? subject : newSummary;
   const description = newDescription === split.description ? body : newDescription;
-  return trim(description) ? `${summary}${separator}${description}` : summary;
+  const message = trim(description) ? `${summary}${separator}${description}` : summary;
+  return message.endsWith("\n") ? message : `${message}\n`;
 }
 
 /**

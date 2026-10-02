@@ -117,7 +117,10 @@ export function CommitForm(props: {
         submit();
       }}
       onKeyDown={(event) => {
-        if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) submit();
+        if (event.key !== "Enter" || !(event.metaKey || event.ctrlKey)) return;
+        // Else Enter in the summary would submit the form a second time.
+        event.preventDefault();
+        submit();
       }}
     >
       <FormField
@@ -152,6 +155,12 @@ export function CommitForm(props: {
             The last commit is already on {branch()}; amending it means force-pushing.
           </p>
         )}
+      </Show>
+      <Show when={amend() && pushedTo.isError}>
+        <p class="m-0 mb-2.5 text-[11.5px] leading-[1.45] text-amber">
+          Couldn't check whether the last commit has been pushed; if it has, amending it means
+          force-pushing.
+        </p>
       </Show>
       <Button
         type="submit"

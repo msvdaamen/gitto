@@ -47,15 +47,15 @@ describe("commit messages", () => {
     const split = splitMessage(original);
     expect(editMessage(original, split)).toBe(original);
     expect(editMessage(original, { ...split, description: "New body" })).toBe(
-      "Fix parser\nfor nested lists  \n\n\nNew body",
+      "Fix parser\nfor nested lists  \n\n\nNew body\n",
     );
     expect(editMessage(original, { ...split, summary: "Fix the parser" })).toBe(
       "Fix the parser\n\n\nBody  \n",
     );
     expect(editMessage(original, { ...split, summary: `${split.summary} ` })).toBe(original);
     expect(editMessage("Subject\n", splitMessage("Subject\n"))).toBe("Subject\n");
-    expect(editMessage("Subject\n", { summary: "Subject", description: "Added" })).toBe(
-      "Subject\n\nAdded",
+    expect(editMessage("Subject", { summary: "Subject", description: "Added" })).toBe(
+      "Subject\n\nAdded\n",
     );
   });
 });
