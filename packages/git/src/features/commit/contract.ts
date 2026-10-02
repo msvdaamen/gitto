@@ -16,4 +16,6 @@ export const CommitContract = {
   ),
   /** A commit's full message, e.g. the last one's to amend it. */
   message: oc.input(RepositoryInput.extend({ sha: Sha })).output(z.string()),
+  /** A remote branch that has the commit, e.g. `origin/main`; `null` if it hasn't been pushed. */
+  pushedTo: oc.input(RepositoryInput.extend({ sha: Sha })).output(z.string().nullable()),
 };

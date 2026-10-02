@@ -16,8 +16,8 @@ describe("commit messages", () => {
     expect(joinMessage({ summary: "Subject", description: "  " })).toBe("Subject");
   });
 
-  it("round-trips a message", () => {
-    const message = "Subject\n\nBody\n\n## Notes";
+  it("round-trips a message, indented body and all", () => {
+    const message = "Subject\n\n    code();\n\n## Notes";
     expect(joinMessage(splitMessage(message))).toBe(message);
   });
 });

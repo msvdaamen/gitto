@@ -23,3 +23,11 @@ export function commitMessageQuery(repositoryId: string, sha: string) {
     staleTime: Infinity,
   });
 }
+
+/** A remote branch that has the commit, e.g. `origin/main`; `null` if it hasn't been pushed. */
+export function pushedToQuery(repositoryId: string, sha: string) {
+  return queryOptions({
+    queryKey: gitKeys.pushedTo(repositoryId, sha),
+    queryFn: ({ signal }) => rpc.git.commit.pushedTo({ repositoryId, sha }, { signal }),
+  });
+}

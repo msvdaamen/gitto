@@ -4,9 +4,9 @@ import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import type { Repo } from "../../core/repo";
-import { createRepo, git, page, repos } from "../../test/fixtures";
+import { createRepo, git, page, paths, repos, root } from "../../test/fixtures";
 import { getLog } from "../history/commands";
-import { createCommit, getCommitMessage } from "./commands";
+import { createCommit, getCommitMessage, getPushedTo } from "./commands";
 
 describe("createCommit", () => {
   let path: string;
@@ -50,6 +50,12 @@ describe("createCommit", () => {
     ]);
   });
 
+  it("rewords an empty commit", async () => {
+    git(path, "commit", "-q", "--allow-empty", "-m", "Empty");
+    await createCommit(repo, "Still empty", { amend: true });
+    expect((await getLog(repo, page))[0]).toMatchObject({ subject: "Still empty" });
+  });
+
   it("explains why a commit failed", async () => {
     await expect(createCommit(repo, "nothing")).rejects.toMatchObject({
       message: expect.stringContaining("nothing to commit"),
@@ -72,5 +78,24 @@ describe("getCommitMessage", () => {
     const message = "First line\nsecond line\n\n#123 fixes it\n## Notes";
     git(path, "commit", "-q", "--allow-empty", "-m", message);
     expect(await getCommitMessage(await repos.open("message"), "HEAD")).toBe(message);
+  });
+});
+
+describe("getPushedTo", () => {
+  it("is a remote branch that has the commit, whether or not it's tracked", async () => {
+    const remote = createRepo("remote");
+    git(remote, "commit", "-q", "--allow-empty", "-m", "First");
+    const path = join(root, "clone");
+    git(root, "clone", "-q", remote, path);
+    paths.set("clone", path);
+    const repo = await repos.open("clone");
+    expect(await getPushedTo(repo, "HEAD")).toBe("origin/main");
+
+    git(path, "commit", "-q", "--allow-empty", "-m", "Local");
+    expect(await getPushedTo(repo, "HEAD")).toBeNull();
+
+    git(path, "push", "-q", "origin", "HEAD:refs/heads/side");
+    git(path, "fetch", "-q");
+    expect(await getPushedTo(repo, "HEAD")).toBe("origin/side");
   });
 });

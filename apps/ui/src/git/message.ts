@@ -9,11 +9,16 @@ export const emptyMessage: CommitMessage = { summary: "", description: "" };
 /** Splits a commit message into its first line and the rest. */
 export function splitMessage(message: string): CommitMessage {
   const [summary = "", ...rest] = message.split("\n");
-  return { summary, description: rest.join("\n").trim() };
+  return { summary, description: trimBody(rest.join("\n")) };
 }
 
 /** The message to commit: the summary, then a blank line and the description if there is one. */
 export function joinMessage({ summary, description }: CommitMessage): string {
-  const body = description.trim();
+  const body = trimBody(description);
   return body ? `${summary.trim()}\n\n${body}` : summary.trim();
+}
+
+/** Drops blank lines around the body, but keeps its first line's indentation, e.g. for code. */
+function trimBody(body: string): string {
+  return body.replace(/^\s*\n/, "").trimEnd();
 }

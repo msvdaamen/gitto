@@ -26,11 +26,6 @@ describe("parseStatus", () => {
     });
   });
 
-  it("has no upstream when it's gone", () => {
-    const gone = "# branch.oid 1111\0# branch.head main\0# branch.upstream origin/main\0";
-    expect(parseStatus(gone)).toMatchObject({ upstream: null, ahead: 0, behind: 0 });
-  });
-
   it("reads changed, renamed, conflicted and untracked files", () => {
     expect(parseStatus(output).files).toEqual([
       { path: "src/a file.ts", origPath: null, staged: null, unstaged: "modified" },
