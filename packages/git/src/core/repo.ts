@@ -12,6 +12,12 @@ export interface Repo {
   read(args: string[], options?: RunOptions): Promise<string>;
   /** Runs a command that changes the repository, after any earlier writes to it have finished. */
   write(args: string[], options?: RunOptions): Promise<string>;
+  /**
+   * Runs a fetch. Not queued with writes: it waits on the network, which a commit or staging a file
+   * shouldn't wait for, and it only updates remote-tracking refs and FETCH_HEAD, which they don't
+   * touch. Fetches of the same repository do run one at a time.
+   */
+  fetch(args: string[], options?: RunOptions): Promise<string>;
   /** Whether HEAD points at a commit; it doesn't on a branch without commits yet. */
   hasHead(): Promise<boolean>;
   /** Writes the commit-graph, which speeds up the log, once per run (see `CommitGraphs`). */
@@ -25,6 +31,7 @@ export interface GitRepos {
 
 export class GitReposImpl implements GitRepos {
   private readonly writes = new WriteQueue();
+  private readonly fetches = new WriteQueue();
   private readonly commitGraphs = new CommitGraphs();
 
   constructor(private readonly repositories: RepositoryService) {}
@@ -48,6 +55,7 @@ export class GitReposImpl implements GitRepos {
       path,
       read: run,
       write: (args, options) => this.writes.run(path, () => run(args, options)),
+      fetch: (args, options) => this.fetches.run(path, () => run(args, options)),
       hasHead: () =>
         runGit(path, ["rev-parse", "--verify", "--quiet", "HEAD"]).then(
           () => true,

@@ -2,6 +2,7 @@ import { commitRouter } from "./features/commit/handler";
 import { diffRouter } from "./features/diff/handler";
 import { historyRouter } from "./features/history/handler";
 import { refsRouter } from "./features/refs/handler";
+import { remoteRouter } from "./features/remote/handler";
 import { stagingRouter } from "./features/staging/handler";
 import { statusRouter } from "./features/status/handler";
 import { watchRouter } from "./features/watch/handler";
@@ -14,5 +15,6 @@ export const gitRouter = {
   refs: refsRouter,
   staging: stagingRouter,
   commit: commitRouter,
+  remote: remoteRouter,
   watch: watchRouter,
 };
