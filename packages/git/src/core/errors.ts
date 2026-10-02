@@ -20,6 +20,17 @@ export class NotARepositoryError extends GitError {}
 /** Another git process holds `index.lock`, e.g. one running in the user's terminal. */
 export class IndexLockedError extends GitError {}
 
+/** A pull that stopped at conflicts, which are left in the working tree to resolve. */
+export class PullConflictError extends GitError {}
+
+/** There's nothing to pull from: HEAD isn't on a branch, or the branch doesn't track one. */
+export class NoUpstreamError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = new.target.name;
+  }
+}
+
 /** No repository with that id has been added to Gitto. */
 export class RepositoryNotFoundError extends Error {
   constructor(readonly repositoryId: string) {
@@ -56,6 +67,16 @@ export function commandError(
     );
   }
   // Some failures, like "nothing to commit", are only explained on stdout.
-  const message = stderr.trim() || stdout.trim() || `git ${args[0]} exited with code ${exitCode}`;
+  const message =
+    withoutHints(stderr) || stdout.trim() || `git ${args[0]} exited with code ${exitCode}`;
   return new GitError(message, args, exitCode, stderr);
+}
+
+/** `output` without git's hints, which suggest commands to type and so don't help in the app. */
+function withoutHints(output: string): string {
+  return output
+    .split("\n")
+    .filter((line) => !line.startsWith("hint:"))
+    .join("\n")
+    .trim();
 }

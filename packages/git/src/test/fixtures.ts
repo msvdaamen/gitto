@@ -45,6 +45,20 @@ export function createRepo(name: string): string {
 }
 
 /**
+ * Clones the repository at `from` (which `createRepo` made), with the same author settings, as
+ * `name`; its `main` tracks `from`'s. Returns its path.
+ */
+export function cloneRepo(name: string, from: string): string {
+  const path = join(root, name);
+  git(root, "clone", "-q", from, name);
+  git(path, "config", "user.name", "Test User");
+  git(path, "config", "user.email", "test@example.com");
+  git(path, "config", "commit.gpgsign", "false");
+  paths.set(name, path);
+  return path;
+}
+
+/**
  * A repository with some history: `first`, then a `side` branch that renames `b.txt` and adds
  * `s.txt`, merged into `main` (tagged `v1`) after a commit there, plus a commit only a tool's ref
  * points at. `a file.txt` is modified and `new file.txt` untracked.

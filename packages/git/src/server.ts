@@ -2,7 +2,9 @@ export {
   FolderNotFoundError,
   GitError,
   IndexLockedError,
+  NoUpstreamError,
   NotARepositoryError,
+  PullConflictError,
   RepositoryNotFoundError,
 } from "./core/errors";
 export type { GitContext } from "./core/middleware";

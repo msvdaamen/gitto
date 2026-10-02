@@ -1,8 +1,5 @@
-import { cn } from "cn";
-import type { LucideIcon } from "lucide-solid";
 import Archive from "lucide-solid/icons/archive";
 import ArchiveRestore from "lucide-solid/icons/archive-restore";
-import Download from "lucide-solid/icons/download";
 import GitBranch from "lucide-solid/icons/git-branch";
 import PanelLeft from "lucide-solid/icons/panel-left";
 import PanelRight from "lucide-solid/icons/panel-right";
@@ -11,8 +8,7 @@ import RefreshCw from "lucide-solid/icons/refresh-cw";
 import Settings from "lucide-solid/icons/settings";
 import Undo2 from "lucide-solid/icons/undo-2";
 import Upload from "lucide-solid/icons/upload";
-import { For, Suspense } from "solid-js";
-import { Dynamic } from "solid-js/web";
+import { Suspense } from "solid-js";
 
 import { IconButton } from "@/components/ui/button";
 import { Divider } from "@/components/ui/divider";
@@ -21,29 +17,8 @@ import { useStatus } from "@/git/queries/status";
 import { headLabel } from "@/git/status";
 import { useRepository } from "@/hooks/repositories";
 
-interface ToolbarAction {
-  icon: LucideIcon;
-  label: string;
-  accent?: boolean;
-  /** Set apart from the actions before it by a divider. */
-  startsGroup?: boolean;
-  /** Left out of the toolbar below this breakpoint, to make room. */
-  hideBelow?: keyof typeof HIDDEN_BELOW;
-}
-
-// Spelled out, so Tailwind finds the classes.
-const HIDDEN_BELOW = { sm: "max-sm:hidden", lg: "max-lg:hidden" };
-
-const toolbarActions: ToolbarAction[] = [
-  { icon: Undo2, label: "Undo", hideBelow: "lg" },
-  { icon: Redo2, label: "Redo", hideBelow: "lg" },
-  { icon: Download, label: "Pull", accent: true, startsGroup: true },
-  { icon: Upload, label: "Push" },
-  { icon: GitBranch, label: "Branch", hideBelow: "sm" },
-  { icon: Archive, label: "Stash", hideBelow: "lg" },
-  { icon: ArchiveRestore, label: "Pop", hideBelow: "lg" },
-  { icon: RefreshCw, label: "Fetch", hideBelow: "sm" },
-];
+import { PullButton } from "./pull-button";
+import { ToolbarButton } from "./toolbar-button";
 
 export function RepositoryToolbar(props: {
   repositoryId: string;
@@ -75,24 +50,15 @@ export function RepositoryToolbar(props: {
         </div>
       </div>
       <div class="flex items-center gap-0.5">
-        <For each={toolbarActions}>
-          {(action) => (
-            <>
-              {action.startsGroup && <Divider class="h-6" />}
-              <button
-                class={cn(
-                  "flex h-[38px] min-w-[43px] cursor-pointer flex-col items-center justify-center gap-0.5 rounded-md border-0 bg-transparent px-1.5 text-muted hover:bg-panel-hover hover:text-text max-md:min-w-9 max-md:[&>span]:hidden",
-                  action.accent && "text-blue",
-                  action.hideBelow && HIDDEN_BELOW[action.hideBelow],
-                )}
-                title={action.label}
-              >
-                <Dynamic component={action.icon} size={16} />
-                <span class="text-[10.5px]">{action.label}</span>
-              </button>
-            </>
-          )}
-        </For>
+        <ToolbarButton icon={Undo2} label="Undo" hideBelow="lg" />
+        <ToolbarButton icon={Redo2} label="Redo" hideBelow="lg" />
+        <Divider class="h-6" />
+        <PullButton repositoryId={props.repositoryId} />
+        <ToolbarButton icon={Upload} label="Push" />
+        <ToolbarButton icon={GitBranch} label="Branch" hideBelow="sm" />
+        <ToolbarButton icon={Archive} label="Stash" hideBelow="lg" />
+        <ToolbarButton icon={ArchiveRestore} label="Pop" hideBelow="lg" />
+        <ToolbarButton icon={RefreshCw} label="Fetch" hideBelow="sm" />
       </div>
       <div class="ml-auto max-md:min-w-[115px] max-sm:min-w-[90px]">
         <TextInput

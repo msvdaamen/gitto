@@ -1,0 +1,84 @@
+import type { Uncommitted } from "@gitto/git/types";
+import { render, screen } from "@solidjs/testing-library";
+import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { PullButton } from "./pull-button";
+
+const rpc = vi.hoisted(() => ({
+  git: { status: { get: vi.fn() }, remote: { pull: vi.fn() } },
+}));
+
+vi.mock("@/lib/rpc", () => ({ rpc }));
+
+const status: Uncommitted = {
+  head: { kind: "branch", name: "main", sha: "abc" },
+  upstream: "origin/main",
+  ahead: 0,
+  behind: 2,
+  counts: { files: 0, staged: 0, unstaged: 0, conflicted: 0 },
+  changes: { staged: [], unstaged: [] },
+  version: "v1",
+};
+
+/** The pull button, once the status has loaded: until then it's a disabled placeholder. */
+async function loadedButton(title: string) {
+  await vi.waitFor(() =>
+    expect(screen.getByRole("button", { name: "Pull" })).toHaveAttribute("title", title),
+  );
+  return screen.getByRole("button", { name: "Pull" });
+}
+
+function renderButton() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(() => (
+    <QueryClientProvider client={client}>
+      <PullButton repositoryId="repo" />
+    </QueryClientProvider>
+  ));
+}
+
+afterEach(() => {
+  vi.resetAllMocks();
+});
+
+describe("the pull button", () => {
+  it("pulls, and shows how many commits there are to pull", async () => {
+    const user = userEvent.setup();
+    rpc.git.status.get.mockResolvedValue(status);
+    rpc.git.remote.pull.mockResolvedValue(undefined);
+    renderButton();
+
+    const button = await loadedButton("Pull 2 commits from origin/main");
+    expect(button).toBeEnabled();
+    expect(button).toHaveTextContent("2");
+
+    await user.click(button);
+    expect(rpc.git.remote.pull).toHaveBeenCalledWith({ repositoryId: "repo" });
+    // The status is reloaded afterwards.
+    await vi.waitFor(() => expect(rpc.git.status.get).toHaveBeenCalledTimes(2));
+  });
+
+  it("says why a pull failed", async () => {
+    const user = userEvent.setup();
+    rpc.git.status.get.mockResolvedValue(status);
+    rpc.git.remote.pull.mockRejectedValue(new Error("Pulling origin/main caused conflicts."));
+    renderButton();
+
+    await user.click(await loadedButton("Pull 2 commits from origin/main"));
+
+    expect(await screen.findByText("Pulling origin/main caused conflicts.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Dismiss" }));
+    await vi.waitFor(() =>
+      expect(screen.queryByText("Pulling origin/main caused conflicts.")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("is disabled without an upstream to pull from", async () => {
+    rpc.git.status.get.mockResolvedValue({ ...status, upstream: null, behind: 0 });
+    renderButton();
+
+    expect(await loadedButton("main doesn't track a remote branch")).toBeDisabled();
+  });
+});

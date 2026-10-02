@@ -2,6 +2,7 @@ import { CommitContract } from "./features/commit/contract";
 import { DiffContract } from "./features/diff/contract";
 import { HistoryContract } from "./features/history/contract";
 import { RefsContract } from "./features/refs/contract";
+import { RemoteContract } from "./features/remote/contract";
 import { StagingContract } from "./features/staging/contract";
 import { StatusContract } from "./features/status/contract";
 import { WatchContract } from "./features/watch/contract";
@@ -14,5 +15,6 @@ export const GitContract = {
   refs: RefsContract,
   staging: StagingContract,
   commit: CommitContract,
+  remote: RemoteContract,
   watch: WatchContract,
 };

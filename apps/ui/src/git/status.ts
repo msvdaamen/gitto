@@ -22,3 +22,19 @@ export function syncLabel(status: Pick<StatusSummary, "ahead" | "behind">): stri
   ];
   return parts.length ? parts.join(" ") : "synced";
 }
+
+/** Why HEAD can't be pulled into, if it can't: it isn't on a branch, or the branch has no upstream. */
+export function pullBlocker(status: Pick<StatusSummary, "head" | "upstream">): string | undefined {
+  if (status.head.kind === "detached") return "Check out a branch to pull into it";
+  if (!status.upstream) return `${status.head.name} doesn't track a remote branch`;
+  return undefined;
+}
+
+/** What pulling would do, e.g. "Pull 2 commits from origin/main", or why it can't. */
+export function pullTitle(status: Pick<StatusSummary, "head" | "upstream" | "behind">): string {
+  const blocker = pullBlocker(status);
+  if (blocker) return blocker;
+  // `behind` is as of the last fetch; the pull fetches first, so there may be more.
+  if (!status.behind) return `Pull from ${status.upstream}`;
+  return `Pull ${status.behind} ${status.behind === 1 ? "commit" : "commits"} from ${status.upstream}`;
+}
