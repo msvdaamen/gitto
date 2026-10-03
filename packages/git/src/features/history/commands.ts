@@ -56,11 +56,12 @@ export async function getVersionedLog(
   let readMs: number | undefined;
   if (!commits) {
     const start = performance.now();
-    commits = await readLog(repo, page, head !== null, signal);
+    // And the commit after the page, which reading the next one from changes needs.
+    commits = await readLog(repo, { ...page, limit: page.limit + 1 }, head !== null, signal);
     readMs = performance.now() - start;
   }
   rememberLog(repo, { version, page, head, refs, commits }, readMs);
-  return { commits, version };
+  return { commits: commits.slice(0, page.limit), version };
 }
 
 /** A page of the history of all branches, remotes and tags (see `HistoryContract.log`). */

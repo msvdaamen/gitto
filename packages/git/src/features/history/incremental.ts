@@ -47,6 +47,7 @@ export interface LogSnapshot {
   /** HEAD's commit; `null` before the first commit. */
   head: string | null;
   refs: Map<string, LogRef>;
+  /** The page, and the commit after it (if there is one), to tell what's past the page. */
   commits: Commit[];
 }
 
@@ -84,9 +85,10 @@ export function fullReadMs(repo: Repo): number {
 }
 
 /**
- * The first page of the log now, read from what changed since `previous`: the commits that are new,
- * the ones before them in `previous`, and the decorations of those whose refs moved. `undefined`
- * when that wouldn't be the page git sorts itself; it then has to be read whole.
+ * The first page of the log now, and the commit after it, read from what changed since `previous`:
+ * the commits that are new, the ones before them in `previous`, and the decorations of those whose
+ * refs moved. `undefined` when that wouldn't be the page git sorts itself; it then has to be read
+ * whole.
  *
  * Git sorts the log by commit date, never a commit before one of its children: it repeatedly takes
  * the newest commit whose children have all been taken. New commits are only ever children of the
@@ -108,6 +110,8 @@ export async function readLogSince(
 ): Promise<Commit[] | undefined> {
   const { page } = previous;
   if (page.skip !== 0 || previous.commits.length === 0) return undefined;
+  // The page, and the commit after it.
+  const size = page.limit + 1;
 
   // Commits reachable from these may be new, and those reachable from `gone` only, gone.
   const added = new Set<string>();
@@ -177,13 +181,11 @@ export async function readLogSince(
   for (const commit of previous.commits) {
     sameSecond.set(commit.committedAt, (sameSecond.get(commit.committedAt) ?? 0) + 1);
   }
-  // Commits past the page can be of the same second as its last one (and no other).
-  const last = previous.commits.length === page.limit ? previous.commits.at(-1)! : undefined;
+  // Commits past the page of the same second as one on it are of the same second as the commit
+  // after it too, which is kept for that: dates only go down the log.
   const tied = (sha: string) => {
     const index = inPage.get(sha);
-    if (index === undefined) return false;
-    const { committedAt } = previous.commits[index]!;
-    return sameSecond.get(committedAt)! > 1 || committedAt === last?.committedAt;
+    return index !== undefined && sameSecond.get(previous.commits[index]!.committedAt)! > 1;
   };
   if (toRedecorate.some(tied)) return undefined;
 
@@ -206,7 +208,7 @@ export async function readLogSince(
   for (let i = 0; i + 1 < fields.length; i += 2) {
     decorations.set(fields[i]!.trim(), parseDecorations(fields[i + 1]!));
   }
-  const kept = previous.commits.slice(0, page.limit - ordered.length);
+  const kept = previous.commits.slice(0, size - ordered.length);
   for (const [i, commit] of kept.entries()) {
     const refsNow = decorations.get(commit.sha);
     // A copy: the pages kept before share their commits.
