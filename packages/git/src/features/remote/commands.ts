@@ -16,19 +16,35 @@ import { NO_BRANCH, noUpstream, REBASING } from "./pull-blocker";
  * so the sidebar and history show the remotes as they are.
  */
 export async function fetchAll(repo: Repo): Promise<void> {
-  await gitFetch(repo.fetch, FETCH_ALL);
+  await gitFetch(repo.fetch, ["--all", "--prune", "--no-progress"]);
 }
 
-const FETCH_ALL = ["--all", "--prune", "--no-progress"];
+/**
+ * Fetches `remotes` and prunes, as `fetchAll` does, once a pull has merged: not waited for, so a
+ * remote that's slow to answer doesn't hold up the pull, and one that can't be reached doesn't fail
+ * it (that's for the Fetch button to explain). The watcher picks up the branches it changes.
+ */
+function fetchAfterPull(repo: Repo, remotes: string[]): void {
+  if (remotes.length === 0) return;
+  // Queued (as fetches are) before the pull returns, so a fetch started after it waits for this.
+  gitFetch(repo.fetch, ["--multiple", "--prune", "--no-progress", "--", ...remotes]).catch(
+    () => undefined,
+  );
+}
 
 /**
- * Fetches every remote and prunes, as `fetchAll` does, for a pull. A remote that can't be reached
- * doesn't fail the pull, which has what it needs to merge: that's for the Fetch button to explain.
+ * The remotes `git fetch --all` fetches (those not set to be skipped), going by `config`, but for
+ * `except`, which a pull already fetched.
  */
-async function updateRemotes(run: GitCommand): Promise<void> {
-  await gitFetch(run, FETCH_ALL).catch((error: unknown) => {
-    if (!(error instanceof GitError)) throw error;
-  });
+function remotesToFetch(config: Map<string, string>, except: string): string[] {
+  const remotes: string[] = [];
+  for (const key of config.keys()) {
+    const name = /^remote\.(.+)\.url$/.exec(key)?.[1];
+    if (name === undefined || name === except) continue;
+    const skip = config.get(`remote.${name}.skipfetchall`)?.toLowerCase();
+    if (skip === undefined || FALSE.has(skip)) remotes.push(name);
+  }
+  return remotes;
 }
 
 /** `git fetch` with `args`, through `run` (`repo.fetch`, or a command of `repo.fetching`). */
@@ -48,7 +64,8 @@ async function gitFetch(run: GitCommand, args: string[], settings: string[] = []
  * Fetches the current branch's upstream and merges it in, or rebases onto it if the user's config
  * says to, like `git pull`. Conflicts are left in the working tree, to resolve and commit. Also
  * fetches every remote and drops branches deleted on them, as the Fetch button does, so the
- * sidebar and history are up to date after a pull too.
+ * sidebar and history are up to date after a pull too: the upstream's remote first, and the others
+ * once merged (see `fetchAfterPull`).
  *
  * Done as a fetch and then a merge or rebase, rather than one `git pull`, so only the second waits
  * for (and holds up) the other writes to the repository: the fetch takes as long as the network.
@@ -64,6 +81,25 @@ export async function pull(repo: Repo): Promise<void> {
   // (as the settings say before fetching).
   const fetched = await fetchUpstream(repo, gitDir, upstream, makesMergeCommit(settings, branch));
 
+  try {
+    await integrate(repo, gitDir, branch, upstream, fetched);
+  } finally {
+    // Also after a merge that stopped at conflicts, say: the remotes are fetched all the same.
+    fetchAfterPull(repo, remotesToFetch(settings, upstream.remote));
+  }
+}
+
+/**
+ * Merges what `fetchUpstream` fetched into `branch`, or rebases onto it, as one write; rejects if
+ * that stopped partway, or the branch or its upstream changed while fetching.
+ */
+async function integrate(
+  repo: Repo,
+  gitDir: string,
+  branch: string,
+  upstream: Upstream,
+  fetched: Fetched | null,
+): Promise<void> {
   await repo.exclusive(async (run) => {
     // The branch and its settings again, now that no other write can change them: one may have
     // while fetching. All that's read while holding up the other writes is read at once.
@@ -178,11 +214,12 @@ interface Fetched {
 }
 
 /**
- * Fetches the branch's upstream as `git pull` does: just that branch, which updates its
- * remote-tracking branch, and FETCH_HEAD, read before another fetch replaces it. A local upstream
- * (remote ".") has nothing to fetch. Then fetches every remote (see `updateRemotes`). With what
- * was fetched and the message to merge it with, if `word`, and there's one: there's none for a
- * branch already up to date, or without commits (which just moves to its upstream).
+ * Fetches the branch's upstream as `git pull` does: its whole remote, which updates the
+ * remote-tracking branches, and FETCH_HEAD, read before another fetch replaces it. Pruned too, as
+ * the Fetch button does, so the remote is only asked once. A local upstream (remote ".") has
+ * nothing to fetch. With what was fetched and the message to merge it with, if `word`, and there's
+ * one: there's none for a branch already up to date, or without commits (which just moves to its
+ * upstream). Rejects if the upstream no longer exists.
  */
 async function fetchUpstream(
   repo: Repo,
@@ -192,24 +229,32 @@ async function fetchUpstream(
 ): Promise<Fetched | null> {
   let fetchHead: string;
   if (remote === ".") {
-    // Nothing of the upstream's to fetch, but the remotes are still brought up to date.
-    await updateRemotes(repo.fetch);
     if (!tracking) return null;
     // As `git pull` words FETCH_HEAD for a local branch.
     const sha = await resolveRef(repo.read, tracking);
     if (!sha) {
       throw new NoUpstreamError(`${tracking.replace(/^refs\/heads\//, "")} no longer exists.`);
     }
-    fetchHead = `${sha}\t\tbranch '${merge.replace(/^refs\/heads\//, "")}' of .\n`;
+    fetchHead = `${sha}\t\t${fetchedName(merge)} of .\n`;
   } else {
-    fetchHead = await repo.fetching(async (run) => {
+    const written = await repo.fetching(async (run) => {
       // FETCH_HEAD is read next, so it's written whatever `fetch.writeFetchHEAD` says.
-      await gitFetch(run, ["--quiet", "--", remote, merge], ["fetch.writeFetchHEAD=true"]);
-      // Read before fetching every remote, which writes its own.
-      const written = await readFile(join(gitDir, "FETCH_HEAD"), "utf8");
-      await updateRemotes(run);
-      return written;
+      await gitFetch(run, ["--quiet", "--prune", "--", remote], ["fetch.writeFetchHEAD=true"]);
+      return readFile(join(gitDir, "FETCH_HEAD"), "utf8");
     });
+    // The upstream's line, picked by its name rather than by git marking it as the one to merge:
+    // git marks the upstream of the branch checked out as it fetched, which may have been another.
+    // None for an upstream deleted on the remote, whose remote-tracking branch was just pruned.
+    const name = `${fetchedName(merge)} of `;
+    const line = written.split("\n").find((entry) => entry.split("\t")[2]?.startsWith(name));
+    if (!line) {
+      throw new NoUpstreamError(
+        `${merge.replace(/^refs\/heads\//, "")} no longer exists on ${remote}.`,
+      );
+    }
+    const [sha, , description] = line.split("\t");
+    // Marked as the one to merge, and the only one.
+    fetchHead = `${sha}\t\t${description}\n`;
   }
   // The line of what's to be merged, the one that isn't marked not-for-merge.
   const line = fetchHead.split("\n").find((entry) => /^[0-9a-f]+\t\t/.test(entry));
@@ -223,6 +268,21 @@ async function fetchUpstream(
     () => "",
   );
   return message ? { sha, message } : null;
+}
+
+/** The kinds of refs `git fetch` names in FETCH_HEAD, by the prefix of their full names. */
+const FETCHED_KINDS: [prefix: string, kind: string][] = [
+  ["refs/heads/", "branch"],
+  ["refs/tags/", "tag"],
+  ["refs/remotes/", "remote-tracking branch"],
+];
+
+/** How `git fetch` names `ref` in FETCH_HEAD, before " of <URL>": e.g. "branch 'main'". */
+function fetchedName(ref: string): string {
+  for (const [prefix, kind] of FETCHED_KINDS) {
+    if (ref.startsWith(prefix)) return `${kind} '${ref.slice(prefix.length)}'`;
+  }
+  return `'${ref}'`;
 }
 
 /**
@@ -254,7 +314,7 @@ function trackingBranch(run: GitCommand, branch: string): Promise<string | null>
  * git, but for a branch's `merge`, whose values are all kept.
  */
 async function readConfig(run: GitCommand): Promise<Map<string, string>> {
-  const pattern = String.raw`^(pull\.(rebase|ff)|branch\..+\.(remote|merge|rebase)|remote\..+\.url)$`;
+  const pattern = String.raw`^(pull\.(rebase|ff)|branch\..+\.(remote|merge|rebase)|remote\..+\.(url|skipfetchall))$`;
   let output = "";
   try {
     output = await run(["config", "-z", "--get-regexp", pattern]);
