@@ -1,18 +1,19 @@
 import { Popover } from "@kobalte/core/popover";
 import GitBranch from "lucide-solid/icons/git-branch";
-import { createEffect, createSignal, on, Show, Suspense } from "solid-js";
+import { createEffect, createSignal, on, Suspense } from "solid-js";
 
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/ui/form-field";
 import { useCreateBranch } from "@/git/queries/branch";
 import { useStatus } from "@/git/queries/status";
-import { branchBlocker, branchTitle, hasUncommittedChanges, headLabel } from "@/git/status";
+import { branchSource, hasUncommittedChanges } from "@/git/status";
 
+import { FailurePopover } from "./failure-popover";
 import { ToolbarButton } from "./toolbar-button";
 
 /**
- * Creates a branch from the current one and switches to it, with a popover to name it. Uncommitted
- * changes come along to the new branch.
+ * Creates a branch from the current one and switches to it, with a popover to name it, and says why
+ * if that failed. Uncommitted changes come along to the new branch.
  */
 export function BranchButton(props: { repositoryId: string }) {
   return (
@@ -24,91 +25,84 @@ export function BranchButton(props: { repositoryId: string }) {
 
 function Branch(props: { repositoryId: string }) {
   const status = useStatus(() => props.repositoryId);
-  const create = useCreateBranch();
+  const create = useCreateBranch(() => props.repositoryId);
   const [open, setOpen] = createSignal(false);
   const [name, setName] = createSignal("");
-  // The last creation, if it was in this repository; one in another stays with that repository.
-  const current = () => create.variables?.repositoryId === props.repositoryId;
-  const pending = () => current() && create.isPending;
-  const error = () => (current() ? create.error : null);
-  const canCreate = () => !!name().trim() && !pending();
+  const source = () => (status.data ? branchSource(status.data.head) : "HEAD");
 
   // The popover names a branch for the repository it was opened in.
   createEffect(
     on(
       () => props.repositoryId,
-      () => setOpen(false),
+      () => {
+        setOpen(false);
+        setName("");
+      },
       { defer: true },
     ),
   );
 
   function toggle(isOpen: boolean) {
-    // A fresh name each time, and no error from the last try.
-    if (isOpen && !pending()) {
-      setName("");
-      create.reset();
-    }
+    // Out of the way of the name, which is kept after a failure to fix it.
+    if (isOpen) create.dismiss();
     setOpen(isOpen);
   }
 
   function submit() {
-    if (!canCreate()) return;
-    create.mutate(
-      { repositoryId: props.repositoryId, name: name().trim() },
-      { onSuccess: () => setOpen(false) },
-    );
+    const trimmed = name().trim();
+    if (!trimmed) return;
+    // The button shows it running, and why it failed.
+    setOpen(false);
+    // Only the name that was used: another may be being typed in another repository by then.
+    create.run(trimmed, {
+      onSuccess: () => setName((typed) => (typed.trim() === trimmed ? "" : typed)),
+    });
   }
 
   return (
-    <Popover open={open()} onOpenChange={toggle} placement="bottom-start" gutter={6}>
-      <Popover.Trigger
-        as={ToolbarButton}
-        icon={GitBranch}
-        label="Branch"
-        hideBelow="sm"
-        title={status.data ? branchTitle(status.data) : "Branch"}
-        disabled={!status.data || !!branchBlocker(status.data) || pending()}
-        busy={pending()}
-      />
-      <Popover.Portal>
-        <Popover.Content class="z-50 w-[280px] animate-toast-in rounded-lg border border-border bg-panel-raised p-3 text-text shadow-app outline-none motion-reduce:animate-none">
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              submit();
-            }}
-          >
-            <Popover.Title class="m-0 text-[12.5px] font-[680]">New branch</Popover.Title>
-            <Popover.Description class="m-0 mt-1 mb-2.5 text-[11.5px] leading-[1.45] text-muted">
-              From {status.data ? headLabel(status.data.head) : "HEAD"}
-              {hasUncommittedChanges(status.data) ? ", with your uncommitted changes." : "."}
-            </Popover.Description>
-            <FormField
-              label="Name"
-              placeholder="feature/my-change"
-              value={name()}
-              onChange={setName}
-              readOnly={pending()}
-            />
-            <Button
-              type="submit"
-              variant="primary"
-              icon={GitBranch}
-              disabled={!canCreate()}
-              class="h-8 w-full gap-[7px] rounded-[7px] text-[12.5px] font-[680] shadow-none"
+    <FailurePopover title="Branch" error={create.error()} onDismiss={() => create.dismiss()}>
+      <Popover open={open()} onOpenChange={toggle} placement="bottom-start" gutter={6}>
+        <Popover.Trigger
+          as={ToolbarButton}
+          icon={GitBranch}
+          label="Branch"
+          hideBelow="sm"
+          title={`Create a branch from ${source()}`}
+          disabled={!status.data || create.isPending()}
+          busy={create.isPending()}
+        />
+        <Popover.Portal>
+          <Popover.Content class="z-50 w-[280px] animate-toast-in rounded-lg border border-border bg-panel-raised p-3 text-text shadow-app outline-none motion-reduce:animate-none">
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                submit();
+              }}
             >
-              {pending() ? "Creating…" : "Create branch"}
-            </Button>
-            <Show when={error()} keyed>
-              {(failure) => (
-                <p class="m-0 mt-2.5 text-[11.5px] break-words whitespace-pre-wrap text-coral">
-                  {failure.message}
-                </p>
-              )}
-            </Show>
-          </form>
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover>
+              <Popover.Title class="m-0 text-[12.5px] font-[680]">New branch</Popover.Title>
+              <Popover.Description class="m-0 mt-1 mb-2.5 text-[11.5px] leading-[1.45] text-muted">
+                From {source()}
+                {hasUncommittedChanges(status.data) ? ", with your uncommitted changes." : "."}
+              </Popover.Description>
+              <FormField
+                label="Name"
+                placeholder="feature/my-change"
+                value={name()}
+                onChange={setName}
+              />
+              <Button
+                type="submit"
+                variant="primary"
+                icon={GitBranch}
+                disabled={!name().trim()}
+                class="h-8 w-full gap-[7px] rounded-[7px] text-[12.5px] font-[680] shadow-none"
+              >
+                Create branch
+              </Button>
+            </form>
+          </Popover.Content>
+        </Popover.Portal>
+      </Popover>
+    </FailurePopover>
   );
 }

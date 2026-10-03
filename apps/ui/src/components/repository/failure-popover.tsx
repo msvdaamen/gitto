@@ -22,6 +22,9 @@ export function FailurePopover(props: {
         <Popover.Content
           // Not focused: the action can fail while the user is typing elsewhere.
           onOpenAutoFocus={(event) => event.preventDefault()}
+          // Nor closed when focus moves elsewhere, e.g. back to the button from a popover it
+          // opened: only by clicking outside, Escape, or dismissing it.
+          onFocusOutside={(event) => event.preventDefault()}
           class="z-50 flex max-w-[360px] animate-toast-in items-start gap-2 rounded-lg border border-[color-mix(in_srgb,var(--coral)_30%,var(--border))] bg-panel-raised p-3 text-text shadow-app motion-reduce:animate-none"
         >
           <div class="min-w-0">

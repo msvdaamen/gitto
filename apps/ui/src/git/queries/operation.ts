@@ -40,9 +40,10 @@ export function useRepositoryOperation<T = void>(
 
   const operation = () => operations[key(repositoryId())];
   return {
-    run(input: T) {
+    /** Runs it, unless it's running; `onSuccess` runs once it's done, if this is still on show. */
+    run(input: T, options?: { onSuccess?: () => void }) {
       if (operation()?.running) return;
-      mutation.mutate({ id: repositoryId(), input });
+      mutation.mutate({ id: repositoryId(), input }, { onSuccess: () => options?.onSuccess?.() });
     },
     isPending: () => !!operation()?.running,
     error: () => operation()?.error ?? null,
