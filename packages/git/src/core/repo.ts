@@ -97,3 +97,16 @@ export function resolveRef(run: GitCommand, rev: string): Promise<string | null>
 export async function refExists(run: GitCommand, ref: string): Promise<boolean> {
   return (await resolveRef(run, ref)) !== null;
 }
+
+/** The checked-out branch's name; `null` when HEAD is detached. */
+export async function currentBranch(run: GitCommand): Promise<string | null> {
+  let ref: string;
+  try {
+    // The full name: `--short` would make it `heads/main` if there's also a tag called `main`.
+    ref = (await run(["symbolic-ref", "--quiet", "HEAD"])).trim();
+  } catch (error) {
+    if (error instanceof GitError && error.exitCode === 1) return null;
+    throw error;
+  }
+  return ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : null;
+}

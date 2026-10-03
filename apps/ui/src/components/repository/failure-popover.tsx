@@ -1,13 +1,19 @@
 import { Popover } from "@kobalte/core/popover";
+import { cn } from "cn";
 import X from "lucide-solid/icons/x";
 import type { JSX } from "solid-js";
 
-/** A toolbar button, with a popover under it that says why its action failed until dismissed. */
+/**
+ * A toolbar button (or other part of the toolbar), with a popover under it that says why its action
+ * failed until dismissed.
+ */
 export function FailurePopover(props: {
   /** The action, e.g. "Pull". */
   title: string;
   error: Error | null;
   onDismiss: () => void;
+  /** Classes for the element around `children`, which the popover is placed under. */
+  class?: string;
   children: JSX.Element;
 }) {
   return (
@@ -17,7 +23,7 @@ export function FailurePopover(props: {
       placement="bottom-start"
       gutter={6}
     >
-      <Popover.Anchor class="flex">{props.children}</Popover.Anchor>
+      <Popover.Anchor class={cn("flex", props.class)}>{props.children}</Popover.Anchor>
       <Popover.Portal>
         <Popover.Content
           // Not focused: the action can fail while the user is typing elsewhere.

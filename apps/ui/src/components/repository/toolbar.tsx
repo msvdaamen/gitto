@@ -1,5 +1,6 @@
 import { cn } from "cn";
 import GitBranch from "lucide-solid/icons/git-branch";
+import LoaderCircle from "lucide-solid/icons/loader-circle";
 import PanelLeft from "lucide-solid/icons/panel-left";
 import PanelRight from "lucide-solid/icons/panel-right";
 import Redo2 from "lucide-solid/icons/redo-2";
@@ -12,12 +13,14 @@ import { Suspense } from "solid-js";
 import { IconButton } from "@/components/ui/button";
 import { Divider } from "@/components/ui/divider";
 import { TextInput } from "@/components/ui/text-input";
+import { useSwitchBranchState } from "@/git/queries/branch";
 import { useFetch } from "@/git/queries/remote";
 import { useStatus } from "@/git/queries/status";
 import { headLabel } from "@/git/status";
 import { useRepository } from "@/hooks/repositories";
 
 import { BranchButton } from "./branch-button";
+import { FailurePopover } from "./failure-popover";
 import { PullButton } from "./pull-button";
 import { StashButtons } from "./stash-buttons";
 import { ToolbarButton } from "./toolbar-button";
@@ -40,16 +43,7 @@ export function RepositoryToolbar(props: {
           active={props.sidebarOpen}
           onClick={props.onToggleSidebar}
         />
-        <div class="flex min-w-0 items-center gap-2">
-          <span class="grid size-[27px] shrink-0 place-items-center rounded-[7px] bg-primary-soft text-primary-strong">
-            <GitBranch size={15} />
-          </span>
-          <div class="flex min-w-0 flex-col gap-px max-md:hidden">
-            <Suspense>
-              <RepositoryName repositoryId={props.repositoryId} />
-            </Suspense>
-          </div>
-        </div>
+        <CurrentBranch repositoryId={props.repositoryId} />
       </div>
       <div class="flex items-center gap-0.5">
         <ToolbarButton icon={Undo2} label="Undo" hideBelow="lg" />
@@ -99,6 +93,38 @@ function FetchButton(props: { repositoryId: string }) {
       busy={pending()}
       onClick={() => fetchRemotes.mutate(props.repositoryId)}
     />
+  );
+}
+
+/**
+ * The repository's name and current branch. A spinner takes the branch icon's place while switching
+ * branches (from the sidebar), and a popover under it says why that failed.
+ */
+function CurrentBranch(props: { repositoryId: string }) {
+  const switching = useSwitchBranchState(() => props.repositoryId);
+
+  return (
+    <FailurePopover
+      title="Switch branch"
+      error={switching.error()}
+      onDismiss={() => switching.dismiss()}
+      class="min-w-0"
+    >
+      <div class="flex min-w-0 items-center gap-2" aria-busy={switching.isPending()}>
+        <span class="grid size-[27px] shrink-0 place-items-center rounded-[7px] bg-primary-soft text-primary-strong">
+          {switching.isPending() ? (
+            <LoaderCircle size={15} class="animate-spin motion-reduce:animate-none" />
+          ) : (
+            <GitBranch size={15} />
+          )}
+        </span>
+        <div class="flex min-w-0 flex-col gap-px max-md:hidden">
+          <Suspense>
+            <RepositoryName repositoryId={props.repositoryId} />
+          </Suspense>
+        </div>
+      </div>
+    </FailurePopover>
   );
 }
 
