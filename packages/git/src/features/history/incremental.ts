@@ -10,12 +10,12 @@ export type Page = { limit: number; skip: number };
 
 /**
  * What the log starts from, besides HEAD: every branch, remote branch and tag (and the replace
- * refs, which change what a commit's parents are), with what a tag points at, and the checked-out
- * branch marked, as both are in the log's decorations.
+ * refs, which change what a commit's parents are), with the checked-out branch marked, as it is in
+ * the log's decorations.
  */
 export const LOG_REFS_ARGS = [
   "for-each-ref",
-  "--format=%(objectname)%00%(objecttype)%00%(*objectname)%00%(*objecttype)%00%(HEAD)%00%(refname)",
+  "--format=%(objectname)%00%(HEAD)%00%(refname)",
   "refs/heads",
   "refs/remotes",
   "refs/tags",
@@ -23,75 +23,74 @@ export const LOG_REFS_ARGS = [
 ];
 
 interface LogRef {
-  /** What it points at; a tag object for an annotated tag. */
+  /** What it points at: a commit, or a tag object for an annotated tag. */
   sha: string;
-  /**
-   * The commit it starts the log from and decorates: for an annotated tag, the one the tag points
-   * at, through any tags in between. `null` for a tag of something else, like a tree.
-   */
-  commit: string | null;
   /** Whether it's the checked-out branch. */
   current: boolean;
 }
 
 /** `LOG_REFS_ARGS` output, by ref name. */
-export async function parseLogRefs(
-  repo: Repo,
-  output: string,
-  signal?: AbortSignal,
-): Promise<Map<string, LogRef>> {
+export function parseLogRefs(output: string): Map<string, LogRef> {
   const refs = new Map<string, LogRef>();
-  // Tags of tags, which `LOG_REFS_ARGS` peels only once: git is asked what they end at.
-  const nested: LogRef[] = [];
   for (const line of output.split("\n")) {
-    const [sha = "", type, peeled = "", peeledType, head, name = ""] = line.split("\0");
-    if (!name) continue;
-    const commit =
-      type === "commit" ? sha : type === "tag" && peeledType === "commit" ? peeled : null;
-    const ref = { sha, commit, current: head === "*" };
-    refs.set(name, ref);
-    if (type === "tag" && peeledType === "tag") nested.push(ref);
-  }
-  if (nested.length > 0) {
-    const commits = await peelTags(
-      repo,
-      nested.map((ref) => ref.sha),
-      signal,
-    );
-    for (const ref of nested) ref.commit = commits.get(ref.sha) ?? null;
+    const [sha = "", head, name = ""] = line.split("\0");
+    if (name) refs.set(name, { sha, current: head === "*" });
   }
   return refs;
 }
 
 /**
- * The commits the tag objects `tags` end at (`null` for those that end at something else), asked
- * of git once for each: a tag object never changes.
+ * Finds out what the objects `refs` point at end at (see `LogMemory.refCommits`), for those it
+ * isn't known of: asking git for every ref's along with the refs (`%(*objectname)`) would make
+ * reading them five times slower in a big repository, every time.
  */
-async function peelTags(
-  repo: Repo,
-  tags: string[],
-  signal?: AbortSignal,
-): Promise<Map<string, string | null>> {
-  const { peeled } = memoryOf(repo);
-  const unknown = [...new Set(tags)].filter((sha) => !peeled.has(sha));
-  if (unknown.length > 0) {
-    const output = await repo.read(["cat-file", "--batch-check=%(objectname) %(objecttype)"], {
-      signal,
-      stdin: `${unknown.map((sha) => `${sha}^{}`).join("\n")}\n`,
-    });
-    for (const [i, line] of output.split("\n").slice(0, unknown.length).entries()) {
-      const [sha, type] = line.split(" ");
-      peeled.set(unknown[i]!, type === "commit" ? sha! : null);
+async function peel(repo: Repo, refs: Map<string, LogRef>[], signal?: AbortSignal) {
+  const { refCommits } = memoryOf(repo);
+  const unknown = new Set<string>();
+  for (const named of refs) {
+    for (const [name, ref] of named) {
+      if (!name.startsWith("refs/replace/") && !refCommits.has(ref.sha)) unknown.add(ref.sha);
     }
   }
-  return peeled;
+  if (unknown.size === 0) return;
+  const check = async (objects: string[]) => {
+    const output = await repo.read(["cat-file", "--batch-check=%(objectname) %(objecttype)"], {
+      signal,
+      stdin: `${objects.join("\n")}\n`,
+    });
+    return output
+      .split("\n")
+      .slice(0, objects.length)
+      .map((line) => line.split(" "));
+  };
+  // Telling an object's type is quick; peeling a tag takes reading it, so only tags are.
+  const shas = [...unknown];
+  const tags: string[] = [];
+  for (const [i, [, type]] of (await check(shas)).entries()) {
+    if (type === "tag") tags.push(shas[i]!);
+    else refCommits.set(shas[i]!, type === "commit" ? shas[i]! : null);
+  }
+  if (tags.length === 0) return;
+  for (const [i, [sha, type]] of (await check(tags.map((tag) => `${tag}^{}`))).entries()) {
+    refCommits.set(tags[i]!, type === "commit" ? sha! : null);
+  }
 }
 
-/** The commits the log starts from, for the commit index. */
-function indexTips(refs: Map<string, LogRef>, head: string | null): Set<string> {
+/**
+ * The commits the log starts from, for the commit index; `undefined` while what a ref points at
+ * isn't known (see `peel`).
+ */
+function indexTips(
+  memory: LogMemory,
+  refs: Map<string, LogRef>,
+  head: string | null,
+): Set<string> | undefined {
   const shas = new Set<string>();
   for (const [name, ref] of refs) {
-    if (!name.startsWith("refs/replace/") && ref.commit) shas.add(ref.commit);
+    if (name.startsWith("refs/replace/")) continue;
+    const commit = memory.refCommits.get(ref.sha);
+    if (commit === undefined) return undefined;
+    if (commit) shas.add(commit);
   }
   if (head) shas.add(head);
   return shas;
@@ -123,8 +122,12 @@ interface LogMemory {
   indexing?: Promise<void>;
   /** Not to be indexed: a shallow clone, whose commits' parents change as it's deepened. */
   unindexable?: boolean;
-  /** What tag objects pointing at tags end at, by their SHA (see `parseLogRefs`). */
-  peeled: Map<string, string | null>;
+  /**
+   * The commit each object refs point at starts the log from, by the object's SHA: the commit
+   * itself, the one an annotated tag points at (through any tags in between), or `null` for
+   * anything else, like a tag of a tree. Kept, as an object never changes.
+   */
+  refCommits: Map<string, string | null>;
 }
 
 /** How many pages are kept, in case the caller didn't get the newest (it was cancelled, say). */
@@ -133,7 +136,7 @@ const SNAPSHOTS = 3;
 function memoryOf(repo: Repo): LogMemory {
   let memory = repo.memory.get("log") as LogMemory | undefined;
   if (!memory)
-    repo.memory.set("log", (memory = { snapshots: [], fullReadMs: 0, peeled: new Map() }));
+    repo.memory.set("log", (memory = { snapshots: [], fullReadMs: 0, refCommits: new Map() }));
   return memory;
 }
 
@@ -161,10 +164,12 @@ export function fullReadMs(repo: Repo): number {
  */
 export function indexLog(repo: Repo, snapshot: LogSnapshot): void {
   const memory = memoryOf(repo);
-  const wanted = indexTips(snapshot.refs, snapshot.head);
   if (memory.unindexable || memory.indexing) return;
-  if (memory.index && sameSet(memory.index.tips, wanted)) return;
+  const known = indexTips(memory, snapshot.refs, snapshot.head);
+  if (known && memory.index && sameSet(memory.index.tips, known)) return;
   const work = async () => {
+    await peel(repo, [snapshot.refs]);
+    const wanted = indexTips(memory, snapshot.refs, snapshot.head)!;
     if (memory.index) {
       await memory.index.sync(repo, wanted);
       return;
@@ -217,10 +222,16 @@ export async function readLogSince(
   const memory = memoryOf(repo);
   const { page } = previous;
   const commitIndex = memory.index;
-  const [tipsBefore, tipsNow] = [indexTips(previous.refs, previous.head), indexTips(refs, head)];
   if (!commitIndex || memory.indexing) return undefined;
-  if (!sameSet(commitIndex.tips, tipsBefore)) return undefined;
   if (page.skip !== 0 || previous.commits.length === 0) return undefined;
+  // Known for the refs before, but for those that moved, usually.
+  await peel(repo, [previous.refs, refs], signal);
+  const commitOf = (ref: LogRef | undefined) => ref && memory.refCommits.get(ref.sha);
+  const [tipsBefore, tipsNow] = [
+    indexTips(memory, previous.refs, previous.head)!,
+    indexTips(memory, refs, head)!,
+  ];
+  if (!sameSet(commitIndex.tips, tipsBefore)) return undefined;
   // The page, and the commit after it.
   const size = page.limit + 1;
 
@@ -233,14 +244,14 @@ export async function readLogSince(
     const was = previous.refs.get(name);
     if (was?.sha === ref.sha && was.current === ref.current) continue;
     if (name.startsWith("refs/replace/")) return replaced(memory);
-    touch(ref.commit);
-    touch(was?.commit);
+    touch(commitOf(ref));
+    touch(commitOf(was));
     if (was?.sha !== ref.sha) added.add(ref.sha);
   }
   for (const [name, was] of previous.refs) {
     if (refs.has(name)) continue;
     if (name.startsWith("refs/replace/")) return replaced(memory);
-    touch(was.commit);
+    touch(commitOf(was));
   }
   if (head !== previous.head) {
     if (head) added.add(head);
