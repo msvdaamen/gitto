@@ -37,6 +37,7 @@ describe("Batches", () => {
     // A change every 100ms, for five seconds: never quiet for long enough.
     for (let i = 0; i < 50; i++) {
       batches.add(i);
+      // oxlint-disable-next-line no-await-in-loop -- one change after the other, on purpose.
       await vi.advanceTimersByTimeAsync(100);
     }
     expect(handed.length).toBe(2);
