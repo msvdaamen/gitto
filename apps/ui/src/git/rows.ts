@@ -1,6 +1,6 @@
 import type { Commit, Stash } from "@gitto/git/types";
 
-import { avatarColor, initials, relativeTime } from "@/lib/format";
+import { avatarColor, initials } from "@/lib/format";
 
 import { computeGraph, type GraphCommit, type GraphRow } from "./graph";
 import { toRefLabels, type RefLabel } from "./ref-labels";
@@ -47,8 +47,8 @@ export interface StashRow {
   graph: GraphRow | undefined;
   /** What git named it, e.g. `WIP on main: 1a2b3c4 Fix the header`. */
   message: string;
-  /** When it was made, relative to now. */
-  timestamp: string;
+  /** When it was made, in milliseconds since the epoch. */
+  createdAt: number;
 }
 
 /** A commit as the UI shows it. */
@@ -66,8 +66,8 @@ export interface CommitRow {
   author: string;
   initials: string;
   avatarColor: string;
-  /** The commit date, which the history is sorted by, relative to now. */
-  timestamp: string;
+  /** The commit date, which the history is sorted by, in milliseconds since the epoch. */
+  committedAt: number;
   /** The branches and tags pointing at it (see `toRefLabels`). */
   labels: RefLabel[];
 }
@@ -164,7 +164,7 @@ function toStashRow(repositoryId: string, stash: Stash, graph: GraphRow | undefi
     repositoryId,
     graph,
     message: stash.message,
-    timestamp: relativeTime(stash.createdAt),
+    createdAt: stash.createdAt,
   };
 }
 
@@ -180,7 +180,7 @@ export function toCommitRow(repositoryId: string, commit: Commit, graph?: GraphR
     author: commit.authorName,
     initials: initials(commit.authorName),
     avatarColor: avatarColor(commit.authorEmail),
-    timestamp: relativeTime(commit.committedAt),
+    committedAt: commit.committedAt,
     labels: toRefLabels(commit.refs),
   };
 }

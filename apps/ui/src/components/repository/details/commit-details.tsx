@@ -12,6 +12,7 @@ import { lineTotals } from "@/git/changes";
 import { useCommitFiles } from "@/git/queries/diff";
 import { useCommitDetails } from "@/git/queries/history";
 import { stashSha, WIP_ID, type CommitRow } from "@/git/rows";
+import { useRelativeTime } from "@/hooks/relative-time";
 
 import { ChangedFilesSection, DetailsError, FileTotals } from "./details-sections";
 import { StashDetails } from "./stash-details";
@@ -113,13 +114,15 @@ function CommitSummary(props: {
   fileCount: number;
   totals: { additions: number; deletions: number };
 }) {
+  const ago = useRelativeTime();
+
   return (
     <div class="border-b border-border p-4">
       <div class="flex items-center gap-[9px]">
         <Avatar initials={props.commit.initials} color={props.commit.avatarColor} size="md" />
         <div class="flex flex-col gap-0.5">
           <strong class="text-[13px]">{props.commit.author}</strong>
-          <span class="text-[11px] text-faint">{props.commit.timestamp}</span>
+          <span class="text-[11px] text-faint">{ago(props.commit.committedAt)}</span>
         </div>
       </div>
       <h2 class="mt-3.5 mb-1.5 text-sm leading-[1.35] tracking-[-.2px]">{props.commit.message}</h2>

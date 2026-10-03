@@ -4,6 +4,7 @@ import { Show, Suspense } from "solid-js";
 
 import { useStashFiles } from "@/git/queries/stash";
 import type { StashRow } from "@/git/rows";
+import { useRelativeTime } from "@/hooks/relative-time";
 
 import { HistoryGraph } from "./history-graph";
 import { HistoryOption, RowKindBadge, RowTotals, type HistoryRowProps } from "./history-option";
@@ -16,6 +17,8 @@ export function HistoryStashRow(
     searching: boolean;
   },
 ) {
+  const ago = useRelativeTime();
+
   return (
     <HistoryOption
       selected={props.selected}
@@ -47,7 +50,7 @@ export function HistoryStashRow(
           </Suspense>
         </Show>
       </span>
-      <span class="truncate text-[11.5px]">{props.stash.timestamp}</span>
+      <span class="truncate text-[11.5px]">{ago(props.stash.createdAt)}</span>
     </HistoryOption>
   );
 }

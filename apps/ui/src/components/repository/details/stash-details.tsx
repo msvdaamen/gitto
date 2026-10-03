@@ -3,7 +3,7 @@ import { createMemo, Show } from "solid-js";
 
 import { Badge } from "@/components/ui/badge";
 import { useStashes, useStashFiles } from "@/git/queries/stash";
-import { relativeTime } from "@/lib/format";
+import { useRelativeTime } from "@/hooks/relative-time";
 
 import { ChangedFilesSection, DetailsError, FileTotals } from "./details-sections";
 
@@ -21,6 +21,7 @@ export function StashDetails(props: {
   );
   // The stash whose files are on show, so the summary never names another one while its files
   // load. Gone once it's popped; the history then selects another row.
+  const ago = useRelativeTime();
   const shown = createMemo(() => stashes.data?.find((stash) => stash.sha === changes.shownSha()));
 
   // One element, so the file list sees it change size when the summary above the files loads.
@@ -36,7 +37,7 @@ export function StashDetails(props: {
             </Badge>
             <h2 class="mt-3 mb-1.5 text-sm leading-[1.35] tracking-[-.2px]">{stash.message}</h2>
             <p class="m-0 text-[12px] leading-[1.55] text-muted">
-              Stashed {relativeTime(stash.createdAt).toLowerCase()}
+              Stashed {ago(stash.createdAt).toLowerCase()}
             </p>
             <code class="mt-3 inline-block rounded-[5px] border border-border-soft bg-bg px-[7px] py-1 text-[11px] text-text-soft">
               {stash.sha.slice(0, 7)}

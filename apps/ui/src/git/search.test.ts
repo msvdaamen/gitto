@@ -12,7 +12,7 @@ const commit: CommitRow = {
   author: "Ada Lovelace",
   initials: "AL",
   avatarColor: "#000",
-  timestamp: "Just now",
+  committedAt: 0,
   labels: [{ kind: "branch", name: "main", local: true, remotes: ["origin"], current: true }],
 };
 
@@ -23,7 +23,7 @@ const stash: StashRow = {
   repositoryId: "repo",
   graph: undefined,
   message: "WIP on main: a1b2c3d Fix the parser",
-  timestamp: "Just now",
+  createdAt: 0,
 };
 
 const wip: WipRow = { kind: "wip", id: "wip", repositoryId: "repo", graph: undefined };
