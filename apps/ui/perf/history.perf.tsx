@@ -75,6 +75,27 @@ describe("history", () => {
     expect(position).toBeGreaterThan(4);
     expectWithin("Page Down, Up, Home, End", stats, { p95: 21, worst: 21 });
   });
+
+  it("filters the rows as a search is typed, and cleared", async () => {
+    const search = page.getByPlaceholder("Search history…");
+    const field = search.element().getBoundingClientRect();
+    await commands.click([onPage(search.element(), field.width / 2, field.height / 2)], 0);
+    const query = "branch list in the sidebar";
+
+    // About ten keys a second, a quick typist.
+    const typing = await measureFrames(() => commands.press([...query], 100));
+    await expect.element(search).toHaveValue(query);
+    const options = page.getByRole("option");
+    expect(Number(options.first().element().getAttribute("aria-setsize"))).toBeLessThan(COMMITS);
+    expectWithin("type a search", typing, { p95: 13, worst: 15 });
+
+    // Held down, so it repeats.
+    const clearing = await measureFrames(() =>
+      commands.press(Array(query.length).fill("Backspace"), 33),
+    );
+    await expect.element(search).toHaveValue("");
+    expectWithin("clear it with Backspace", clearing, { p95: 12, worst: 18 });
+  });
 });
 
 /** The history's rows a click lands on: the ones in view, and not under its header. */
