@@ -29,7 +29,7 @@ describe("history", () => {
       commands.wheel({ deltaY: 100, steps: 120, interval: 1000 / 60 }),
     );
     expect(scroller.element().scrollTop).toBeGreaterThan(100 * 100);
-    expectWithin("steady scroll", stats, { p95: 8, worst: 25 });
+    expectWithin("steady scroll", stats, { p95: 6, worst: 20 });
   });
 
   it("jumps to where the scrollbar is dragged", async () => {
@@ -44,6 +44,6 @@ describe("history", () => {
     scroller.addEventListener("scroll", () => scrolled.add(scroller.scrollTop));
     const stats = await measureFrames(() => commands.drag(thumb, to, 200));
     expect(scrolled.size).toBeGreaterThanOrEqual(stops.length);
-    expectWithin("scrollbar jumps", stats, { p95: 16, worst: 25 });
+    expectWithin("scrollbar jumps", stats, { p95: 18, worst: 21 });
   });
 });

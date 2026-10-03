@@ -30,44 +30,45 @@ export const startFrameTrace: BrowserCommand<[]> = async ({ page }) => {
 };
 
 /**
- * Stops the recording, and returns how long the main thread was busy for each frame it drew, in
- * milliseconds: the input and scroll handlers, timers and rendering since the frame before. That's
- * the time a frame needs, which has to stay within the display's frame budget.
+ * Stops the recording, and returns how long the main thread was busy in each frame it drew, in
+ * milliseconds. Frames are as Chrome delimits them for the Long Animation Frames API: from the
+ * first task after the frame before that led to this one (an input or scroll handler, a timer),
+ * to the end of its rendering. Work in between that isn't followed by a frame, like garbage
+ * collection while nothing happens, holds nothing up and isn't counted.
  */
 export const stopFrameTrace: BrowserCommand<[], number[]> = async ({ page }) => {
   const buffer = await page.context().browser()!.stopTracing();
   const events: TraceEvent[] = JSON.parse(buffer.toString()).traceEvents;
-  // A frame ends when its rendering does. Only the renderer's main thread renders frames.
-  const frameEnds = events.filter((event) => event.name === "AnimationFrame" && event.ph === "e");
-  const thread = frameEnds[0]?.tid;
-  const ends = frameEnds.map((event) => event.ts).toSorted((a, b) => a - b);
-  // Top-level tasks can nest (a microtask checkpoint runs inside a task), so they're merged into
-  // the stretches the thread was busy for before being counted.
+  // Only the renderer's main thread draws frames, one at a time.
+  const marks = events
+    .filter((event) => event.name === "AnimationFrame" && (event.ph === "b" || event.ph === "e"))
+    .toSorted((a, b) => a.ts - b.ts);
+  const thread = marks[0]?.tid;
+  const frames: { start: number; end: number }[] = [];
+  let start: number | undefined;
+  for (const mark of marks) {
+    if (mark.tid !== thread) continue;
+    if (mark.ph === "b") start = mark.ts;
+    else if (start !== undefined) frames.push({ start, end: mark.ts });
+  }
+  // A frame can have gaps, e.g. between an input handler and the rendering it waits for, so only
+  // the tasks in it count. Top-level tasks can nest (a microtask checkpoint runs inside a task).
   const tasks = events
     .filter((event) => event.tid === thread && event.cat === "toplevel" && event.ph === "X")
     .map((event) => ({ start: event.ts, end: event.ts + (event.dur ?? 0) }))
     .toSorted((a, b) => a.start - b.start);
-  const busy: { start: number; end: number }[] = [];
-  for (const task of tasks) {
-    const last = busy.at(-1);
-    if (last && task.start <= last.end) last.end = Math.max(last.end, task.end);
-    else busy.push({ ...task });
-  }
-
-  const frames = ends.map(() => 0);
-  let frame = 0;
-  for (const stretch of busy) {
-    let start = stretch.start;
-    // Work that runs past a frame's end goes towards the next frame, which it holds up.
-    while (frame < ends.length && start < stretch.end) {
-      const end = Math.min(stretch.end, ends[frame]!);
-      if (end > start) frames[frame]! += end - start;
-      if (stretch.end <= ends[frame]!) break;
-      start = Math.max(start, ends[frame]!);
-      frame++;
+  return frames.map((frame) => {
+    let busy = frame.start;
+    let total = 0;
+    for (const task of tasks) {
+      if (task.start >= frame.end) break;
+      const from = Math.max(task.start, busy);
+      const to = Math.min(task.end, frame.end);
+      if (to > from) total += to - from;
+      busy = Math.max(busy, to);
     }
-  }
-  return frames.map((microseconds) => microseconds / 1000);
+    return total / 1000;
+  });
 };
 
 /**

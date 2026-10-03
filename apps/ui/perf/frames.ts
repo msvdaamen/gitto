@@ -39,17 +39,19 @@ export interface FrameStats {
 }
 
 /**
- * The busy time of every frame drawn while `scenario` runs, and in the frames after, which draw
- * what it left pending.
+ * The busy time of every frame drawn while `scenario` runs, and in the moment after, which draws
+ * what it left pending. The waits are timers, not animation frames, so the only frames drawn are
+ * the ones the app asks for.
  */
 export async function measureFrames(scenario: () => Promise<void>): Promise<FrameStats> {
   await commands.startFrameTrace();
-  // Not counting the frames the tracing starts up in.
-  await quiet();
+  await sleep(100);
   await scenario();
-  await quiet();
+  await sleep(300);
   return summarize(await commands.stopFrameTrace());
 }
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Resolves after `frames` frames. */
 export async function quiet(frames = 10): Promise<void> {
