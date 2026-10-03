@@ -57,7 +57,7 @@ export function RefList(props: { repositoryId: string }) {
 
   /**
    * A ref tree's line: a collapsible folder, or a ref drawn by `ref`. Which of the two can change,
-   * as a line is reused for another when it scrolls out of view.
+   * as lines are rendered by position: collapsing a folder moves the ones below it up.
    */
   const treeRow = (
     row: () => RefTreeRow,

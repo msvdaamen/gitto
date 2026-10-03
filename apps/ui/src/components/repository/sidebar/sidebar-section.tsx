@@ -33,7 +33,7 @@ export function SidebarSection<T>(props: {
   collapsed: boolean;
   onToggle: () => void;
   items: T[];
-  /** Renders a row; its item changes when the row is reused for another (see `VirtualList`). */
+  /** Renders a row; its item can change, as rows are rendered by position (see `VirtualList`). */
   children: (item: () => T) => JSX.Element;
 }) {
   const expanded = () => !props.collapsed && props.items.length > 0;

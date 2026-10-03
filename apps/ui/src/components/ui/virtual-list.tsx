@@ -1,15 +1,10 @@
-import {
-  createVirtualizer,
-  defaultRangeExtractor,
-  type Range,
-  type VirtualItem,
-} from "@tanstack/solid-virtual";
+import { createVirtualizer, defaultRangeExtractor, type Range } from "@tanstack/solid-virtual";
 import { cn } from "cn";
 import {
   createEffect,
   createMemo,
   createSignal,
-  Index,
+  For,
   onCleanup,
   onMount,
   Show,
@@ -22,7 +17,8 @@ const OVERSCAN = 10;
 /**
  * A scroll container that only renders the rows in view, so a list of thousands of rows costs as
  * much as a screenful. Every row is `rowHeight` tall, including any space below it. Rows are
- * reused as the list scrolls (see `RecycledRows`), so what's rendered for one has to follow its item.
+ * rendered by position, like in `VirtualRows`, so items that are replaced (by a refetch, or a
+ * folder collapsing above them) update the rows in place instead of re-creating them.
  */
 export function VirtualList<T>(props: {
   items: T[];
@@ -31,7 +27,7 @@ export function VirtualList<T>(props: {
   padding?: number;
   /** Classes for the scroll container. */
   class?: string;
-  /** Renders a row; its item changes when the row is reused for another. */
+  /** Renders a row; its item can change, as rows are rendered by position. */
   children: (item: () => T) => JSX.Element;
 }) {
   let container: HTMLDivElement | undefined;
@@ -56,13 +52,20 @@ export function VirtualList<T>(props: {
   return (
     <div ref={(el) => (container = el)} class={cn("min-h-0 overflow-y-auto", props.class)}>
       <div class="relative" style={{ height: `${virtualizer.getTotalSize()}px` }}>
-        <RecycledRows
-          rows={virtualizer.getVirtualItems()}
-          items={props.items}
-          height={props.rowHeight}
-        >
-          {props.children}
-        </RecycledRows>
+        <For each={virtualizer.getVirtualItems()}>
+          {(row) => {
+            // The row's item; the last one once the list shrinks past the row (see `VirtualRows`).
+            const item = createMemo<T | undefined>((last) => props.items[row.index] ?? last);
+            return (
+              <div
+                class="absolute inset-x-0 top-0"
+                style={{ height: `${props.rowHeight}px`, transform: `translateY(${row.start}px)` }}
+              >
+                <Show when={item() !== undefined}>{props.children(item as () => T)}</Show>
+              </div>
+            );
+          }}
+        </For>
       </div>
     </div>
   );
@@ -72,8 +75,8 @@ export function VirtualList<T>(props: {
  * The rows of a list inside a scroll container it shares with other content, e.g. a commit's files
  * below its message: only the rows in view are rendered, like in `VirtualList`, plus the one with
  * focus, so scrolling it out of view doesn't lose it. Every row is `rowHeight` tall, with `gap`
- * below it. Rows are reused as the list scrolls (see `RecycledRows`), and a refetch that replaces
- * the items updates the rows in place instead of re-creating them.
+ * below it. Rows are rendered by position, so a refetch that replaces the items updates the rows in
+ * place instead of re-creating them.
  */
 export function VirtualRows<T>(props: {
   items: T[];
@@ -82,8 +85,8 @@ export function VirtualRows<T>(props: {
   gap?: number;
   /** The element that scrolls the rows, along with whatever is above and below them. */
   scrollElement: HTMLElement | undefined;
-  /** Renders the item at `index`; both change when the row is reused for another. */
-  children: (item: () => T, index: () => number) => JSX.Element;
+  /** Renders the item at `index`; the item can change, as rows are rendered by position. */
+  children: (item: () => T, index: number) => JSX.Element;
 }) {
   let list: HTMLDivElement | undefined;
   const connected = useConnected(() => list);
@@ -149,88 +152,27 @@ export function VirtualRows<T>(props: {
       onFocusIn={onFocusIn}
       onFocusOut={onFocusOut}
     >
-      <RecycledRows
-        rows={virtualizer.getVirtualItems()}
-        items={props.items}
-        height={props.rowHeight}
-        offset={offset()}
-      >
-        {props.children}
-      </RecycledRows>
+      <For each={virtualizer.getVirtualItems()}>
+        {(row) => {
+          // The row's item; when the list shrinks past the row, the last one until the row is
+          // removed. Effects in the row can still run in between (e.g. ones a loading Suspense
+          // boundary held back), and reading a <Show>'s stale value there would throw.
+          const item = createMemo<T | undefined>((last) => props.items[row.index] ?? last);
+          return (
+            <div
+              data-index={row.index}
+              class="absolute inset-x-0 top-0"
+              style={{
+                height: `${props.rowHeight}px`,
+                transform: `translateY(${row.start - offset()}px)`,
+              }}
+            >
+              <Show when={item() !== undefined}>{props.children(item as () => T, row.index)}</Show>
+            </div>
+          );
+        }}
+      </For>
     </div>
-  );
-}
-
-/**
- * Renders `rows`, the ones of `items` a virtualizer says are in view, each in a slot that stays its
- * own for as long as it's rendered. A row that scrolls into view takes the slot of one that
- * scrolled out, so scrolling updates what the rows already there say, rather than building a row
- * and throwing one away for each that passes by.
- */
-function RecycledRows<T>(props: {
-  rows: VirtualItem[];
-  items: T[];
-  /** Height of a row, in pixels. */
-  height: number;
-  /** Where the rows' container starts in the scrolled content, which their positions include. */
-  offset?: number;
-  children: (item: () => T, index: () => number) => JSX.Element;
-}) {
-  // The slot each rendered row is in, by the row's index.
-  let slotOf = new Map<number, number>();
-  // The row in each slot; `undefined` for one that's free. A slot is never dropped: how many rows
-  // fit in view goes up and down by one all the time while scrolling.
-  const slots = createMemo<(VirtualItem | undefined)[]>((last) => {
-    const next: (VirtualItem | undefined)[] = last.map(() => undefined);
-    const nextSlotOf = new Map<number, number>();
-    const entering: VirtualItem[] = [];
-    for (const row of props.rows) {
-      const slot = slotOf.get(row.index);
-      if (slot === undefined) {
-        entering.push(row);
-      } else {
-        next[slot] = row;
-        nextSlotOf.set(row.index, slot);
-      }
-    }
-    // Into the free slots, and new ones once those run out.
-    let free = 0;
-    for (const row of entering) {
-      while (next[free] !== undefined) free++;
-      next[free] = row;
-      nextSlotOf.set(row.index, free);
-    }
-    slotOf = nextSlotOf;
-    return next;
-  }, []);
-
-  return (
-    <Index each={slots()}>
-      {(slot) => {
-        // The slot's row; the last one while it's free, when it's hidden, so what's rendered in it
-        // is kept for the next row.
-        const row = createMemo<VirtualItem | undefined>((last) => slot() ?? last);
-        const index = () => row()?.index ?? 0;
-        // The row's item; when the list shrinks past the row, the last one until the row is
-        // hidden. Effects in the row can still run in between (e.g. ones a loading Suspense
-        // boundary held back), and reading a <Show>'s stale value there would throw.
-        const item = createMemo<T | undefined>((last) => props.items[index()] ?? last);
-        return (
-          <div
-            data-index={index()}
-            // Contained: rendering another item in a row doesn't lay out the rows around it.
-            class="absolute inset-x-0 top-0 contain-layout contain-size contain-style"
-            style={{
-              height: `${props.height}px`,
-              transform: `translateY(${(row()?.start ?? 0) - (props.offset ?? 0)}px)`,
-              display: slot() ? undefined : "none",
-            }}
-          >
-            <Show when={item() !== undefined}>{props.children(item as () => T, index)}</Show>
-          </div>
-        );
-      }}
-    </Index>
   );
 }
 

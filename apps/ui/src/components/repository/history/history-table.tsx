@@ -182,8 +182,7 @@ function HistoryRows(props: {
             }
           >
             {/* By position rather than object identity: the rows are rebuilt whenever the log or
-            the uncommitted changes change, and re-creating them would restart their queries. A
-            row is also reused for another when it scrolls out of view. */}
+            the uncommitted changes change, and re-creating them would restart their queries. */}
             <VirtualRows
               items={visibleRows()}
               rowHeight={ROW_HEIGHT}
@@ -207,7 +206,7 @@ function HistoryRows(props: {
                     return history.selected()?.id === row().id;
                   },
                   get position() {
-                    return { index: index(), count: visibleRows().length };
+                    return { index, count: visibleRows().length };
                   },
                   onSelect: () => props.onSelect(row().id),
                 };

@@ -40,6 +40,20 @@ describe("VirtualList", () => {
     expect(row).toHaveStyle({ height: "10px", transform: "translateY(30px)" });
     expect(row.parentElement).toHaveStyle({ height: "1000px" });
   });
+
+  it("shows the items that replace the ones in view in the same rows", async () => {
+    const [items, setItems] = createSignal(ITEMS);
+    render(() => (
+      <VirtualList items={items()} rowHeight={10}>
+        {(item) => <span>{item()}</span>}
+      </VirtualList>
+    ));
+    const row = await screen.findByText("Row 2");
+
+    setItems(["Other 0", "Other 1", "Other 2"]);
+    await vi.waitFor(() => expect(row).toHaveTextContent("Other 2"));
+    expect(screen.queryByText("Row 3")).not.toBeInTheDocument();
+  });
 });
 
 function renderRows() {
@@ -47,7 +61,7 @@ function renderRows() {
   render(() => (
     <div ref={setScroller}>
       <VirtualRows items={ITEMS} rowHeight={10} scrollElement={scroller()}>
-        {(item, index) => <button data-row={index()}>{item()}</button>}
+        {(item, index) => <button data-row={index}>{item()}</button>}
       </VirtualRows>
     </div>
   ));
@@ -87,56 +101,8 @@ describe("VirtualRows", () => {
     expect(screen.queryByText("Row 1")).not.toBeInTheDocument();
     expect(screen.getByText("Row 0")).toBe(document.activeElement);
 
-    // Once focus moves elsewhere, it goes like the others: hidden, until another row needs it.
+    // Once focus moves elsewhere, it goes like the others.
     row.blur();
-    await vi.waitFor(() => expect(screen.getByText("Row 0")).not.toBeVisible());
-  });
-
-  it("reuses the rows that scroll out of view for the ones that scroll in", async () => {
-    const scroller = renderRows();
-    const row = await screen.findByText("Row 1");
-    const rendered = () => scroller()!.querySelectorAll("button").length;
-    expect(rendered()).toBe(20);
-
-    scrollTop = 500;
-    scroller()!.dispatchEvent(new Event("scroll"));
-    await vi.waitFor(() => expect(screen.getByText("Row 50")).toBeInTheDocument());
-    // The same element, now another row, at that row's place.
-    expect(row).toBeVisible();
-    expect(row).not.toHaveTextContent("Row 1");
-    const index = Number(row.dataset.row);
-    expect(row).toHaveTextContent(`Row ${index}`);
-    expect(row.parentElement).toHaveStyle({ transform: `translateY(${index * 10}px)` });
-    // Ten rows past each edge are rendered now, rather than past the bottom only.
-    expect(rendered()).toBe(30);
-
-    scrollTop = 0;
-    scroller()!.dispatchEvent(new Event("scroll"));
-    await vi.waitFor(() => expect(screen.getByText("Row 0")).toBeVisible());
-    // The rows that aren't needed any more are kept, hidden, for when they are.
-    expect(rendered()).toBe(30);
-    const visible = [...scroller()!.querySelectorAll("button")].filter(
-      (button) => button.parentElement!.style.display !== "none",
-    );
-    expect(visible.map((button) => button.textContent).toSorted()).toEqual(
-      ITEMS.slice(0, 20).toSorted(),
-    );
-  });
-
-  it("shows the items that replace the ones in view in the same rows", async () => {
-    const [items, setItems] = createSignal(ITEMS);
-    const [scroller, setScroller] = createSignal<HTMLDivElement>();
-    render(() => (
-      <div ref={setScroller}>
-        <VirtualRows items={items()} rowHeight={10} scrollElement={scroller()}>
-          {(item) => <button>{item()}</button>}
-        </VirtualRows>
-      </div>
-    ));
-    const row = await screen.findByText("Row 2");
-
-    setItems(["Other 0", "Other 1", "Other 2"]);
-    await vi.waitFor(() => expect(row).toHaveTextContent("Other 2"));
-    expect(screen.getAllByRole("button")).toHaveLength(3);
+    await vi.waitFor(() => expect(screen.queryByText("Row 0")).not.toBeInTheDocument());
   });
 });
