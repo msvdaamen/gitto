@@ -177,9 +177,13 @@ export async function readLogSince(
   for (const commit of previous.commits) {
     sameSecond.set(commit.committedAt, (sameSecond.get(commit.committedAt) ?? 0) + 1);
   }
+  // Commits past the page can be of the same second as its last one (and no other).
+  const last = previous.commits.length === page.limit ? previous.commits.at(-1)! : undefined;
   const tied = (sha: string) => {
     const index = inPage.get(sha);
-    return index !== undefined && sameSecond.get(previous.commits[index]!.committedAt)! > 1;
+    if (index === undefined) return false;
+    const { committedAt } = previous.commits[index]!;
+    return sameSecond.get(committedAt)! > 1 || committedAt === last?.committedAt;
   };
   if (toRedecorate.some(tied)) return undefined;
 
