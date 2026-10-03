@@ -1,6 +1,8 @@
 /** Query keys for git data. Everything under `repository(id)` is refetched when it changes on disk. */
 export const gitKeys = {
-  repository: (repositoryId: string) => ["git", repositoryId] as const,
+  /** Every repository's data that can change on disk; see `queryClient` for how it's kept fresh. */
+  all: ["git"] as const,
+  repository: (repositoryId: string) => [...gitKeys.all, repositoryId] as const,
   /** What's changed since the last commit: refetched on its own when files are edited or staged. */
   uncommitted: (repositoryId: string) =>
     [...gitKeys.repository(repositoryId), "uncommitted"] as const,

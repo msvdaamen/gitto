@@ -14,11 +14,12 @@ import { gitKeys } from "./keys";
 export const UNWATCH_AFTER_MS = 5 * 60_000;
 
 /**
- * Refetches the repository's git data when it changes on disk. The git directory (commits,
- * checkouts, staging) is watched all the time. The working tree is watched while the window has
- * focus and for a while after; changes to it while the window doesn't have focus are refetched
- * once it gets focus back, and not at all if there weren't any. A watch that stopped (e.g. Linux
- * ran out of file watches) is started again, with a refetch, when the window gets focus.
+ * Refetches the repository's git data when it changes on disk; nothing else does (see
+ * `queryClient`). The git directory (commits, checkouts, staging) is watched all the time. The
+ * working tree is watched while the window has focus and for a while after; changes to it while
+ * the window doesn't have focus are refetched once it gets focus back, and not at all if there
+ * weren't any. A watch that stopped (e.g. Linux ran out of file watches) is started again, with a
+ * refetch, when the window gets focus.
  */
 export function useRepositoryWatcher(repositoryId: () => string) {
   const queryClient = useQueryClient();
@@ -52,6 +53,9 @@ export function useRepositoryWatcher(repositoryId: () => string) {
         else changed = true;
       });
 
+    // Nothing watched the repository until now, so what was loaded from it before (when it was last
+    // on show) may be out of date. What's loading for the first time isn't loaded twice.
+    refetchAll();
     watchGitDir();
 
     createEffect((wasFocused: boolean | undefined) => {
