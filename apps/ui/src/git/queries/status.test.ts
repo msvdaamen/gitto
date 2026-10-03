@@ -46,8 +46,8 @@ describe("the uncommitted changes", () => {
   it("are only sent again when they changed", async () => {
     rpc.git.status.get.mockResolvedValueOnce(status);
     const { result, client } = render(() => useUncommittedFiles(() => "repo"));
-    await vi.waitFor(() => expect(result.data).toEqual(status.changes));
-    const file = result.data!.unstaged[0];
+    await vi.waitFor(() => expect(result.data?.value).toEqual(status.changes));
+    const file = result.data!.value.unstaged[0];
     const cached = client.getQueryData(gitKeys.status("repo"));
 
     rpc.git.status.get.mockResolvedValueOnce({ unchanged: true });
@@ -57,7 +57,15 @@ describe("the uncommitted changes", () => {
       expect.anything(),
     );
     expect(client.getQueryData(gitKeys.status("repo"))).toBe(cached);
-    expect(result.data!.unstaged[0]).toBe(file);
+    expect(result.data!.value.unstaged[0]).toBe(file);
+  });
+
+  it("are kept as they were loaded, not wrapped to track each file", async () => {
+    rpc.git.status.get.mockResolvedValueOnce(status);
+    const { result } = render(() => useUncommittedFiles(() => "repo"));
+    await vi.waitFor(() => expect(result.data).toBeDefined());
+    expect(result.data!.value).toBe(status.changes);
+    expect(result.data!.value.unstaged[0]).toBe(status.changes.unstaged[0]);
   });
 
   it("are left out of the summary", async () => {

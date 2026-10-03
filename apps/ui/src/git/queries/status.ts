@@ -6,6 +6,7 @@ import { headSha } from "@/git/status";
 import { rpc } from "@/lib/rpc";
 
 import { gitKeys } from "./keys";
+import { Opaque } from "./opaque";
 
 /**
  * The uncommitted changes come in one query (so the working tree is only walked once), but most of
@@ -38,7 +39,7 @@ const selectSummary = ({ head, upstream, ahead, behind, counts }: Uncommitted): 
   behind,
   counts,
 });
-const selectChanges = (data: Uncommitted): WorkingTreeFiles => data.changes;
+const selectChanges = (data: Uncommitted) => new Opaque<WorkingTreeFiles>(data.changes);
 
 /** Where HEAD is, and how many files changed. */
 export function useStatus(repositoryId: () => string) {
@@ -53,15 +54,12 @@ export function useHeadSha(status: { data: StatusSummary | undefined }) {
   return createMemo(() => status.data && headSha(status.data.head));
 }
 
-/** The staged and unstaged changes, with their line counts. */
+/**
+ * The staged and unstaged changes, with their line counts. A refetch that brings changes replaces
+ * the lists, rather than being merged into them file by file: there can be tens of thousands of
+ * files (see `Opaque`), and their rows are rendered by position (see `VirtualRows`), so only the
+ * ones in view are updated either way.
+ */
 export function useUncommittedFiles(repositoryId: () => string) {
-  return useQuery(() => ({
-    ...uncommittedQuery(repositoryId(), selectChanges),
-    // Merged into the previous lists, file by file, so a refetch only updates what changed:
-    // otherwise every file is a new object and its row is rendered again.
-    reconcile: "path",
-    // Merging is slow for thousands of files, so it's only done when they changed, not also when a
-    // refetch starts and ends.
-    notifyOnChangeProps: ["data", "error"],
-  }));
+  return useQuery(() => uncommittedQuery(repositoryId(), selectChanges));
 }

@@ -6,6 +6,7 @@ import { lineTotals } from "@/git/changes";
 import { rpc } from "@/lib/rpc";
 
 import { gitKeys } from "./keys";
+import { Opaque } from "./opaque";
 import { useUncommittedFiles } from "./status";
 
 /** Loads the files a commit or stash changed. */
@@ -32,14 +33,15 @@ export function useChangedFiles(
       queryKey: queryKey(id, target),
       queryFn: async ({ signal }: { signal: AbortSignal }) => ({
         sha: target,
-        files: await fetch({ repositoryId: id, sha: target }, { signal }),
+        // A commit can change tens of thousands of files.
+        files: new Opaque(await fetch({ repositoryId: id, sha: target }, { signal })),
       }),
       staleTime: Infinity,
       placeholderData: keepPreviousData,
     };
   });
 
-  const files = createMemo(() => query.data?.files ?? []);
+  const files = createMemo(() => query.data?.files.value ?? []);
   const totals = createMemo(() => lineTotals(files()));
   /** The SHA whose files are on show: the previous one's, while `sha`'s load. */
   const shownSha = () => query.data?.sha;
@@ -63,9 +65,9 @@ export function useWorkingTreeChanges(repositoryId: () => string) {
 
   // A conflict shows up on both sides, but it's resolved (and so staged) by staging it.
   const staged = createMemo(() =>
-    (query.data?.staged ?? []).filter((file) => file.status !== "conflicted"),
+    (query.data?.value.staged ?? []).filter((file) => file.status !== "conflicted"),
   );
-  const unstaged = createMemo(() => query.data?.unstaged ?? []);
+  const unstaged = createMemo(() => query.data?.value.unstaged ?? []);
 
   return { query, staged, unstaged };
 }
