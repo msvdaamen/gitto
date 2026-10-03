@@ -46,4 +46,56 @@ describe("history", () => {
     expect(scrolled.size).toBeGreaterThanOrEqual(stops.length);
     expectWithin("scrollbar jumps", stats, { p95: 18, worst: 21 });
   });
+
+  it("selects rows that are clicked", async () => {
+    const stats = await measureFrames(() => commands.click(rowsInView().map(center), 300));
+    expect(selected()).toHaveTextContent(rowsInView().at(-1)!.textContent!);
+    expectWithin("click rows", stats, { p95: 20, worst: 20 });
+  });
+
+  it("moves the selection while Arrow Down is held", async () => {
+    await commands.click([center(rowsInView()[0]!)], 0);
+    // Three seconds at a usual key repeat rate, which scrolls the list along.
+    const stats = await measureFrames(() => commands.press(Array(90).fill("ArrowDown"), 33));
+    expect(selected()).toHaveAttribute("aria-posinset", "91");
+    expectWithin("hold Arrow Down", stats, { p95: 8, worst: 14 });
+  });
+
+  it("moves the selection a page, and to either end, at a time", async () => {
+    await commands.click([center(rowsInView()[0]!)], 0);
+    const keys = [
+      ...Array(8).fill("PageDown"),
+      "End",
+      ...Array(4).fill("PageUp"),
+      "Home",
+      ...Array(4).fill("PageDown"),
+    ];
+    const stats = await measureFrames(() => commands.press(keys, 250));
+    const position = Number(selected().element().getAttribute("aria-posinset"));
+    expect(position).toBeGreaterThan(4);
+    expectWithin("Page Down, Up, Home, End", stats, { p95: 21, worst: 21 });
+  });
 });
+
+/** The history's rows a click lands on: the ones in view, and not under its header. */
+function rowsInView(): Element[] {
+  return page
+    .getByRole("option")
+    .elements()
+    .filter((row) => {
+      const box = row.getBoundingClientRect();
+      const top = document.elementFromPoint(box.left + box.width / 2, box.top + 1);
+      const bottom = document.elementFromPoint(box.left + box.width / 2, box.bottom - 1);
+      return row.contains(top) && row.contains(bottom);
+    });
+}
+
+/** Where `row`'s middle is on the page. */
+function center(row: Element) {
+  const box = row.getBoundingClientRect();
+  return onPage(row, box.width / 2, box.height / 2);
+}
+
+function selected() {
+  return page.getByRole("option", { selected: true });
+}

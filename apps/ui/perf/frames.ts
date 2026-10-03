@@ -8,6 +8,8 @@ declare module "vitest/browser" {
     stopFrameTrace: () => Promise<number[]>;
     wheel: (options: { deltaY: number; steps: number; interval: number }) => Promise<void>;
     drag: (from: Point, to: Point[], interval: number) => Promise<void>;
+    click: (points: Point[], interval: number) => Promise<void>;
+    press: (keys: string[], interval: number) => Promise<void>;
   }
 }
 

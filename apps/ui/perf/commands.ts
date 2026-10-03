@@ -106,3 +106,35 @@ export const drag: BrowserCommand<[from: Point, to: Point[], interval: number]> 
   }
   await page.mouse.up();
 };
+
+/** Clicks each of `points` in turn, one every `interval` milliseconds. Points are as for `drag`. */
+export const click: BrowserCommand<[points: Point[], interval: number]> = async (
+  { page },
+  points,
+  interval,
+) => {
+  for (const point of points) {
+    // oxlint-disable-next-line no-await-in-loop -- one click at a time, like a hand
+    await Promise.all([page.mouse.click(point.x, point.y), sleep(interval)]);
+  }
+};
+
+/**
+ * Presses each of `keys` in turn, one every `interval` milliseconds. A key that's the same as the
+ * one before is pressed again without being let go, the way a key held down repeats.
+ */
+export const press: BrowserCommand<[keys: string[], interval: number]> = async (
+  { page },
+  keys,
+  interval,
+) => {
+  let held: string | undefined;
+  for (const key of keys) {
+    // oxlint-disable-next-line no-await-in-loop -- one key at a time, like a hand
+    if (held && held !== key) await page.keyboard.up(held);
+    held = key;
+    // oxlint-disable-next-line no-await-in-loop
+    await Promise.all([page.keyboard.down(key), sleep(interval)]);
+  }
+  if (held) await page.keyboard.up(held);
+};
