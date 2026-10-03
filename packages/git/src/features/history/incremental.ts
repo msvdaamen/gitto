@@ -235,8 +235,10 @@ export async function readLogSince(
   // The page, and the commit after it.
   const size = page.limit + 1;
 
-  // Commits reachable from these may be new.
+  // Commits reachable from these may be new: not from those reachable before, as neither are their
+  // parents (a branch moved back, say).
   const added = new Set<string>();
+  const add = (sha: string | null | undefined) => sha && !commitIndex.has(sha) && added.add(sha);
   // Commits whose decorations may have changed.
   const redecorated = new Set<string>();
   const touch = (sha: string | null | undefined) => sha && redecorated.add(sha);
@@ -246,7 +248,7 @@ export async function readLogSince(
     if (name.startsWith("refs/replace/")) return replaced(memory);
     touch(commitOf(ref));
     touch(commitOf(was));
-    if (was?.sha !== ref.sha) added.add(ref.sha);
+    if (was?.sha !== ref.sha) add(commitOf(ref));
   }
   for (const [name, was] of previous.refs) {
     if (refs.has(name)) continue;
@@ -254,7 +256,7 @@ export async function readLogSince(
     touch(commitOf(was));
   }
   if (head !== previous.head) {
-    if (head) added.add(head);
+    add(head);
     touch(head);
     touch(previous.head);
   }
@@ -263,8 +265,8 @@ export async function readLogSince(
   // Revisions go in through stdin: there can be thousands.
   const read = (args: string[], revisions?: string[]) =>
     repo.read(args, { signal, stdin: revisions && `${revisions.join("\n")}\n` });
-  const [changes, newOutput, redecoratedOutput] = await Promise.all([
-    commitIndex.sync(repo, tipsNow, signal),
+  const syncing = commitIndex.sync(repo, tipsNow, signal);
+  const reading = Promise.all([
     // The new commits' details, along with (when the clock was skewed) some that aren't new.
     added.size
       ? read(
@@ -288,7 +290,11 @@ export async function readLogSince(
         )
       : "",
   ]);
+  // Not waited for when commits were lost: the page is read whole anyway.
+  reading.catch(() => undefined);
+  const changes = await syncing;
   if (!changes || changes.lost) return undefined;
+  const [newOutput, redecoratedOutput] = await reading;
 
   const redecoratedNow = new Map<string, { committedAt: number; refs: CommitRef[] }>();
   const fields = redecoratedOutput.split("\0");
