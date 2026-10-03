@@ -38,6 +38,12 @@ export class PullInterruptedError extends MessageError {}
 /** A stash that was popped but conflicts, left for the user to resolve; the stash is kept. */
 export class StashConflictError extends MessageError {}
 
+/**
+ * Uncommitted changes that were left in the stash rather than brought along to the branch switched
+ * to: they conflict with it, or stashing them failed partway.
+ */
+export class ChangesStashedError extends MessageError {}
+
 /** There's nothing to pull from: HEAD isn't on a branch, or the branch doesn't track one. */
 export class NoUpstreamError extends MessageError {}
 

@@ -38,8 +38,16 @@ export async function listStashes(repo: Repo, signal?: AbortSignal): Promise<Sta
  * does nothing.
  */
 export async function pushStash(repo: Repo): Promise<void> {
+  await stashChanges(repo.write);
+}
+
+/** `pushStash` through `run` (e.g. a command of `repo.exclusive`), with `message` if given. */
+export async function stashChanges(run: GitCommand, message?: string): Promise<void> {
   // Not `--quiet`, which keeps git from saying why it refused, too.
-  await repo.write(["stash", "push", "--include-untracked"], STASH_ENV);
+  await run(
+    ["stash", "push", "--include-untracked", ...(message ? ["--message", message] : [])],
+    STASH_ENV,
+  );
 }
 
 /** The files the stash `sha` changed compared to its base, untracked ones included. */
@@ -69,24 +77,32 @@ export async function popStash(repo: Repo, sha: string): Promise<void> {
         "The stashes changed before the stash could be popped, so nothing was popped.",
       );
     }
-    const [conflicted, staged] = await Promise.all([hasConflicts(run), hasStagedChanges(run)]);
-    try {
-      // Putting back what was staged (`--index`) is only tried when nothing is staged now: when
-      // something is, a pop that fails partway can unstage it, and leave half the stash applied.
-      // Without staged changes, it either works, fails like a plain pop, or fails before changing
-      // anything when the staged changes don't apply, and a plain pop follows.
-      if (!staged && (await popIndex(run))) return;
-      await run(["stash", "pop", "--quiet"], STASH_ENV);
-    } catch (error) {
-      // Git won't pop over conflicts that were already there, and says so.
-      if (error instanceof GitError && !conflicted && (await hasConflicts(run))) {
-        throw new StashConflictError(
-          "Popping the stash caused conflicts. Resolve them. The stash was kept, as git does when a pop conflicts.",
-        );
-      }
-      throw error;
-    }
+    await popNewest(run);
   });
+}
+
+/**
+ * Pops the newest stash through `run` (a command of `repo.exclusive`), as `popStash` does, without
+ * checking which one it is.
+ */
+export async function popNewest(run: GitCommand): Promise<void> {
+  const [conflicted, staged] = await Promise.all([hasConflicts(run), hasStagedChanges(run)]);
+  try {
+    // Putting back what was staged (`--index`) is only tried when nothing is staged now: when
+    // something is, a pop that fails partway can unstage it, and leave half the stash applied.
+    // Without staged changes, it either works, fails like a plain pop, or fails before changing
+    // anything when the staged changes don't apply, and a plain pop follows.
+    if (!staged && (await popIndex(run))) return;
+    await run(["stash", "pop", "--quiet"], STASH_ENV);
+  } catch (error) {
+    // Git won't pop over conflicts that were already there, and says so.
+    if (error instanceof GitError && !conflicted && (await hasConflicts(run))) {
+      throw new StashConflictError(
+        "Popping the stash caused conflicts. Resolve them. The stash was kept, as git does when a pop conflicts.",
+      );
+    }
+    throw error;
+  }
 }
 
 /**

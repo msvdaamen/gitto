@@ -46,6 +46,7 @@ export function SidebarRow(props: {
   count?: number;
   meta?: string;
   tone?: "amber";
+  onDblClick?: () => void;
 }) {
   return (
     <button
@@ -55,6 +56,8 @@ export function SidebarRow(props: {
       )}
       style={{ "padding-left": `${25 + (props.depth ?? 0) * DEPTH_INDENT}px` }}
       title={props.title ?? props.label}
+      // Read on each double-click: Solid binds a handler once.
+      onDblClick={() => props.onDblClick?.()}
     >
       <props.icon size={13} />
       <span class="truncate text-[12.5px]">{props.label}</span>

@@ -1,10 +1,10 @@
-import { writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 import { cloneRepo, createRepo, git, repos } from "../../test/fixtures";
-import { createBranch } from "./commands";
+import { createBranch, switchBranch } from "./commands";
 
 /** A repository with `a.txt` committed on `main`, which `repos` opens as `name`. */
 function createCommittedRepo(name: string): string {
@@ -60,5 +60,219 @@ describe("creating a branch", () => {
       /^fatal: 'a\.\.b' is not a valid branch name$/,
     );
     await expect(createBranch(repo, "--force")).rejects.toThrow(/not a valid branch name/);
+  });
+});
+
+/**
+ * A committed repository `name` with an `other` branch that changes `a.txt` and adds `other.txt`,
+ * on `main`.
+ */
+function createBranchedRepo(name: string): string {
+  const path = createCommittedRepo(name);
+  writeFileSync(join(path, "b.txt"), "b\n");
+  git(path, "add", ".");
+  git(path, "commit", "-qm", "second");
+  git(path, "switch", "-qc", "other");
+  writeFileSync(join(path, "a.txt"), "other\na\n");
+  writeFileSync(join(path, "other.txt"), "other\n");
+  git(path, "add", ".");
+  git(path, "commit", "-qm", "other");
+  git(path, "switch", "-q", "main");
+  return path;
+}
+
+const read = (path: string, file: string) => readFileSync(join(path, file), "utf8");
+
+describe("switching branches", () => {
+  it("takes the changes along when they're in files the branch doesn't change", async () => {
+    const path = createBranchedRepo("switch-along");
+    writeFileSync(join(path, "b.txt"), "staged\n");
+    git(path, "add", "b.txt");
+    writeFileSync(join(path, "new.txt"), "new\n");
+    const before = git(path, "status", "--porcelain");
+
+    await switchBranch(await repos.open("switch-along"), "refs/heads/other");
+    expect(git(path, "symbolic-ref", "--short", "HEAD")).toBe("other");
+    expect(git(path, "status", "--porcelain")).toBe(before);
+    expect(git(path, "stash", "list")).toBe("");
+  });
+
+  it("brings changes to files the branch changes along, when they merge", async () => {
+    const path = createBranchedRepo("switch-merge");
+    // `other` changes the first line; this the last.
+    writeFileSync(join(path, "a.txt"), "a\nmine\n");
+    writeFileSync(join(path, "new.txt"), "new\n");
+
+    await switchBranch(await repos.open("switch-merge"), "refs/heads/other");
+    expect(git(path, "symbolic-ref", "--short", "HEAD")).toBe("other");
+    expect(read(path, "a.txt")).toBe("other\na\nmine\n");
+    expect(git(path, "status", "--porcelain")).toBe("M a.txt\n?? new.txt");
+    expect(git(path, "stash", "list")).toBe("");
+  });
+
+  it("keeps the changes in the stash when they conflict with the branch", async () => {
+    const path = createBranchedRepo("switch-conflict");
+    writeFileSync(join(path, "a.txt"), "mine\n");
+    writeFileSync(join(path, "new.txt"), "new\n");
+
+    await expect(
+      switchBranch(await repos.open("switch-conflict"), "refs/heads/other"),
+    ).rejects.toThrow(
+      "Switched to other, but your uncommitted changes conflict with it, so they're kept in the stash.",
+    );
+    expect(git(path, "symbolic-ref", "--short", "HEAD")).toBe("other");
+    expect(git(path, "status", "--porcelain")).toBe("");
+    expect(git(path, "stash", "list")).toBe(
+      "stash@{0}: On main: Uncommitted changes when switching to other",
+    );
+    git(path, "switch", "-q", "main");
+    git(path, "stash", "pop", "-q");
+    expect(read(path, "a.txt")).toBe("mine\n");
+    expect(read(path, "new.txt")).toBe("new\n");
+  });
+
+  it("keeps the changes in the stash when an untracked file is in the way", async () => {
+    const path = createBranchedRepo("switch-untracked");
+    // Would merge, but `other` has an `other.txt` of its own.
+    writeFileSync(join(path, "b.txt"), "mine\n");
+    writeFileSync(join(path, "other.txt"), "mine\n");
+
+    await expect(
+      switchBranch(await repos.open("switch-untracked"), "refs/heads/other"),
+    ).rejects.toThrow(/kept in the stash/);
+    expect(git(path, "symbolic-ref", "--short", "HEAD")).toBe("other");
+    expect(git(path, "status", "--porcelain")).toBe("");
+    expect(read(path, "other.txt")).toBe("other\n");
+    expect(git(path, "stash", "list")).toContain("Uncommitted changes when switching to other");
+  });
+
+  it("leaves the changes and the stashes be when git won't switch", async () => {
+    const path = createBranchedRepo("switch-refused");
+    writeFileSync(join(path, "a.txt"), "mine\n");
+    const repo = await repos.open("switch-refused");
+
+    await expect(switchBranch(repo, "refs/heads/missing")).rejects.toThrow(
+      /invalid reference: missing/,
+    );
+    await expect(switchBranch(repo, "refs/heads/--force")).rejects.toThrow(/invalid reference/);
+    expect(git(path, "symbolic-ref", "--short", "HEAD")).toBe("main");
+    expect(git(path, "status", "--porcelain")).toBe("M a.txt");
+    expect(git(path, "stash", "list")).toBe("");
+  });
+
+  it("switches to the local branch tracking a remote one", async () => {
+    const origin = createBranchedRepo("switch-tracked-origin");
+    const path = cloneRepo("switch-tracked", origin);
+    git(path, "switch", "-qc", "mine", "--track", "origin/other");
+    git(path, "switch", "-q", "main");
+    writeFileSync(join(path, "b.txt"), "mine\n");
+
+    await switchBranch(await repos.open("switch-tracked"), "refs/remotes/origin/other");
+    expect(git(path, "symbolic-ref", "--short", "HEAD")).toBe("mine");
+    expect(git(path, "branch", "--format=%(refname:short)")).toBe("main\nmine");
+    expect(git(path, "status", "--porcelain")).toBe("M b.txt");
+  });
+
+  it("makes a local branch tracking a remote one, when none does", async () => {
+    const origin = createBranchedRepo("switch-remote-origin");
+    const path = cloneRepo("switch-remote", origin);
+    writeFileSync(join(path, "a.txt"), "a\nmine\n");
+
+    await switchBranch(await repos.open("switch-remote"), "refs/remotes/origin/other");
+    expect(git(path, "symbolic-ref", "--short", "HEAD")).toBe("other");
+    expect(git(path, "rev-parse", "--abbrev-ref", "other@{upstream}")).toBe("origin/other");
+    // Brought along through the stash, as `other` changes `a.txt`.
+    expect(read(path, "a.txt")).toBe("other\na\nmine\n");
+    expect(git(path, "stash", "list")).toBe("");
+  });
+
+  it("names the branch it made when the changes are kept in the stash", async () => {
+    const origin = createBranchedRepo("switch-remote-conflict-origin");
+    const path = cloneRepo("switch-remote-conflict", origin);
+    writeFileSync(join(path, "a.txt"), "mine\n");
+
+    await expect(
+      switchBranch(await repos.open("switch-remote-conflict"), "refs/remotes/origin/other"),
+    ).rejects.toThrow(
+      "Switched to other, but your uncommitted changes conflict with it, so they're kept in the stash.",
+    );
+    expect(git(path, "symbolic-ref", "--short", "HEAD")).toBe("other");
+    expect(git(path, "stash", "list")).toBe(
+      "stash@{0}: On main: Uncommitted changes when switching to origin/other",
+    );
+  });
+
+  it("stashes untracked files in a folder the branch replaces with a file", async () => {
+    const path = createCommittedRepo("switch-folder");
+    git(path, "switch", "-qc", "file");
+    writeFileSync(join(path, "dir"), "file\n");
+    git(path, "add", ".");
+    git(path, "commit", "-qm", "file");
+    git(path, "switch", "-q", "main");
+    mkdirSync(join(path, "dir"));
+    writeFileSync(join(path, "dir", "tracked.txt"), "tracked\n");
+    git(path, "add", ".");
+    git(path, "commit", "-qm", "folder");
+    git(path, "switch", "-q", "file");
+    git(path, "switch", "-q", "main");
+    writeFileSync(join(path, "dir", "untracked.txt"), "mine\n");
+
+    // Git won't switch, as that'd lose `dir/untracked.txt`; it's stashed, and kept, as `dir` is a
+    // file there.
+    await expect(
+      switchBranch(await repos.open("switch-folder"), "refs/heads/file"),
+    ).rejects.toThrow(/kept in the stash/);
+    expect(git(path, "symbolic-ref", "--short", "HEAD")).toBe("file");
+    expect(git(path, "stash", "list")).toContain("Uncommitted changes when switching to file");
+  });
+
+  it("names the branch it switched to, when a tag has its name too", async () => {
+    const path = createBranchedRepo("switch-tag");
+    git(path, "tag", "other");
+    writeFileSync(join(path, "a.txt"), "mine\n");
+
+    await expect(switchBranch(await repos.open("switch-tag"), "refs/heads/other")).rejects.toThrow(
+      /^Switched to other, but/,
+    );
+  });
+
+  it("brings the changes along when it switched, but a hook failed after", async () => {
+    const path = createBranchedRepo("switch-hook");
+    const hook = join(path, ".git", "hooks", "post-checkout");
+    writeFileSync(hook, "#!/bin/sh\necho hook failed >&2\nexit 1\n");
+    chmodSync(hook, 0o755);
+    writeFileSync(join(path, "a.txt"), "a\nmine\n");
+
+    await expect(switchBranch(await repos.open("switch-hook"), "refs/heads/other")).rejects.toThrow(
+      "hook failed",
+    );
+    expect(git(path, "symbolic-ref", "--short", "HEAD")).toBe("other");
+    expect(read(path, "a.txt")).toBe("other\na\nmine\n");
+    expect(git(path, "stash", "list")).toBe("");
+  });
+
+  it("names a branch made from a remote one after it without the remote, slashes and all", async () => {
+    const origin = createBranchedRepo("switch-slash-origin");
+    const path = createRepo("switch-slash");
+    git(path, "remote", "add", "up/stream", origin);
+    git(path, "fetch", "-q", "up/stream");
+
+    await switchBranch(await repos.open("switch-slash"), "refs/remotes/up/stream/other");
+    expect(git(path, "symbolic-ref", "--short", "HEAD")).toBe("other");
+    expect(git(path, "rev-parse", "--abbrev-ref", "other@{upstream}")).toBe("up/stream/other");
+  });
+
+  it("picks the current branch, then the one named after it, when several track a remote one", async () => {
+    const origin = createBranchedRepo("switch-several-origin");
+    const path = cloneRepo("switch-several", origin);
+    git(path, "branch", "-q", "--track", "a-mine", "origin/other");
+    git(path, "branch", "-q", "--track", "other", "origin/other");
+    const repo = await repos.open("switch-several");
+
+    await switchBranch(repo, "refs/remotes/origin/other");
+    expect(git(path, "symbolic-ref", "--short", "HEAD")).toBe("other");
+    git(path, "switch", "-q", "a-mine");
+    await switchBranch(repo, "refs/remotes/origin/other");
+    expect(git(path, "symbolic-ref", "--short", "HEAD")).toBe("a-mine");
   });
 });

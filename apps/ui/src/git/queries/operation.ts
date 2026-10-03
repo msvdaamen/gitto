@@ -28,7 +28,7 @@ export function useRepositoryOperation<T = void>(
   repositoryId: () => string,
   run: (repositoryId: string, input: T) => Promise<unknown>,
 ) {
-  const [operations, setOperations] = operationsOf(useQueryClient());
+  const [, setOperations] = operationsOf(useQueryClient());
   const key = (id: string) => `${name}:${id}`;
   const mutation = useMutation(() => ({
     mutationFn: ({ id, input }: { id: string; input: T }) => run(id, input),
@@ -38,18 +38,30 @@ export function useRepositoryOperation<T = void>(
     onSuccess: (_data, { id }) => setOperations(produce((all) => delete all[key(id)])),
   }));
 
-  const operation = () => operations[key(repositoryId())];
+  const state = useRepositoryOperationState(name, repositoryId);
   return {
     /** Runs it, unless it's running; `onSuccess` runs once it's done, if this is still on show. */
     run(input: T, options?: { onSuccess?: () => void }) {
-      if (operation()?.running) return;
+      if (state.isPending()) return;
       mutation.mutate({ id: repositoryId(), input }, { onSuccess: () => options?.onSuccess?.() });
     },
-    isPending: () => !!operation()?.running,
-    error: () => operation()?.error ?? null,
+    ...state,
+  };
+}
+
+/**
+ * Whether the repository's operation `name` is running, and why it last failed, for showing it
+ * somewhere other than where it's run.
+ */
+export function useRepositoryOperationState(name: string, repositoryId: () => string) {
+  const [operations, setOperations] = operationsOf(useQueryClient());
+  const key = () => `${name}:${repositoryId()}`;
+  return {
+    isPending: () => !!operations[key()]?.running,
+    error: () => operations[key()]?.error ?? null,
     /** Forgets why it last failed. */
     dismiss() {
-      const id = key(repositoryId());
+      const id = key();
       if (!operations[id]?.running) setOperations(produce((all) => delete all[id]));
     },
   };

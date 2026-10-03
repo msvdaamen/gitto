@@ -1,6 +1,7 @@
 import { ORPCError, os } from "@orpc/server";
 
 import {
+  ChangesStashedError,
   FolderNotFoundError,
   GitError,
   HeadMovedError,
@@ -47,6 +48,7 @@ function toApiError(error: unknown): unknown {
   if (
     error instanceof IndexLockedError ||
     error instanceof HeadMovedError ||
+    error instanceof ChangesStashedError ||
     error instanceof PullInterruptedError ||
     error instanceof RepositoryChangedError ||
     error instanceof StashConflictError

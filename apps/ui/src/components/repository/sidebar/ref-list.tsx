@@ -12,6 +12,7 @@ import { createMemo, Show } from "solid-js";
 import type { JSX } from "solid-js";
 
 import { EmptyState } from "@/components/ui/empty-state";
+import { useSwitchBranch } from "@/git/queries/branch";
 import { useRefs } from "@/git/queries/refs";
 import { useStashes } from "@/git/queries/stash";
 import { useStatus } from "@/git/queries/status";
@@ -29,11 +30,15 @@ const PULL_REQUESTS = [
   { label: "#18 Theme tokens", meta: "merged" },
 ];
 
-/** The sidebar's sections: the working directory, branches, remotes, pull requests, tags, stashes. */
+/**
+ * The sidebar's sections: the working directory, branches, remotes, pull requests, tags, stashes.
+ * Double-clicking a branch switches to it; for a remote one, to the local branch tracking it.
+ */
 export function RefList(props: { repositoryId: string }) {
   const status = useStatus(() => props.repositoryId);
   const refs = useRefs(() => props.repositoryId);
   const stashes = useStashes(() => props.repositoryId);
+  const switchBranch = useSwitchBranch(() => props.repositoryId);
 
   const ofKind = (kind: Ref["kind"]) => (refs.data ?? []).filter((ref) => ref.kind === kind);
   const localBranches = createMemo(() => ofKind("local"));
@@ -124,6 +129,8 @@ export function RefList(props: { repositoryId: string }) {
               meta={
                 branch.ahead ? `↑${branch.ahead}` : branch.behind ? `↓${branch.behind}` : undefined
               }
+              // The toolbar shows it running, and why it failed.
+              onDblClick={() => !branch.current && switchBranch.run(branch.fullName)}
             />
           ))
         }
@@ -137,7 +144,13 @@ export function RefList(props: { repositoryId: string }) {
       >
         {(row) =>
           treeRow(row, (branch, label, depth) => (
-            <SidebarRow icon={GitBranch} label={label} title={branch.name} depth={depth} />
+            <SidebarRow
+              icon={GitBranch}
+              label={label}
+              title={branch.name}
+              depth={depth}
+              onDblClick={() => switchBranch.run(branch.fullName)}
+            />
           ))
         }
       </SidebarSection>

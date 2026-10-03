@@ -7,7 +7,7 @@ import {
   PullInterruptedError,
   RepositoryChangedError,
 } from "../../core/errors";
-import { refExists, resolveRef, type GitCommand, type Repo } from "../../core/repo";
+import { currentBranch, refExists, resolveRef, type GitCommand, type Repo } from "../../core/repo";
 import { gitDirs, type GitDirs } from "../watch/git-dirs";
 import { NO_BRANCH, noUpstream, REBASING } from "./pull-blocker";
 
@@ -227,19 +227,6 @@ function trackingBranch(run: GitCommand, branch: string): Promise<string | null>
       throw error;
     },
   );
-}
-
-/** The checked-out branch's name; `null` when HEAD is detached. */
-async function currentBranch(run: GitCommand): Promise<string | null> {
-  let ref: string;
-  try {
-    // The full name: `--short` would make it `heads/main` if there's also a tag called `main`.
-    ref = (await run(["symbolic-ref", "--quiet", "HEAD"])).trim();
-  } catch (error) {
-    if (error instanceof GitError && error.exitCode === 1) return null;
-    throw error;
-  }
-  return ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : null;
 }
 
 /**
