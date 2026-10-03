@@ -31,6 +31,7 @@
     "@types/node": "^26.6.3",
     "drizzle-kit": "catalog:",
     "electron": "^44.4.5",
+    "playwright": "^1.63.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.1",
     "vitest": "catalog:"
