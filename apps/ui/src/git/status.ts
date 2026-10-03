@@ -39,3 +39,8 @@ export function pullTitle(status: Pick<StatusSummary, "head" | "upstream" | "beh
   if (!status.behind) return `Pull from ${status.upstream}`;
   return `Pull ${status.behind} ${status.behind === 1 ? "commit" : "commits"} from ${status.upstream}`;
 }
+
+/** What a new branch is made from: the branch's name, or "this commit" with HEAD detached. */
+export function branchSource(head: Head): string {
+  return head.kind === "detached" ? "this commit" : head.name;
+}

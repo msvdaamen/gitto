@@ -1,3 +1,4 @@
+import { branchRouter } from "./features/branch/handler";
 import { commitRouter } from "./features/commit/handler";
 import { diffRouter } from "./features/diff/handler";
 import { historyRouter } from "./features/history/handler";
@@ -14,6 +15,7 @@ export const gitRouter = {
   history: historyRouter,
   diff: diffRouter,
   refs: refsRouter,
+  branch: branchRouter,
   staging: stagingRouter,
   commit: commitRouter,
   remote: remoteRouter,
