@@ -3,7 +3,7 @@ import { stat } from "node:fs/promises";
 import type { RepositoryService } from "@gitto/repository/server";
 
 import { FolderNotFoundError, GitError, RepositoryNotFoundError } from "./errors";
-import { CommitGraphs, runGit, WriteQueue, type RunOptions } from "./runner";
+import { CommitGraphs, runGit, ShownStatuses, WriteQueue, type RunOptions } from "./runner";
 
 /** A repository on disk, with git commands bound to it. */
 export interface Repo {
@@ -32,6 +32,18 @@ export interface Repo {
   hasHead(): Promise<boolean>;
   /** Writes the commit-graph, which speeds up the log, once per run (see `CommitGraphs`). */
   updateCommitGraph(): Promise<void>;
+  /** Whether there's a commit-graph yet; a fresh clone has none until it's written. */
+  hasCommitGraph(): Promise<boolean>;
+  /**
+   * Remembers the status the UI is being sent, as its `statusSnapshot`: `snapshot` resolves to
+   * `undefined` if the UI didn't get it after all (see `ShownStatuses`).
+   */
+  showStatus(snapshot: Promise<string | undefined>): void;
+  /**
+   * The snapshot of the status the UI last got, once any that's being read is; `undefined` if it
+   * didn't get one.
+   */
+  shownStatus(): Promise<string | undefined>;
 }
 
 export type GitCommand = (args: string[], options?: RunOptions) => Promise<string>;
@@ -45,6 +57,7 @@ export class GitReposImpl implements GitRepos {
   private readonly writes = new WriteQueue();
   private readonly fetches = new WriteQueue();
   private readonly commitGraphs = new CommitGraphs();
+  private readonly shownStatuses = new ShownStatuses();
 
   constructor(private readonly repositories: RepositoryService) {}
 
@@ -77,6 +90,9 @@ export class GitReposImpl implements GitRepos {
       // Any failure is taken for no HEAD, as callers have always had it.
       hasHead: () => refExists(run, "HEAD").catch(() => false),
       updateCommitGraph: () => this.commitGraphs.update(path),
+      hasCommitGraph: () => this.commitGraphs.exists(path),
+      showStatus: (snapshot) => this.shownStatuses.set(path, snapshot),
+      shownStatus: () => this.shownStatuses.get(path),
     };
   }
 }

@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { stat } from "node:fs/promises";
+import { resolve as resolvePath } from "node:path";
 
 import { commandError, GitError } from "./errors";
 import { trace, tracing } from "./trace";
@@ -148,6 +150,34 @@ export function runGit(cwd: string, args: string[], options: RunOptions = {}): P
  */
 export class CommitGraphs {
   private readonly writes = new Map<string, Promise<void>>();
+  /** The repositories known to have one; it isn't removed while the app runs. */
+  private readonly found = new Set<string>();
+
+  /** Whether `path` has a commit-graph yet, as a single file or split. */
+  async exists(path: string): Promise<boolean> {
+    if (this.found.has(path)) return true;
+    const files = await runGit(path, [
+      "rev-parse",
+      "--git-path",
+      "objects/info/commit-graph",
+      "--git-path",
+      "objects/info/commit-graphs/commit-graph-chain",
+    ]).then(
+      (output) => output.split("\n").filter(Boolean),
+      () => [],
+    );
+    const found = await Promise.all(
+      files.map((file) =>
+        // Relative to the repository, unless it's somewhere else.
+        stat(resolvePath(path, file)).then(
+          () => true,
+          () => false,
+        ),
+      ),
+    );
+    if (found.includes(true)) this.found.add(path);
+    return this.found.has(path);
+  }
 
   /** Writes `path`'s commit-graph if that hasn't been done yet; resolves once it's written. */
   update(path: string): Promise<void> {
@@ -159,6 +189,31 @@ export class CommitGraphs {
       this.writes.set(path, write);
     }
     return write;
+  }
+}
+
+/**
+ * A snapshot (see `statusSnapshot`) of each repository's status as the UI last got it. Git also
+ * writes the index when nothing in it changes (another tool's `git status` refreshes it), and after
+ * Gitto's own writes the UI already refetches the status itself: comparing the status with the one
+ * the UI has tells those apart from a change it hasn't got yet (see `watchGitDir`).
+ */
+export class ShownStatuses {
+  private readonly latest = new Map<string, Promise<string | undefined>>();
+
+  /** Remembers `snapshot` as `path`'s; it resolves to `undefined` if the UI didn't get the status. */
+  set(path: string, snapshot: Promise<string | undefined>): void {
+    this.latest.set(path, snapshot);
+  }
+
+  /** `path`'s latest snapshot, once it's there: a status that's being read is waited for. */
+  async get(path: string): Promise<string | undefined> {
+    for (;;) {
+      const latest = this.latest.get(path);
+      // oxlint-disable-next-line no-await-in-loop -- whichever is the latest by then.
+      const snapshot = await latest;
+      if (this.latest.get(path) === latest) return snapshot;
+    }
   }
 }
 

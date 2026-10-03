@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -60,9 +61,11 @@ describe("the commit-graph", () => {
     git(path, "commit", "-q", "--allow-empty", "-m", "first");
     const repo = await repos.open("graph");
     expect(existsSync(chain(path))).toBe(false);
+    expect(await repo.hasCommitGraph()).toBe(false);
 
     await getLog(repo, page);
     await vi.waitFor(() => expect(existsSync(chain(path))).toBe(true));
+    expect(await repo.hasCommitGraph()).toBe(true);
     const written = readFileSync(chain(path), "utf8");
 
     // A commit since then isn't added until the app runs again.
@@ -71,6 +74,25 @@ describe("the commit-graph", () => {
     // Resolves once the write is done, without writing again.
     await repo.updateCommitGraph();
     expect(readFileSync(chain(path), "utf8")).toBe(written);
+  });
+
+  it("isn't needed to put a commit dated before its parent above it", async () => {
+    const path = createRepo("graph-backdated");
+    git(path, "commit", "-q", "--allow-empty", "-m", "parent");
+    git(path, "checkout", "-qb", "side");
+    // As a rebase with --committer-date-is-author-date leaves them. Unsorted, git lists it last.
+    execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "child"], {
+      cwd: path,
+      env: { ...process.env, GIT_COMMITTER_DATE: "2001-01-01T00:00:00Z" },
+    });
+    const repo = await repos.open("graph-backdated");
+    const subjects = async () => (await getLog(repo, page)).map((commit) => commit.subject);
+
+    expect(await repo.hasCommitGraph()).toBe(false);
+    expect(await subjects()).toEqual(["child", "parent"]);
+    await repo.updateCommitGraph();
+    expect(await repo.hasCommitGraph()).toBe(true);
+    expect(await subjects()).toEqual(["child", "parent"]);
   });
 
   it("doesn't fail the log when it can't be written", async () => {

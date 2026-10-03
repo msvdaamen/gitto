@@ -5,6 +5,7 @@ import { subscribe, type AsyncSubscription } from "@parcel/watcher";
 
 import type { Repo } from "../../core/repo";
 import { trace } from "../../core/trace";
+import { statusSnapshot } from "../status/commands";
 import { Batches } from "./batches";
 import { classify, gitDirs, inside } from "./git-dirs";
 import type { GitDirChange } from "./schema";
@@ -56,6 +57,10 @@ export async function* watchGitDir(
     if (failed) throw failed.reason;
     for await (const batch of changes.stream()) {
       const unique = [...new Set(batch)];
+      if (!unique.includes("refs") && (await hasStatus(repo))) {
+        trace(`index written in ${repo.path}, with nothing the UI doesn't have`);
+        continue;
+      }
       trace(`git dir changed in ${repo.path}: ${unique.join(", ")}`);
       yield unique;
     }
@@ -63,6 +68,19 @@ export async function* watchGitDir(
     changes.close();
     await Promise.all(subscriptions.map((subscription) => subscription.unsubscribe()));
   }
+}
+
+/**
+ * Whether the UI already has the status as it is after the index was written. It does when nothing
+ * in the index changed, as when another tool's `git status` refreshes it, and when it asked for the
+ * status since: after staging a file itself, it doesn't wait to hear from the watcher. Reading the
+ * status again takes long with many changes, which this doesn't count the lines of.
+ */
+async function hasStatus(repo: Repo): Promise<boolean> {
+  const now = await statusSnapshot(repo).catch(() => undefined);
+  // Asked for after: a status the UI started on meanwhile, e.g. for a file changing along with the
+  // index, is waited for rather than started over.
+  return now !== undefined && now === (await repo.shownStatus());
 }
 
 /** A changed path in the working tree (relative, `/`-separated), or `.git/info/exclude` changing. */

@@ -7,14 +7,45 @@ import { parseStatus, STATUS_ARGS } from "./parse";
 import type { StatusCounts, StatusFile, Uncommitted, WorkingTreeFiles } from "./schema";
 
 /** The status, and the changed files with their line counts: all the uncommitted changes show. */
-export async function getStatus(repo: Repo, signal?: AbortSignal): Promise<Uncommitted> {
+export function getStatus(repo: Repo, signal?: AbortSignal): Promise<Uncommitted> {
+  const status = readStatus(repo, signal);
+  // It's the UI that asks. Only shown once all of it is read: a status that fails isn't.
+  repo.showStatus(
+    status.then(
+      ({ snapshot }) => snapshot,
+      () => undefined,
+    ),
+  );
+  return status.then(({ uncommitted }) => uncommitted);
+}
+
+/**
+ * What `git status` reports right now, hashed. The same as an earlier one when HEAD, the index and
+ * which files differ from it are: all but the changed files' contents, which the working tree's
+ * watcher follows.
+ */
+export async function statusSnapshot(repo: Repo): Promise<string> {
+  return snapshotOf(await repo.read(STATUS_ARGS));
+}
+
+function snapshotOf(output: string): string {
+  return createHash("sha1").update(output).digest("hex");
+}
+
+async function readStatus(
+  repo: Repo,
+  signal?: AbortSignal,
+): Promise<{ uncommitted: Uncommitted; snapshot: string }> {
   const output = await repo.read(STATUS_ARGS, { signal });
   const { files, ...status } = parseStatus(output);
   const { changes, outputs } = await getWorkingTreeFiles(repo, files, signal);
   // Everything shown comes from git's output, so the same output means the same status.
   const hash = createHash("sha1");
   for (const part of [output, ...outputs]) hash.update(part).update("\0");
-  return { ...status, counts: countFiles(files), changes, version: hash.digest("hex") };
+  return {
+    uncommitted: { ...status, counts: countFiles(files), changes, version: hash.digest("hex") },
+    snapshot: snapshotOf(output),
+  };
 }
 
 function countFiles(files: StatusFile[]): StatusCounts {

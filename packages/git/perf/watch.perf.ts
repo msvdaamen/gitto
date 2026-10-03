@@ -13,6 +13,7 @@ import { basename, join } from "node:path";
 
 import { afterAll, describe, it } from "vitest";
 
+import { getStatus } from "../src/features/status/commands";
 import { ignoredPaths, watchGitDir, watchWorkingTree } from "../src/features/watch/commands";
 import { git, ms, openRepo, perfRepoPaths, printTable } from "./measure";
 
@@ -150,20 +151,21 @@ describe.each(perfRepoPaths())("%s", (source) => {
     const ignoredMs = performance.now() - start;
 
     const reports: { at: number; refetch: Refetch }[] = [];
+    // Every report has the UI ask for the status again, which the git directory's watcher goes by.
+    const refetched = (refetch: Refetch) => {
+      reports.push({ at: performance.now(), refetch });
+      void getStatus(repo).catch(() => undefined);
+    };
+    await getStatus(repo);
     const controller = new AbortController();
     const watching = Promise.all([
       (async () => {
         for await (const changes of watchGitDir(repo, controller.signal)) {
-          reports.push({
-            at: performance.now(),
-            refetch: changes.includes("refs") ? "all" : "uncommitted",
-          });
+          refetched(changes.includes("refs") ? "all" : "uncommitted");
         }
       })(),
       (async () => {
-        for await (const _ of watchWorkingTree(repo, controller.signal)) {
-          reports.push({ at: performance.now(), refetch: "uncommitted" });
-        }
+        for await (const _ of watchWorkingTree(repo, controller.signal)) refetched("uncommitted");
       })(),
     ]);
     // Let the watchers start, and anything the clone left behind settle.

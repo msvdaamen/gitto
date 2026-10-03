@@ -1,9 +1,10 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 import { createRepo, git, paths, repos, root } from "../../test/fixtures";
+import { getStatus } from "../status/commands";
 import { watchGitDir, watchWorkingTree } from "./commands";
 
 /** Whether `next` stays pending for longer than the watcher's debounce: resolves to "quiet" if so. */
@@ -203,6 +204,42 @@ describe("watching the git directory", () => {
       controller.abort();
     },
   );
+
+  it("leaves out writes to the index the UI has the status of", { timeout: 10_000 }, async () => {
+    const path = createRepo("watched-index");
+    const file = join(path, "file.txt");
+    const index = () => readFileSync(join(path, ".git", "index"));
+    writeFileSync(file, "x");
+    git(path, "add", "file.txt");
+    git(path, "commit", "-q", "-m", "First");
+    const repo = await repos.open("watched-index");
+    await getStatus(repo);
+    const controller = new AbortController();
+    const changes = watchGitDir(repo, controller.signal);
+    const next = changes.next();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // Another tool's `git status` refreshes the index after a file was touched: nothing changed.
+    const before = index();
+    const later = new Date(Date.now() + 5000);
+    utimesSync(file, later, later);
+    git(path, "status");
+    expect(index().equals(before)).toBe(false);
+    expect(await quiet(next)).toBe("quiet");
+
+    // Staged by the UI, which asks for the status right after rather than waiting for this.
+    writeFileSync(file, "y");
+    git(path, "add", "file.txt");
+    await getStatus(repo);
+    expect(await quiet(next)).toBe("quiet");
+
+    // Staged by another tool.
+    writeFileSync(file, "z");
+    git(path, "add", "file.txt");
+    expect(await next).toEqual({ value: ["index"], done: false });
+
+    controller.abort();
+  });
 
   it("reports refs stored in a reftable", { timeout: 10_000 }, async () => {
     // What `git init --ref-format=reftable` (git 2.45+) writes to, instead of `refs`.
