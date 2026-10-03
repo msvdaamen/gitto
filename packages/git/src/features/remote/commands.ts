@@ -181,8 +181,8 @@ interface Fetched {
  * Fetches the branch's upstream as `git pull` does: just that branch, which updates its
  * remote-tracking branch, and FETCH_HEAD, read before another fetch replaces it. A local upstream
  * (remote ".") has nothing to fetch. Then fetches every remote (see `updateRemotes`). With what
- * was fetched and the message to merge it with, if `word`, and there's one: there's none for a branch already up to date, or without commits
- * (which just moves to its upstream).
+ * was fetched and the message to merge it with, if `word`, and there's one: there's none for a
+ * branch already up to date, or without commits (which just moves to its upstream).
  */
 async function fetchUpstream(
   repo: Repo,
