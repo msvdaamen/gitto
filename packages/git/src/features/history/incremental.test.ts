@@ -79,6 +79,8 @@ describe("reading the log from what changed", () => {
     git(path, "update-ref", "refs/heads/side", side);
     git(path, "tag", "v1", "main~3");
     gitAt(path, 1500, "tag", "-a", "-m", "release", "v2", "main~1");
+    // A tag of a tag, which for-each-ref doesn't peel all the way.
+    gitAt(path, 1500, "tag", "-a", "-m", "release notes", "v2-notes", "v2");
 
     let seen = await readSince(repo, undefined);
     const steps: [change: string, expected: "changes" | "whole", run: () => void][] = [

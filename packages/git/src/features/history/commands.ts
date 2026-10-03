@@ -46,7 +46,7 @@ export async function getVersionedLog(
     .digest("hex");
   if (version === since) return { unchanged: true };
 
-  const refs = parseLogRefs(refsOutput);
+  const refs = await parseLogRefs(repo, refsOutput, signal);
   const previous = rememberedLog(repo, since);
   // Read after the refs, so it's never older than the version says: a ref that moves in between
   // only makes the next refetch read it again.
