@@ -12,12 +12,15 @@ export function FormField(props: {
   onChange: (value: string) => void;
   placeholder?: string;
   rows?: number;
+  /** Keeps focus, unlike disabling it, e.g. to type the next message once a commit is done. */
+  readOnly?: boolean;
 }) {
   return (
     <TextField
       class="mb-2.5 flex flex-col gap-[5px] text-[11.5px] text-muted"
       value={props.value}
       onChange={props.onChange}
+      readOnly={props.readOnly}
     >
       <TextField.Label class="flex justify-between">
         {props.label}

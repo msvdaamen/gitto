@@ -1,6 +1,8 @@
 import type { StatusSummary, Uncommitted, WorkingTreeFiles } from "@gitto/git/types";
 import { useQuery, type QueryFunctionContext } from "@tanstack/solid-query";
+import { createMemo } from "solid-js";
 
+import { headSha } from "@/git/status";
 import { rpc } from "@/lib/rpc";
 
 import { gitKeys } from "./keys";
@@ -41,6 +43,14 @@ const selectChanges = (data: Uncommitted): WorkingTreeFiles => data.changes;
 /** Where HEAD is, and how many files changed. */
 export function useStatus(repositoryId: () => string) {
   return useQuery(() => uncommittedQuery(repositoryId(), selectSummary));
+}
+
+/**
+ * The commit HEAD points at, from a `useStatus` query; `undefined` before the first commit, or until
+ * the status loads. Only changes when HEAD moves, not with every status refetch.
+ */
+export function useHeadSha(status: { data: StatusSummary | undefined }) {
+  return createMemo(() => status.data && headSha(status.data.head));
 }
 
 /** The staged and unstaged changes, with their line counts. */

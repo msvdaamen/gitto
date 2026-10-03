@@ -29,6 +29,11 @@ const CONFIG = [
   "color.ui=false",
   "-c",
   "log.showSignature=false",
+  // Text is read and written in UTF-8, e.g. commit messages, as JS strings are sent and decoded.
+  "-c",
+  "i18n.commitEncoding=UTF-8",
+  "-c",
+  "i18n.logOutputEncoding=UTF-8",
 ];
 
 const ENV = {

@@ -1,0 +1,261 @@
+import { render, screen } from "@solidjs/testing-library";
+import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
+import userEvent from "@testing-library/user-event";
+import { createSignal, Suspense } from "solid-js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { CommitForm } from "./commit-form";
+
+const rpc = vi.hoisted(() => ({
+  git: {
+    commit: {
+      create: vi.fn(async () => {}),
+      message: vi.fn(async ({ sha }: { sha: string }) => `Commit ${sha}\n\nIts body`),
+      pushedTo: vi.fn(async (): Promise<string | null> => null),
+    },
+  },
+}));
+
+vi.mock("@/lib/rpc", () => ({ rpc }));
+
+function renderForm(props: { stagedCount?: number; lastCommit?: string | null } = {}) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const [lastCommit, setLastCommit] = createSignal<string | undefined>(
+    props.lastCommit === null ? undefined : (props.lastCommit ?? "a1"),
+  );
+  render(() => (
+    <QueryClientProvider client={client}>
+      <Suspense fallback="Suspended">
+        <CommitForm
+          repositoryId="repo"
+          stagedCount={props.stagedCount ?? 0}
+          lastCommit={lastCommit()}
+        />
+      </Suspense>
+    </QueryClientProvider>
+  ));
+  return {
+    setLastCommit,
+    summary: screen.getByLabelText("Commit message"),
+    amend: screen.getByLabelText("Amend last commit"),
+  };
+}
+
+describe("amending the last commit", () => {
+  afterEach(() => {
+    // Also drops one-off results a failed test didn't use, so they can't leak into the next.
+    vi.resetAllMocks();
+    rpc.git.commit.create.mockResolvedValue(undefined);
+    rpc.git.commit.message.mockImplementation(async ({ sha }) => `Commit ${sha}\n\nIts body`);
+    rpc.git.commit.pushedTo.mockResolvedValue(null);
+  });
+
+  it("edits the last commit's message, and amends it without anything staged", async () => {
+    const { summary, amend } = renderForm();
+    expect(screen.getByRole("button", { name: /Nothing staged/ })).toBeDisabled();
+
+    await userEvent.click(amend);
+    expect(await screen.findByDisplayValue("Commit a1")).toBe(summary);
+    expect(screen.getByLabelText(/Description/)).toHaveValue("Its body");
+
+    await userEvent.clear(summary);
+    await userEvent.type(summary, "Reworded");
+    await userEvent.click(screen.getByRole("button", { name: /Amend message/ }));
+    expect(rpc.git.commit.create).toHaveBeenCalledWith({
+      repositoryId: "repo",
+      message: "Reworded\n\nIts body\n",
+      amend: "a1",
+    });
+    expect(amend).not.toBeChecked();
+  });
+
+  it("amends what wasn't edited exactly as it was written", async () => {
+    rpc.git.commit.message.mockResolvedValueOnce("First line\nsecond line\n\n    code();\n");
+    const { setLastCommit, amend } = renderForm({ stagedCount: 1 });
+    await userEvent.click(amend);
+    await userEvent.click(await screen.findByRole("button", { name: /Amend with 1 file/ }));
+    expect(rpc.git.commit.create).toHaveBeenLastCalledWith({
+      repositoryId: "repo",
+      message: "First line\nsecond line\n\n    code();\n",
+      amend: "a1",
+    });
+
+    setLastCommit("b2");
+    rpc.git.commit.message.mockResolvedValueOnce("First line\nsecond line\n\nBody\n");
+    await userEvent.click(amend);
+    const description = screen.getByLabelText(/Description/);
+    await vi.waitFor(() => expect(description).toHaveValue("Body"));
+    await userEvent.type(description, " edited");
+    await userEvent.click(screen.getByRole("button", { name: /Amend with 1 file/ }));
+    expect(rpc.git.commit.create).toHaveBeenLastCalledWith({
+      repositoryId: "repo",
+      message: "First line\nsecond line\n\nBody edited\n",
+      amend: "b2",
+    });
+  });
+
+  it("can't be edited until the last commit's message has loaded", async () => {
+    let resolve!: (message: string) => void;
+    rpc.git.commit.message.mockReturnValueOnce(new Promise((r) => (resolve = r)));
+    const { summary, amend } = renderForm();
+    await userEvent.click(amend);
+    expect(summary).toHaveAttribute("readonly");
+
+    resolve("Loaded");
+    expect(await screen.findByDisplayValue("Loaded")).not.toHaveAttribute("readonly");
+  });
+
+  it("keeps both messages when switching between them, and the new one after amending", async () => {
+    const { summary, amend } = renderForm({ stagedCount: 2 });
+    await userEvent.type(summary, "Draft");
+
+    await userEvent.click(amend);
+    await screen.findByDisplayValue("Commit a1");
+    await userEvent.type(summary, " edited");
+    await userEvent.click(amend);
+    expect(summary).toHaveValue("Draft");
+    await userEvent.click(amend);
+    expect(summary).toHaveValue("Commit a1 edited");
+
+    await userEvent.click(screen.getByRole("button", { name: /Amend with 2 files/ }));
+    expect(await screen.findByDisplayValue("Draft")).toBe(summary);
+  });
+
+  it("stops amending once HEAD moves on, without loading the new commit's message", async () => {
+    const { setLastCommit, summary, amend } = renderForm({ stagedCount: 1 });
+    await userEvent.type(summary, "Draft");
+    await userEvent.click(amend);
+    await screen.findByDisplayValue("Commit a1");
+
+    // Made in a terminal, say.
+    setLastCommit("b2");
+    expect(amend).not.toBeChecked();
+    expect(summary).toHaveValue("Draft");
+    expect(rpc.git.commit.message).not.toHaveBeenCalledWith(
+      expect.objectContaining({ sha: "b2" }),
+      expect.anything(),
+    );
+  });
+
+  it("stops amending once the amend moves HEAD, before it's done", async () => {
+    const { setLastCommit, amend } = renderForm({ stagedCount: 1 });
+    await userEvent.click(amend);
+    await screen.findByDisplayValue("Commit a1");
+    let finish!: () => void;
+    rpc.git.commit.create.mockImplementationOnce(() => new Promise((r) => (finish = r)));
+    await userEvent.click(screen.getByRole("button", { name: /Amend with 1 file/ }));
+    expect(screen.getByLabelText("Commit message")).toHaveAttribute("readonly");
+
+    setLastCommit("b2");
+    finish();
+    expect(amend).not.toBeChecked();
+    expect(rpc.git.commit.message).toHaveBeenCalledTimes(1);
+  });
+
+  it("turns off when there's no commit left to amend, and stays off", async () => {
+    const { setLastCommit, summary, amend } = renderForm({ stagedCount: 1 });
+    await userEvent.click(amend);
+    await screen.findByDisplayValue("Commit a1");
+
+    setLastCommit(undefined);
+    expect(amend).not.toBeChecked();
+    expect(amend).toBeDisabled();
+    await userEvent.type(summary, "First commit");
+    expect(screen.getByRole("button", { name: /Commit 1 file/ })).toBeEnabled();
+
+    setLastCommit("c3");
+    expect(amend).not.toBeChecked();
+    expect(screen.getByRole("button", { name: /Commit 1 file/ })).toBeEnabled();
+  });
+
+  it("warns when the last commit is already on a remote branch", async () => {
+    rpc.git.commit.pushedTo.mockResolvedValueOnce("origin/side");
+    const { amend } = renderForm();
+    await userEvent.click(amend);
+    expect(await screen.findByText(/already on origin\/side/)).toBeInTheDocument();
+  });
+
+  it("doesn't come back on when HEAD returns to the commit", async () => {
+    const { setLastCommit, summary, amend } = renderForm();
+    await userEvent.click(amend);
+    await screen.findByDisplayValue("Commit a1");
+
+    setLastCommit("b2");
+    setLastCommit("a1");
+    expect(amend).not.toBeChecked();
+    expect(summary).toHaveValue("");
+  });
+
+  it("says why the fields stay locked when the last commit's message can't be loaded", async () => {
+    rpc.git.commit.message.mockRejectedValueOnce(new Error("log failed"));
+    const { summary, amend } = renderForm();
+    await userEvent.click(amend);
+    expect(await screen.findByText("log failed")).toBeInTheDocument();
+    expect(summary).toHaveAttribute("readonly");
+    expect(summary).toHaveAttribute("placeholder", "Summary of your changes");
+
+    await userEvent.click(amend);
+    expect(summary).not.toHaveAttribute("readonly");
+  });
+
+  it("waits for the push check before amending, so its warning is seen", async () => {
+    let finish!: (branch: string | null) => void;
+    rpc.git.commit.pushedTo.mockReturnValueOnce(new Promise((r) => (finish = r)));
+    const { amend } = renderForm({ stagedCount: 1 });
+    await userEvent.click(amend);
+    await screen.findByDisplayValue("Commit a1");
+    expect(screen.getByRole("button", { name: /Amend with 1 file/ })).toBeDisabled();
+
+    finish("origin/feature");
+    expect(await screen.findByText(/already on origin\/feature/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Amend with 1 file/ })).toBeEnabled();
+  });
+
+  it("doesn't amend with nothing staged and the same message", async () => {
+    const { summary, amend } = renderForm();
+    await userEvent.click(amend);
+    await screen.findByDisplayValue("Commit a1");
+    const button = screen.getByRole("button", { name: /Amend message/ });
+    expect(button).toBeDisabled();
+
+    await userEvent.type(summary, " ");
+    expect(button).toBeDisabled();
+    await userEvent.type(summary, "!");
+    expect(button).toBeEnabled();
+  });
+
+  it("doesn't carry amending over to another repository at the same commit", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const [repositoryId, setRepositoryId] = createSignal("repo");
+    render(() => (
+      <QueryClientProvider client={client}>
+        <CommitForm repositoryId={repositoryId()} stagedCount={1} lastCommit="a1" />
+      </QueryClientProvider>
+    ));
+    const amend = screen.getByLabelText("Amend last commit");
+    await userEvent.click(amend);
+    await screen.findByDisplayValue("Commit a1");
+
+    setRepositoryId("other worktree");
+    expect(amend).not.toBeChecked();
+    expect(screen.getByLabelText("Commit message")).toHaveValue("");
+  });
+
+  it("doesn't call a failed push check an error, but says it couldn't check", async () => {
+    rpc.git.commit.pushedTo.mockRejectedValueOnce(new Error("for-each-ref failed"));
+    const { amend } = renderForm({ stagedCount: 1 });
+    await userEvent.click(amend);
+    await screen.findByDisplayValue("Commit a1");
+    await vi.waitFor(() => expect(rpc.git.commit.pushedTo).toHaveBeenCalled());
+    expect(screen.queryByText("for-each-ref failed")).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/Couldn't check whether the last commit has been pushed/),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: /Amend with 1 file/ })).toBeEnabled();
+  });
+
+  it("can't amend before the first commit", () => {
+    const { amend } = renderForm({ lastCommit: null });
+    expect(amend).toBeDisabled();
+  });
+});

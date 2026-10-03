@@ -8,8 +8,13 @@ export const gitKeys = {
   status: (repositoryId: string) => [...gitKeys.uncommitted(repositoryId), "status"] as const,
   log: (repositoryId: string) => [...gitKeys.repository(repositoryId), "log"] as const,
   refs: (repositoryId: string) => [...gitKeys.repository(repositoryId), "refs"] as const,
+  /** Which remote branch has a commit: refetched when the refs change, e.g. after a push. */
+  pushedTo: (repositoryId: string, sha: string) =>
+    [...gitKeys.repository(repositoryId), "pushed-to", sha] as const,
   /** A commit never changes, so it and its files are kept outside `repository(id)`. */
   commit: (repositoryId: string, sha: string) => ["git-commit", repositoryId, sha] as const,
   commitFiles: (repositoryId: string, sha: string) =>
     [...gitKeys.commit(repositoryId, sha), "files"] as const,
+  commitMessage: (repositoryId: string, sha: string) =>
+    [...gitKeys.commit(repositoryId, sha), "message"] as const,
 };

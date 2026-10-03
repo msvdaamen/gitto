@@ -16,7 +16,7 @@ import { UpdatingIndicator } from "@/components/ui/updating-indicator";
 import { stagingPaths } from "@/git/changes";
 import { useWorkingTreeChanges } from "@/git/queries/diff";
 import { useStage, useUnstage } from "@/git/queries/staging";
-import { useStatus } from "@/git/queries/status";
+import { useHeadSha, useStatus } from "@/git/queries/status";
 import { headLabel } from "@/git/status";
 import { useDelayed } from "@/hooks/delayed";
 
@@ -34,6 +34,7 @@ export function WorkingTreeDetails(props: { repositoryId: string }) {
   const stage = useStage(() => props.repositoryId);
   const unstage = useUnstage(() => props.repositoryId);
   const busy = () => stage.isPending || unstage.isPending;
+  const lastCommit = useHeadSha(status);
   // The status is reloaded whenever a file changes, which takes a while in a big repository.
   const updating = useDelayed(() => status.isRefetching);
 
@@ -102,7 +103,11 @@ export function WorkingTreeDetails(props: { repositoryId: string }) {
         }}
       />
 
-      <CommitForm repositoryId={props.repositoryId} stagedCount={changes.staged().length} />
+      <CommitForm
+        repositoryId={props.repositoryId}
+        stagedCount={changes.staged().length}
+        lastCommit={lastCommit()}
+      />
     </div>
   );
 }

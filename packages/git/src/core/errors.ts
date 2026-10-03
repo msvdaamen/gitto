@@ -41,6 +41,13 @@ export class NoUpstreamError extends MessageError {}
 /** The repository changed while an operation was under way, which trying again will get past. */
 export class RepositoryChangedError extends MessageError {}
 
+/** HEAD isn't the commit that was meant to be amended, e.g. one was made in a terminal since. */
+export class HeadMovedError extends MessageError {
+  constructor() {
+    super("The last commit changed before it could be amended, so nothing was amended.");
+  }
+}
+
 /** No repository with that id has been added to Gitto. */
 export class RepositoryNotFoundError extends MessageError {
   constructor(readonly repositoryId: string) {
