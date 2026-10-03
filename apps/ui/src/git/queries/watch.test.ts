@@ -32,7 +32,10 @@ function watch(focused: boolean) {
       }),
   });
   const invalidated = () => invalidate.mock.calls.map(([filters]) => filters?.queryKey);
-  return { invalidate, invalidated, cleanup };
+  // What starting to watch refetched; the tests are about what's refetched after.
+  const initial = invalidated();
+  invalidate.mockClear();
+  return { invalidate, invalidated, initial, cleanup };
 }
 
 beforeEach(() => vi.useFakeTimers());
@@ -82,6 +85,12 @@ function procedure<T>() {
 }
 
 describe("watching a repository", () => {
+  it("refetches what was loaded before it was watched", () => {
+    const { initial, cleanup } = watch(true);
+    expect(initial).toEqual([gitKeys.repository("repo")]);
+    cleanup();
+  });
+
   it("refetches only what a change in the git directory affects", async () => {
     const { invalidate, invalidated, cleanup } = watch(true);
     await vi.waitFor(() => expect(rpc.gitDir.open).toBe(1));
