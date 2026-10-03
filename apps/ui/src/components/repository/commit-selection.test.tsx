@@ -4,6 +4,8 @@ import userEvent from "@testing-library/user-event";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { gitKeys } from "@/git/queries/keys";
+
 import { CommitDetails } from "./details/commit-details";
 import { HistoryTable } from "./history/history-table";
 
@@ -38,9 +40,33 @@ const rpc = vi.hoisted(() => {
         },
       },
       diff: {
-        commitFiles: async () => [
-          { path: "first.txt", status: "added", origPath: null, additions: 1, deletions: 0 },
+        // The second commit's files never load.
+        commitFiles: ({ sha }: { sha: string }) =>
+          sha === "a1"
+            ? Promise.resolve([
+                { path: "first.txt", status: "added", origPath: null, additions: 1, deletions: 0 },
+              ])
+            : new Promise(() => undefined),
+      },
+      stash: {
+        // Each is listed just above the commit it was made on.
+        list: async () => [
+          { sha: "d".repeat(40), base: "b1", message: "On main: newer stash", createdAt: 6000 },
+          { sha: "c".repeat(40), base: "a1", message: "WIP on main: a1 First", createdAt: 5000 },
         ],
+        // The newer stash's files never load.
+        files: ({ sha }: { sha: string }) =>
+          sha === "c".repeat(40)
+            ? Promise.resolve([
+                {
+                  path: "stashed.txt",
+                  status: "added",
+                  origPath: null,
+                  additions: 2,
+                  deletions: 0,
+                },
+              ])
+            : new Promise(() => undefined),
       },
     },
   };
@@ -56,7 +82,7 @@ function commit(sha: string, subject: string, parents: string[]) {
     authorName: "Ada Lovelace",
     authorEmail: "ada@example.com",
     authoredAt: 0,
-    committedAt: 0,
+    committedAt: sha === "b1" ? 2000 : 1000,
     refs: [],
     subject,
     body: "",
@@ -92,8 +118,21 @@ describe("selecting a commit", () => {
     expect(await screen.findByText("Working directory")).toBeInTheDocument();
     // Only the rows in view are rendered, so each says where it is in the whole list.
     const options = await screen.findAllByRole("option");
-    expect(options.map((option) => option.getAttribute("aria-posinset"))).toEqual(["1", "2", "3"]);
-    expect(options.every((option) => option.getAttribute("aria-setsize") === "3")).toBe(true);
+    expect(options.map((option) => option.getAttribute("aria-posinset"))).toEqual([
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+    ]);
+    expect(options.every((option) => option.getAttribute("aria-setsize") === "5")).toBe(true);
+    expect(options.map((option) => option.textContent)).toEqual([
+      expect.stringContaining("Uncommitted changes"),
+      expect.stringContaining("On main: newer stash"),
+      expect.stringContaining("Second"),
+      expect.stringContaining("WIP on main: a1 First"),
+      expect.stringContaining("First"),
+    ]);
     await userEvent.click(screen.getByText("First"));
 
     expect(await screen.findByText("first.txt")).toBeInTheDocument();
@@ -101,5 +140,59 @@ describe("selecting a commit", () => {
     expect(await screen.findByRole("heading", { name: "First" })).toBeInTheDocument();
     expect(selectedId()).toBe("a1");
     expect(rpc.statusCalls()).toBeLessThan(20);
+
+    // While another commit's files load, the message stays the one whose files are shown.
+    await userEvent.click(screen.getByText("Second"));
+    expect(selectedId()).toBe("b1");
+    await vi.waitFor(() =>
+      expect(client.getQueryState(gitKeys.commit("repo", "b1"))?.status).toBe("success"),
+    );
+    expect(screen.getByRole("heading", { name: "First" })).toBeInTheDocument();
+    expect(screen.getByText("first.txt")).toBeInTheDocument();
+  });
+
+  it("shows the history while the stashes are still loading", async () => {
+    const list = rpc.git.stash.list;
+    rpc.git.stash.list = () => new Promise<never>(() => undefined);
+    try {
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(() => (
+        <QueryClientProvider client={client}>
+          <HistoryTable repositoryId="repo" search="" selectedId={undefined} onSelect={() => {}} />
+        </QueryClientProvider>
+      ));
+
+      expect(await screen.findByText("Second")).toBeInTheDocument();
+      expect(screen.queryByText("On main: newer stash")).not.toBeInTheDocument();
+    } finally {
+      rpc.git.stash.list = list;
+    }
+  });
+
+  it("shows a stash's details, with the files it changed", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const [selectedId, setSelectedId] = createSignal<string>();
+    render(() => (
+      <QueryClientProvider client={client}>
+        <HistoryTable
+          repositoryId="repo"
+          search=""
+          selectedId={selectedId()}
+          onSelect={setSelectedId}
+        />
+        <CommitDetails repositoryId="repo" selectedId={selectedId()} />
+      </QueryClientProvider>
+    ));
+
+    await userEvent.click(await screen.findByText("WIP on main: a1 First"));
+    expect(await screen.findByText("stashed.txt")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "WIP on main: a1 First" })).toBeInTheDocument();
+    expect(selectedId()).toBe(`stash:${"c".repeat(40)}`);
+
+    // While another stash's files load, the summary still names the one whose files are shown.
+    await userEvent.click(screen.getByText("On main: newer stash"));
+    expect(selectedId()).toBe(`stash:${"d".repeat(40)}`);
+    expect(screen.getByRole("heading", { name: "WIP on main: a1 First" })).toBeInTheDocument();
+    expect(screen.getByText("stashed.txt")).toBeInTheDocument();
   });
 });

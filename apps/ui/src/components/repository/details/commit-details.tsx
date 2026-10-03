@@ -1,32 +1,32 @@
+import type { ChangedFile } from "@gitto/git/types";
 import Copy from "lucide-solid/icons/copy";
 import Ellipsis from "lucide-solid/icons/ellipsis";
-import File from "lucide-solid/icons/file";
 import GitCommitHorizontal from "lucide-solid/icons/git-commit-horizontal";
 import LoaderCircle from "lucide-solid/icons/loader-circle";
-import TriangleAlert from "lucide-solid/icons/triangle-alert";
-import { createMemo, createSignal, Show, Suspense } from "solid-js";
+import { createMemo, createSignal, Match, Show, Suspense, Switch } from "solid-js";
 
 import { Avatar } from "@/components/ui/avatar";
 import { IconButton } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
-import { LineStats } from "@/components/ui/line-stats";
-import { SectionHeader } from "@/components/ui/section-header";
+import { lineTotals } from "@/git/changes";
 import { useCommitFiles } from "@/git/queries/diff";
 import { useCommitDetails } from "@/git/queries/history";
-import { WIP_ID, type CommitRow } from "@/git/rows";
+import { stashSha, WIP_ID, type CommitRow } from "@/git/rows";
 
-import { ChangedFileList } from "./changed-file-list";
+import { ChangedFilesSection, DetailsError, FileTotals } from "./details-sections";
+import { StashDetails } from "./stash-details";
 import { WorkingTreeDetails } from "./working-tree-details";
 
 /**
- * Details of the selected history row: a commit, or the uncommitted changes. Loads what it shows by
- * itself, so it only needs the row's id from the history table.
+ * Details of the selected history row: a commit, a stash, or the uncommitted changes. Loads what it
+ * shows by itself, so it only needs the row's id from the history table.
  */
 export function CommitDetails(props: { repositoryId: string; selectedId: string | undefined }) {
   const [scrollElement, setScrollElement] = createSignal<HTMLDivElement>();
   // The selected row, kept while the selection is briefly empty: switching repositories clears it
   // until the history picks a row, and effects in the details can still run in between.
   const selectedId = createMemo((last: string) => props.selectedId ?? last, "");
+  const stash = () => stashSha(selectedId());
   return (
     <Show
       when={props.selectedId}
@@ -34,12 +34,13 @@ export function CommitDetails(props: { repositoryId: string; selectedId: string 
     >
       <div ref={setScrollElement} class="flex h-full min-w-[280px] flex-col overflow-y-auto">
         <div class="flex h-[38px] shrink-0 items-center justify-between border-b border-border py-0 pr-[9px] pl-[13px] text-[11.5px] font-[720] tracking-[.07em] text-muted uppercase">
-          <span>{selectedId() === WIP_ID ? "Working directory" : "Commit details"}</span>
+          <span>
+            {selectedId() === WIP_ID ? "Working directory" : stash() ? "Stash" : "Commit details"}
+          </span>
           <IconButton label="More commit actions" icon={Ellipsis} />
         </div>
         <Suspense fallback={<EmptyState icon={LoaderCircle} loading title="Loading details…" />}>
-          <Show
-            when={selectedId() === WIP_ID}
+          <Switch
             fallback={
               <SelectedCommit
                 repositoryId={props.repositoryId}
@@ -48,8 +49,19 @@ export function CommitDetails(props: { repositoryId: string; selectedId: string 
               />
             }
           >
-            <WorkingTreeDetails repositoryId={props.repositoryId} />
-          </Show>
+            <Match when={selectedId() === WIP_ID}>
+              <WorkingTreeDetails repositoryId={props.repositoryId} />
+            </Match>
+            <Match when={stash()}>
+              {(sha) => (
+                <StashDetails
+                  repositoryId={props.repositoryId}
+                  sha={sha()}
+                  scrollElement={scrollElement()}
+                />
+              )}
+            </Match>
+          </Switch>
         </Suspense>
       </div>
     </Show>
@@ -70,40 +82,28 @@ function SelectedCommit(props: {
     () => props.repositoryId,
     () => props.sha,
   );
+  // The commit and its files are loaded apart, and either can arrive first when another is
+  // selected: what's on show is the last commit both are loaded for, so the message is never
+  // another commit's than the files. Until one fails, which leaves the other on its own.
+  const shown = createMemo((last: { commit: CommitRow; files: ChangedFile[] } | undefined) => {
+    if (details.query.error || changes.query.error) return undefined;
+    const commit = details.commit();
+    return commit && commit.id === changes.shownSha() ? { commit, files: changes.files() } : last;
+  }, undefined);
+  const files = () => shown()?.files ?? changes.files();
+  const totals = createMemo(() => lineTotals(files()));
 
   // One element, so the file list sees it change size when the message above the files loads.
   return (
     <div>
-      <Show when={details.query.error ?? changes.query.error} keyed>
-        {(error) => (
-          <EmptyState
-            icon={TriangleAlert}
-            title="Couldn't load the commit"
-            tone="error"
-            class="h-auto border-b border-border py-4"
-          >
-            {error.message}
-          </EmptyState>
-        )}
+      <DetailsError
+        title="Couldn't load the commit"
+        error={details.query.error ?? changes.query.error}
+      />
+      <Show when={shown()?.commit ?? (changes.query.error && details.commit())} keyed>
+        {(commit) => <CommitSummary commit={commit} fileCount={files().length} totals={totals()} />}
       </Show>
-      <Show when={details.commit()} keyed>
-        {(commit) => (
-          <CommitSummary
-            commit={commit}
-            fileCount={changes.files().length}
-            totals={changes.totals()}
-          />
-        )}
-      </Show>
-      <div class="border-b border-border px-2.5 py-3">
-        <SectionHeader
-          icon={File}
-          title="Changed files"
-          count={changes.files().length}
-          class="px-1 pb-2"
-        />
-        <ChangedFileList files={changes.files()} scrollElement={props.scrollElement} />
-      </div>
+      <ChangedFilesSection files={files()} scrollElement={props.scrollElement} />
     </div>
   );
 }
@@ -135,12 +135,7 @@ function CommitSummary(props: {
           <Copy size={13} />
         </button>
       </div>
-      <div class="mt-[13px] flex items-center gap-2 text-[11.5px] text-muted">
-        <span class="mr-auto">
-          <strong>{props.fileCount}</strong> files changed
-        </span>
-        <LineStats additions={props.totals.additions} deletions={props.totals.deletions} />
-      </div>
+      <FileTotals count={props.fileCount} totals={props.totals} />
     </div>
   );
 }

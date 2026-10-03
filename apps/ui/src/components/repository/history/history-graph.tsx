@@ -1,4 +1,4 @@
-import { Index, Show, type JSX } from "solid-js";
+import { Index, Match, Show, Switch, type JSX } from "solid-js";
 
 import { Avatar } from "@/components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -65,8 +65,9 @@ function bottomPath(edge: GraphEdge): string {
 
 /**
  * A commit's row of the history graph. Commits are avatars ringed in their lane's colour, merges
- * small dots, and the uncommitted changes a dashed, hollow circle with a dashed line to HEAD. A
- * commit's node shows its author when hovered.
+ * small dots, the uncommitted changes a dashed, hollow circle with a dashed line to HEAD, and a
+ * stash a box with a dashed line to the commit it was made on. A commit's node shows its author when
+ * hovered.
  */
 export function HistoryGraph(props: {
   row: GraphRow;
@@ -74,11 +75,12 @@ export function HistoryGraph(props: {
   initials?: string;
   avatarColor?: string;
   wip?: boolean;
+  stash?: boolean;
   /** Leave out the lines, e.g. while searching, when the rows they lead to may be hidden. */
   nodeOnly?: boolean;
 }) {
   const node = () => x(props.row.column);
-  const color = () => (props.wip ? "var(--amber)" : laneColor(props.row.column));
+  const color = () => (props.wip || props.stash ? "var(--amber)" : laneColor(props.row.column));
   const isMerge = () => props.row.bottom.length > 1;
 
   return (
@@ -103,9 +105,37 @@ export function HistoryGraph(props: {
           {(edge) => <Line d={bottomPath(edge())} edge={edge()} lane={edge().to} />}
         </Index>
       </Show>
-      <Show
-        when={!props.wip}
+      <Switch
         fallback={
+          <AuthorTooltip author={props.author} initials={props.initials} color={props.avatarColor}>
+            <Show
+              when={!isMerge()}
+              fallback={<circle cx={node()} cy={MIDDLE} r={4.5} fill={color()} stroke="none" />}
+            >
+              <circle
+                cx={node()}
+                cy={MIDDLE}
+                r={NODE_RADIUS}
+                fill={props.avatarColor ?? color()}
+                stroke={color()}
+              />
+              <text
+                x={node()}
+                y={MIDDLE}
+                fill="#fff"
+                stroke="none"
+                font-size="7"
+                font-weight="700"
+                text-anchor="middle"
+                dominant-baseline="central"
+              >
+                {props.initials}
+              </text>
+            </Show>
+          </AuthorTooltip>
+        }
+      >
+        <Match when={props.wip}>
           <circle
             cx={node()}
             cy={MIDDLE}
@@ -114,35 +144,22 @@ export function HistoryGraph(props: {
             stroke={color()}
             stroke-dasharray="3 2"
           />
-        }
-      >
-        <AuthorTooltip author={props.author} initials={props.initials} color={props.avatarColor}>
-          <Show
-            when={!isMerge()}
-            fallback={<circle cx={node()} cy={MIDDLE} r={4.5} fill={color()} stroke="none" />}
-          >
-            <circle
-              cx={node()}
-              cy={MIDDLE}
-              r={NODE_RADIUS}
-              fill={props.avatarColor ?? color()}
-              stroke={color()}
+        </Match>
+        <Match when={props.stash}>
+          {/* A box with its lid. */}
+          <g stroke={color()} stroke-width="1.5">
+            <rect
+              x={node() - NODE_RADIUS + 1}
+              y={MIDDLE - NODE_RADIUS + 1}
+              width={2 * NODE_RADIUS - 2}
+              height={2 * NODE_RADIUS - 2}
+              rx={3}
+              fill="var(--bg)"
             />
-            <text
-              x={node()}
-              y={MIDDLE}
-              fill="#fff"
-              stroke="none"
-              font-size="7"
-              font-weight="700"
-              text-anchor="middle"
-              dominant-baseline="central"
-            >
-              {props.initials}
-            </text>
-          </Show>
-        </AuthorTooltip>
-      </Show>
+            <path d={`M${node() - NODE_RADIUS + 1} ${MIDDLE - 2}H${node() + NODE_RADIUS - 1}`} />
+          </g>
+        </Match>
+      </Switch>
     </svg>
   );
 }
@@ -167,7 +184,10 @@ function AuthorTooltip(props: {
   );
 }
 
-/** A line in `lane`'s colour; dashed amber on its way from the uncommitted changes to HEAD. */
+/**
+ * A line in `lane`'s colour; dashed amber on its way from the uncommitted changes to HEAD, or from a
+ * stash to the commit it was made on.
+ */
 function Line(props: { d: string; edge: GraphEdge; lane: number }) {
   return (
     <path

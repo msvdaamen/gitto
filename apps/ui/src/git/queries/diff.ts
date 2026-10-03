@@ -1,4 +1,5 @@
-import { keepPreviousData, useQuery } from "@tanstack/solid-query";
+import type { ChangedFile } from "@gitto/git/types";
+import { keepPreviousData, useQuery, type QueryKey } from "@tanstack/solid-query";
 import { createMemo } from "solid-js";
 
 import { lineTotals } from "@/git/changes";
@@ -7,25 +8,50 @@ import { rpc } from "@/lib/rpc";
 import { gitKeys } from "./keys";
 import { useUncommittedFiles } from "./status";
 
-/** Files changed by a commit, compared to its first parent. */
-export function useCommitFiles(repositoryId: () => string, sha: () => string) {
+/** Loads the files a commit or stash changed. */
+type FilesFetcher = (
+  input: { repositoryId: string; sha: string },
+  options: { signal: AbortSignal },
+) => Promise<ChangedFile[]>;
+
+/**
+ * The files the commit or stash `sha` changed, which never change, as `fetch` loads them under
+ * `queryKey`. While another one's load, the previous ones stay on show rather than suspending;
+ * `shownSha` says whose they are, so what's shown with them can match.
+ */
+export function useChangedFiles(
+  repositoryId: () => string,
+  sha: () => string,
+  queryKey: (repositoryId: string, sha: string) => QueryKey,
+  fetch: FilesFetcher,
+) {
   const query = useQuery(() => {
     const id = repositoryId();
-    const commitSha = sha();
+    const target = sha();
     return {
-      queryKey: gitKeys.commitFiles(id, commitSha),
-      queryFn: ({ signal }: { signal: AbortSignal }) =>
-        rpc.git.diff.commitFiles({ repositoryId: id, sha: commitSha }, { signal }),
+      queryKey: queryKey(id, target),
+      queryFn: async ({ signal }: { signal: AbortSignal }) => ({
+        sha: target,
+        files: await fetch({ repositoryId: id, sha: target }, { signal }),
+      }),
       staleTime: Infinity,
-      // Keep showing the previous selection's files while the next ones load, instead of suspending.
       placeholderData: keepPreviousData,
     };
   });
 
-  const files = createMemo(() => query.data ?? []);
+  const files = createMemo(() => query.data?.files ?? []);
   const totals = createMemo(() => lineTotals(files()));
+  /** The SHA whose files are on show: the previous one's, while `sha`'s load. */
+  const shownSha = () => query.data?.sha;
 
-  return { query, files, totals };
+  return { query, files, totals, shownSha };
+}
+
+/** Files changed by a commit, compared to its first parent. */
+export function useCommitFiles(repositoryId: () => string, sha: () => string) {
+  return useChangedFiles(repositoryId, sha, gitKeys.commitFiles, (input, options) =>
+    rpc.git.diff.commitFiles(input, options),
+  );
 }
 
 /**

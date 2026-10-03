@@ -114,6 +114,27 @@ describe("computeGraph", () => {
     ]);
   });
 
+  it("keeps a commit in its branch's lane rather than a stash's", () => {
+    const [, , , stash, b] = computeGraph([
+      { sha: "t", parents: ["z"] },
+      { sha: "c", parents: ["b"] },
+      { sha: "z", parents: [] },
+      // Lane 0 is free again, so the stash takes it.
+      { sha: "stash", parents: ["b"], dashed: true, aside: true },
+      { sha: "b", parents: [] },
+    ]);
+
+    expect(stash!.column).toBe(0);
+    // `b` stays in `c`'s lane; the stash's line curves over to it.
+    expect(b).toMatchObject({
+      column: 1,
+      top: [
+        { from: 0, to: 1, dashed: true },
+        { from: 1, to: 1 },
+      ],
+    });
+  });
+
   it("doesn't reuse a lane that ends at a node for that node's merged parent", () => {
     const rows = computeGraph([
       { sha: "a", parents: ["m"] },

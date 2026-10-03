@@ -13,25 +13,27 @@ import type { JSX } from "solid-js";
 
 import { EmptyState } from "@/components/ui/empty-state";
 import { useRefs } from "@/git/queries/refs";
+import { useStashes } from "@/git/queries/stash";
 import { useStatus } from "@/git/queries/status";
 import { buildRefTree, flattenRefTree } from "@/git/ref-tree";
 import type { RefTreeRow } from "@/git/ref-tree";
 import { useCollapsed } from "@/hooks/collapsed";
+import { relativeTime } from "@/lib/format";
 
 import { SidebarFolder, SidebarRow } from "./sidebar-row";
 import { SidebarSection } from "./sidebar-section";
 
-// Placeholders until pull requests and stashes are loaded from the repository.
+// Placeholders until pull requests are loaded from the repository.
 const PULL_REQUESTS = [
   { label: "#24 Polish desktop shell", meta: "open" },
   { label: "#18 Theme tokens", meta: "merged" },
 ];
-const STASHES = [{ label: "WIP: layout experiment" }];
 
 /** The sidebar's sections: the working directory, branches, remotes, pull requests, tags, stashes. */
 export function RefList(props: { repositoryId: string }) {
   const status = useStatus(() => props.repositoryId);
   const refs = useRefs(() => props.repositoryId);
+  const stashes = useStashes(() => props.repositoryId);
 
   const ofKind = (kind: Ref["kind"]) => (refs.data ?? []).filter((ref) => ref.kind === kind);
   const localBranches = createMemo(() => ofKind("local"));
@@ -160,11 +162,17 @@ export function RefList(props: { repositoryId: string }) {
       <SidebarSection
         title="Stashes"
         icon={Inbox}
-        count={STASHES.length}
+        count={stashes.data?.length ?? 0}
         {...collapsible("stashes")}
-        items={STASHES}
+        items={stashes.data ?? []}
       >
-        {(stash) => <SidebarRow icon={Archive} label={stash.label} />}
+        {(stash) => (
+          <SidebarRow
+            icon={Archive}
+            label={stash.message}
+            title={`${stash.message}\nStashed ${relativeTime(stash.createdAt).toLowerCase()}`}
+          />
+        )}
       </SidebarSection>
     </>
   );

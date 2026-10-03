@@ -1,6 +1,4 @@
 import { cn } from "cn";
-import Archive from "lucide-solid/icons/archive";
-import ArchiveRestore from "lucide-solid/icons/archive-restore";
 import GitBranch from "lucide-solid/icons/git-branch";
 import PanelLeft from "lucide-solid/icons/panel-left";
 import PanelRight from "lucide-solid/icons/panel-right";
@@ -20,6 +18,7 @@ import { headLabel } from "@/git/status";
 import { useRepository } from "@/hooks/repositories";
 
 import { PullButton } from "./pull-button";
+import { StashButtons } from "./stash-buttons";
 import { ToolbarButton } from "./toolbar-button";
 
 export function RepositoryToolbar(props: {
@@ -58,8 +57,7 @@ export function RepositoryToolbar(props: {
         <PullButton repositoryId={props.repositoryId} />
         <ToolbarButton icon={Upload} label="Push" />
         <ToolbarButton icon={GitBranch} label="Branch" hideBelow="sm" />
-        <ToolbarButton icon={Archive} label="Stash" hideBelow="lg" />
-        <ToolbarButton icon={ArchiveRestore} label="Pop" hideBelow="lg" />
+        <StashButtons repositoryId={props.repositoryId} />
         <FetchButton repositoryId={props.repositoryId} />
       </div>
       <div class="ml-auto max-md:min-w-[115px] max-sm:min-w-[90px]">

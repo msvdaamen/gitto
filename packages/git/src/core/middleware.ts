@@ -10,6 +10,7 @@ import {
   PullInterruptedError,
   RepositoryChangedError,
   RepositoryNotFoundError,
+  StashConflictError,
 } from "./errors";
 import type { GitRepos } from "./repo";
 
@@ -47,7 +48,8 @@ function toApiError(error: unknown): unknown {
     error instanceof IndexLockedError ||
     error instanceof HeadMovedError ||
     error instanceof PullInterruptedError ||
-    error instanceof RepositoryChangedError
+    error instanceof RepositoryChangedError ||
+    error instanceof StashConflictError
   ) {
     return new ORPCError("CONFLICT", { message: error.message, cause: error });
   }

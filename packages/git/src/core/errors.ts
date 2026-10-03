@@ -35,6 +35,9 @@ export class IndexLockedError extends GitError {}
  */
 export class PullInterruptedError extends MessageError {}
 
+/** A stash that was popped but conflicts, left for the user to resolve; the stash is kept. */
+export class StashConflictError extends MessageError {}
+
 /** There's nothing to pull from: HEAD isn't on a branch, or the branch doesn't track one. */
 export class NoUpstreamError extends MessageError {}
 

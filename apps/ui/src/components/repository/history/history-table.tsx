@@ -14,6 +14,7 @@ import { useDelayed } from "@/hooks/delayed";
 import { COLUMNS, MIN_WIDTH } from "./columns";
 import { HistoryCommitRow } from "./commit-row";
 import { graphWidth, ROW_HEIGHT } from "./history-graph";
+import { HistoryStashRow } from "./stash-row";
 import { HistoryWipRow } from "./wip-row";
 
 export function HistoryTable(props: {
@@ -132,6 +133,10 @@ function HistoryRows(props: {
                   const current = row();
                   return current.kind === "wip" ? current : undefined;
                 };
+                const asStash = () => {
+                  const current = row();
+                  return current.kind === "stash" ? current : undefined;
+                };
                 const asCommit = () => {
                   const current = row();
                   return current.kind === "commit" ? current : undefined;
@@ -149,6 +154,11 @@ function HistoryRows(props: {
                   <Switch>
                     <Match when={asWip()}>
                       {(wip) => <HistoryWipRow {...rowProps} row={wip()} searching={!!needle()} />}
+                    </Match>
+                    <Match when={asStash()}>
+                      {(stash) => (
+                        <HistoryStashRow {...rowProps} stash={stash()} searching={!!needle()} />
+                      )}
                     </Match>
                     <Match when={asCommit()}>
                       {(commit) => (
