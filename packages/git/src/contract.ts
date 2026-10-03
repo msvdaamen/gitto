@@ -1,3 +1,4 @@
+import { BranchContract } from "./features/branch/contract";
 import { CommitContract } from "./features/commit/contract";
 import { DiffContract } from "./features/diff/contract";
 import { HistoryContract } from "./features/history/contract";
@@ -14,6 +15,7 @@ export const GitContract = {
   history: HistoryContract,
   diff: DiffContract,
   refs: RefsContract,
+  branch: BranchContract,
   staging: StagingContract,
   commit: CommitContract,
   remote: RemoteContract,

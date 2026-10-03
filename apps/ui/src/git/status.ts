@@ -39,3 +39,18 @@ export function pullTitle(status: Pick<StatusSummary, "head" | "upstream" | "beh
   if (!status.behind) return `Pull from ${status.upstream}`;
   return `Pull ${status.behind} ${status.behind === 1 ? "commit" : "commits"} from ${status.upstream}`;
 }
+
+/** Why a branch can't be created, if it can't. */
+export function branchBlocker(status: Pick<StatusSummary, "counts">): string | undefined {
+  // Git won't switch to it in the middle of a merge or rebase, and says so.
+  if (status.counts.conflicted) return "Resolve the conflicts before creating a branch.";
+  return undefined;
+}
+
+/** What creating a branch would do, e.g. "Create a branch from main", or why it can't. */
+export function branchTitle(status: Pick<StatusSummary, "head" | "counts">): string {
+  const blocker = branchBlocker(status);
+  if (blocker) return blocker;
+  const from = status.head.kind === "detached" ? "this commit" : status.head.name;
+  return `Create a branch from ${from}`;
+}

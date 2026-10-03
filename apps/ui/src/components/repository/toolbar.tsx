@@ -17,6 +17,7 @@ import { useStatus } from "@/git/queries/status";
 import { headLabel } from "@/git/status";
 import { useRepository } from "@/hooks/repositories";
 
+import { BranchButton } from "./branch-button";
 import { PullButton } from "./pull-button";
 import { StashButtons } from "./stash-buttons";
 import { ToolbarButton } from "./toolbar-button";
@@ -56,7 +57,7 @@ export function RepositoryToolbar(props: {
         <Divider class="h-6" />
         <PullButton repositoryId={props.repositoryId} />
         <ToolbarButton icon={Upload} label="Push" />
-        <ToolbarButton icon={GitBranch} label="Branch" hideBelow="sm" />
+        <BranchButton repositoryId={props.repositoryId} />
         <StashButtons repositoryId={props.repositoryId} />
         <FetchButton repositoryId={props.repositoryId} />
       </div>
