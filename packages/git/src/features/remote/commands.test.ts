@@ -92,6 +92,43 @@ describe("pull", () => {
     expect(readFileSync(join(path, "a.txt"), "utf8")).toBe("a\nb\n");
   });
 
+  it("fetches every remote, dropping branches deleted on it, as the Fetch button does", async () => {
+    const { upstream, path } = createClone("pruned");
+    git(upstream, "branch", "old");
+    git(path, "fetch", "-q");
+    git(upstream, "branch", "-D", "old");
+    git(upstream, "branch", "new");
+    const other = createRepo("pruned-other");
+    commit(other, "b.txt", "b\n", "other");
+    git(path, "remote", "add", "other", other);
+    await pull(await repos.open("pruned"));
+    const branches = git(path, "for-each-ref", "--format=%(refname:lstrip=2)", "refs/remotes");
+    // Without the remotes' HEADs, which newer git also records on a first fetch.
+    expect(branches.split("\n").filter((branch) => !branch.endsWith("/HEAD"))).toEqual([
+      "origin/main",
+      "origin/new",
+      "other/main",
+    ]);
+  });
+
+  it("pulls even when another remote can't be reached", async () => {
+    const { upstream, path } = createClone("unreachable");
+    git(path, "remote", "add", "gone", join(root, "gone"));
+    commit(upstream, "a.txt", "a\nb\n", "second");
+    await pull(await repos.open("unreachable"));
+    expect(subjects(path)).toEqual(["second", "first"]);
+  });
+
+  it("fetches every remote when pulling from a local upstream", async () => {
+    const { upstream, path } = createClone("local-pruned");
+    git(path, "checkout", "-qb", "feature", "--track", "main");
+    git(upstream, "branch", "new");
+    await pull(await repos.open("local-pruned"));
+    expect(git(path, "for-each-ref", "--format=%(refname:lstrip=2)", "refs/remotes")).toContain(
+      "origin/new",
+    );
+  });
+
   it("does nothing when there's nothing new", async () => {
     const { path } = createClone("current");
     await pull(await repos.open("current"));

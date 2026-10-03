@@ -16,7 +16,19 @@ import { NO_BRANCH, noUpstream, REBASING } from "./pull-blocker";
  * so the sidebar and history show the remotes as they are.
  */
 export async function fetchAll(repo: Repo): Promise<void> {
-  await gitFetch(repo.fetch, ["--all", "--prune", "--no-progress"]);
+  await gitFetch(repo.fetch, FETCH_ALL);
+}
+
+const FETCH_ALL = ["--all", "--prune", "--no-progress"];
+
+/**
+ * Fetches every remote and prunes, as `fetchAll` does, for a pull. A remote that can't be reached
+ * doesn't fail the pull, which has what it needs to merge: that's for the Fetch button to explain.
+ */
+async function updateRemotes(run: GitCommand): Promise<void> {
+  await gitFetch(run, FETCH_ALL).catch((error: unknown) => {
+    if (!(error instanceof GitError)) throw error;
+  });
 }
 
 /** `git fetch` with `args`, through `run` (`repo.fetch`, or a command of `repo.fetching`). */
@@ -34,7 +46,9 @@ async function gitFetch(run: GitCommand, args: string[], settings: string[] = []
 
 /**
  * Fetches the current branch's upstream and merges it in, or rebases onto it if the user's config
- * says to, like `git pull`. Conflicts are left in the working tree, to resolve and commit.
+ * says to, like `git pull`. Conflicts are left in the working tree, to resolve and commit. Also
+ * fetches every remote and drops branches deleted on them, as the Fetch button does, so the
+ * sidebar and history are up to date after a pull too.
  *
  * Done as a fetch and then a merge or rebase, rather than one `git pull`, so only the second waits
  * for (and holds up) the other writes to the repository: the fetch takes as long as the network.
@@ -166,8 +180,8 @@ interface Fetched {
 /**
  * Fetches the branch's upstream as `git pull` does: just that branch, which updates its
  * remote-tracking branch, and FETCH_HEAD, read before another fetch replaces it. A local upstream
- * (remote ".") has nothing to fetch. With what was fetched and the message to merge it with, if
- * `word`, and there's one: there's none for a branch already up to date, or without commits
+ * (remote ".") has nothing to fetch. Then fetches every remote (see `updateRemotes`). With what
+ * was fetched and the message to merge it with, if `word`, and there's one: there's none for a branch already up to date, or without commits
  * (which just moves to its upstream).
  */
 async function fetchUpstream(
@@ -178,6 +192,8 @@ async function fetchUpstream(
 ): Promise<Fetched | null> {
   let fetchHead: string;
   if (remote === ".") {
+    // Nothing of the upstream's to fetch, but the remotes are still brought up to date.
+    await updateRemotes(repo.fetch);
     if (!tracking) return null;
     // As `git pull` words FETCH_HEAD for a local branch.
     const sha = await resolveRef(repo.read, tracking);
@@ -189,7 +205,10 @@ async function fetchUpstream(
     fetchHead = await repo.fetching(async (run) => {
       // FETCH_HEAD is read next, so it's written whatever `fetch.writeFetchHEAD` says.
       await gitFetch(run, ["--quiet", "--", remote, merge], ["fetch.writeFetchHEAD=true"]);
-      return readFile(join(gitDir, "FETCH_HEAD"), "utf8");
+      // Read before fetching every remote, which writes its own.
+      const written = await readFile(join(gitDir, "FETCH_HEAD"), "utf8");
+      await updateRemotes(run);
+      return written;
     });
   }
   // The line of what's to be merged, the one that isn't marked not-for-merge.
