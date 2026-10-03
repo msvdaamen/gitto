@@ -10,13 +10,15 @@ import { compactCount } from "@/lib/format";
 
 import { ROW_HEIGHT } from "./sidebar-row";
 
-/**
- * Height of an expanded section without its rows: its top border, its header (`h-[30px]`), the
- * border below that and the list's padding.
- */
-const SECTION_CHROME = 1 + 30 + 1 + 2 * 4;
+/** Height of a section's header, in pixels. */
+const HEADER_HEIGHT = 30;
 /** Space above a section's first row and below its last one. */
 const LIST_PADDING = 4;
+/**
+ * Height of an expanded section without its rows: its top border, its header, the border below
+ * that and the list's padding.
+ */
+const SECTION_CHROME = 1 + HEADER_HEIGHT + 1 + 2 * LIST_PADDING;
 
 /**
  * A section of the sidebar, like GitKraken's: its header always shows, and while expanded its rows
@@ -38,10 +40,12 @@ export function SidebarSection<T>(props: {
   return (
     <section
       class={cn(
-        "flex min-h-[31px] flex-col border-t border-border-soft max-md:min-h-0 max-md:flex-none max-md:border-0",
+        // At least its top border and its header.
+        "flex min-h-[calc(var(--header-height)+1px)] flex-col border-t border-border-soft max-md:min-h-0 max-md:flex-none max-md:border-0",
         expanded() ? "flex-1" : "flex-none",
       )}
       style={{
+        "--header-height": `${HEADER_HEIGHT}px`,
         "max-height": expanded()
           ? `${SECTION_CHROME + props.items.length * ROW_HEIGHT}px`
           : undefined,
@@ -49,7 +53,7 @@ export function SidebarSection<T>(props: {
     >
       <button
         class={cn(
-          "flex h-[30px] w-full shrink-0 cursor-pointer items-center gap-1.5 border-0 bg-panel-raised px-2.5 text-left text-muted hover:bg-panel-hover hover:text-text-soft focus-ring-inset max-md:hidden",
+          "flex h-(--header-height) w-full shrink-0 cursor-pointer items-center gap-1.5 border-0 bg-panel-raised px-2.5 text-left text-muted hover:bg-panel-hover hover:text-text-soft focus-ring-inset max-md:hidden",
           !props.collapsed && "text-text-soft",
         )}
         aria-expanded={!props.collapsed ? "true" : "false"}
@@ -123,7 +127,11 @@ function RailSection<T>(props: {
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Content class="z-50 flex w-[260px] flex-col overflow-hidden rounded-lg border border-border bg-panel shadow-app outline-none">
-          <Popover.Title class="flex h-[30px] shrink-0 items-center gap-1.5 border-b border-border-soft bg-panel-raised px-2.5 text-text-soft">
+          <Popover.Title
+            class="flex shrink-0 items-center gap-1.5 border-b border-border-soft bg-panel-raised px-2.5 text-text-soft"
+            // Outside the section, at the end of the page, so not through its `--header-height`.
+            style={{ height: `${HEADER_HEIGHT}px` }}
+          >
             <props.icon size={13} class="shrink-0" />
             <SectionTitle title={props.title} count={props.count} />
           </Popover.Title>
