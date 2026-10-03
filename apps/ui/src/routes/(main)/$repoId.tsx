@@ -37,7 +37,12 @@ function RouteComponent() {
   };
   // What the details show: the selected row, but only the first and the last while the selection
   // moves quickly (an arrow key held down in the history), rather than loading every row passed.
-  const detailsId = useSettled(selectedId);
+  // Settled with its repository, as it lags behind: the details never get another repository's row.
+  const settledSelection = useSettled(selection);
+  const detailsId = () => {
+    const current = settledSelection();
+    return current?.repositoryId === repositoryId() ? current.id : undefined;
+  };
   const [sidebarOpen, setSidebarOpen] = createSignal(true);
   const [detailsOpen, setDetailsOpen] = createSignal(true);
   const sidebar = usePanelWidth("sidebar", SIDEBAR_BOUNDS);

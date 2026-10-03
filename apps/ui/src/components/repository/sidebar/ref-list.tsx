@@ -17,7 +17,7 @@ import { useRefs } from "@/git/queries/refs";
 import { useStashes } from "@/git/queries/stash";
 import { useStatus } from "@/git/queries/status";
 import { buildRefTree, flattenRefTree } from "@/git/ref-tree";
-import type { RefTreeRow } from "@/git/ref-tree";
+import type { RefFolder, RefLeaf, RefTreeRow } from "@/git/ref-tree";
 import { useCollapsed } from "@/hooks/collapsed";
 import { relativeTime } from "@/lib/format";
 
@@ -64,35 +64,35 @@ export function RefList(props: { repositoryId: string }) {
     ref: (ref: () => Ref, label: () => string, depth: () => number) => JSX.Element,
   ) => {
     const depth = () => row().depth;
-    const asFolder = () => {
+    // The line's folder or ref; the last one while the line turns into the other, rather than a
+    // <Match>'s narrowed value. Switching repositories happens in a transition, which removes what
+    // was rendered for the line only once it's over, and its effects can still run in between:
+    // reading the narrowed value there would throw.
+    const folder = createMemo<RefFolder | undefined>((last) => {
       const { node } = row();
-      return node.type === "folder" ? node : undefined;
-    };
-    const asRef = () => {
+      return node.type === "folder" ? node : last;
+    });
+    const leaf = createMemo<RefLeaf | undefined>((last) => {
       const { node } = row();
-      return node.type === "ref" ? node : undefined;
-    };
+      return node.type === "ref" ? node : last;
+    });
     return (
       <Switch>
-        <Match when={asFolder()}>
-          {(folder) => (
-            <SidebarFolder
-              name={folder().name}
-              count={folder().count}
-              depth={depth()}
-              collapsed={collapsed.isCollapsed(folder().path)}
-              onToggle={() => collapsed.toggle(folder().path)}
-            />
-          )}
+        <Match when={row().node.type === "folder"}>
+          <SidebarFolder
+            name={folder()!.name}
+            count={folder()!.count}
+            depth={depth()}
+            collapsed={collapsed.isCollapsed(folder()!.path)}
+            onToggle={() => collapsed.toggle(folder()!.path)}
+          />
         </Match>
-        <Match when={asRef()}>
-          {(leaf) =>
-            ref(
-              () => leaf().ref,
-              () => leaf().name,
-              depth,
-            )
-          }
+        <Match when={row().node.type === "ref"}>
+          {ref(
+            () => leaf()!.ref,
+            () => leaf()!.name,
+            depth,
+          )}
         </Match>
       </Switch>
     );

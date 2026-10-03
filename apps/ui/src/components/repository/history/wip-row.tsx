@@ -23,6 +23,12 @@ export function HistoryWipRow(
 ) {
   const status = useStatus(() => props.row.repositoryId);
   const counts = () => status.data?.counts ?? { staged: 0, unstaged: 0, conflicted: 0 };
+  // Read once: in JSX, `status.data && headLabel(status.data.head)` would check a memo of whether
+  // there's data, which a transition (switching repositories) can leave behind the data itself.
+  const branch = () => {
+    const head = status.data?.head;
+    return head && headLabel(head);
+  };
 
   return (
     <HistoryOption
@@ -53,9 +59,7 @@ export function HistoryWipRow(
         <Show when={counts().conflicted}>
           <WipCount tone="coral">{counts().conflicted} conflicted</WipCount>
         </Show>
-        <span class="ml-auto shrink-0 text-[11.5px] text-faint">
-          on {status.data && headLabel(status.data.head)}
-        </span>
+        <span class="ml-auto shrink-0 text-[11.5px] text-faint">on {branch()}</span>
       </span>
     </HistoryOption>
   );
