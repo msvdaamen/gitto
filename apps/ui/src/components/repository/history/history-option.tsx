@@ -17,6 +17,11 @@ export interface RowPosition {
   count: number;
 }
 
+/** The id of the option at `index` in the list, for the list to say which one is selected. */
+export function optionId(index: number): string {
+  return `history-option-${index}`;
+}
+
 /** What every history row gets from the table. */
 export interface HistoryRowProps {
   selected: boolean;
@@ -26,18 +31,23 @@ export interface HistoryRowProps {
 
 /**
  * A row of the history table as a selectable option, laid out in the table's columns; `class`
- * styles it.
+ * styles it. Not focused itself: the list has the focus, and moves the selection with the keyboard.
+ * The selected one is outlined while the keyboard does.
  */
 export function HistoryOption(props: HistoryRowProps & { class: string; children: JSX.Element }) {
   return (
     <button
+      id={optionId(props.position.index)}
       role="option"
+      tabIndex={-1}
       aria-selected={props.selected ? "true" : "false"}
       aria-posinset={props.position.index + 1}
       aria-setsize={props.position.count}
       class={cn(
         COLUMNS,
         "grid h-full w-full cursor-pointer items-center border-0 border-b p-0 text-left text-muted [&>span]:min-w-0 [&>span]:px-[9px]",
+        props.selected &&
+          "group-focus-visible/history:outline-2 group-focus-visible/history:-outline-offset-2 group-focus-visible/history:outline-primary",
         props.class,
       )}
       onClick={() => props.onSelect()}

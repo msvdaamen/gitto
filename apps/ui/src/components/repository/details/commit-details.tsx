@@ -1,9 +1,10 @@
 import type { ChangedFile } from "@gitto/git/types";
+import Check from "lucide-solid/icons/check";
 import Copy from "lucide-solid/icons/copy";
 import Ellipsis from "lucide-solid/icons/ellipsis";
 import GitCommitHorizontal from "lucide-solid/icons/git-commit-horizontal";
 import LoaderCircle from "lucide-solid/icons/loader-circle";
-import { createMemo, createSignal, Match, Show, Suspense, Switch } from "solid-js";
+import { createMemo, createSignal, Match, onCleanup, Show, Suspense, Switch } from "solid-js";
 
 import { Avatar } from "@/components/ui/avatar";
 import { IconButton } from "@/components/ui/button";
@@ -12,6 +13,7 @@ import { lineTotals } from "@/git/changes";
 import { useCommitFiles } from "@/git/queries/diff";
 import { useCommitDetails } from "@/git/queries/history";
 import { stashSha, WIP_ID, type CommitRow } from "@/git/rows";
+import { useRelativeTime } from "@/hooks/relative-time";
 
 import { ChangedFilesSection, DetailsError, FileTotals } from "./details-sections";
 import { StashDetails } from "./stash-details";
@@ -113,13 +115,15 @@ function CommitSummary(props: {
   fileCount: number;
   totals: { additions: number; deletions: number };
 }) {
+  const ago = useRelativeTime();
+
   return (
     <div class="border-b border-border p-4">
       <div class="flex items-center gap-[9px]">
         <Avatar initials={props.commit.initials} color={props.commit.avatarColor} size="md" />
         <div class="flex flex-col gap-0.5">
           <strong class="text-[13px]">{props.commit.author}</strong>
-          <span class="text-[11px] text-faint">{props.commit.timestamp}</span>
+          <span class="text-[11px] text-faint">{ago(props.commit.committedAt)}</span>
         </div>
       </div>
       <h2 class="mt-3.5 mb-1.5 text-sm leading-[1.35] tracking-[-.2px]">{props.commit.message}</h2>
@@ -128,14 +132,37 @@ function CommitSummary(props: {
       )}
       <div class="mt-3 flex w-max items-center overflow-hidden rounded-[5px] border border-border-soft">
         <code class="bg-bg px-[7px] py-1 text-[11px] text-text-soft">{props.commit.shortSha}</code>
-        <button
-          class="grid h-[23px] w-6 cursor-pointer place-items-center border-0 border-l border-border-soft bg-panel-raised p-0 text-faint"
-          aria-label="Copy commit SHA"
-        >
-          <Copy size={13} />
-        </button>
+        <CopyShaButton sha={props.commit.id} />
       </div>
       <FileTotals count={props.fileCount} totals={props.totals} />
     </div>
+  );
+}
+
+/** How long the copy button says the SHA was copied. */
+const COPIED_MS = 1500;
+
+/** Copies the commit's full SHA to the clipboard, and says so for a moment. */
+function CopyShaButton(props: { sha: string }) {
+  const [copied, setCopied] = createSignal(false);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  onCleanup(() => clearTimeout(timer));
+
+  async function copy() {
+    await navigator.clipboard.writeText(props.sha);
+    setCopied(true);
+    clearTimeout(timer);
+    timer = setTimeout(() => setCopied(false), COPIED_MS);
+  }
+
+  return (
+    <button
+      class="grid h-[23px] w-6 cursor-pointer place-items-center border-0 border-l border-border-soft bg-panel-raised p-0 text-faint hover:text-text-soft"
+      aria-label={copied() ? "Copied the commit SHA" : "Copy commit SHA"}
+      title={copied() ? "Copied" : "Copy the full SHA"}
+      onClick={() => void copy().catch((error) => console.error("Couldn't copy the SHA", error))}
+    >
+      {copied() ? <Check size={13} class="text-mint" /> : <Copy size={13} />}
+    </button>
   );
 }

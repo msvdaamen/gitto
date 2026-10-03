@@ -11,13 +11,18 @@ import { HistoryTable } from "./history/history-table";
 
 const rpc = vi.hoisted(() => {
   let statusCalls = 0;
+  const commitCalls: string[] = [];
   return {
     statusCalls: () => statusCalls,
+    /** The commits that were asked for on their own. */
+    commitCalls,
     git: {
       history: {
         log: async () => [commit("b1", "Second", ["a1"]), commit("a1", "First", [])],
-        commit: async ({ sha }: { sha: string }) =>
-          sha === "a1" ? commit("a1", "First", []) : commit("b1", "Second", ["a1"]),
+        commit: async ({ sha }: { sha: string }) => {
+          commitCalls.push(sha);
+          return sha === "a1" ? commit("a1", "First", []) : commit("b1", "Second", ["a1"]);
+        },
       },
       status: {
         get: async () => {
@@ -149,6 +154,21 @@ describe("selecting a commit", () => {
     );
     expect(screen.getByRole("heading", { name: "First" })).toBeInTheDocument();
     expect(screen.getByText("first.txt")).toBeInTheDocument();
+    // Both commits are in the log, which has all there is to show of them.
+    expect(rpc.commitCalls).toEqual([]);
+  });
+
+  it("loads a commit that isn't in the log on its own", async () => {
+    rpc.commitCalls.length = 0;
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(() => (
+      <QueryClientProvider client={client}>
+        <CommitDetails repositoryId="repo" selectedId="a1" />
+      </QueryClientProvider>
+    ));
+
+    expect(await screen.findByRole("heading", { name: "First" })).toBeInTheDocument();
+    expect(rpc.commitCalls).toEqual(["a1"]);
   });
 
   it("shows the history while the stashes are still loading", async () => {
@@ -194,5 +214,22 @@ describe("selecting a commit", () => {
     expect(selectedId()).toBe(`stash:${"d".repeat(40)}`);
     expect(screen.getByRole("heading", { name: "WIP on main: a1 First" })).toBeInTheDocument();
     expect(screen.getByText("stashed.txt")).toBeInTheDocument();
+  });
+
+  it("copies the selected commit's full SHA", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.spyOn(navigator.clipboard, "writeText");
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(() => (
+      <QueryClientProvider client={client}>
+        <CommitDetails repositoryId="repo" selectedId="a1" />
+      </QueryClientProvider>
+    ));
+
+    await user.click(await screen.findByRole("button", { name: "Copy commit SHA" }));
+    expect(writeText).toHaveBeenCalledWith("a1");
+    expect(
+      await screen.findByRole("button", { name: "Copied the commit SHA" }),
+    ).toBeInTheDocument();
   });
 });

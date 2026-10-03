@@ -9,6 +9,7 @@ import { RepositoryToolbar } from "@/components/repository/toolbar";
 import { ResizeHandle } from "@/components/ui/resize-handle";
 import { useRepositoryWatcher } from "@/git/queries/watch";
 import { usePanelWidth } from "@/hooks/panel-width";
+import { useSettled } from "@/hooks/settled";
 
 // The panels can't take more than a share of the window either (see the grid below), so the history
 // keeps room on small screens.
@@ -34,6 +35,9 @@ function RouteComponent() {
     const current = selection();
     return current?.repositoryId === repositoryId() ? current.id : undefined;
   };
+  // What the details show: the selected row, but only the first and the last while the selection
+  // moves quickly (an arrow key held down in the history), rather than loading every row passed.
+  const detailsId = useSettled(selectedId);
   const [sidebarOpen, setSidebarOpen] = createSignal(true);
   const [detailsOpen, setDetailsOpen] = createSignal(true);
   const sidebar = usePanelWidth("sidebar", SIDEBAR_BOUNDS);
@@ -83,7 +87,7 @@ function RouteComponent() {
             !detailsOpen() && "pointer-events-none opacity-0 max-lg:translate-x-full",
           )}
         >
-          <CommitDetails repositoryId={repositoryId()} selectedId={selectedId()} />
+          <CommitDetails repositoryId={repositoryId()} selectedId={detailsId()} />
         </aside>
 
         <Show when={sidebarOpen()}>

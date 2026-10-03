@@ -23,9 +23,11 @@ function load(name: string, bounds: PanelBounds): number {
 export function usePanelWidth(name: string, bounds: PanelBounds) {
   const [width, setWidthSignal] = createSignal(load(name, bounds));
 
-  const setWidth = (next: number) => {
+  /** Sets the width; `save: false` while it's being dragged, which sets it on every frame. */
+  const setWidth = (next: number, save = true) => {
     const value = clamp(next, bounds);
     setWidthSignal(value);
+    if (!save) return;
     try {
       localStorage.setItem(storageKey(name), String(value));
     } catch {

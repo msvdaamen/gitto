@@ -3,6 +3,7 @@ import { Show, Suspense } from "solid-js";
 
 import { useCommitFiles } from "@/git/queries/diff";
 import type { CommitRow } from "@/git/rows";
+import { useRelativeTime } from "@/hooks/relative-time";
 
 import { HistoryGraph, laneColor } from "./history-graph";
 import { HistoryOption, RowTotals, type HistoryRowProps } from "./history-option";
@@ -19,6 +20,8 @@ export function HistoryCommitRow(
     search: string;
   },
 ) {
+  const ago = useRelativeTime();
+
   return (
     <HistoryOption
       selected={props.selected}
@@ -62,7 +65,7 @@ export function HistoryCommitRow(
           </Suspense>
         </Show>
       </span>
-      <span class="truncate text-[11.5px]">{props.commit.timestamp}</span>
+      <span class="truncate text-[11.5px]">{ago(props.commit.committedAt)}</span>
     </HistoryOption>
   );
 }

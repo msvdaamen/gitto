@@ -1,8 +1,8 @@
-import { Index, Match, Show, Switch, type JSX } from "solid-js";
+import { Index, Match, onCleanup, Show, Switch } from "solid-js";
 
-import { Avatar } from "@/components/ui/avatar";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { GraphEdge, GraphRow } from "@/git/graph";
+
+import { useAuthorTooltip } from "./author-tooltip";
 
 /** Width of a lane, and the space left and right of the lanes. */
 const LANE = 20;
@@ -67,7 +67,7 @@ function bottomPath(edge: GraphEdge): string {
  * A commit's row of the history graph. Commits are avatars ringed in their lane's colour, merges
  * small dots, the uncommitted changes a dashed, hollow circle with a dashed line to HEAD, and a
  * stash a box with a dashed line to the commit it was made on. A commit's node shows its author when
- * hovered.
+ * hovered, inside an `AuthorTooltipProvider`.
  */
 export function HistoryGraph(props: {
   row: GraphRow;
@@ -82,6 +82,11 @@ export function HistoryGraph(props: {
   const node = () => x(props.row.column);
   const color = () => (props.wip || props.stash ? "var(--amber)" : laneColor(props.row.column));
   const isMerge = () => props.row.bottom.length > 1;
+
+  const tooltip = useAuthorTooltip();
+  let commitNode: SVGGElement | undefined;
+  // Removed while its tooltip shows, e.g. by a refetch: the pointer never leaves it.
+  onCleanup(() => commitNode && tooltip?.hide(commitNode));
 
   return (
     <svg
@@ -107,7 +112,19 @@ export function HistoryGraph(props: {
       </Show>
       <Switch
         fallback={
-          <AuthorTooltip author={props.author} initials={props.initials} color={props.avatarColor}>
+          <g
+            ref={(el) => (commitNode = el)}
+            class="cursor-default"
+            onPointerEnter={(event) =>
+              props.author &&
+              tooltip?.show(event.currentTarget, {
+                name: props.author,
+                initials: props.initials ?? "",
+                color: props.avatarColor,
+              })
+            }
+            onPointerLeave={(event) => tooltip?.hide(event.currentTarget)}
+          >
             <Show
               when={!isMerge()}
               fallback={<circle cx={node()} cy={MIDDLE} r={4.5} fill={color()} stroke="none" />}
@@ -132,7 +149,7 @@ export function HistoryGraph(props: {
                 {props.initials}
               </text>
             </Show>
-          </AuthorTooltip>
+          </g>
         }
       >
         <Match when={props.wip}>
@@ -161,26 +178,6 @@ export function HistoryGraph(props: {
         </Match>
       </Switch>
     </svg>
-  );
-}
-
-/** Shows a commit's author in a tooltip while its node, `children`, is hovered. */
-function AuthorTooltip(props: {
-  author?: string;
-  initials?: string;
-  color?: string;
-  children: JSX.Element;
-}) {
-  return (
-    <Tooltip>
-      <TooltipTrigger as="g" class="cursor-default">
-        {props.children}
-      </TooltipTrigger>
-      <TooltipContent class="flex items-center gap-2 py-1 pl-1 pr-2.5">
-        <Avatar initials={props.initials ?? ""} color={props.color} />
-        <span class="truncate font-[600]">{props.author}</span>
-      </TooltipContent>
-    </Tooltip>
   );
 }
 
