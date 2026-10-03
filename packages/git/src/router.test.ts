@@ -62,6 +62,19 @@ describe("the router", () => {
       code: "PRECONDITION_FAILED",
       message: "main doesn't track a remote branch.",
     });
+
+    expect(
+      await apiError(
+        call(
+          gitRouter.stash.pop,
+          { repositoryId: ids.history, sha: "0123456789abcdef0123456789abcdef01234567" },
+          { context },
+        ),
+      ),
+    ).toMatchObject({
+      code: "CONFLICT",
+      message: "The stashes changed before the stash could be popped, so nothing was popped.",
+    });
   });
 
   it("skips a status the caller already has", async () => {

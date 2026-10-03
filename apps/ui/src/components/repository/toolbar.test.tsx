@@ -15,6 +15,7 @@ const rpc = vi.hoisted(() => {
     git: {
       // Refetched after a fetch, which only finishes once that's done.
       status: { get: async () => Promise.reject(new Error("no status in this test")) },
+      stash: { list: async () => [] },
       remote: {
         fetch: vi.fn(
           () =>
