@@ -195,4 +195,21 @@ describe("selecting a commit", () => {
     expect(screen.getByRole("heading", { name: "WIP on main: a1 First" })).toBeInTheDocument();
     expect(screen.getByText("stashed.txt")).toBeInTheDocument();
   });
+
+  it("copies the selected commit's full SHA", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.spyOn(navigator.clipboard, "writeText");
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(() => (
+      <QueryClientProvider client={client}>
+        <CommitDetails repositoryId="repo" selectedId="a1" />
+      </QueryClientProvider>
+    ));
+
+    await user.click(await screen.findByRole("button", { name: "Copy commit SHA" }));
+    expect(writeText).toHaveBeenCalledWith("a1");
+    expect(
+      await screen.findByRole("button", { name: "Copied the commit SHA" }),
+    ).toBeInTheDocument();
+  });
 });
