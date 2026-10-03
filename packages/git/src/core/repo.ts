@@ -32,6 +32,11 @@ export interface Repo {
   hasHead(): Promise<boolean>;
   /** Writes the commit-graph, which speeds up the log, once per run (see `CommitGraphs`). */
   updateCommitGraph(): Promise<void>;
+  /**
+   * What features keep of the repository between calls, by key, for as long as Gitto runs: e.g.
+   * the history last read, so the next read only asks git for what changed since.
+   */
+  readonly memory: Map<string, unknown>;
 }
 
 export type GitCommand = (args: string[], options?: RunOptions) => Promise<string>;
@@ -45,6 +50,8 @@ export class GitReposImpl implements GitRepos {
   private readonly writes = new WriteQueue();
   private readonly fetches = new WriteQueue();
   private readonly commitGraphs = new CommitGraphs();
+  /** Each repository's `Repo.memory`, by path. */
+  private readonly memories = new Map<string, Map<string, unknown>>();
 
   constructor(private readonly repositories: RepositoryService) {}
 
@@ -62,6 +69,8 @@ export class GitReposImpl implements GitRepos {
     if (!isFolder) throw new FolderNotFoundError(path);
 
     const run: GitCommand = (args, options) => runGit(path, args, options);
+    let memory = this.memories.get(path);
+    if (!memory) this.memories.set(path, (memory = new Map()));
     const fetching = <T>(task: (run: GitCommand) => Promise<T>) =>
       this.fetches.run(path, () =>
         task((args, options) => run(args, { ...options, stopOnExit: true })),
@@ -77,6 +86,7 @@ export class GitReposImpl implements GitRepos {
       // Any failure is taken for no HEAD, as callers have always had it.
       hasHead: () => refExists(run, "HEAD").catch(() => false),
       updateCommitGraph: () => this.commitGraphs.update(path),
+      memory,
     };
   }
 }

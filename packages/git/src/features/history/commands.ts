@@ -2,51 +2,68 @@ import { createHash } from "node:crypto";
 
 import { GitError } from "../../core/errors";
 import { resolveRef, type Repo } from "../../core/repo";
+import {
+  fullReadMs,
+  LOG_REFS_ARGS,
+  parseLogRefs,
+  readLogSince,
+  rememberedLog,
+  rememberLog,
+  type Page,
+} from "./incremental";
 import { LOG_FORMAT, parseLog } from "./parse";
 import type { Commit, Log } from "./schema";
 
-type Page = { limit: number; skip: number };
-
 /**
- * What the log starts from, besides HEAD: every branch, remote branch and tag (and the replace
- * refs, which change what a commit's parents are), with the checked-out branch marked, as that's
- * in the log's decorations.
+ * Below this, a repository's log is read whole every time: reading only what changed takes a few
+ * git commands of its own, and can't always be done.
  */
-const LOG_REFS_ARGS = [
-  "for-each-ref",
-  "--format=%(objectname) %(HEAD) %(refname)",
-  "refs/heads",
-  "refs/remotes",
-  "refs/tags",
-  "refs/replace",
-];
+const READ_CHANGES_AFTER_MS = 100;
 
 /**
  * The page of the log `getLog` reads, with a version of it; `{ unchanged: true }` instead when
  * that's `since`. Commits never change, so neither does the log until a ref it starts from does,
  * or HEAD: the version comes from those, so an unchanged log isn't read again. That takes long in a
- * big repository, as it sorts the history of every branch and tag (0.35s for vscode's 5,800).
+ * big repository, as it sorts the history of every branch and tag (0.35s for vscode's 5,800); there,
+ * a log that did change is read from what changed since `since`, when it can be (see
+ * `readLogSince`). `readChangesAfterMs` is how slow reading it whole must have been for that.
  */
 export async function getVersionedLog(
   repo: Repo,
   page: Page,
   since?: string,
   signal?: AbortSignal,
+  { readChangesAfterMs = READ_CHANGES_AFTER_MS } = {},
 ): Promise<Log | { unchanged: true }> {
-  const [head, refs] = await Promise.all([
+  const [head, refsOutput] = await Promise.all([
     // Any failure is taken for no HEAD, as `Repo.hasHead` does.
     resolveRef((args) => repo.read(args, { signal }), "HEAD").catch(() => null),
     repo.read(LOG_REFS_ARGS, { signal }),
   ]);
   const version = createHash("sha1")
-    .update(`${page.limit} ${page.skip} ${head}\0${refs}`)
+    .update(`${page.limit} ${page.skip} ${head}\0${refsOutput}`)
     .digest("hex");
   if (version === since) return { unchanged: true };
+
+  const refs = parseLogRefs(refsOutput);
+  const previous = rememberedLog(repo, since);
   // Read after the refs, so it's never older than the version says: a ref that moves in between
   // only makes the next refetch read it again.
-  return { commits: await readLog(repo, page, head !== null, signal), version };
+  let commits =
+    previous && fullReadMs(repo) >= readChangesAfterMs
+      ? await readLogSince(repo, previous, head, refs, signal)
+      : undefined;
+  let readMs: number | undefined;
+  if (!commits) {
+    const start = performance.now();
+    commits = await readLog(repo, page, head !== null, signal);
+    readMs = performance.now() - start;
+  }
+  rememberLog(repo, { version, page, head, refs, commits }, readMs);
+  return { commits, version };
 }
 
+/** A page of the history of all branches, remotes and tags (see `HistoryContract.log`). */
 export async function getLog(repo: Repo, page: Page, signal?: AbortSignal): Promise<Commit[]> {
   return readLog(repo, page, await repo.hasHead(), signal);
 }

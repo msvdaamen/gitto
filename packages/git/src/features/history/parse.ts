@@ -47,7 +47,7 @@ export function parseLog(output: string): Commit[] {
  * branch points at too (`HEAD, refs/heads/main`). Needs `--decorate=full`: short names can't tell
  * a remote branch from a local one named like it (`origin/main`).
  */
-function parseDecorations(decorations: string): CommitRef[] {
+export function parseDecorations(decorations: string): CommitRef[] {
   if (!decorations) return [];
   return decorations.split(", ").flatMap<CommitRef>((decoration) => {
     if (decoration === "HEAD") return [{ kind: "head", name: "HEAD" }];
