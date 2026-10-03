@@ -11,6 +11,7 @@ catalog:
   drizzle-orm: "1.0.0-rc.4"
   drizzle-kit: "1.0.0-rc.4"
   vitest: "^5.0.2"
+  "@vitest/browser-playwright": "^5.0.2"
 
 # pnpm's default, set explicitly so Electron Forge's package manager check passes.
 # The Electron app is bundled by Vite (Forge only packages the .vite folder); the few
