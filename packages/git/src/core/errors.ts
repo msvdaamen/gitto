@@ -14,33 +14,51 @@ export class GitError extends Error {
   }
 }
 
+/** An error that's only a message for the user; `name` is its class's, as for `GitError`. */
+class MessageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = new.target.name;
+  }
+}
+
 /** The repository's folder is no longer a git repository, e.g. its `.git` was deleted. */
 export class NotARepositoryError extends GitError {}
 
 /** Another git process holds `index.lock`, e.g. one running in the user's terminal. */
 export class IndexLockedError extends GitError {}
 
+/**
+ * A pull that stopped partway, at conflicts or a rebase that couldn't go on, and is left for the
+ * user to finish. Not a `GitError`: git may well have succeeded, e.g. stopping a merge before
+ * committing because it was told to.
+ */
+export class PullInterruptedError extends MessageError {}
+
+/** There's nothing to pull from: HEAD isn't on a branch, or the branch doesn't track one. */
+export class NoUpstreamError extends MessageError {}
+
+/** The repository changed while an operation was under way, which trying again will get past. */
+export class RepositoryChangedError extends MessageError {}
+
 /** HEAD isn't the commit that was meant to be amended, e.g. one was made in a terminal since. */
-export class HeadMovedError extends Error {
+export class HeadMovedError extends MessageError {
   constructor() {
     super("The last commit changed before it could be amended, so nothing was amended.");
-    this.name = new.target.name;
   }
 }
 
 /** No repository with that id has been added to Gitto. */
-export class RepositoryNotFoundError extends Error {
+export class RepositoryNotFoundError extends MessageError {
   constructor(readonly repositoryId: string) {
     super("Repository not found.");
-    this.name = new.target.name;
   }
 }
 
 /** The repository's folder has been moved or deleted. */
-export class FolderNotFoundError extends Error {
+export class FolderNotFoundError extends MessageError {
   constructor(readonly path: string) {
     super(`${path} no longer exists.`);
-    this.name = new.target.name;
   }
 }
 

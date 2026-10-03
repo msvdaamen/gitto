@@ -55,6 +55,13 @@ describe("the router", () => {
       code: "INTERNAL_SERVER_ERROR",
       message: expect.stringContaining("bad object"),
     });
+
+    expect(
+      await apiError(call(gitRouter.remote.pull, { repositoryId: ids.history }, { context })),
+    ).toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: "main doesn't track a remote branch.",
+    });
   });
 
   it("skips a status the caller already has", async () => {

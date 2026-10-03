@@ -1,5 +1,5 @@
 import { GitError, HeadMovedError } from "../../core/errors";
-import type { Repo } from "../../core/repo";
+import { resolveRef, type Repo } from "../../core/repo";
 
 /**
  * Commits what's staged, with `message` as it's written. With `amend`, HEAD's SHA, replaces that
@@ -13,14 +13,8 @@ export async function createCommit(
 ): Promise<void> {
   const { amend } = options;
   // One write, so no other commit of Gitto's can land between checking HEAD and amending it.
-  await repo.writeTogether(async (run) => {
-    if (amend) {
-      const head = await run(["rev-parse", "--verify", "--quiet", "HEAD"]).then(
-        (sha) => sha.trim(),
-        nothingFound,
-      );
-      if (head !== amend) throw new HeadMovedError();
-    }
+  await repo.exclusive(async (run) => {
+    if (amend && (await resolveRef(run, "HEAD")) !== amend) throw new HeadMovedError();
     // An amended message is kept exactly as sent, whatever `commit.cleanup` says, as what wasn't
     // edited of it is as it was written.
     const args = [
@@ -35,8 +29,8 @@ export async function createCommit(
 }
 
 /**
- * For a lookup that exits 1 without a word when there's nothing to find, e.g. `rev-parse --quiet`
- * before the first commit: `""` then, and any other failure rethrown.
+ * For a lookup that exits 1 without a word when there's nothing to find, e.g. `symbolic-ref --quiet`
+ * with HEAD detached: `""` then, and any other failure rethrown.
  */
 function nothingFound(error: unknown): string {
   if (error instanceof GitError && error.exitCode === 1 && !error.stderr.trim()) return "";
