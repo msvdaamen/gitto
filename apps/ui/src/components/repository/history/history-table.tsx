@@ -11,6 +11,7 @@ import { useHistory } from "@/git/queries/history";
 import { matchesSearch, searchNeedle } from "@/git/search";
 import { useDelayed } from "@/hooks/delayed";
 
+import { AuthorTooltipProvider } from "./author-tooltip";
 import { COLUMNS, MIN_WIDTH } from "./columns";
 import { HistoryCommitRow } from "./commit-row";
 import { graphWidth, ROW_HEIGHT } from "./history-graph";
@@ -38,7 +39,9 @@ export function HistoryTable(props: {
           </>
         }
       >
-        <HistoryRows {...props} scrollElement={scrollElement()} />
+        <AuthorTooltipProvider>
+          <HistoryRows {...props} scrollElement={scrollElement()} />
+        </AuthorTooltipProvider>
       </Suspense>
     </main>
   );
