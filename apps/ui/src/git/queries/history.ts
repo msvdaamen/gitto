@@ -1,4 +1,5 @@
-import { keepPreviousData, useQuery } from "@tanstack/solid-query";
+import type { Commit } from "@gitto/git/types";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/solid-query";
 import { createMemo } from "solid-js";
 
 import { historyGraph, toCommitRow, toHistoryRows, withStashes } from "@/git/rows";
@@ -9,13 +10,19 @@ import { gitKeys } from "./keys";
 import { useStashes } from "./stash";
 import { useHeadSha, useStatus } from "./status";
 
+/** A repository's log, as `useLog` loads it. */
+interface Log {
+  repositoryId: string;
+  commits: Commit[];
+}
+
 export function useLog(repositoryId: () => string) {
   return useQuery(() => {
     const id = repositoryId();
     return {
       queryKey: gitKeys.log(id),
       // Tagged with its repository, so every row knows where its commit lives (see `toHistoryRows`).
-      queryFn: async ({ signal }) => ({
+      queryFn: async ({ signal }): Promise<Log> => ({
         repositoryId: id,
         commits: await rpc.git.history.log({ repositoryId: id }, { signal }),
       }),
@@ -54,8 +61,13 @@ export function useHistory(repositoryId: () => string, selectedId: () => string 
   return { log, rows, selected };
 }
 
-/** A single commit, loaded on its own, e.g. for the details of the selected one. */
+/**
+ * A single commit, e.g. for the details of the selected one. Taken from the log when it's in it,
+ * as the selected one is: the log has all of a commit, so git isn't asked for it again. Loaded on
+ * its own otherwise.
+ */
 export function useCommitDetails(repositoryId: () => string, sha: () => string) {
+  const queryClient = useQueryClient();
   const query = useQuery(() => {
     const id = repositoryId();
     const commitSha = sha();
@@ -63,6 +75,10 @@ export function useCommitDetails(repositoryId: () => string, sha: () => string) 
       queryKey: gitKeys.commit(id, commitSha),
       queryFn: ({ signal }: { signal: AbortSignal }) =>
         rpc.git.history.commit({ repositoryId: id, sha: commitSha }, { signal }),
+      initialData: () =>
+        queryClient
+          .getQueryData<Log>(gitKeys.log(id))
+          ?.commits.find((commit) => commit.sha === commitSha),
       staleTime: Infinity,
       // Keep showing the previous selection while the next one loads, instead of suspending.
       placeholderData: keepPreviousData,
