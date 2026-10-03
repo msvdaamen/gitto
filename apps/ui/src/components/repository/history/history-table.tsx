@@ -8,6 +8,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { UpdatingIndicator } from "@/components/ui/updating-indicator";
 import { VirtualRows } from "@/components/ui/virtual-list";
 import { useHistory } from "@/git/queries/history";
+import type { CommitRow, StashRow, WipRow } from "@/git/rows";
 import { matchesSearch, searchNeedle } from "@/git/search";
 import { useDelayed } from "@/hooks/delayed";
 
@@ -189,18 +190,23 @@ function HistoryRows(props: {
               scrollElement={props.scrollElement}
             >
               {(row, index) => {
-                const asWip = () => {
+                // The row as each kind; the last one of that kind while the row turns into
+                // another, rather than a <Match>'s narrowed value. Switching repositories happens
+                // in a transition, which removes what was rendered for the row only once it's
+                // over, and its effects can still run in between: reading the narrowed value there
+                // would throw.
+                const wip = createMemo<WipRow | undefined>((last) => {
                   const current = row();
-                  return current.kind === "wip" ? current : undefined;
-                };
-                const asStash = () => {
+                  return current.kind === "wip" ? current : last;
+                });
+                const stash = createMemo<StashRow | undefined>((last) => {
                   const current = row();
-                  return current.kind === "stash" ? current : undefined;
-                };
-                const asCommit = () => {
+                  return current.kind === "stash" ? current : last;
+                });
+                const commit = createMemo<CommitRow | undefined>((last) => {
                   const current = row();
-                  return current.kind === "commit" ? current : undefined;
-                };
+                  return current.kind === "commit" ? current : last;
+                });
                 const rowProps = {
                   get selected() {
                     return history.selected()?.id === row().id;
@@ -212,18 +218,14 @@ function HistoryRows(props: {
                 };
                 return (
                   <Switch>
-                    <Match when={asWip()}>
-                      {(wip) => <HistoryWipRow {...rowProps} row={wip()} searching={!!needle()} />}
+                    <Match when={row().kind === "wip"}>
+                      <HistoryWipRow {...rowProps} row={wip()!} searching={!!needle()} />
                     </Match>
-                    <Match when={asStash()}>
-                      {(stash) => (
-                        <HistoryStashRow {...rowProps} stash={stash()} searching={!!needle()} />
-                      )}
+                    <Match when={row().kind === "stash"}>
+                      <HistoryStashRow {...rowProps} stash={stash()!} searching={!!needle()} />
                     </Match>
-                    <Match when={asCommit()}>
-                      {(commit) => (
-                        <HistoryCommitRow {...rowProps} commit={commit()} search={needle()} />
-                      )}
+                    <Match when={row().kind === "commit"}>
+                      <HistoryCommitRow {...rowProps} commit={commit()!} search={needle()} />
                     </Match>
                   </Switch>
                 );

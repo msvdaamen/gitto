@@ -25,10 +25,22 @@ import { WorkingTreeDetails } from "./working-tree-details";
  */
 export function CommitDetails(props: { repositoryId: string; selectedId: string | undefined }) {
   const [scrollElement, setScrollElement] = createSignal<HTMLDivElement>();
-  // The selected row, kept while the selection is briefly empty: switching repositories clears it
-  // until the history picks a row, and effects in the details can still run in between.
-  const selectedId = createMemo((last: string) => props.selectedId ?? last, "");
+  // The selected row and its repository, kept while the selection is briefly empty: switching
+  // repositories clears it until the history picks a row, and effects in the details can still run
+  // in between. Kept together, so they never ask one repository for another's commit.
+  const selected = createMemo(
+    (last: { repositoryId: string; id: string }) =>
+      props.selectedId === undefined
+        ? last
+        : { repositoryId: props.repositoryId, id: props.selectedId },
+    { repositoryId: props.repositoryId, id: "" },
+  );
+  const selectedId = () => selected().id;
+  const repositoryId = () => selected().repositoryId;
   const stash = () => stashSha(selectedId());
+  // The selected stash; the last one once another row is selected, rather than a <Match>'s narrowed
+  // value, which would throw if read by the stash's details before they're removed.
+  const shownStash = createMemo((last: string | undefined) => stash() ?? last, undefined);
   return (
     <Show
       when={props.selectedId}
@@ -45,23 +57,21 @@ export function CommitDetails(props: { repositoryId: string; selectedId: string 
           <Switch
             fallback={
               <SelectedCommit
-                repositoryId={props.repositoryId}
+                repositoryId={repositoryId()}
                 sha={selectedId()}
                 scrollElement={scrollElement()}
               />
             }
           >
             <Match when={selectedId() === WIP_ID}>
-              <WorkingTreeDetails repositoryId={props.repositoryId} />
+              <WorkingTreeDetails repositoryId={repositoryId()} />
             </Match>
             <Match when={stash()}>
-              {(sha) => (
-                <StashDetails
-                  repositoryId={props.repositoryId}
-                  sha={sha()}
-                  scrollElement={scrollElement()}
-                />
-              )}
+              <StashDetails
+                repositoryId={repositoryId()}
+                sha={shownStash()!}
+                scrollElement={scrollElement()}
+              />
             </Match>
           </Switch>
         </Suspense>

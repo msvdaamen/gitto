@@ -35,6 +35,12 @@ export function WorkingTreeDetails(props: { repositoryId: string }) {
   const unstage = useUnstage(() => props.repositoryId);
   const busy = () => stage.isPending || unstage.isPending;
   const lastCommit = useHeadSha(status);
+  // Read once: in JSX, `status.data && headLabel(status.data.head)` would check a memo of whether
+  // there's data, which a transition (switching repositories) can leave behind the data itself.
+  const branch = () => {
+    const head = status.data?.head;
+    return head && headLabel(head);
+  };
   // The status is reloaded whenever a file changes, which takes a while in a big repository.
   const updating = useDelayed(() => status.isRefetching);
 
@@ -48,7 +54,7 @@ export function WorkingTreeDetails(props: { repositoryId: string }) {
             Uncommitted changes
           </h2>
           <p class="m-0 text-[12px] leading-[1.55] text-muted">
-            On <strong class="text-text-soft">{status.data && headLabel(status.data.head)}</strong>
+            On <strong class="text-text-soft">{branch()}</strong>
             {" · "}
             {changes.staged().length} staged, {changes.unstaged().length} unstaged
           </p>
