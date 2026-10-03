@@ -28,6 +28,9 @@ function renderHandle(edge: "start" | "end") {
   return { panel, handle: screen.getByRole("separator", { name: "Resize panel" }) };
 }
 
+/** The width saved for the panel, if any. */
+const saved = () => localStorage.getItem("gitto-panel-width:test");
+
 afterEach(() => localStorage.clear());
 
 describe("ResizeHandle", () => {
@@ -54,6 +57,24 @@ describe("ResizeHandle", () => {
     handle.focus();
     await user.keyboard("{ArrowLeft}");
     expect(panel.width()).toBe(236);
+  });
+
+  it("saves the width it's dragged to once it's let go of", () => {
+    // jsdom has no layout or pointer capture: the panel starts at the window's left edge.
+    HTMLElement.prototype.setPointerCapture = () => undefined;
+    HTMLElement.prototype.releasePointerCapture = () => undefined;
+    const { panel, handle } = renderHandle("start");
+
+    fireEvent.pointerDown(handle, { button: 0, clientX: 0, pointerId: 1 });
+    fireEvent.pointerMove(handle, { clientX: 300, pointerId: 1 });
+    expect(panel.width()).toBe(300);
+    expect(saved()).toBeNull();
+    fireEvent.pointerMove(handle, { clientX: 320, pointerId: 1 });
+    expect(saved()).toBeNull();
+
+    fireEvent.pointerUp(handle, { pointerId: 1 });
+    expect(panel.width()).toBe(320);
+    expect(saved()).toBe("320");
   });
 
   it("resets the width on double-click", () => {
