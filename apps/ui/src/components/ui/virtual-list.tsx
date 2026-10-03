@@ -16,7 +16,9 @@ const OVERSCAN = 10;
 
 /**
  * A scroll container that only renders the rows in view, so a list of thousands of rows costs as
- * much as a screenful. Every row is `rowHeight` tall, including any space below it.
+ * much as a screenful. Every row is `rowHeight` tall, including any space below it. Rows are
+ * rendered by position, like in `VirtualRows`, so items that are replaced (by a refetch, or a
+ * folder collapsing above them) update the rows in place instead of re-creating them.
  */
 export function VirtualList<T>(props: {
   items: T[];
@@ -25,7 +27,8 @@ export function VirtualList<T>(props: {
   padding?: number;
   /** Classes for the scroll container. */
   class?: string;
-  children: (item: T) => JSX.Element;
+  /** Renders a row; its item can change, as rows are rendered by position. */
+  children: (item: () => T) => JSX.Element;
 }) {
   let container: HTMLDivElement | undefined;
   const connected = useConnected(() => container);
@@ -50,16 +53,18 @@ export function VirtualList<T>(props: {
     <div ref={(el) => (container = el)} class={cn("min-h-0 overflow-y-auto", props.class)}>
       <div class="relative" style={{ height: `${virtualizer.getTotalSize()}px` }}>
         <For each={virtualizer.getVirtualItems()}>
-          {(row) => (
-            <div
-              class="absolute inset-x-0 top-0"
-              style={{ height: `${props.rowHeight}px`, transform: `translateY(${row.start}px)` }}
-            >
-              <Show when={props.items[row.index]} keyed>
-                {(item) => props.children(item)}
-              </Show>
-            </div>
-          )}
+          {(row) => {
+            // The row's item; the last one once the list shrinks past the row (see `VirtualRows`).
+            const item = createMemo<T | undefined>((last) => props.items[row.index] ?? last);
+            return (
+              <div
+                class="absolute inset-x-0 top-0"
+                style={{ height: `${props.rowHeight}px`, transform: `translateY(${row.start}px)` }}
+              >
+                <Show when={item() !== undefined}>{props.children(item as () => T)}</Show>
+              </div>
+            );
+          }}
         </For>
       </div>
     </div>

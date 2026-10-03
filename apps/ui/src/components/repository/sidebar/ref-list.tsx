@@ -8,7 +8,7 @@ import GitMerge from "lucide-solid/icons/git-merge";
 import Inbox from "lucide-solid/icons/inbox";
 import Tag from "lucide-solid/icons/tag";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
-import { createMemo, Show } from "solid-js";
+import { createMemo, Match, Show, Switch } from "solid-js";
 import type { JSX } from "solid-js";
 
 import { EmptyState } from "@/components/ui/empty-state";
@@ -55,22 +55,48 @@ export function RefList(props: { repositoryId: string }) {
     flattenRefTree(buildRefTree(remoteBranches()), collapsed.isCollapsed),
   );
 
-  /** A ref tree's line: a collapsible folder, or a ref drawn by `ref`. */
+  /**
+   * A ref tree's line: a collapsible folder, or a ref drawn by `ref`. Which of the two can change,
+   * as lines are rendered by position: collapsing a folder moves the ones below it up.
+   */
   const treeRow = (
-    { node, depth }: RefTreeRow,
-    ref: (ref: Ref, label: string, depth: number) => JSX.Element,
-  ) =>
-    node.type === "folder" ? (
-      <SidebarFolder
-        name={node.name}
-        count={node.count}
-        depth={depth}
-        collapsed={collapsed.isCollapsed(node.path)}
-        onToggle={() => collapsed.toggle(node.path)}
-      />
-    ) : (
-      ref(node.ref, node.name, depth)
+    row: () => RefTreeRow,
+    ref: (ref: () => Ref, label: () => string, depth: () => number) => JSX.Element,
+  ) => {
+    const depth = () => row().depth;
+    const asFolder = () => {
+      const { node } = row();
+      return node.type === "folder" ? node : undefined;
+    };
+    const asRef = () => {
+      const { node } = row();
+      return node.type === "ref" ? node : undefined;
+    };
+    return (
+      <Switch>
+        <Match when={asFolder()}>
+          {(folder) => (
+            <SidebarFolder
+              name={folder().name}
+              count={folder().count}
+              depth={depth()}
+              collapsed={collapsed.isCollapsed(folder().path)}
+              onToggle={() => collapsed.toggle(folder().path)}
+            />
+          )}
+        </Match>
+        <Match when={asRef()}>
+          {(leaf) =>
+            ref(
+              () => leaf().ref,
+              () => leaf().name,
+              depth,
+            )
+          }
+        </Match>
+      </Switch>
     );
+  };
 
   /** The props a section needs to collapse, saved under `id`. */
   const collapsible = (id: string) => ({
@@ -122,15 +148,19 @@ export function RefList(props: { repositoryId: string }) {
           treeRow(row, (branch, label, depth) => (
             <SidebarRow
               icon={GitBranch}
-              label={label}
-              title={branch.name}
-              depth={depth}
-              active={branch.current}
+              label={label()}
+              title={branch().name}
+              depth={depth()}
+              active={branch().current}
               meta={
-                branch.ahead ? `↑${branch.ahead}` : branch.behind ? `↓${branch.behind}` : undefined
+                branch().ahead
+                  ? `↑${branch().ahead}`
+                  : branch().behind
+                    ? `↓${branch().behind}`
+                    : undefined
               }
               // The toolbar shows it running, and why it failed.
-              onDblClick={() => !branch.current && switchBranch.run(branch.fullName)}
+              onDblClick={() => !branch().current && switchBranch.run(branch().fullName)}
             />
           ))
         }
@@ -146,10 +176,10 @@ export function RefList(props: { repositoryId: string }) {
           treeRow(row, (branch, label, depth) => (
             <SidebarRow
               icon={GitBranch}
-              label={label}
-              title={branch.name}
-              depth={depth}
-              onDblClick={() => switchBranch.run(branch.fullName)}
+              label={label()}
+              title={branch().name}
+              depth={depth()}
+              onDblClick={() => switchBranch.run(branch().fullName)}
             />
           ))
         }
@@ -161,7 +191,7 @@ export function RefList(props: { repositoryId: string }) {
         {...collapsible("pullRequests")}
         items={PULL_REQUESTS}
       >
-        {(pr) => <SidebarRow icon={GitMerge} label={pr.label} meta={pr.meta} />}
+        {(pr) => <SidebarRow icon={GitMerge} label={pr().label} meta={pr().meta} />}
       </SidebarSection>
       <SidebarSection
         title="Tags"
@@ -170,7 +200,7 @@ export function RefList(props: { repositoryId: string }) {
         {...collapsible("tags")}
         items={tags()}
       >
-        {(tag) => <SidebarRow icon={Tag} label={tag.name} />}
+        {(tag) => <SidebarRow icon={Tag} label={tag().name} />}
       </SidebarSection>
       <SidebarSection
         title="Stashes"
@@ -182,8 +212,8 @@ export function RefList(props: { repositoryId: string }) {
         {(stash) => (
           <SidebarRow
             icon={Archive}
-            label={stash.message}
-            title={`${stash.message}\nStashed ${relativeTime(stash.createdAt).toLowerCase()}`}
+            label={stash().message}
+            title={`${stash().message}\nStashed ${relativeTime(stash().createdAt).toLowerCase()}`}
           />
         )}
       </SidebarSection>

@@ -20,7 +20,7 @@ describe("VirtualList", () => {
   it("only renders the rows in view, plus a few past the edges", async () => {
     render(() => (
       <VirtualList items={ITEMS} rowHeight={10}>
-        {(item) => <span>{item}</span>}
+        {(item) => <span>{item()}</span>}
       </VirtualList>
     ));
 
@@ -32,13 +32,27 @@ describe("VirtualList", () => {
   it("keeps the list as tall as all its rows, each at its own position", async () => {
     render(() => (
       <VirtualList items={ITEMS} rowHeight={10}>
-        {(item) => <span>{item}</span>}
+        {(item) => <span>{item()}</span>}
       </VirtualList>
     ));
 
     const row = (await screen.findByText("Row 3")).parentElement!;
     expect(row).toHaveStyle({ height: "10px", transform: "translateY(30px)" });
     expect(row.parentElement).toHaveStyle({ height: "1000px" });
+  });
+
+  it("shows the items that replace the ones in view in the same rows", async () => {
+    const [items, setItems] = createSignal(ITEMS);
+    render(() => (
+      <VirtualList items={items()} rowHeight={10}>
+        {(item) => <span>{item()}</span>}
+      </VirtualList>
+    ));
+    const row = await screen.findByText("Row 2");
+
+    setItems(["Other 0", "Other 1", "Other 2"]);
+    await vi.waitFor(() => expect(row).toHaveTextContent("Other 2"));
+    expect(screen.queryByText("Row 3")).not.toBeInTheDocument();
   });
 });
 
