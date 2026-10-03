@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { Repo } from "../../core/repo";
 import { createRepo, git, repos } from "../../test/fixtures";
 import { getLog, getVersionedLog } from "./commands";
+import { indexed } from "./incremental";
 import type { Commit } from "./schema";
 
 /** Small, so changes reach past the end of the page. */
@@ -55,6 +56,8 @@ async function readSince(repo: Repo, seen: Seen | undefined) {
   });
   const now = "unchanged" in log ? seen! : log;
   expect(now.commits).toEqual(await getLog(repo, page));
+  // As the index has time to load or catch up between refreshes in the app.
+  await indexed(repo);
   return { ...now, readWhole };
 }
 
@@ -138,6 +141,28 @@ describe("reading the log from what changed", () => {
         () => git(path, "update-ref", "-d", "refs/remotes/origin/feature"),
       ],
       [
+        // Older than the page's commits, so not on top of it.
+        "commits on a branch whose clock was skewed",
+        "whole",
+        () => {
+          // Eight commits dated well before the one they're on: walking by date from `behind`,
+          // git reaches `skewed` only after giving up.
+          const skewed = commit(path, 8000, "skewed", git(path, "rev-parse", "main"));
+          let behind = skewed;
+          for (let i = 0; i < 8; i++) behind = commit(path, 100 + i, `behind${i}`, behind);
+          git(path, "update-ref", "refs/heads/behind", behind);
+        },
+      ],
+      [
+        // Git takes the skewed commit (and what's below it) for new too.
+        "a commit on the skewed commit",
+        "changes",
+        () => {
+          const skewed = git(path, "rev-parse", "behind~8");
+          git(path, "update-ref", "refs/heads/onto-skewed", commit(path, 9000, "onto", skewed));
+        },
+      ],
+      [
         "more new commits than a page",
         "whole",
         () => {
@@ -166,9 +191,8 @@ describe("reading the log from what changed", () => {
     let now = 10_000;
     // For names, which the clock going back would repeat.
     let made = 0;
-    // Mostly later, sometimes the same second. Never behind: with a skewed clock, git can list
-    // commits it had already as new (see `readLogSince`), which isn't handled yet.
-    const when = () => (now += pick([1, 1, 1, 0, 0, 5]));
+    // Mostly later, sometimes the same second, now and then behind (a skewed clock).
+    const when = () => (now += pick([1, 1, 1, 0, 0, 5, -50]));
 
     git(path, "update-ref", "refs/heads/main", commit(path, now, "root"));
     git(path, "symbolic-ref", "HEAD", "refs/heads/main");

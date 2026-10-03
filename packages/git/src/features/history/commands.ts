@@ -4,6 +4,7 @@ import { GitError } from "../../core/errors";
 import { resolveRef, type Repo } from "../../core/repo";
 import {
   fullReadMs,
+  indexLog,
   LOG_REFS_ARGS,
   parseLogRefs,
   readLogSince,
@@ -49,10 +50,9 @@ export async function getVersionedLog(
   const previous = rememberedLog(repo, since);
   // Read after the refs, so it's never older than the version says: a ref that moves in between
   // only makes the next refetch read it again.
+  const readChanges = () => fullReadMs(repo) >= readChangesAfterMs;
   let commits =
-    previous && fullReadMs(repo) >= readChangesAfterMs
-      ? await readLogSince(repo, previous, head, refs, signal)
-      : undefined;
+    previous && readChanges() ? await readLogSince(repo, previous, head, refs, signal) : undefined;
   let readMs: number | undefined;
   if (!commits) {
     const start = performance.now();
@@ -60,7 +60,10 @@ export async function getVersionedLog(
     commits = await readLog(repo, { ...page, limit: page.limit + 1 }, head !== null, signal);
     readMs = performance.now() - start;
   }
-  rememberLog(repo, { version, page, head, refs, commits }, readMs);
+  const snapshot = { version, page, head, refs, commits };
+  rememberLog(repo, snapshot, readMs);
+  // For the next page to be read from changes, in a repository where reading it whole is slow.
+  if (readMs !== undefined && readChanges()) indexLog(repo, snapshot);
   return { commits: commits.slice(0, page.limit), version };
 }
 

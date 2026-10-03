@@ -2,6 +2,7 @@
 // big repository, sorting the history of every branch and tag takes long (0.4s for vscode's 5,800),
 // while what a commit, a pull or a fetch adds is found in a fraction of that.
 import type { Repo } from "../../core/repo";
+import { CommitIndex } from "./commit-index";
 import { LOG_FORMAT, parseDecorations, parseLog } from "./parse";
 import type { Commit, CommitRef } from "./schema";
 
@@ -9,12 +10,12 @@ export type Page = { limit: number; skip: number };
 
 /**
  * What the log starts from, besides HEAD: every branch, remote branch and tag (and the replace
- * refs, which change what a commit's parents are), with the commit a tag points at, and the
- * checked-out branch marked, as both are in the log's decorations.
+ * refs, which change what a commit's parents are), with what a tag points at, and the checked-out
+ * branch marked, as both are in the log's decorations.
  */
 export const LOG_REFS_ARGS = [
   "for-each-ref",
-  "--format=%(objectname)%00%(*objectname)%00%(HEAD)%00%(refname)",
+  "--format=%(objectname)%00%(objecttype)%00%(*objectname)%00%(*objecttype)%00%(HEAD)%00%(refname)",
   "refs/heads",
   "refs/remotes",
   "refs/tags",
@@ -24,8 +25,12 @@ export const LOG_REFS_ARGS = [
 interface LogRef {
   /** What it points at; a tag object for an annotated tag. */
   sha: string;
-  /** The commit it decorates: for an annotated tag, the one the tag points at. */
-  commit: string;
+  /**
+   * The commit it starts the log from and decorates: for an annotated tag, the one the tag points
+   * at. `null` for a tag of something else, like a tree, and `undefined` for a tag of a tag, which
+   * would take asking git again to tell.
+   */
+  commit: string | null | undefined;
   /** Whether it's the checked-out branch. */
   current: boolean;
 }
@@ -34,10 +39,40 @@ interface LogRef {
 export function parseLogRefs(output: string): Map<string, LogRef> {
   const refs = new Map<string, LogRef>();
   for (const line of output.split("\n")) {
-    const [sha = "", peeled = "", head = "", name = ""] = line.split("\0");
-    if (name) refs.set(name, { sha, commit: peeled || sha, current: head === "*" });
+    const [sha = "", type, peeled = "", peeledType, head, name = ""] = line.split("\0");
+    if (!name) continue;
+    const commit =
+      type === "commit"
+        ? sha
+        : type !== "tag"
+          ? null
+          : peeledType === "commit"
+            ? peeled
+            : peeledType === "tag"
+              ? undefined
+              : null;
+    refs.set(name, { sha, commit, current: head === "*" });
   }
   return refs;
+}
+
+/**
+ * The commits the log starts from, for the commit index; `undefined` if one of them can't be told
+ * (see `LogRef.commit`).
+ */
+function indexTips(refs: Map<string, LogRef>, head: string | null): Set<string> | undefined {
+  const shas = new Set<string>();
+  for (const [name, ref] of refs) {
+    if (name.startsWith("refs/replace/")) continue;
+    if (ref.commit === undefined) return undefined;
+    if (ref.commit) shas.add(ref.commit);
+  }
+  if (head) shas.add(head);
+  return shas;
+}
+
+function sameSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  return a.size === b.size && [...a].every((item) => b.has(item));
 }
 
 /** A page of the log, and what it was read from. */
@@ -56,6 +91,12 @@ interface LogMemory {
   snapshots: LogSnapshot[];
   /** How long reading a whole page took the last time it was. */
   fullReadMs: number;
+  /** Once loaded: the commits the history reaches, as of the newest page, or one before it. */
+  index?: CommitIndex;
+  /** Loading the index, or bringing it up to date, in the background. */
+  indexing?: Promise<void>;
+  /** Not to be indexed: a shallow clone, whose commits' parents change as it's deepened. */
+  unindexable?: boolean;
 }
 
 /** How many pages are kept, in case the caller didn't get the newest (it was cancelled, say). */
@@ -85,6 +126,43 @@ export function fullReadMs(repo: Repo): number {
 }
 
 /**
+ * Loads the commit index in the background, if it isn't yet, or brings it up to date with
+ * `snapshot`, which was read whole: reading the next page from what changed needs the index as of
+ * the page it's read from.
+ */
+export function indexLog(repo: Repo, snapshot: LogSnapshot): void {
+  const memory = memoryOf(repo);
+  const wanted = indexTips(snapshot.refs, snapshot.head);
+  if (memory.unindexable || memory.indexing || !wanted) return;
+  if (memory.index && sameSet(memory.index.tips, wanted)) return;
+  const work = async () => {
+    if (memory.index) {
+      await memory.index.sync(repo, wanted);
+      return;
+    }
+    const shallow = await repo.read(["rev-parse", "--is-shallow-repository"]);
+    if (shallow.trim() === "true") {
+      memory.unindexable = true;
+      return;
+    }
+    memory.index = await CommitIndex.load(repo, wanted);
+  };
+  memory.indexing = work()
+    .catch(() => {
+      // Left out of the next reads, rather than relied on half done; loaded again after the next.
+      memory.index = undefined;
+    })
+    .finally(() => (memory.indexing = undefined));
+}
+
+/** Resolves once the commit index is done loading or being brought up to date in the background. */
+export async function indexed(repo: Repo): Promise<CommitIndex | undefined> {
+  const memory = memoryOf(repo);
+  await memory.indexing;
+  return memory.index;
+}
+
+/**
  * The first page of the log now, and the commit after it, read from what changed since `previous`:
  * the commits that are new, the ones before them in `previous`, and the decorations of those whose
  * refs moved. `undefined` when that wouldn't be the page git sorts itself; it then has to be read
@@ -97,9 +175,8 @@ export function fullReadMs(repo: Repo): number {
  * between commits made in the same second, it goes by the order it came across them in, which
  * isn't worked out here: those, and commits lost (a reset, a deleted branch), are read whole.
  *
- * Not yet exact when commit dates go back in time (a skewed clock): asked for what's reachable from
- * the new tips but not the old ones, git stops walking by date, and can list commits it had already
- * as new. Those would have to be told apart before this can be relied on.
+ * Which commits are new and whether any were lost comes from the commit index, which needs to be as
+ * of `previous`: git's own answer can be wrong when the clock was skewed (see `CommitIndex`).
  */
 export async function readLogSince(
   repo: Repo,
@@ -108,41 +185,38 @@ export async function readLogSince(
   refs: Map<string, LogRef>,
   signal?: AbortSignal,
 ): Promise<Commit[] | undefined> {
+  const memory = memoryOf(repo);
   const { page } = previous;
+  const commitIndex = memory.index;
+  const [tipsBefore, tipsNow] = [indexTips(previous.refs, previous.head), indexTips(refs, head)];
+  if (!commitIndex || memory.indexing || !tipsBefore || !tipsNow) return undefined;
+  if (!sameSet(commitIndex.tips, tipsBefore)) return undefined;
   if (page.skip !== 0 || previous.commits.length === 0) return undefined;
   // The page, and the commit after it.
   const size = page.limit + 1;
 
-  // Commits reachable from these may be new, and those reachable from `gone` only, gone.
+  // Commits reachable from these may be new.
   const added = new Set<string>();
-  const gone = new Set<string>();
   // Commits whose decorations may have changed.
   const redecorated = new Set<string>();
+  const touch = (sha: string | null | undefined) => sha && redecorated.add(sha);
   for (const [name, ref] of refs) {
     const was = previous.refs.get(name);
     if (was?.sha === ref.sha && was.current === ref.current) continue;
-    if (name.startsWith("refs/replace/")) return undefined;
-    redecorated.add(ref.commit);
-    if (was) redecorated.add(was.commit);
-    if (was?.sha === ref.sha) continue;
-    added.add(ref.sha);
-    if (was) gone.add(was.sha);
+    if (name.startsWith("refs/replace/")) return replaced(memory);
+    touch(ref.commit);
+    touch(was?.commit);
+    if (was?.sha !== ref.sha) added.add(ref.sha);
   }
   for (const [name, was] of previous.refs) {
     if (refs.has(name)) continue;
-    if (name.startsWith("refs/replace/")) return undefined;
-    redecorated.add(was.commit);
-    gone.add(was.sha);
+    if (name.startsWith("refs/replace/")) return replaced(memory);
+    touch(was.commit);
   }
   if (head !== previous.head) {
-    if (head) {
-      added.add(head);
-      redecorated.add(head);
-    }
-    if (previous.head) {
-      gone.add(previous.head);
-      redecorated.add(previous.head);
-    }
+    if (head) added.add(head);
+    touch(head);
+    touch(previous.head);
   }
 
   const inPage = new Map(previous.commits.map((commit, index) => [commit.sha, index]));
@@ -150,17 +224,14 @@ export async function readLogSince(
   const read = (args: string[], revisions?: string[]) =>
     repo.read(args, { signal, stdin: revisions && `${revisions.join("\n")}\n` });
   const toRedecorate = [...redecorated].filter((sha) => inPage.has(sha));
-  const [newOutput, lostOutput, decorationsOutput] = await Promise.all([
-    // What's reachable now but wasn't, in no particular order.
+  const [changes, newOutput, decorationsOutput] = await Promise.all([
+    commitIndex.sync(repo, tipsNow, signal),
+    // The new commits' details, along with (when the clock was skewed) some that aren't new.
     added.size
       ? read(
           ["log", "-z", LOG_FORMAT, "--decorate=full", `--max-count=${page.limit}`, "--stdin"],
           [...added, ...not(tips(previous.refs, previous.head))],
         )
-      : "",
-    // Anything that was reachable, but isn't anymore.
-    gone.size
-      ? read(["rev-list", "--max-count=1", "--stdin"], [...gone, ...not(tips(refs, head))])
       : "",
     toRedecorate.length
       ? read([
@@ -173,7 +244,7 @@ export async function readLogSince(
         ])
       : "",
   ]);
-  if (lostOutput.trim()) return undefined;
+  if (!changes || changes.lost) return undefined;
 
   // Commits of the same second are taken in the order git came across them, which goes by the refs
   // pointing at them: one whose refs changed can come up in another place than it did.
@@ -189,9 +260,10 @@ export async function readLogSince(
   };
   if (toRedecorate.some(tied)) return undefined;
 
-  const fresh = parseLog(newOutput);
-  // As many as a page, or more: reading it whole is no slower.
-  if (fresh.length >= page.limit) return undefined;
+  const fresh = parseLog(newOutput).filter((commit) => changes.added.has(commit.sha));
+  // As many as a page, or more (or some not read, past the ones that weren't new): reading it
+  // whole is no slower.
+  if (fresh.length >= page.limit || fresh.length < changes.added.size) return undefined;
   const ordered = byDate(fresh);
   if (!ordered) return undefined;
   if (ordered.length > 0) {
@@ -215,6 +287,12 @@ export async function readLogSince(
     if (refsNow) kept[i] = { ...commit, refs: refsNow };
   }
   return [...ordered, ...kept];
+}
+
+/** A replace ref changed what commits' parents are: the index is loaded again, later. */
+function replaced(memory: LogMemory): undefined {
+  memory.index = undefined;
+  return undefined;
 }
 
 /** `shas` as revisions to leave out. */

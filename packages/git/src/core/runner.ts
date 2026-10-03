@@ -19,6 +19,11 @@ export interface RunOptions {
    * come, so even left behind (when Gitto is stopped by a signal, say) they end.
    */
   stopOnExit?: boolean;
+  /**
+   * Takes git's output as it comes, rather than all of it at the end (the command then resolves to
+   * ""): for output too big to hold up the main process parsing at once.
+   */
+  onStdout?: (chunk: Buffer) => void;
 }
 
 // Settings that keep git's output stable and machine-readable, whatever the user's config says.
@@ -100,7 +105,18 @@ export function runGit(cwd: string, args: string[], options: RunOptions = {}): P
 
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    // What `onStdout` threw, which stops git and fails the command.
+    let streamError: unknown;
+    child.stdout.on("data", (chunk: Buffer) => {
+      if (!options.onStdout) return void stdout.push(chunk);
+      if (streamError !== undefined) return;
+      try {
+        options.onStdout(chunk);
+      } catch (error) {
+        streamError = error;
+        child.kill();
+      }
+    });
     child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
 
     child.on("error", (error: NodeJS.ErrnoException) => {
@@ -121,7 +137,9 @@ export function runGit(cwd: string, args: string[], options: RunOptions = {}): P
         const ms = (performance.now() - start).toFixed(0);
         trace(`${ms.padStart(5)}ms ${String(out.length).padStart(8)}B  git ${args.join(" ")}`);
       }
-      if (code === 0) {
+      if (streamError !== undefined) {
+        reject(streamError);
+      } else if (code === 0) {
         resolve(out);
       } else {
         reject(commandError(cwd, args, code, out, err));
