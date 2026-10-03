@@ -91,7 +91,7 @@ describe("reading the log from what changed", () => {
           git(path, "update-ref", "refs/heads/side", side);
         },
       ],
-      ["a branch at a commit there was", "changes", () => git(path, "branch", "other", "main~2")],
+      ["a branch at a commit there was", "changes", () => git(path, "branch", "other", "main~1")],
       [
         "an annotated tag",
         "changes",
@@ -176,6 +176,46 @@ describe("reading the log from what changed", () => {
       seen = await readSince(repo, seen);
       expect(seen.readWhole ? "whole" : "changes", change).toBe(expected);
     }
+  });
+
+  // Git takes commits of the same second in the order it came across them, by the refs pointing at
+  // them for those it starts from: refs/heads, then refs/remotes, then refs/tags.
+  it.each<[string, string, (path: string, shas: Record<string, string>) => void]>([
+    [
+      // `x`, last on the page, is followed by its parent, newer when the clock was skewed: `y`
+      // comes after both, past the page.
+      "a ref moved off a commit followed by its newer parent, tied with one past it",
+      "incremental-tie-skewed",
+      (path, { parent }) => git(path, "update-ref", "refs/remotes/origin/x", parent!),
+    ],
+    [
+      "a branch made at a commit past the page, tied with the one last on it",
+      "incremental-tie-past",
+      (path, { y }) => git(path, "branch", "y", y!),
+    ],
+  ])("reads the whole log after %s", async (_, name, change) => {
+    const path = createRepo(name);
+    const repo = await repos.open(name);
+    const base = commit(path, 1000, "base");
+    git(path, "update-ref", "refs/heads/main", base);
+    // Seven commits on top, then `x` and `y` of the same second; `x` first, by its remote branch.
+    let top = base;
+    for (let i = 0; i < 7; i++) top = commit(path, 9000 + i, `top${i}`, top);
+    git(path, "update-ref", "refs/heads/top", top);
+    const parent = commit(path, 6000, "parent", base);
+    const shas = {
+      x: commit(path, 5000, "x", parent),
+      parent,
+      y: commit(path, 5000, "y", commit(path, 7000, "parent of y", base)),
+    };
+    git(path, "update-ref", "refs/remotes/origin/x", shas.x);
+    git(path, "tag", "x", shas.x);
+    git(path, "update-ref", "refs/remotes/origin/y", shas.y);
+
+    const seen = await readSince(repo, undefined);
+    expect(seen.commits.at(-1)!.subject).toBe("x");
+    change(path, shas);
+    expect((await readSince(repo, seen)).readWhole).toBe(true);
   });
 
   it("reads the log git would after any changes", { timeout: 60_000 }, async () => {

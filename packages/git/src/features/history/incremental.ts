@@ -223,8 +223,7 @@ export async function readLogSince(
   // Revisions go in through stdin: there can be thousands.
   const read = (args: string[], revisions?: string[]) =>
     repo.read(args, { signal, stdin: revisions && `${revisions.join("\n")}\n` });
-  const toRedecorate = [...redecorated].filter((sha) => inPage.has(sha));
-  const [changes, newOutput, decorationsOutput] = await Promise.all([
+  const [changes, newOutput, redecoratedOutput] = await Promise.all([
     commitIndex.sync(repo, tipsNow, signal),
     // The new commits' details, along with (when the clock was skewed) some that aren't new.
     added.size
@@ -233,32 +232,55 @@ export async function readLogSince(
           [...added, ...not(tips(previous.refs, previous.head))],
         )
       : "",
-    toRedecorate.length
-      ? read([
-          "log",
-          "-z",
-          "--no-walk=unsorted",
-          "--decorate=full",
-          "--format=%H%x00%D",
-          ...toRedecorate,
-        ])
+    // Their dates too, for those past the page.
+    redecorated.size
+      ? read(
+          [
+            "log",
+            "-z",
+            "--no-walk=unsorted",
+            "--ignore-missing",
+            "--decorate=full",
+            "--format=%H%x00%ct%x00%D",
+            "--stdin",
+          ],
+          [...redecorated],
+        )
       : "",
   ]);
   if (!changes || changes.lost) return undefined;
 
-  // Commits of the same second are taken in the order git came across them, which goes by the refs
-  // pointing at them: one whose refs changed can come up in another place than it did.
-  const sameSecond = new Map<number, number>();
-  for (const commit of previous.commits) {
-    sameSecond.set(commit.committedAt, (sameSecond.get(commit.committedAt) ?? 0) + 1);
+  const redecoratedNow = new Map<string, { committedAt: number; refs: CommitRef[] }>();
+  const fields = redecoratedOutput.split("\0");
+  for (let i = 0; i + 2 < fields.length; i += 3) {
+    redecoratedNow.set(fields[i]!.trim(), {
+      committedAt: Number(fields[i + 1]) * 1000,
+      refs: parseDecorations(fields[i + 2]!),
+    });
   }
-  // Commits past the page of the same second as one on it are of the same second as the commit
-  // after it too, which is kept for that: dates only go down the log.
-  const tied = (sha: string) => {
+
+  // Where git could take more than one commit of the same second, it takes them in the order it
+  // came across them: the ones it starts from by the refs pointing at them, the others as their
+  // last child is taken. A commit whose refs changed, or which has a new child, may then come up in
+  // another place among those it was tied with, so the page is read whole.
+  //
+  // The commits git chose `sha` over, or the other way around, are among the ones read: those
+  // before it of its second, and the ones after it but for its parents and their parents newer than
+  // it (when the clock was skewed), up to one older than it. Without one older read, they can be
+  // past the page. A commit past the page can only come up on it in place of one of its second.
+  const full = previous.commits.length === size;
+  const tied = (sha: string, committedAt: number) => {
+    if (previous.commits.some((c) => c.sha !== sha && c.committedAt === committedAt)) return true;
     const index = inPage.get(sha);
-    return index !== undefined && sameSecond.get(previous.commits[index]!.committedAt)! > 1;
+    if (index === undefined || !full) return false;
+    return !previous.commits.slice(index + 1).some((c) => c.committedAt < committedAt);
   };
-  if (toRedecorate.some(tied)) return undefined;
+  for (const sha of redecorated) {
+    // New commits come first, whatever their refs.
+    if (changes.added.has(sha)) continue;
+    const committedAt = redecoratedNow.get(sha)?.committedAt;
+    if (committedAt === undefined || tied(sha, committedAt)) return undefined;
+  }
 
   const fresh = parseLog(newOutput).filter((commit) => changes.added.has(commit.sha));
   // As many as a page, or more (or some not read, past the ones that weren't new): reading it
@@ -271,18 +293,17 @@ export async function readLogSince(
     const newest = previous.commits[0]!.committedAt;
     if (ordered.some((commit) => commit.committedAt <= newest)) return undefined;
     // A commit git could take from the start, which now has a new child, comes up later than it
-    // did; between commits of the same second, that changes the order git takes them in.
-    if (fresh.some((commit) => commit.parents.some(tied))) return undefined;
+    // did among those of its second: past the page, it stays there.
+    const isTied = (sha: string) => {
+      const index = inPage.get(sha);
+      return index !== undefined && tied(sha, previous.commits[index]!.committedAt);
+    };
+    if (fresh.some((commit) => commit.parents.some(isTied))) return undefined;
   }
 
-  const decorations = new Map<string, CommitRef[]>();
-  const fields = decorationsOutput.split("\0");
-  for (let i = 0; i + 1 < fields.length; i += 2) {
-    decorations.set(fields[i]!.trim(), parseDecorations(fields[i + 1]!));
-  }
   const kept = previous.commits.slice(0, size - ordered.length);
   for (const [i, commit] of kept.entries()) {
-    const refsNow = decorations.get(commit.sha);
+    const refsNow = redecoratedNow.get(commit.sha)?.refs;
     // A copy: the pages kept before share their commits.
     if (refsNow) kept[i] = { ...commit, refs: refsNow };
   }
