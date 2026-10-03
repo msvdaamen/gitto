@@ -42,6 +42,18 @@ describe("VirtualList", () => {
   });
 });
 
+function renderRows() {
+  const [scroller, setScroller] = createSignal<HTMLDivElement>();
+  render(() => (
+    <div ref={setScroller}>
+      <VirtualRows items={ITEMS} rowHeight={10} scrollElement={scroller()}>
+        {(item, index) => <button data-row={index}>{item()}</button>}
+      </VirtualRows>
+    </div>
+  ));
+  return scroller;
+}
+
 describe("VirtualRows", () => {
   let scrollTop = 0;
 
@@ -56,18 +68,6 @@ describe("VirtualRows", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
-
-  function renderRows() {
-    const [scroller, setScroller] = createSignal<HTMLDivElement>();
-    render(() => (
-      <div ref={setScroller}>
-        <VirtualRows items={ITEMS} rowHeight={10} scrollElement={scroller()}>
-          {(item, index) => <button data-row={index}>{item()}</button>}
-        </VirtualRows>
-      </div>
-    ));
-    return scroller;
-  }
 
   it("only renders the rows in view, plus a few past the edges", async () => {
     renderRows();

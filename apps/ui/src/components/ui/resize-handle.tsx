@@ -5,6 +5,18 @@ import type { PanelBounds } from "@/hooks/panel-width";
 
 const KEYBOARD_STEP = 16;
 
+/** The x position of the handle's centre, which is the panel's edge. */
+function center(handle: HTMLElement) {
+  const rect = handle.getBoundingClientRect();
+  return rect.left + rect.width / 2;
+}
+
+/** Keeps the resize cursor and stops text selection anywhere on the page while dragging. */
+function setPageDragging(on: boolean) {
+  document.documentElement.style.cursor = on ? "col-resize" : "";
+  document.documentElement.style.userSelect = on ? "none" : "";
+}
+
 /**
  * A draggable line on the edge of a panel that resizes it. Sits in the panel's parent, centred on
  * the panel's edge: `start` for a panel on its left, `end` for one on its right. Double-click resets
@@ -29,16 +41,8 @@ export function ResizeHandle(props: {
     const container = handle.parentElement!.getBoundingClientRect();
     return props.edge === "start" ? x - container.left : container.right - x;
   };
-  const center = (handle: HTMLElement) => {
-    const rect = handle.getBoundingClientRect();
-    return rect.left + rect.width / 2;
-  };
   const renderedWidth = (handle: HTMLElement) => widthAt(handle, center(handle)) || props.width;
 
-  const setPageDragging = (on: boolean) => {
-    document.documentElement.style.cursor = on ? "col-resize" : "";
-    document.documentElement.style.userSelect = on ? "none" : "";
-  };
   onCleanup(() => dragging() && setPageDragging(false));
 
   const stop = (event: PointerEvent & { currentTarget: HTMLElement }) => {
