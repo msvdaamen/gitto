@@ -1,6 +1,6 @@
 import type { GitDirChange } from "@gitto/git/types";
 import { useQueryClient } from "@tanstack/solid-query";
-import { createEffect, onCleanup } from "solid-js";
+import { createEffect, createMemo, onCleanup } from "solid-js";
 
 import { useWindowFocus } from "@/hooks/window-focus";
 import { rpc } from "@/lib/rpc";
@@ -24,9 +24,16 @@ export const UNWATCH_AFTER_MS = 5 * 60_000;
 export function useRepositoryWatcher(repositoryId: () => string) {
   const queryClient = useQueryClient();
   const focused = useWindowFocus();
+  // When the repository came on show. That's before the effect below runs when switching from
+  // another repository: a transition, which only runs it once the new one's data has loaded.
+  const shownAt = createMemo(() => {
+    repositoryId();
+    return Date.now();
+  });
 
   createEffect(() => {
     const id = repositoryId();
+    const since = shownAt();
     const refetchAll = () =>
       void queryClient.invalidateQueries({ queryKey: gitKeys.repository(id) });
     const refetchUncommitted = () =>
@@ -54,8 +61,12 @@ export function useRepositoryWatcher(repositoryId: () => string) {
       });
 
     // Nothing watched the repository until now, so what was loaded from it before (when it was last
-    // on show) may be out of date. What's loading for the first time isn't loaded twice.
-    refetchAll();
+    // on show) may be out of date. What's loading for the first time isn't loaded twice, nor what
+    // was loaded since it came on show.
+    void queryClient.invalidateQueries({
+      queryKey: gitKeys.repository(id),
+      predicate: (query) => query.state.dataUpdatedAt < since,
+    });
     watchGitDir();
 
     createEffect((wasFocused: boolean | undefined) => {

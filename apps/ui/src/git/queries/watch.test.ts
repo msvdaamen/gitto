@@ -1,6 +1,14 @@
 import { renderHook } from "@solidjs/testing-library";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
-import { createComponent, type JSX } from "solid-js";
+import {
+  createComponent,
+  createMemo,
+  createResource,
+  createSignal,
+  startTransition,
+  Suspense,
+  type JSX,
+} from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { gitKeys } from "./keys";
@@ -88,6 +96,56 @@ describe("watching a repository", () => {
   it("refetches what was loaded before it was watched", () => {
     const { initial, cleanup } = watch(true);
     expect(initial).toEqual([gitKeys.repository("repo")]);
+    cleanup();
+  });
+
+  it("doesn't refetch what was loaded while switching to the repository", async () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    const client = new QueryClient();
+    // Loaded when the repository was last on show.
+    client.setQueryData(gitKeys.refs("next"), []);
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const [id, setId] = createSignal("repo");
+    let load: (() => void) | undefined;
+    const { cleanup } = renderHook(
+      () => {
+        useRepositoryWatcher(id);
+        // Like the page's queries: switching repositories is a transition, which waits for them.
+        const [data] = createResource(id, (repositoryId) =>
+          repositoryId === "repo"
+            ? repositoryId
+            : new Promise<string>((resolve) => (load = () => resolve(repositoryId))),
+        );
+        createMemo(() => data());
+      },
+      {
+        wrapper: (props: { children: JSX.Element }) =>
+          createComponent(QueryClientProvider, {
+            client,
+            get children() {
+              return createComponent(Suspense, {
+                get children() {
+                  return props.children;
+                },
+              });
+            },
+          }),
+      },
+    );
+    await vi.waitFor(() => expect(rpc.gitDir.open).toBe(1));
+
+    const switched = startTransition(() => setId("next"));
+    await vi.advanceTimersByTimeAsync(100);
+    client.setQueryData(gitKeys.log("next"), []);
+    load?.();
+    await switched;
+
+    await vi.waitFor(() =>
+      expect(client.getQueryState(gitKeys.refs("next"))?.isInvalidated).toBe(true),
+    );
+    expect(client.getQueryState(gitKeys.log("next"))?.isInvalidated).toBe(false);
+
     cleanup();
   });
 

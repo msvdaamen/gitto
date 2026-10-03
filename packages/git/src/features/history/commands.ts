@@ -8,31 +8,47 @@ export async function getLog(
   page: { limit: number; skip: number },
   signal?: AbortSignal,
 ): Promise<Commit[]> {
+  const [hasHead, hasCommitGraph] = await Promise.all([repo.hasHead(), repo.hasCommitGraph()]);
   // Only refs a user would recognise; `--all` also picks up tool namespaces (e.g. refs/t3/*).
   // HEAD is included for detached checkouts, unless the branch has no commits yet.
-  const revisions = [
-    "--branches",
-    "--remotes",
-    "--tags",
-    ...((await repo.hasHead()) ? ["HEAD"] : []),
-  ];
-  const output = await repo.read(
-    [
-      "log",
-      "-z",
-      LOG_FORMAT,
-      "--date-order",
-      "--decorate=full",
-      `--max-count=${page.limit}`,
-      `--skip=${page.skip}`,
-      ...revisions,
-      "--",
-    ],
-    { signal },
-  );
+  const revisions = ["--branches", "--remotes", "--tags", ...(hasHead ? ["HEAD"] : [])];
+  const read = async (order: string[]) =>
+    parseLog(
+      await repo.read(
+        [
+          "log",
+          "-z",
+          LOG_FORMAT,
+          ...order,
+          "--decorate=full",
+          `--max-count=${page.limit}`,
+          `--skip=${page.skip}`,
+          ...revisions,
+          "--",
+        ],
+        { signal },
+      ),
+    );
+
+  // Without a commit-graph, as in a fresh clone, git reads every commit before it can sort them
+  // with children first: 0.9s on vscode. Unsorted, it hands them over by date as it comes across
+  // them, in 45ms, which is the same order unless a commit is dated before its parent. So that's
+  // read first, and only sorted by git if a commit did end up below one of its parents.
+  let commits = hasCommitGraph ? undefined : await read([]);
+  if (!commits || !childrenFirst(commits)) commits = await read(["--date-order"]);
   // After the log, not alongside it: the first write can take seconds, and would slow it down.
   void repo.updateCommitGraph();
-  return parseLog(output);
+  return commits;
+}
+
+/** Whether every commit comes before its parents, as the history's graph needs them. */
+function childrenFirst(commits: Commit[]): boolean {
+  const listed = new Set<string>();
+  for (const commit of commits) {
+    if (commit.parents.some((parent) => listed.has(parent))) return false;
+    listed.add(commit.sha);
+  }
+  return true;
 }
 
 export async function getCommit(repo: Repo, sha: string, signal?: AbortSignal): Promise<Commit> {
