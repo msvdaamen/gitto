@@ -83,13 +83,124 @@ describe("fetchAll", () => {
   });
 });
 
+/** Waits for the fetches queued for `repo`, as a pull queues the other remotes' once merged. */
+const fetchesDone = (repo: Repo) => repo.fetching(async () => undefined);
+
+/** Releases the remotes `gateRemote` holds up, once a test is done. */
+const gates: (() => void)[] = [];
+
+/**
+ * Has fetches from the remote `name` of the repository at `path` wait until `release` is called
+ * (or the test is done), and counts them: each one starts upload-pack on the remote.
+ */
+function gateRemote(path: string, name: string) {
+  const gate = `${path}-${name}-gate`;
+  const log = `${path}-${name}-fetches`;
+  writeFileSync(log, "");
+  git(
+    path,
+    "config",
+    `remote.${name}.uploadpack`,
+    `f() { echo >> '${log}'; until [ -e '${gate}' ]; do sleep 0.02; done; git-upload-pack "$@"; }; f`,
+  );
+  const release = () => writeFileSync(gate, "");
+  gates.push(release);
+  return {
+    release,
+    count: () => readFileSync(log, "utf8").length,
+  };
+}
+
 describe("pull", () => {
+  // The other remotes are fetched after a pull returns: done before the repositories are removed.
+  afterEach(async () => {
+    for (const release of gates.splice(0)) release();
+    await Promise.all([...paths.keys()].map(async (id) => fetchesDone(await repos.open(id))));
+  });
+
   it("fast-forwards to the upstream's new commits", async () => {
     const { upstream, path } = createClone("behind");
     commit(upstream, "a.txt", "a\nb\n", "second");
     await pull(await repos.open("behind"));
     expect(subjects(path)).toEqual(["second", "first"]);
     expect(readFileSync(join(path, "a.txt"), "utf8")).toBe("a\nb\n");
+  });
+
+  it("fetches every remote, dropping branches deleted on it, as the Fetch button does", async () => {
+    const { upstream, path } = createClone("pruned");
+    git(upstream, "branch", "old");
+    git(path, "fetch", "-q");
+    git(upstream, "branch", "-D", "old");
+    git(upstream, "branch", "new");
+    const other = createRepo("pruned-other");
+    commit(other, "b.txt", "b\n", "other");
+    git(path, "remote", "add", "other", other);
+    // As `git fetch --all` does, without the remotes set to be skipped.
+    git(path, "remote", "add", "skipped", other);
+    git(path, "config", "remote.skipped.skipFetchAll", "true");
+    const repo = await repos.open("pruned");
+    await pull(repo);
+    await fetchesDone(repo);
+    const branches = git(path, "for-each-ref", "--format=%(refname:lstrip=2)", "refs/remotes");
+    // Without the remotes' HEADs, which newer git also records on a first fetch.
+    expect(branches.split("\n").filter((branch) => !branch.endsWith("/HEAD"))).toEqual([
+      "origin/main",
+      "origin/new",
+      "other/main",
+    ]);
+  });
+
+  it("asks the upstream's remote once, and doesn't wait for the others", async () => {
+    const { upstream, path } = createClone("once");
+    const origin = gateRemote(path, "origin");
+    origin.release();
+    const other = createRepo("once-other");
+    commit(other, "b.txt", "b\n", "other");
+    git(path, "remote", "add", "other", other);
+    const slow = gateRemote(path, "other");
+    commit(upstream, "a.txt", "a\nb\n", "second");
+    const repo = await repos.open("once");
+    await pull(repo);
+    expect(subjects(path)).toEqual(["second", "first"]);
+    expect(origin.count()).toBe(1);
+    slow.release();
+    await fetchesDone(repo);
+    expect(git(path, "for-each-ref", "--format=%(refname:lstrip=2)", "refs/remotes")).toContain(
+      "other/main",
+    );
+    expect(origin.count()).toBe(1);
+  });
+
+  it("says when the upstream was deleted on the remote, dropping its remote-tracking branch", async () => {
+    const { upstream, path } = createClone("deleted-upstream");
+    git(upstream, "branch", "gone");
+    git(path, "fetch", "-q");
+    git(path, "checkout", "-qb", "gone", "--track", "origin/gone");
+    git(upstream, "branch", "-D", "gone");
+    await expect(pull(await repos.open("deleted-upstream"))).rejects.toEqual(
+      new NoUpstreamError("gone no longer exists on origin."),
+    );
+    expect(git(path, "for-each-ref", "refs/remotes/origin/gone")).toBe("");
+  });
+
+  it("pulls even when another remote can't be reached", async () => {
+    const { upstream, path } = createClone("unreachable");
+    git(path, "remote", "add", "gone", join(root, "gone"));
+    commit(upstream, "a.txt", "a\nb\n", "second");
+    await pull(await repos.open("unreachable"));
+    expect(subjects(path)).toEqual(["second", "first"]);
+  });
+
+  it("fetches every remote when pulling from a local upstream", async () => {
+    const { upstream, path } = createClone("local-pruned");
+    git(path, "checkout", "-qb", "feature", "--track", "main");
+    git(upstream, "branch", "new");
+    const repo = await repos.open("local-pruned");
+    await pull(repo);
+    await fetchesDone(repo);
+    expect(git(path, "for-each-ref", "--format=%(refname:lstrip=2)", "refs/remotes")).toContain(
+      "origin/new",
+    );
   });
 
   it("does nothing when there's nothing new", async () => {
