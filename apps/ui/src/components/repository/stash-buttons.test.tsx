@@ -31,8 +31,13 @@ const clean: Uncommitted = {
   counts: { files: 0, staged: 0, unstaged: 0, conflicted: 0 },
   version: "v2",
 };
-const newer: Stash = { sha: "b".repeat(40), message: "WIP on main: abc newer", createdAt: 2 };
-const older: Stash = { sha: "a".repeat(40), message: "On main: older", createdAt: 1 };
+const newer: Stash = {
+  sha: "b".repeat(40),
+  base: "abc",
+  message: "WIP on main: abc newer",
+  createdAt: 2,
+};
+const older: Stash = { sha: "a".repeat(40), base: "abc", message: "On main: older", createdAt: 1 };
 
 /** The button labelled `name`, once it has `title`: until the status loads it's a placeholder. */
 async function loadedButton(name: "Stash" | "Pop", title: string) {

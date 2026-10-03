@@ -8,7 +8,7 @@ import { WIP_MESSAGE, type WipRow } from "@/git/rows";
 import { headLabel } from "@/git/status";
 
 import { HistoryGraph } from "./history-graph";
-import { HistoryOption, type HistoryRowProps } from "./history-option";
+import { HistoryOption, RowKindBadge, type HistoryRowProps } from "./history-option";
 
 /**
  * The uncommitted changes, set apart from the commits below: an amber, dashed-off row with a
@@ -36,17 +36,7 @@ export function HistoryWipRow(
           : "bg-[color-mix(in_srgb,var(--amber-soft)_70%,transparent)] hover:bg-amber-soft",
       )}
     >
-      <span class="flex">
-        <span
-          class={cn(
-            "inline-flex items-center gap-1 rounded-sm border border-[color-mix(in_srgb,var(--amber)_40%,var(--border))] px-[5px] py-[3px] text-[10.5px] font-[680]",
-            toneClasses.amber,
-          )}
-        >
-          <PencilLine size={9} strokeWidth={2.4} />
-          WIP
-        </span>
-      </span>
+      <RowKindBadge icon={PencilLine} label="WIP" />
       <div class="h-full overflow-x-clip">
         <Show when={props.row.graph}>
           {(row) => <HistoryGraph row={row()} wip nodeOnly={props.searching} />}

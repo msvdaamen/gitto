@@ -1,8 +1,10 @@
 import { GitError, RepositoryChangedError, StashConflictError } from "../../core/errors";
 import { resolveRef, type GitCommand, type Repo } from "../../core/repo";
+import { parseDiff } from "../diff/parse";
+import type { ChangedFile } from "../diff/schema";
 import type { Stash } from "./schema";
 
-const FIELDS = ["%H", "%ct", "%gs"];
+const FIELDS = ["%H", "%P", "%ct", "%gs"];
 
 /**
  * For the stash commands, which take no paths: with literal pathspecs (see `ENV` in the runner),
@@ -20,8 +22,12 @@ export async function listStashes(repo: Repo, signal?: AbortSignal): Promise<Sta
   const fields = output.split("\0");
   const stashes: Stash[] = [];
   for (let i = 0; i + FIELDS.length <= fields.length; i += FIELDS.length) {
-    const [sha = "", createdAt = "", message = ""] = fields.slice(i, i + FIELDS.length);
-    stashes.push({ sha, message, createdAt: Number(createdAt) * 1000 });
+    const [sha = "", parents = "", createdAt = "", message = ""] = fields.slice(
+      i,
+      i + FIELDS.length,
+    );
+    const base = parents.split(" ")[0]!;
+    stashes.push({ sha, base, message, createdAt: Number(createdAt) * 1000 });
   }
   return stashes;
 }
@@ -34,6 +40,20 @@ export async function listStashes(repo: Repo, signal?: AbortSignal): Promise<Sta
 export async function pushStash(repo: Repo): Promise<void> {
   // Not `--quiet`, which keeps git from saying why it refused, too.
   await repo.write(["stash", "push", "--include-untracked"], STASH_ENV);
+}
+
+/** The files the stash `sha` changed compared to its base, untracked ones included. */
+export async function getStashFiles(
+  repo: Repo,
+  sha: string,
+  signal?: AbortSignal,
+): Promise<ChangedFile[]> {
+  // Diff options of its own, so `stash.showStat` and `stash.showPatch` don't add any.
+  const output = await repo.read(
+    ["stash", "show", "--include-untracked", "-M", "--raw", "--numstat", "-z", sha],
+    { ...STASH_ENV, signal },
+  );
+  return parseDiff(output);
 }
 
 /**

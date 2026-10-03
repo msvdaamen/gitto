@@ -1,5 +1,10 @@
 import { cn } from "cn";
+import type { LucideIcon } from "lucide-solid";
 import type { JSX } from "solid-js";
+
+import { LineStats } from "@/components/ui/line-stats";
+import { toneClasses } from "@/components/ui/tone";
+import type { useCommitFiles } from "@/git/queries/diff";
 
 import { COLUMNS } from "./columns";
 
@@ -39,5 +44,45 @@ export function HistoryOption(props: HistoryRowProps & { class: string; children
     >
       {props.children}
     </button>
+  );
+}
+
+/** What a row that isn't a commit is, e.g. "WIP" or "Stash", in its branch / tag column. */
+export function RowKindBadge(props: { icon: LucideIcon; label: string }) {
+  return (
+    <span class="flex">
+      <span
+        class={cn(
+          "inline-flex items-center gap-1 rounded-sm border border-[color-mix(in_srgb,var(--amber)_40%,var(--border))] px-[5px] py-[3px] text-[10.5px] font-[680]",
+          toneClasses.amber,
+        )}
+      >
+        <props.icon size={9} strokeWidth={2.4} />
+        {props.label}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * The lines a commit or stash added and removed, as `useFiles` loads its files. Only shown for the
+ * selected row, whose files are loaded anyway.
+ */
+export function RowTotals(props: {
+  repositoryId: string;
+  sha: string;
+  useFiles: typeof useCommitFiles;
+}) {
+  // Read once: a row's kind, and so how its files load, doesn't change.
+  const { totals } = props.useFiles(
+    () => props.repositoryId,
+    () => props.sha,
+  );
+  return (
+    <LineStats
+      additions={totals().additions}
+      deletions={totals().deletions}
+      class="shrink-0 text-[10.5px]"
+    />
   );
 }

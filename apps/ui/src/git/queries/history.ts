@@ -1,11 +1,12 @@
 import { keepPreviousData, useQuery } from "@tanstack/solid-query";
 import { createMemo } from "solid-js";
 
-import { historyGraph, toCommitRow, toHistoryRows } from "@/git/rows";
+import { historyGraph, toCommitRow, toHistoryRows, withStashes } from "@/git/rows";
 import { hasUncommittedChanges } from "@/git/status";
 import { rpc } from "@/lib/rpc";
 
 import { gitKeys } from "./keys";
+import { useStashes } from "./stash";
 import { useHeadSha, useStatus } from "./status";
 
 export function useLog(repositoryId: () => string) {
@@ -26,22 +27,27 @@ export function useLog(repositoryId: () => string) {
 }
 
 /**
- * History table rows: the uncommitted changes (if any) followed by the log. `selectedId` picks the
- * selected row; it defaults to the first one.
+ * History table rows: the uncommitted changes (if any) followed by the log, with the stashes among
+ * it. `selectedId` picks the selected row; it defaults to the first one.
  */
 export function useHistory(repositoryId: () => string, selectedId: () => string | undefined) {
   const log = useLog(repositoryId);
   const status = useStatus(repositoryId);
+  const stashes = useStashes(repositoryId);
 
-  // The layout only depends on the log, whether there are changes and HEAD; not on the rest of
-  // the status, which is refetched whenever a file changes.
+  // The layout only depends on the log, the stashes, whether there are changes and HEAD; not on the
+  // rest of the status, which is refetched whenever a file changes. The log and the stashes are
+  // reconciled when they're refetched, so they only change when there's something new.
   const hasChanges = createMemo(() => hasUncommittedChanges(status.data));
   const head = useHeadSha(status);
-  const graph = createMemo(() =>
-    log.data ? historyGraph(log.data.commits, hasChanges(), head()) : [],
+  // Without the stashes until they've loaded, rather than holding up the history for them (reading
+  // `data` before then would suspend it), and if they couldn't be: the Pop button says why.
+  const entries = createMemo(() =>
+    log.data ? withStashes(log.data.commits, stashes.isSuccess ? stashes.data : []) : [],
   );
+  const graph = createMemo(() => historyGraph(entries(), hasChanges(), head()));
   const rows = createMemo(() =>
-    log.data ? toHistoryRows(log.data.repositoryId, log.data.commits, hasChanges(), graph()) : [],
+    log.data ? toHistoryRows(log.data.repositoryId, entries(), hasChanges(), graph()) : [],
   );
   const selected = createMemo(() => rows().find((row) => row.id === selectedId()) ?? rows()[0]);
 

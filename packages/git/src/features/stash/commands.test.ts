@@ -7,7 +7,7 @@ import { RepositoryChangedError, StashConflictError } from "../../core/errors";
 import type { Repo } from "../../core/repo";
 import { createRepo, git, repos } from "../../test/fixtures";
 import { parseStatus, STATUS_ARGS } from "../status/parse";
-import { listStashes, popStash, pushStash } from "./commands";
+import { getStashFiles, listStashes, popStash, pushStash } from "./commands";
 
 /** Each changed file, with how it changed in the index and the working tree. */
 async function statusFiles(repo: Repo) {
@@ -56,11 +56,18 @@ describe("stashes", () => {
     expect(stashes).toEqual([
       {
         sha: git(path, "rev-parse", "refs/stash"),
+        base: git(path, "rev-parse", "HEAD"),
         message: expect.stringMatching(/^WIP on main: [0-9a-f]+ first$/),
         createdAt: expect.any(Number),
       },
     ]);
     expect(Math.abs(stashes[0]!.createdAt - Date.now())).toBeLessThan(60_000);
+    // What it changed, staged or not, and the untracked files.
+    expect(await getStashFiles(repo, stashes[0]!.sha)).toEqual([
+      { path: "a.txt", status: "modified", origPath: null, additions: 1, deletions: 1 },
+      { path: "b.txt", status: "modified", origPath: null, additions: 1, deletions: 1 },
+      { path: "new file.txt", status: "added", origPath: null, additions: 1, deletions: 0 },
+    ]);
 
     await popStash(repo, stashes[0]!.sha);
     // What was staged is staged again.

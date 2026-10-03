@@ -9,7 +9,7 @@ const status: Pick<StatusSummary, "head" | "counts"> = {
 };
 const clean = { files: 0, staged: 0, unstaged: 0, conflicted: 0 };
 const conflicted = { files: 1, staged: 0, unstaged: 0, conflicted: 1 };
-const stash: Stash = { sha: "def", message: "WIP on main: abc first", createdAt: 0 };
+const stash: Stash = { sha: "def", base: "abc", message: "WIP on main: abc first", createdAt: 0 };
 
 describe("stashTitle", () => {
   it("says how many files would be stashed, or why they can't be", () => {

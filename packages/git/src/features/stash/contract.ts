@@ -2,6 +2,7 @@ import { oc } from "@orpc/contract";
 import * as z from "zod";
 
 import { FullSha, RepositoryInput } from "../../input";
+import { ChangedFileSchema } from "../diff/schema";
 import { StashSchema } from "./schema";
 
 export const StashContract = {
@@ -9,6 +10,8 @@ export const StashContract = {
   list: oc.input(RepositoryInput).output(z.array(StashSchema)),
   /** Stashes every uncommitted change, untracked files included, which leaves no changes behind. */
   push: oc.input(RepositoryInput),
+  /** The files a stash changed compared to its base, untracked ones included. */
+  files: oc.input(RepositoryInput.extend({ sha: FullSha })).output(z.array(ChangedFileSchema)),
   /**
    * Puts the newest stash's changes back, and drops it. Takes its full SHA, and fails if another
    * stash has become the newest since, so it's always the one the user saw that's popped. A pop

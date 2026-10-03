@@ -18,4 +18,7 @@ export const gitKeys = {
     [...gitKeys.commit(repositoryId, sha), "files"] as const,
   commitMessage: (repositoryId: string, sha: string) =>
     [...gitKeys.commit(repositoryId, sha), "message"] as const,
+  /** A stash is a commit too, and never changes either. */
+  stashFiles: (repositoryId: string, sha: string) =>
+    [...gitKeys.commit(repositoryId, sha), "stash-files"] as const,
 };

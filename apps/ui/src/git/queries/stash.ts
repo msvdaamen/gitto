@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/solid-query";
 
 import { rpc } from "@/lib/rpc";
 
+import { useChangedFiles } from "./diff";
 import { gitKeys } from "./keys";
 import { useRepositoryOperation } from "./operation";
 
@@ -12,8 +13,18 @@ export function useStashes(repositoryId: () => string) {
     return {
       queryKey: gitKeys.stashes(id),
       queryFn: ({ signal }) => rpc.git.stash.list({ repositoryId: id }, { signal }),
+      // Merged into the previous list, stash by stash, so a refetch that brings nothing new (the
+      // refs changed elsewhere, say) doesn't lay out and render the history again.
+      reconcile: "sha",
     };
   });
+}
+
+/** The files a stash changed compared to the commit it was made on, untracked ones included. */
+export function useStashFiles(repositoryId: () => string, sha: () => string) {
+  return useChangedFiles(repositoryId, sha, gitKeys.stashFiles, (input, options) =>
+    rpc.git.stash.files(input, options),
+  );
 }
 
 /**

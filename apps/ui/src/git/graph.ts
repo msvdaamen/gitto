@@ -2,7 +2,7 @@
 export interface GraphEdge {
   from: number;
   to: number;
-  /** Part of the dashed line from the uncommitted changes to the commit they're based on. */
+  /** Part of a dashed line from the uncommitted changes, or a stash, to the commit it's based on. */
   dashed?: true;
 }
 
@@ -29,11 +29,19 @@ export interface GraphRow {
   width: number;
 }
 
-/** A commit to lay out. `dashed` draws the line to its parent dashed, for uncommitted changes. */
+/**
+ * A commit to lay out. `dashed` draws the line to its parent dashed, for uncommitted changes and
+ * stashes.
+ */
 export interface GraphCommit {
   sha: string;
   parents: string[];
   dashed?: boolean;
+  /**
+   * Set aside from its parent's branch, like a stash: the parent stays in the lane of a branch
+   * that leads to it, if one does, rather than moving into this one's.
+   */
+  aside?: boolean;
 }
 
 /**
@@ -46,12 +54,14 @@ export function computeGraph(commits: GraphCommit[]): GraphRow[] {
   const lanes: (string | null)[] = [];
   // Lanes drawn dashed, from a `dashed` commit down to its parent.
   const dashed = new Set<number>();
+  // Lanes from an `aside` commit down to its parent.
+  const aside = new Set<number>();
 
   return commits.map((commit) => {
     const { sha, parents } = commit;
     const incoming = lanes.flatMap((lane, i) => (lane === sha ? [i] : []));
     // A branch tip nothing leads to yet starts in the first free lane.
-    const column = incoming[0] ?? freeLane(lanes);
+    const column = incoming.find((lane) => !aside.has(lane)) ?? incoming[0] ?? freeLane(lanes);
     const through = lanes.flatMap((lane, i) =>
       lane !== null && lane !== sha ? [edge(i, i, dashed.has(i))] : [],
     );
@@ -62,17 +72,19 @@ export function computeGraph(commits: GraphCommit[]): GraphRow[] {
     for (const lane of incoming) {
       lanes[lane] = null;
       dashed.delete(lane);
+      aside.delete(lane);
     }
     const bottom: GraphEdge[] = [];
     const [first, ...merged] = parents;
     if (first !== undefined) {
       lanes[column] = first;
       if (commit.dashed) dashed.add(column);
+      if (commit.aside) aside.add(column);
       bottom.push(edge(column, column, !!commit.dashed));
     }
     for (const parent of merged) {
-      // Join a lane already heading to the parent, but not the dashed one from the uncommitted
-      // changes: a merge drawn into it would look like part of them.
+      // Join a lane already heading to the parent, but not a dashed one from the uncommitted
+      // changes or a stash: a merge drawn into it would look like part of them.
       let lane = lanes.findIndex((target, i) => target === parent && !dashed.has(i));
       if (lane === -1) {
         lane = freeLane(lanes, incoming);
