@@ -19,7 +19,9 @@ export default mergeConfig(
       browser: {
         enabled: true,
         headless: true,
-        provider: playwright(),
+        // With the scrollbars the app has, rather than none, which is what headless Chromium does
+        // by default: they're part of what's drawn, and can be dragged.
+        provider: playwright({ launchOptions: { ignoreDefaultArgs: ["--hide-scrollbars"] } }),
         // Electron's window size (see apps/electron/src/main.ts).
         instances: [{ browser: "chromium", viewport: { width: 1200, height: 800 } }],
         commands: await import("./perf/commands.ts"),

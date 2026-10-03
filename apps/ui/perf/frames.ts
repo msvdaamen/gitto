@@ -7,7 +7,23 @@ declare module "vitest/browser" {
     startFrameTrace: () => Promise<void>;
     stopFrameTrace: () => Promise<number[]>;
     wheel: (options: { deltaY: number; steps: number; interval: number }) => Promise<void>;
+    drag: (from: Point, to: Point[], interval: number) => Promise<void>;
   }
+}
+
+interface Point {
+  x: number;
+  y: number;
+}
+
+/**
+ * Where the point `x`, `y` within `element` is on the page, for commands that move the mouse: the
+ * suite runs in an iframe, which Vitest puts somewhere on its own page.
+ */
+export function onPage(element: Element, x: number, y: number): Point {
+  const frame = window.frameElement?.getBoundingClientRect() ?? { left: 0, top: 0 };
+  const box = element.getBoundingClientRect();
+  return { x: frame.left + box.left + x, y: frame.top + box.top + y };
 }
 
 /** A 60Hz display's: a frame that takes longer misses its turn, and the UI visibly stutters. */

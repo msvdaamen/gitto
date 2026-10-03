@@ -4,6 +4,11 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 import type { BrowserCommand } from "vitest/node";
 
+interface Point {
+  x: number;
+  y: number;
+}
+
 interface TraceEvent {
   name: string;
   cat: string;
@@ -79,4 +84,24 @@ export const wheel: BrowserCommand<
     // oxlint-disable-next-line no-await-in-loop -- one notch at a time, like a wheel turns
     await Promise.all([page.mouse.wheel(0, deltaY), sleep(interval)]);
   }
+};
+
+/**
+ * Presses the mouse at `from` and drags it through `to`, one point every `interval` milliseconds,
+ * like dragging a scrollbar's thumb. The points are in the page, not the iframe the suite runs in
+ * (see `onPage`).
+ */
+export const drag: BrowserCommand<[from: Point, to: Point[], interval: number]> = async (
+  { page },
+  from,
+  to,
+  interval,
+) => {
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  for (const point of to) {
+    // oxlint-disable-next-line no-await-in-loop -- one move at a time, like a hand
+    await Promise.all([page.mouse.move(point.x, point.y), sleep(interval)]);
+  }
+  await page.mouse.up();
 };
