@@ -80,6 +80,24 @@ describe("the commit index", () => {
     });
   });
 
+  it("doesn't ask git about tips that were reachable already", async () => {
+    const path = createRepo("index-known");
+    const repo = await repos.open("index-known");
+    const first = commit(path, 1000, "first");
+    const second = commit(path, 1001, "second", first);
+    const index = await CommitIndex.load(repo, new Set([second]));
+    const reads: string[][] = [];
+    const recording = { ...repo, read: (args: string[]) => (reads.push(args), repo.read(args)) };
+
+    // A branch made at the first commit, then the second one's branch moved back to it.
+    expect(await index.sync(recording, new Set([second, first]))).toEqual({
+      added: new Set(),
+      lost: false,
+    });
+    expect(await index.sync(recording, new Set([first]))).toEqual({ added: new Set(), lost: true });
+    expect(reads).toEqual([]);
+  });
+
   it("leaves out commits git lists as new that weren't, when the clock was skewed", async () => {
     const path = createRepo("index-skew");
     const repo = await repos.open("index-skew");

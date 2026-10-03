@@ -52,6 +52,9 @@ const ENV = {
   // Paths from the UI are file names, not globs.
   GIT_LITERAL_PATHSPECS: "1",
   GIT_PAGER: "cat",
+  // Git writes its output to a pipe a commit at a time, for whoever reads it as it comes; Gitto
+  // takes it whole, and reading 190,000 commits in 60,000 pieces kept the main process busy 0.5s.
+  GIT_FLUSH: "0",
 };
 
 /** The process groups of the commands to stop when Gitto exits (see `RunOptions.stopOnExit`). */
