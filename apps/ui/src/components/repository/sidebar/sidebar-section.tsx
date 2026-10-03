@@ -31,7 +31,8 @@ export function SidebarSection<T>(props: {
   collapsed: boolean;
   onToggle: () => void;
   items: T[];
-  children: (item: T) => JSX.Element;
+  /** Renders a row; its item changes when the row is reused for another (see `VirtualList`). */
+  children: (item: () => T) => JSX.Element;
 }) {
   const expanded = () => !props.collapsed && props.items.length > 0;
 
@@ -105,7 +106,7 @@ function RailSection<T>(props: {
   icon: LucideIcon;
   count: number;
   items: T[];
-  children: (item: T) => JSX.Element;
+  children: (item: () => T) => JSX.Element;
 }) {
   return (
     <Popover placement="right-start" gutter={10}>
