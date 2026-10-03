@@ -45,6 +45,20 @@ describe("usePanelWidth", () => {
     third.dispose();
   });
 
+  it("doesn't save a width that's still being dragged", () => {
+    const first = mount();
+    first.setWidth(300, false);
+    expect(first.width()).toBe(300);
+    first.dispose();
+    expect(mount().width()).toBe(220);
+
+    const second = mount();
+    second.setWidth(300, false);
+    second.setWidth(310);
+    second.dispose();
+    expect(mount().width()).toBe(310);
+  });
+
   it("ignores unreadable saved widths", () => {
     localStorage.setItem("gitto-panel-width:sidebar", "wide");
     const panel = mount();

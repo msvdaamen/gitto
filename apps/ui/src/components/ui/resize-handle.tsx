@@ -27,7 +27,8 @@ export function ResizeHandle(props: {
   label: string;
   width: number;
   bounds: PanelBounds;
-  onResize: (width: number) => void;
+  /** The width to resize to; `save` is false while dragging, until the handle is let go of. */
+  onResize: (width: number, save: boolean) => void;
   onReset: () => void;
   class?: string;
 }) {
@@ -50,6 +51,8 @@ export function ResizeHandle(props: {
     event.currentTarget.releasePointerCapture(event.pointerId);
     setDragging(false);
     setPageDragging(false);
+    // The width it was dragged to, saved now rather than on every frame of the drag.
+    props.onResize(props.width, true);
   };
 
   return (
@@ -75,7 +78,9 @@ export function ResizeHandle(props: {
         setPageDragging(true);
       }}
       onPointerMove={(event) => {
-        if (dragging()) props.onResize(widthAt(event.currentTarget, event.clientX + grabOffset));
+        if (dragging()) {
+          props.onResize(widthAt(event.currentTarget, event.clientX + grabOffset), false);
+        }
       }}
       onPointerUp={stop}
       onPointerCancel={stop}
@@ -96,7 +101,7 @@ export function ResizeHandle(props: {
                   : undefined;
         if (width === undefined) return;
         event.preventDefault();
-        props.onResize(width);
+        props.onResize(width, true);
       }}
     >
       <span
