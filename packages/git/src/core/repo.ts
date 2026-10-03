@@ -2,7 +2,7 @@ import { stat } from "node:fs/promises";
 
 import type { RepositoryService } from "@gitto/repository/server";
 
-import { FolderNotFoundError, RepositoryNotFoundError } from "./errors";
+import { FolderNotFoundError, GitError, RepositoryNotFoundError } from "./errors";
 import { CommitGraphs, runGit, WriteQueue, type RunOptions } from "./runner";
 
 /** A repository on disk, with git commands bound to it. */
@@ -15,14 +15,26 @@ export interface Repo {
   /**
    * Runs a fetch. Not queued with writes: it waits on the network, which a commit or staging a file
    * shouldn't wait for, and it only updates remote-tracking refs and FETCH_HEAD, which they don't
-   * touch. Fetches of the same repository do run one at a time.
+   * touch. Fetches of the same repository do run one at a time, and are stopped if Gitto exits.
    */
   fetch(args: string[], options?: RunOptions): Promise<string>;
+  /**
+   * Runs `task`, which runs commands through `run`, as one fetch (see `fetch`): no other fetch of
+   * the repository runs before it's done, e.g. to read the FETCH_HEAD a fetch wrote.
+   */
+  fetching<T>(task: (run: GitCommand) => Promise<T>): Promise<T>;
+  /**
+   * Runs `task`, which runs commands through `run`, as one write: no other write to the repository
+   * runs before it's done. For a write that checks the repository before and after.
+   */
+  exclusive<T>(task: (run: GitCommand) => Promise<T>): Promise<T>;
   /** Whether HEAD points at a commit; it doesn't on a branch without commits yet. */
   hasHead(): Promise<boolean>;
   /** Writes the commit-graph, which speeds up the log, once per run (see `CommitGraphs`). */
   updateCommitGraph(): Promise<void>;
 }
+
+export type GitCommand = (args: string[], options?: RunOptions) => Promise<string>;
 
 /** Opens the repositories that have been added to Gitto. */
 export interface GitRepos {
@@ -49,19 +61,39 @@ export class GitReposImpl implements GitRepos {
     );
     if (!isFolder) throw new FolderNotFoundError(path);
 
-    const run = (args: string[], options?: RunOptions) => runGit(path, args, options);
+    const run: GitCommand = (args, options) => runGit(path, args, options);
+    const fetching = <T>(task: (run: GitCommand) => Promise<T>) =>
+      this.fetches.run(path, () =>
+        task((args, options) => run(args, { ...options, stopOnExit: true })),
+      );
 
     return {
       path,
       read: run,
       write: (args, options) => this.writes.run(path, () => run(args, options)),
-      fetch: (args, options) => this.fetches.run(path, () => run(args, options)),
-      hasHead: () =>
-        runGit(path, ["rev-parse", "--verify", "--quiet", "HEAD"]).then(
-          () => true,
-          () => false,
-        ),
+      fetch: (args, options) => fetching((queued) => queued(args, options)),
+      fetching,
+      exclusive: (task) => this.writes.run(path, () => task(run)),
+      // Any failure is taken for no HEAD, as callers have always had it.
+      hasHead: () => refExists(run, "HEAD").catch(() => false),
       updateCommitGraph: () => this.commitGraphs.update(path),
     };
   }
+}
+
+/** The commit `rev` (e.g. `HEAD`, a branch) points at; `null` if none. Rejects if git couldn't tell. */
+export function resolveRef(run: GitCommand, rev: string): Promise<string | null> {
+  return run(["rev-parse", "--verify", "--quiet", `${rev}^{commit}`]).then(
+    (sha) => sha.trim(),
+    (error: unknown) => {
+      // Exits with 1, saying nothing, when there's no such commit.
+      if (error instanceof GitError && error.exitCode === 1) return null;
+      throw error;
+    },
+  );
+}
+
+/** Whether `ref` (e.g. `HEAD`, `MERGE_HEAD`) points at a commit; rejects if git couldn't tell. */
+export async function refExists(run: GitCommand, ref: string): Promise<boolean> {
+  return (await resolveRef(run, ref)) !== null;
 }

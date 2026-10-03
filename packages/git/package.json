@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./contract": "./src/contract.ts",
+    "./pull-blocker": "./src/features/remote/pull-blocker.ts",
     "./server": "./src/server.ts",
     "./types": "./src/types.ts"
   },
