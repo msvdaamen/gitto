@@ -5,7 +5,7 @@ import { beforeAll, describe, expect, it, onTestFinished } from "vitest";
 
 import { HeadMovedError, NotARepositoryError } from "../../core/errors";
 import type { Repo } from "../../core/repo";
-import { createRepo, git, page, paths, repos, root } from "../../test/fixtures";
+import { cloneRepo, createRepo, git, page, repos } from "../../test/fixtures";
 import { getLog } from "../history/commands";
 import { createCommit, getCommitMessage, getPushedTo } from "./commands";
 
@@ -144,9 +144,7 @@ describe("getPushedTo", () => {
   it("is the remote branch git push would update, if it has the commit", async () => {
     const remote = createRepo("remote");
     git(remote, "commit", "-q", "--allow-empty", "-m", "First");
-    const path = join(root, "clone");
-    git(root, "clone", "-q", remote, path);
-    paths.set("clone", path);
+    const path = cloneRepo("clone", remote);
     const repo = await repos.open("clone");
     expect(await getPushedTo(repo, "HEAD")).toBe("origin/main");
 
