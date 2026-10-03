@@ -15,6 +15,7 @@ import { AuthorTooltipProvider } from "./author-tooltip";
 import { COLUMNS, MIN_WIDTH } from "./columns";
 import { HistoryCommitRow } from "./commit-row";
 import { graphWidth, ROW_HEIGHT } from "./history-graph";
+import { optionId } from "./history-option";
 import { HistoryStashRow } from "./stash-row";
 import { HistoryWipRow } from "./wip-row";
 
@@ -48,9 +49,10 @@ export function HistoryTable(props: {
 }
 
 /** The column headings; `updating` says the history is being reloaded. */
-function HistoryHeader(props: { updating?: boolean }) {
+function HistoryHeader(props: { updating?: boolean; ref?: (el: HTMLDivElement) => void }) {
   return (
     <div
+      ref={props.ref}
       class={cn(
         "sticky top-0 z-10 grid h-[31px] items-center",
         COLUMNS,
@@ -104,10 +106,65 @@ function HistoryRows(props: {
     needle() ? history.rows().filter((row) => matchesSearch(row, needle())) : history.rows(),
   );
 
+  let header: HTMLDivElement | undefined;
+  let list: HTMLDivElement | undefined;
+  // The selected row's place among the rows on show; -1 when the search hides it.
+  const selectedIndex = createMemo(() => {
+    const id = history.selected()?.id;
+    return visibleRows().findIndex((row) => row.id === id);
+  });
+
+  /** Scrolls the row at `index` into view, clear of the header that sticks above the rows. */
+  function reveal(index: number) {
+    const scroller = props.scrollElement;
+    if (!scroller || !list) return;
+    const viewTop = scroller.getBoundingClientRect().top + scroller.clientTop;
+    const top = list.getBoundingClientRect().top + index * ROW_HEIGHT;
+    const above = viewTop + (header?.offsetHeight ?? 0) - top;
+    const below = top + ROW_HEIGHT - (viewTop + scroller.clientHeight);
+    if (above > 0) scroller.scrollTop -= above;
+    else if (below > 0) scroller.scrollTop += below;
+  }
+
+  /** Moves the selection with the arrow keys, Page Up and Down, Home and End. */
+  function onKeyDown(event: KeyboardEvent) {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    const rows = visibleRows();
+    const current = selectedIndex();
+    // A page is what fits in view, less a row to keep one in sight.
+    const view = (props.scrollElement?.clientHeight ?? 0) - (header?.offsetHeight ?? 0);
+    const page = Math.max(1, Math.floor(view / ROW_HEIGHT) - 1);
+    const targets: Record<string, number> = {
+      ArrowDown: current + 1,
+      ArrowUp: current - 1,
+      PageDown: current + page,
+      PageUp: current - page,
+      Home: 0,
+      End: rows.length - 1,
+    };
+    const target = targets[event.key];
+    if (target === undefined || rows.length === 0) return;
+    event.preventDefault();
+    const index = Math.min(rows.length - 1, Math.max(0, target));
+    if (index !== current) props.onSelect(rows[index]!.id);
+    reveal(index);
+  }
+
   return (
     <div class={MIN_WIDTH} style={{ "--graph-width": `${graphWidth(lanes())}px` }}>
-      <HistoryHeader updating={updating()} />
-      <div role="listbox" aria-label="Commit history">
+      <HistoryHeader ref={(el) => (header = el)} updating={updating()} />
+      <div
+        ref={(el) => (list = el)}
+        role="listbox"
+        aria-label="Commit history"
+        aria-activedescendant={selectedIndex() === -1 ? undefined : optionId(selectedIndex())}
+        tabIndex={0}
+        class="group/history outline-none"
+        onKeyDown={onKeyDown}
+        // A clicked row hands the focus to the list, which is what the keyboard moves through:
+        // the rows come and go as the list scrolls, and would take the focus with them.
+        onFocusIn={(event) => event.target !== list && list?.focus({ preventScroll: true })}
+      >
         <Show
           when={!history.log.error}
           fallback={
