@@ -1,4 +1,5 @@
-import { keepPreviousData, useQuery } from "@tanstack/solid-query";
+import type { Log } from "@gitto/git/types";
+import { keepPreviousData, useQuery, type QueryFunctionContext } from "@tanstack/solid-query";
 import { createMemo } from "solid-js";
 
 import { historyGraph, toCommitRow, toHistoryRows, withStashes } from "@/git/rows";
@@ -9,16 +10,25 @@ import { gitKeys } from "./keys";
 import { useStashes } from "./stash";
 import { useHeadSha, useStatus } from "./status";
 
+/** A page of the log, tagged with its repository, so every row knows where its commit lives. */
+type HistoryLog = Log & { repositoryId: string };
+
 export function useLog(repositoryId: () => string) {
   return useQuery(() => {
     const id = repositoryId();
+    const queryKey = gitKeys.log(id);
     return {
-      queryKey: gitKeys.log(id),
-      // Tagged with its repository, so every row knows where its commit lives (see `toHistoryRows`).
-      queryFn: async ({ signal }) => ({
-        repositoryId: id,
-        commits: await rpc.git.history.log({ repositoryId: id }, { signal }),
-      }),
+      queryKey,
+      queryFn: async ({ signal, client }: QueryFunctionContext): Promise<HistoryLog> => {
+        const previous = client.getQueryData<HistoryLog>(queryKey);
+        const result = await rpc.git.history.log(
+          { repositoryId: id, since: previous?.version },
+          { signal },
+        );
+        // Unchanged: keep the same data, without the log being read again. Only ever the answer
+        // when there was a previous log to compare with.
+        return "unchanged" in result ? previous! : { repositoryId: id, ...result };
+      },
       // Merged into the previous log, commit by commit, so a refetch that brings nothing new
       // (the refs changed elsewhere, say) doesn't lay out and render the history again.
       reconcile: "sha",

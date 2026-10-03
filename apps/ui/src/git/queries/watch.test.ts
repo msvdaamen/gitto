@@ -1,5 +1,5 @@
 import { renderHook } from "@solidjs/testing-library";
-import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
+import { QueryClient, QueryClientProvider, QueryObserver } from "@tanstack/solid-query";
 import { createComponent, type JSX } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -32,7 +32,7 @@ function watch(focused: boolean) {
       }),
   });
   const invalidated = () => invalidate.mock.calls.map(([filters]) => filters?.queryKey);
-  return { invalidate, invalidated, cleanup };
+  return { client, invalidate, invalidated, cleanup };
 }
 
 beforeEach(() => vi.useFakeTimers());
@@ -95,6 +95,36 @@ describe("watching a repository", () => {
 
     cleanup();
     expect(rpc.gitDir.open).toBe(0);
+  });
+
+  it("lets a refetch that's running finish, then refetches it again", async () => {
+    const { client, cleanup } = watch(true);
+    await vi.waitFor(() => expect(rpc.gitDir.open).toBe(1));
+    const loads: { signal: AbortSignal; resolve: (log: string) => void }[] = [];
+    const log = new QueryObserver(client, {
+      queryKey: gitKeys.log("repo"),
+      queryFn: ({ signal }) => new Promise<string>((resolve) => loads.push({ signal, resolve })),
+    });
+    const unsubscribe = log.subscribe(() => undefined);
+    await vi.waitFor(() => expect(loads).toHaveLength(1));
+    loads[0]!.resolve("first");
+    await vi.waitFor(() => expect(log.getCurrentResult().data).toBe("first"));
+
+    // Refetched (by a commit in Gitto, say), and reported by the watcher while that runs.
+    void client.invalidateQueries({ queryKey: gitKeys.log("repo") });
+    await vi.waitFor(() => expect(loads).toHaveLength(2));
+    rpc.gitDir.push(["refs"]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(loads).toHaveLength(2);
+    expect(loads[1]!.signal.aborted).toBe(false);
+
+    loads[1]!.resolve("second");
+    await vi.waitFor(() => expect(loads).toHaveLength(3));
+    loads[2]!.resolve("third");
+    await vi.waitFor(() => expect(log.getCurrentResult().data).toBe("third"));
+
+    unsubscribe();
+    cleanup();
   });
 
   it("refetches changes to the working tree right away while the window has focus", async () => {

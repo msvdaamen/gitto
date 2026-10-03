@@ -15,10 +15,12 @@ import { describe, it } from "vitest";
 import type { Repo } from "../src/core/repo";
 import { getCommitFiles } from "../src/features/diff/commands";
 import { DiffContract } from "../src/features/diff/contract";
-import { getCommit, getLog } from "../src/features/history/commands";
+import { getCommit, getVersionedLog } from "../src/features/history/commands";
 import { HistoryContract } from "../src/features/history/contract";
 import { listRefs } from "../src/features/refs/commands";
 import { RefsContract } from "../src/features/refs/contract";
+import { listStashes } from "../src/features/stash/commands";
+import { StashContract } from "../src/features/stash/contract";
 import { getStatus } from "../src/features/status/commands";
 import { StatusContract } from "../src/features/status/contract";
 import { ignoredPaths } from "../src/features/watch/commands";
@@ -39,7 +41,8 @@ const serializer = new StandardRPCSerializer(new StandardRPCJsonSerializer());
 
 interface Operation {
   name: string;
-  run: (repo: Repo) => Promise<unknown>;
+  /** Runs it; with `since`, the version of what the caller has already, as the UI passes it. */
+  run: (repo: Repo, since?: string) => Promise<unknown>;
   /** The procedure that returns it, to validate and encode the result the way oRPC does. */
   procedure?: AnyContractProcedure;
   /**
@@ -60,39 +63,50 @@ interface Timing {
   bytes: number;
 }
 
+/** `result`, or `{ unchanged: true }` if its version is `since`, as the handlers answer. */
+function unlessUnchanged<T extends { version: string }>(result: T, since?: string) {
+  return result.version === since ? { unchanged: true as const } : result;
+}
+
 function operations(head: string): Operation[] {
   return [
     {
       name: "status",
-      run: (repo) => getStatus(repo),
+      run: async (repo, since) => unlessUnchanged(await getStatus(repo), since),
       procedure: StatusContract.get,
       refetchedOn: "uncommitted",
     },
     {
       name: "log 200",
-      run: (repo) => getLog(repo, { limit: 200, skip: 0 }),
+      run: (repo, since) => getVersionedLog(repo, { limit: 200, skip: 0 }, since),
       procedure: HistoryContract.log,
       refetchedOn: "refs",
     },
     {
       name: "log 200, no commit-graph",
-      run: (repo) => withoutCommitGraph(() => getLog(repo, { limit: 200, skip: 0 })),
+      run: (repo) => withoutCommitGraph(() => getVersionedLog(repo, { limit: 200, skip: 0 })),
       procedure: HistoryContract.log,
     },
     {
       name: "log 1000",
-      run: (repo) => getLog(repo, { limit: 1000, skip: 0 }),
+      run: (repo) => getVersionedLog(repo, { limit: 1000, skip: 0 }),
       procedure: HistoryContract.log,
     },
     {
       name: "log 200, skip 10000",
-      run: (repo) => getLog(repo, { limit: 200, skip: 10_000 }),
+      run: (repo) => getVersionedLog(repo, { limit: 200, skip: 10_000 }),
       procedure: HistoryContract.log,
     },
     {
       name: "refs",
-      run: (repo) => listRefs(repo),
+      run: async (repo, since) => unlessUnchanged(await listRefs(repo), since),
       procedure: RefsContract.list,
+      refetchedOn: "refs",
+    },
+    {
+      name: "stashes",
+      run: (repo) => listStashes(repo),
+      procedure: StashContract.list,
       refetchedOn: "refs",
     },
     {
@@ -107,6 +121,17 @@ function operations(head: string): Operation[] {
     },
     { name: "ignored paths (watcher)", run: (repo) => ignoredPaths(repo) },
   ];
+}
+
+/** The version of what each operation returns now, for those that have one. */
+async function versions(repo: Repo, refetched: Operation[]) {
+  const results = await Promise.all(refetched.map((operation) => operation.run(repo)));
+  return new Map(
+    refetched.map((operation, i) => {
+      const result = results[i] as { version?: string };
+      return [operation, result.version] as const;
+    }),
+  );
 }
 
 /** Runs git as if the repository had no commit-graph file, as freshly cloned ones don't. */
@@ -175,16 +200,23 @@ async function measure(repo: Repo, operation: Operation): Promise<Timing> {
 }
 
 /**
- * Everything a change on disk refetches, at once, like the UI does. `busy` is how much of that
- * time the main process was occupied (and so couldn't handle input); `stall` its longest block.
+ * Everything a change on disk refetches, at once, like the UI does: with `since`, the versions of
+ * what it has already, by operation. `busy` is how much of that time the main process was occupied
+ * (and so couldn't handle input); `stall` its longest block.
  */
-async function measureRefresh(repo: Repo, refetched: Operation[]) {
+async function measureRefresh(
+  repo: Repo,
+  refetched: Operation[],
+  since?: Map<Operation, string | undefined>,
+) {
   const delay = monitorEventLoopDelay({ resolution: 1 });
   delay.enable();
   const utilization = performance.eventLoopUtilization();
   const start = performance.now();
   await Promise.all(
-    refetched.map(async (operation) => respond(operation.procedure, await operation.run(repo))),
+    refetched.map(async (operation) =>
+      respond(operation.procedure, await operation.run(repo, since?.get(operation))),
+    ),
   );
   const total = performance.now() - start;
   const busy = performance.eventLoopUtilization(utilization).active;
@@ -230,15 +262,19 @@ describe.each(perfRepoPaths())("%s", (path) => {
     const changes = [
       { change: "file edited or staged", refetched: ["uncommitted"] },
       { change: "commit or checkout", refetched: ["uncommitted", "refs"] },
+      // What the UI has is sent back as its version: e.g. after a change made in Gitto, which it
+      // refetches right away and once more when the watcher reports it.
+      { change: "nothing changed (refs)", refetched: ["uncommitted", "refs"], unchanged: true },
     ];
     const refreshRows = [];
-    for (const { change, refetched } of changes) {
+    for (const { change, refetched, unchanged } of changes) {
       const refetchedOps = all.filter(
         (operation) => operation.refetchedOn && refetched.includes(operation.refetchedOn),
       );
+      const since = unchanged ? await versions(repo, refetchedOps) : undefined;
       const refreshes = [];
       for (let run = 0; run <= RUNS; run++) {
-        const refresh = await measureRefresh(repo, refetchedOps);
+        const refresh = await measureRefresh(repo, refetchedOps, since);
         if (run > 0) refreshes.push(refresh);
       }
       refreshRows.push({

@@ -1,7 +1,12 @@
-import { Index, Match, Show, Switch, type JSX } from "solid-js";
+import { createSignal, Index, Match, onCleanup, Show, Switch, type JSX } from "solid-js";
 
 import { Avatar } from "@/components/ui/avatar";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  Tooltip,
+  TOOLTIP_OPEN_DELAY,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type { GraphEdge, GraphRow } from "@/git/graph";
 
 /** Width of a lane, and the space left and right of the lanes. */
@@ -164,23 +169,52 @@ export function HistoryGraph(props: {
   );
 }
 
-/** Shows a commit's author in a tooltip while its node, `children`, is hovered. */
+/**
+ * Shows a commit's author in a tooltip while its node, `children`, is hovered. The tooltip is only
+ * set up once the pointer first rests on the node: every row has one, and rows are made and dropped
+ * as the history scrolls, a third of which went into setting up their tooltips. Until then the node
+ * is a plain one, which the tooltip's own then takes the place of, open.
+ */
 function AuthorTooltip(props: {
   author?: string;
   initials?: string;
   color?: string;
   children: JSX.Element;
 }) {
+  const [open, setOpen] = createSignal(false);
+  const [hovered, setHovered] = createSignal(false);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  onCleanup(() => clearTimeout(timer));
+
   return (
-    <Tooltip>
-      <TooltipTrigger as="g" class="cursor-default">
-        {props.children}
-      </TooltipTrigger>
-      <TooltipContent class="flex items-center gap-2 py-1 pl-1 pr-2.5">
-        <Avatar initials={props.initials ?? ""} color={props.color} />
-        <span class="truncate font-[600]">{props.author}</span>
-      </TooltipContent>
-    </Tooltip>
+    <Show
+      when={hovered()}
+      fallback={
+        <g
+          class="cursor-default"
+          onPointerEnter={(event) => {
+            if (event.pointerType === "touch") return;
+            timer = setTimeout(() => {
+              setOpen(true);
+              setHovered(true);
+            }, TOOLTIP_OPEN_DELAY);
+          }}
+          onPointerLeave={() => clearTimeout(timer)}
+        >
+          {props.children}
+        </g>
+      }
+    >
+      <Tooltip open={open()} onOpenChange={setOpen}>
+        <TooltipTrigger as="g" class="cursor-default">
+          {props.children}
+        </TooltipTrigger>
+        <TooltipContent class="flex items-center gap-2 py-1 pl-1 pr-2.5">
+          <Avatar initials={props.initials ?? ""} color={props.color} />
+          <span class="truncate font-[600]">{props.author}</span>
+        </TooltipContent>
+      </Tooltip>
+    </Show>
   );
 }
 

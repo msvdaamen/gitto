@@ -2,13 +2,22 @@ import { Tooltip as KobalteTooltip, type TooltipRootProps } from "@kobalte/core/
 import { cn } from "cn";
 import { splitProps, type JSX } from "solid-js";
 
+/** How long the pointer rests on a tooltip's trigger before it opens. */
+export const TOOLTIP_OPEN_DELAY = 150;
+
 /**
  * A tooltip that opens quickly above its trigger. Put a `TooltipTrigger` (any element, through
  * `as`) and a `TooltipContent` inside it.
  */
 export function Tooltip(props: TooltipRootProps & { children: JSX.Element }) {
   return (
-    <KobalteTooltip openDelay={150} closeDelay={0} placement="top" gutter={6} {...props}>
+    <KobalteTooltip
+      openDelay={TOOLTIP_OPEN_DELAY}
+      closeDelay={0}
+      placement="top"
+      gutter={6}
+      {...props}
+    >
       {props.children}
     </KobalteTooltip>
   );

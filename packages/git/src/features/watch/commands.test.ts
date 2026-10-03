@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { createRepo, git, paths, repos, root } from "../../test/fixtures";
+import { cloneRepo, createRepo, git, paths, repos, root } from "../../test/fixtures";
 import { watchGitDir, watchWorkingTree } from "./commands";
 
 /** Whether `next` stays pending for longer than the watcher's debounce: resolves to "quiet" if so. */
@@ -173,6 +173,26 @@ describe("watching the git directory", () => {
       expect(await changes.next()).toEqual({ value: undefined, done: true });
     },
   );
+
+  it("reports a fetch only when it brings new branches", { timeout: 10_000 }, async () => {
+    const origin = createRepo("watched-origin");
+    git(origin, "commit", "-q", "--allow-empty", "-m", "First");
+    const path = cloneRepo("watched-clone", origin);
+    const repo = await repos.open("watched-clone");
+    const controller = new AbortController();
+    const changes = watchGitDir(repo, controller.signal);
+
+    // Writes FETCH_HEAD, and nothing else.
+    let next = changes.next();
+    soon(() => git(path, "fetch", "-q"));
+    expect(await quiet(next)).toBe("quiet");
+
+    git(origin, "branch", "feature");
+    git(path, "fetch", "-q");
+    expect((await next).value).toContain("refs");
+
+    controller.abort();
+  });
 
   it(
     "keeps going while the working tree is watched and unwatched",

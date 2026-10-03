@@ -24,8 +24,11 @@ export type RefLeaf = {
  * `origin/feature/login` → `origin` › `feature` › `login`. Folders come before refs at each level;
  * otherwise the input order is kept.
  */
-export function buildRefTree(refs: Ref[]): RefTreeNode[] {
+export function buildRefTree(refs: readonly Ref[]): RefTreeNode[] {
   const root: RefFolder = { type: "folder", name: "", path: "", count: 0, children: [] };
+  // Every folder by its path, so a ref finds its folders without searching their siblings: a
+  // remote can have thousands of branches.
+  const folders = new Map<string, RefFolder>();
 
   for (const ref of refs) {
     const segments = ref.name.split("/");
@@ -36,12 +39,11 @@ export function buildRefTree(refs: Ref[]): RefTreeNode[] {
 
     for (const segment of segments) {
       path = `${path}/${segment}`;
-      let child = folder.children.find(
-        (node): node is RefFolder => node.type === "folder" && node.name === segment,
-      );
+      let child = folders.get(path);
       if (!child) {
         child = { type: "folder", name: segment, path, count: 0, children: [] };
         folder.children.push(child);
+        folders.set(path, child);
       }
       child.count++;
       folder = child;

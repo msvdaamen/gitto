@@ -5,7 +5,7 @@ import { listRefs } from "./commands";
 
 describe("listRefs", () => {
   it("lists branches and tags, marking the checked-out branch", async () => {
-    const refs = await listRefs(await createHistoryRepo());
+    const { refs } = await listRefs(await createHistoryRepo());
     expect(refs.map((ref) => `${ref.kind}:${ref.name}${ref.current ? "*" : ""}`)).toEqual([
       "local:main*",
       "local:side",
@@ -15,6 +15,6 @@ describe("listRefs", () => {
 
   it("lists nothing in a repository without commits", async () => {
     createRepo("empty");
-    expect(await listRefs(await repos.open("empty"))).toEqual([]);
+    expect((await listRefs(await repos.open("empty"))).refs).toEqual([]);
   });
 });

@@ -89,4 +89,25 @@ describe("the router", () => {
       await call(gitRouter.status.get, { ...input, since: "an older version" }, { context }),
     ).toEqual(status);
   });
+
+  it("skips refs and a log the caller already has", async () => {
+    const input = { repositoryId: ids.history };
+    const refs = await call(gitRouter.refs.list, input, { context });
+    const log = await call(gitRouter.history.log, input, { context });
+    if ("unchanged" in refs || "unchanged" in log) return expect.fail("expected full results");
+
+    const unchanged = { unchanged: true };
+    expect(await call(gitRouter.refs.list, { ...input, since: refs.version }, { context })).toEqual(
+      unchanged,
+    );
+    expect(
+      await call(gitRouter.history.log, { ...input, since: log.version }, { context }),
+    ).toEqual(unchanged);
+    expect(
+      await call(gitRouter.refs.list, { ...input, since: "an older version" }, { context }),
+    ).toEqual(refs);
+    expect(
+      await call(gitRouter.history.log, { ...input, since: "an older version" }, { context }),
+    ).toEqual(log);
+  });
 });

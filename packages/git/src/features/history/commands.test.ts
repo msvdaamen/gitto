@@ -6,7 +6,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { GitError } from "../../core/errors";
 import type { Repo } from "../../core/repo";
 import { createHistoryRepo, createRepo, git, page, rejection, repos } from "../../test/fixtures";
-import { getCommit, getLog } from "./commands";
+import { getCommit, getLog, getVersionedLog } from "./commands";
 
 describe("a repository with history", () => {
   let repo: Repo;
@@ -49,6 +49,47 @@ describe("a repository without commits", () => {
   it("has an empty log", async () => {
     createRepo("empty");
     expect(await getLog(await repos.open("empty"), page)).toEqual([]);
+    expect(await getVersionedLog(await repos.open("empty"), page)).toMatchObject({ commits: [] });
+  });
+});
+
+describe("the log's version", () => {
+  it("skips a log that would be the same, and reads one that wouldn't", async () => {
+    const path = createRepo("versioned");
+    git(path, "commit", "-q", "--allow-empty", "-m", "first");
+    const repo = await repos.open("versioned");
+    /** The version of the log now, checking it's read as `getLog` reads it. */
+    const version = async (pageOfLog = page) => {
+      const log = await getVersionedLog(repo, pageOfLog);
+      if ("unchanged" in log) return expect.fail("expected a log");
+      expect(log.commits).toEqual(await getLog(repo, pageOfLog));
+      return log.version;
+    };
+
+    let last = await version();
+    expect(await getVersionedLog(repo, page, last)).toEqual({ unchanged: true });
+    // Nothing the log shows.
+    writeFileSync(join(path, "file.txt"), "x");
+    git(path, "add", "file.txt");
+    git(path, "config", "core.something", "else");
+    expect(await getVersionedLog(repo, page, last)).toEqual({ unchanged: true });
+
+    const changes: [string, () => void][] = [
+      ["a commit", () => git(path, "commit", "-q", "-m", "second")],
+      // On the same commit, but HEAD's decoration moves.
+      ["switching branches", () => git(path, "switch", "-q", "-c", "other")],
+      ["detaching HEAD", () => git(path, "switch", "-q", "--detach")],
+      ["a tag", () => git(path, "tag", "v1")],
+      ["a branch deleted", () => git(path, "branch", "-q", "-D", "other")],
+    ];
+    for (const [change, run] of changes) {
+      run();
+      // oxlint-disable-next-line no-await-in-loop -- each change follows the one before.
+      const next = await version();
+      expect(next, change).not.toBe(last);
+      last = next;
+    }
+    expect(await version({ limit: 1, skip: 0 })).not.toBe(last);
   });
 });
 

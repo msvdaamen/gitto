@@ -1,5 +1,5 @@
 import type { GitDirChange } from "@gitto/git/types";
-import { useQueryClient } from "@tanstack/solid-query";
+import { useQueryClient, type QueryClient, type QueryKey } from "@tanstack/solid-query";
 import { createEffect, onCleanup } from "solid-js";
 
 import { useWindowFocus } from "@/hooks/window-focus";
@@ -26,10 +26,8 @@ export function useRepositoryWatcher(repositoryId: () => string) {
 
   createEffect(() => {
     const id = repositoryId();
-    const refetchAll = () =>
-      void queryClient.invalidateQueries({ queryKey: gitKeys.repository(id) });
-    const refetchUncommitted = () =>
-      void queryClient.invalidateQueries({ queryKey: gitKeys.uncommitted(id) });
+    const refetchAll = () => refetch(queryClient, gitKeys.repository(id));
+    const refetchUncommitted = () => refetch(queryClient, gitKeys.uncommitted(id));
 
     const gitDir = new Watch("the git directory", (signal) =>
       rpc.git.watch.gitDir({ repositoryId: id }, { signal }),
@@ -80,6 +78,30 @@ export function useRepositoryWatcher(repositoryId: () => string) {
       workingTree.stop();
     });
   });
+}
+
+/**
+ * Refetches the queries under `queryKey` for a change on disk. One that's being refetched already
+ * is let finish, rather than started over as invalidating does: a change made in Gitto is refetched
+ * right away, and reported here a moment later, by which time the history can be most of the way
+ * through loading (which takes a while in a big repository). It may have read the repository before
+ * this change, though, so it's refetched again once done; that's quick when nothing changed, as
+ * the main process then says so rather than sending it all again.
+ */
+function refetch(queryClient: QueryClient, queryKey: QueryKey) {
+  const running = queryClient.getQueryCache().findAll({ queryKey, fetchStatus: "fetching" });
+  void queryClient
+    .invalidateQueries({ queryKey }, { cancelRefetch: false })
+    .then(() =>
+      Promise.all(
+        running.map((query) =>
+          queryClient.invalidateQueries(
+            { queryKey: query.queryKey, exact: true },
+            { cancelRefetch: false },
+          ),
+        ),
+      ),
+    );
 }
 
 /** A watch stream that can be started and stopped, and knows whether it's still running. */

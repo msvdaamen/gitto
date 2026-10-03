@@ -24,8 +24,25 @@ describe("HistoryGraph", () => {
     fireEvent.pointerEnter(node);
     expect(await screen.findByRole("tooltip")).toHaveTextContent("Ada Lovelace");
 
-    fireEvent.pointerLeave(node);
+    // The tooltip's own node took the hovered one's place, and is what the pointer then leaves.
+    fireEvent.pointerLeave(container.querySelector("svg g")!);
     await waitFor(() => expect(screen.queryByRole("tooltip")).not.toBeInTheDocument());
+
+    // Hovered again, it opens the way any tooltip does.
+    fireEvent.pointerEnter(container.querySelector("svg g")!);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Ada Lovelace");
+  });
+
+  it("doesn't open when the pointer only passes over the node", async () => {
+    const { container } = render(() => (
+      <HistoryGraph row={row} author="Ada Lovelace" initials="AL" avatarColor="#8c65cf" />
+    ));
+    const node = container.querySelector("svg g")!;
+
+    fireEvent.pointerEnter(node);
+    fireEvent.pointerLeave(node);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
   it("has no tooltip on the uncommitted changes' node", () => {

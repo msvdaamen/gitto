@@ -71,11 +71,10 @@ beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(300);
   vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(200);
   rpc.git.status.get.mockResolvedValue(status);
-  rpc.git.refs.list.mockResolvedValue([
-    branch("main", true),
-    branch("feature"),
-    branch("origin/feature", false, "remote"),
-  ]);
+  rpc.git.refs.list.mockResolvedValue({
+    refs: [branch("main", true), branch("feature"), branch("origin/feature", false, "remote")],
+    version: "v1",
+  });
   rpc.git.stash.list.mockResolvedValue([]);
 });
 

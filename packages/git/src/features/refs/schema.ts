@@ -18,3 +18,12 @@ export const RefSchema = z.object({
 });
 
 export type Ref = z.infer<typeof RefSchema>;
+
+/** The refs, and a version of them. */
+export const RefListSchema = z.object({
+  refs: z.array(RefSchema),
+  /** Changes whenever any ref does, so a caller can ask to skip refs it already has. */
+  version: z.string(),
+});
+
+export type RefList = z.infer<typeof RefListSchema>;

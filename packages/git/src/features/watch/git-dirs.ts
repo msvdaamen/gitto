@@ -10,6 +10,11 @@ import type { GitDirChange } from "./schema";
  */
 const WORKTREE_STATE = /^([A-Z_]*HEAD|(rebase-merge|rebase-apply|sequencer|reftable)(\/.*)?)$/;
 /**
+ * Written by every fetch, also one that brings nothing new, as editors run every few minutes. None
+ * of what the UI shows comes from it: the branches a fetch updates are refs of their own.
+ */
+const FETCH_HEAD = "FETCH_HEAD";
+/**
  * Files in the shared git directory: branches, tags and remotes (as files, packed, or in a
  * reftable), and the config (upstreams).
  */
@@ -49,7 +54,7 @@ export function classify(dirs: GitDirs, path: string): GitDirChange | undefined 
 
   const own = inside(dirs.gitDir, path);
   if (own === "index") return "index";
-  if (own !== undefined && WORKTREE_STATE.test(own)) return "refs";
+  if (own !== undefined && own !== FETCH_HEAD && WORKTREE_STATE.test(own)) return "refs";
 
   const shared = inside(dirs.commonDir, path);
   if (shared !== undefined && SHARED_STATE.test(shared)) return "refs";

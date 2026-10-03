@@ -40,7 +40,7 @@ export function RefList(props: { repositoryId: string }) {
   const stashes = useStashes(() => props.repositoryId);
   const switchBranch = useSwitchBranch(() => props.repositoryId);
 
-  const ofKind = (kind: Ref["kind"]) => (refs.data ?? []).filter((ref) => ref.kind === kind);
+  const ofKind = (kind: Ref["kind"]) => (refs.data?.all ?? []).filter((ref) => ref.kind === kind);
   const localBranches = createMemo(() => ofKind("local"));
   const remoteBranches = createMemo(() => ofKind("remote"));
   const tags = createMemo(() => ofKind("tag"));

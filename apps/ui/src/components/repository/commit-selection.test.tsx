@@ -15,7 +15,10 @@ const rpc = vi.hoisted(() => {
     statusCalls: () => statusCalls,
     git: {
       history: {
-        log: async () => [commit("b1", "Second", ["a1"]), commit("a1", "First", [])],
+        log: async () => ({
+          commits: [commit("b1", "Second", ["a1"]), commit("a1", "First", [])],
+          version: "v1",
+        }),
         commit: async ({ sha }: { sha: string }) =>
           sha === "a1" ? commit("a1", "First", []) : commit("b1", "Second", ["a1"]),
       },

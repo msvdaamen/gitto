@@ -7,5 +7,8 @@ import { RefsContract } from "./contract";
 const os = implement(RefsContract).$context<GitContext>();
 
 export const refsRouter = os.router({
-  list: os.list.use(withRepo).handler(({ context, signal }) => listRefs(context.repo, signal)),
+  list: os.list.use(withRepo).handler(async ({ context, input, signal }) => {
+    const refs = await listRefs(context.repo, signal);
+    return refs.version === input.since ? { unchanged: true as const } : refs;
+  }),
 });
