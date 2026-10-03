@@ -38,7 +38,9 @@ export async function listStashes(repo: Repo, signal?: AbortSignal): Promise<Sta
  * does nothing.
  */
 export async function pushStash(repo: Repo): Promise<void> {
-  await stashChanges(repo.write);
+  // The changed files are put back as they are in HEAD; the index is refreshed after (see
+  // `refreshIndex`), also after a failure, which may have done some of that.
+  await stashChanges(repo.write).finally(() => repo.refreshIndex());
 }
 
 /** `pushStash` through `run` (e.g. a command of `repo.exclusive`), with `message` if given. */
@@ -71,7 +73,7 @@ export async function getStashFiles(
  */
 export async function popStash(repo: Repo, sha: string): Promise<void> {
   // One write, so no other stash of Gitto's can become the newest between checking and popping.
-  await repo.exclusive(async (run) => {
+  const popping = repo.exclusive(async (run) => {
     if ((await resolveRef(run, "refs/stash")) !== sha) {
       throw new RepositoryChangedError(
         "The stashes changed before the stash could be popped, so nothing was popped.",
@@ -79,6 +81,8 @@ export async function popStash(repo: Repo, sha: string): Promise<void> {
     }
     await popNewest(run);
   });
+  // Also after a pop that conflicted (see `refreshIndex`).
+  await popping.finally(() => repo.refreshIndex());
 }
 
 /**

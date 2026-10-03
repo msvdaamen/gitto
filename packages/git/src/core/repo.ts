@@ -3,7 +3,14 @@ import { stat } from "node:fs/promises";
 import type { RepositoryService } from "@gitto/repository/server";
 
 import { FolderNotFoundError, GitError, RepositoryNotFoundError } from "./errors";
-import { CommitGraphs, runGit, ShownStatuses, WriteQueue, type RunOptions } from "./runner";
+import {
+  CommitGraphs,
+  IndexRefreshes,
+  runGit,
+  ShownStatuses,
+  WriteQueue,
+  type RunOptions,
+} from "./runner";
 
 /** A repository on disk, with git commands bound to it. */
 export interface Repo {
@@ -28,12 +35,16 @@ export interface Repo {
    * runs before it's done. For a write that checks the repository before and after.
    */
   exclusive<T>(task: (run: GitCommand) => Promise<T>): Promise<T>;
+  /**
+   * Refreshes the index a little after a write that rewrote files in the working tree, like a
+   * checkout, so `status` doesn't read them all again every time (see `IndexRefreshes`). Not
+   * waited for.
+   */
+  refreshIndex(): void;
   /** Whether HEAD points at a commit; it doesn't on a branch without commits yet. */
   hasHead(): Promise<boolean>;
-  /** Writes the commit-graph, which speeds up the log, once per run (see `CommitGraphs`). */
+  /** Writes the commit-graph, which speeds up sorting the log, once per run (`CommitGraphs`). */
   updateCommitGraph(): Promise<void>;
-  /** Whether there's a commit-graph yet; a fresh clone has none until it's written. */
-  hasCommitGraph(): Promise<boolean>;
   /**
    * Remembers the status the UI is being sent, as its `statusSnapshot`: `snapshot` resolves to
    * `undefined` if the UI didn't get it after all (see `ShownStatuses`).
@@ -58,6 +69,7 @@ export class GitReposImpl implements GitRepos {
   private readonly fetches = new WriteQueue();
   private readonly commitGraphs = new CommitGraphs();
   private readonly shownStatuses = new ShownStatuses();
+  private readonly indexRefreshes = new IndexRefreshes(this.writes);
 
   constructor(private readonly repositories: RepositoryService) {}
 
@@ -87,10 +99,10 @@ export class GitReposImpl implements GitRepos {
       fetch: (args, options) => fetching((queued) => queued(args, options)),
       fetching,
       exclusive: (task) => this.writes.run(path, () => task(run)),
+      refreshIndex: () => this.indexRefreshes.schedule(path),
       // Any failure is taken for no HEAD, as callers have always had it.
       hasHead: () => refExists(run, "HEAD").catch(() => false),
       updateCommitGraph: () => this.commitGraphs.update(path),
-      hasCommitGraph: () => this.commitGraphs.exists(path),
       showStatus: (snapshot) => this.shownStatuses.set(path, snapshot),
       shownStatus: () => this.shownStatuses.get(path),
     };

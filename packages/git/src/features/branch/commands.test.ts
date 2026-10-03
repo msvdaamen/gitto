@@ -1,7 +1,7 @@
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { cloneRepo, createRepo, git, repos } from "../../test/fixtures";
 import { createBranch, switchBranch } from "./commands";
@@ -95,6 +95,18 @@ describe("switching branches", () => {
     expect(git(path, "symbolic-ref", "--short", "HEAD")).toBe("other");
     expect(git(path, "status", "--porcelain")).toBe(before);
     expect(git(path, "stash", "list")).toBe("");
+  });
+
+  it("refreshes the index a second later, so git doesn't read every file it wrote again", async () => {
+    const path = createBranchedRepo("switch-refresh");
+    await switchBranch(await repos.open("switch-refresh"), "refs/heads/other");
+
+    // Git compares them in whole seconds: until the index is written in a later second than the
+    // files, it can't tell from it whether they changed since.
+    const second = (file: string) => Math.floor(statSync(join(path, file)).mtimeMs / 1000);
+    await vi.waitFor(() => expect(second(".git/index")).toBeGreaterThan(second("other.txt")), {
+      timeout: 3000,
+    });
   });
 
   it("brings changes to files the branch changes along, when they merge", async () => {

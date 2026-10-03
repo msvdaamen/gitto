@@ -61,11 +61,9 @@ describe("the commit-graph", () => {
     git(path, "commit", "-q", "--allow-empty", "-m", "first");
     const repo = await repos.open("graph");
     expect(existsSync(chain(path))).toBe(false);
-    expect(await repo.hasCommitGraph()).toBe(false);
 
     await getLog(repo, page);
     await vi.waitFor(() => expect(existsSync(chain(path))).toBe(true));
-    expect(await repo.hasCommitGraph()).toBe(true);
     const written = readFileSync(chain(path), "utf8");
 
     // A commit since then isn't added until the app runs again.
@@ -88,11 +86,30 @@ describe("the commit-graph", () => {
     const repo = await repos.open("graph-backdated");
     const subjects = async () => (await getLog(repo, page)).map((commit) => commit.subject);
 
-    expect(await repo.hasCommitGraph()).toBe(false);
     expect(await subjects()).toEqual(["child", "parent"]);
     await repo.updateCommitGraph();
-    expect(await repo.hasCommitGraph()).toBe(true);
+    expect(existsSync(chain(path))).toBe(true);
     expect(await subjects()).toEqual(["child", "parent"]);
+  });
+
+  it("doesn't have git sort a log that's already in order", async () => {
+    const path = createRepo("graph-ordered");
+    git(path, "commit", "-q", "--allow-empty", "-m", "first");
+    const repo = await repos.open("graph-ordered");
+    await repo.updateCommitGraph();
+    expect(existsSync(chain(path))).toBe(true);
+
+    const logs: string[][] = [];
+    const counted: Repo = {
+      ...repo,
+      read: (args, options) => {
+        if (args[0] === "log") logs.push(args);
+        return repo.read(args, options);
+      },
+    };
+    expect(await getLog(counted, page)).toHaveLength(1);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).not.toContain("--date-order");
   });
 
   it("doesn't fail the log when it can't be written", async () => {

@@ -1,6 +1,4 @@
 import { spawn } from "node:child_process";
-import { stat } from "node:fs/promises";
-import { resolve as resolvePath } from "node:path";
 
 import { commandError, GitError } from "./errors";
 import { trace, tracing } from "./trace";
@@ -139,9 +137,9 @@ export function runGit(cwd: string, args: string[], options: RunOptions = {}): P
 
 /**
  * Writes each repository's commit-graph, once per run of the app. With it, git looks commits up
- * instead of parsing them, which makes the history (sorted over all refs) several times faster:
- * 0.35s instead of 2.3s on vscode. Fresh clones don't have one: git only writes it in gc or
- * maintenance.
+ * instead of parsing them, which makes sorting the history over all refs, when it needs that (see
+ * `getLog`), several times faster: 0.5s instead of 3.4s on vscode. Fresh clones don't have one:
+ * git only writes it in gc or maintenance.
  *
  * Split, so it only adds the commits that aren't in it yet (in ~30ms when there are none), and
  * not through `WriteQueue`: it doesn't touch the index or refs, and can take seconds the first
@@ -150,35 +148,6 @@ export function runGit(cwd: string, args: string[], options: RunOptions = {}): P
  */
 export class CommitGraphs {
   private readonly writes = new Map<string, Promise<void>>();
-  /** The repositories known to have one; it isn't removed while the app runs. */
-  private readonly found = new Set<string>();
-
-  /** Whether `path` has a commit-graph yet, as a single file or split. */
-  async exists(path: string): Promise<boolean> {
-    if (this.found.has(path)) return true;
-    const files = await runGit(path, [
-      "rev-parse",
-      "--git-path",
-      "objects/info/commit-graph",
-      "--git-path",
-      "objects/info/commit-graphs/commit-graph-chain",
-    ]).then(
-      (output) => output.split("\n").filter(Boolean),
-      () => [],
-    );
-    const found = await Promise.all(
-      files.map((file) =>
-        // Relative to the repository, unless it's somewhere else.
-        stat(resolvePath(path, file)).then(
-          () => true,
-          () => false,
-        ),
-      ),
-    );
-    if (found.includes(true)) this.found.add(path);
-    return this.found.has(path);
-  }
-
   /** Writes `path`'s commit-graph if that hasn't been done yet; resolves once it's written. */
   update(path: string): Promise<void> {
     let write = this.writes.get(path);
@@ -189,6 +158,44 @@ export class CommitGraphs {
       this.writes.set(path, write);
     }
     return write;
+  }
+}
+
+/**
+ * How long after a write that rewrote files the index is refreshed: git compares the files' and the
+ * index's timestamps in whole seconds.
+ */
+const REFRESH_INDEX_AFTER_MS = 1000;
+
+/**
+ * Refreshes each repository's index after a write that rewrote files in the working tree, like a
+ * checkout. Git can't tell whether a file written in the same second as the index changed since,
+ * so it reads it again, in full, whenever it compares the working tree with the index, until the
+ * index is written in a later second. Gitto's reads never write it (see `ENV`), so every `status`
+ * did: 0.5s instead of 80ms on vscode after switching to a branch 3,000 commits back.
+ *
+ * Through `WriteQueue`, as it takes the index's lock, once a second has passed without another such
+ * write. It's only a cache, so a failure (the user's git holding the lock, say) is left alone.
+ */
+export class IndexRefreshes {
+  private readonly timers = new Map<string, NodeJS.Timeout>();
+
+  constructor(private readonly writes: WriteQueue) {}
+
+  schedule(path: string): void {
+    clearTimeout(this.timers.get(path));
+    const timer = setTimeout(() => {
+      this.timers.delete(path);
+      void this.writes
+        .run(path, () => runGit(path, ["update-index", "-q", "--refresh"]))
+        .then(
+          () => trace(`refreshed the index of ${path}`),
+          (error: unknown) => trace(`couldn't refresh the index of ${path}: ${error}`),
+        );
+    }, REFRESH_INDEX_AFTER_MS);
+    // Not worth keeping the app from exiting for.
+    timer.unref();
+    this.timers.set(path, timer);
   }
 }
 

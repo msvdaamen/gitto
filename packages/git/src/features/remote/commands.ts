@@ -84,7 +84,9 @@ export async function pull(repo: Repo): Promise<void> {
   try {
     await integrate(repo, gitDir, branch, upstream, fetched);
   } finally {
-    // Also after a merge that stopped at conflicts, say: the remotes are fetched all the same.
+    // Also after a merge that stopped at conflicts, say: the remotes are fetched all the same, and
+    // the index is refreshed for the files it rewrote (see `refreshIndex`).
+    repo.refreshIndex();
     fetchAfterPull(repo, remotesToFetch(settings, upstream.remote));
   }
 }

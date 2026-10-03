@@ -8,7 +8,7 @@ export async function getLog(
   page: { limit: number; skip: number },
   signal?: AbortSignal,
 ): Promise<Commit[]> {
-  const [hasHead, hasCommitGraph] = await Promise.all([repo.hasHead(), repo.hasCommitGraph()]);
+  const hasHead = await repo.hasHead();
   // Only refs a user would recognise; `--all` also picks up tool namespaces (e.g. refs/t3/*).
   // HEAD is included for detached checkouts, unless the branch has no commits yet.
   const revisions = ["--branches", "--remotes", "--tags", ...(hasHead ? ["HEAD"] : [])];
@@ -30,13 +30,16 @@ export async function getLog(
       ),
     );
 
-  // Without a commit-graph, as in a fresh clone, git reads every commit before it can sort them
-  // with children first: 0.9s on vscode. Unsorted, it hands them over by date as it comes across
-  // them, in 45ms, which is the same order unless a commit is dated before its parent. So that's
-  // read first, and only sorted by git if a commit did end up below one of its parents.
-  let commits = hasCommitGraph ? undefined : await read([]);
-  if (!commits || !childrenFirst(commits)) commits = await read(["--date-order"]);
-  // After the log, not alongside it: the first write can take seconds, and would slow it down.
+  // To sort them with children first, git walks back to the oldest commit a ref points at first:
+  // 0.5s on vscode, whose old remote branches go back years, 4.3s on linux, and seconds more
+  // without a commit-graph, as in a fresh clone. Unsorted, it hands them over by date as it comes
+  // across them, in 40-50ms on both, which is the same order unless a commit is dated before its
+  // parent. So that's read first, and only sorted by git if a commit did end up below one of its
+  // parents.
+  let commits = await read([]);
+  if (!childrenFirst(commits)) commits = await read(["--date-order"]);
+  // For when it does need sorting. After the log, not alongside it: the first write can take
+  // seconds, and would slow it down.
   void repo.updateCommitGraph();
   return commits;
 }

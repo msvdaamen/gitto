@@ -43,7 +43,7 @@ export async function switchBranch(repo: Repo, ref: string): Promise<void> {
   const target = parseRefName(ref);
   if (!target || target.kind === "tag") throw new Error(`${ref} isn't a branch.`);
   // One write, so nothing else changes the branches, the stashes or the working tree halfway.
-  await repo.exclusive(async (run) => {
+  const switching = repo.exclusive(async (run) => {
     const args = await switchArgs(run, ref, target);
     let refused: GitError;
     try {
@@ -77,6 +77,8 @@ export async function switchBranch(repo: Repo, ref: string): Promise<void> {
     await popNewest(run);
     if (failed) throw failed;
   });
+  // Also after a failure: it may have rewritten files either way (see `refreshIndex`).
+  await switching.finally(() => repo.refreshIndex());
 }
 
 /** The `git switch` that switches to the branch `ref`, of `target`'s kind and short name. */
