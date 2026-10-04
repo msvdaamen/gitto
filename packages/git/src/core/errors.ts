@@ -47,6 +47,17 @@ export class ChangesStashedError extends MessageError {}
 /** There's nothing to pull from: HEAD isn't on a branch, or the branch doesn't track one. */
 export class NoUpstreamError extends MessageError {}
 
+/** Git isn't installed, or is older than Gitto works with (see `GitVersion`). */
+export class UnsupportedGitError extends MessageError {
+  constructor(install: { version: string | null; required: string }) {
+    super(
+      install.version === null
+        ? `Gitto couldn't find Git. Install Git ${install.required} or newer.`
+        : `Gitto needs Git ${install.required} or newer, but Git ${install.version} is installed.`,
+    );
+  }
+}
+
 /** The repository changed while an operation was under way, which trying again will get past. */
 export class RepositoryChangedError extends MessageError {}
 

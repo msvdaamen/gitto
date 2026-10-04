@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { call } from "@orpc/server";
 import { beforeAll, describe, expect, it } from "vitest";
 
+import { GitVersion } from "./core/version";
 import { gitRouter } from "./router";
 import { apiError, createHistoryRepo, createRepo, paths, repos } from "./test/fixtures";
 
@@ -14,7 +15,7 @@ describe("the router", () => {
     locked: "01920000-0000-7000-8000-000000000002",
     missing: "01920000-0000-7000-8000-000000000003",
   };
-  const context = { gitRepos: repos };
+  const context = { gitRepos: repos, gitVersion: new GitVersion() };
 
   beforeAll(async () => {
     await createHistoryRepo();
@@ -75,6 +76,42 @@ describe("the router", () => {
       code: "CONFLICT",
       message: "The stashes changed before the stash could be popped, so nothing was popped.",
     });
+  });
+
+  it("runs nothing with a git Gitto doesn't support", async () => {
+    let output: string | null = "git version 2.39.3 (Apple Git-146)\n";
+    const gitVersion = new GitVersion(async () => output);
+    const outdated = { gitRepos: repos, gitVersion };
+
+    expect(await call(gitRouter.version.check, undefined, { context: outdated })).toEqual({
+      version: "2.39.3",
+      required: "2.40",
+      supported: false,
+    });
+    expect(
+      await apiError(
+        call(gitRouter.status.get, { repositoryId: ids.history }, { context: outdated }),
+      ),
+    ).toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: "Gitto needs Git 2.40 or newer, but Git 2.39.3 is installed.",
+    });
+
+    output = null;
+    expect(
+      await apiError(
+        call(gitRouter.status.get, { repositoryId: ids.history }, { context: outdated }),
+      ),
+    ).toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: "Gitto couldn't find Git. Install Git 2.40 or newer.",
+    });
+
+    // Updated since: it works again without a restart.
+    output = "git version 2.51.0\n";
+    expect(
+      await call(gitRouter.status.get, { repositoryId: ids.history }, { context: outdated }),
+    ).toMatchObject({ head: { kind: "branch", name: "main" } });
   });
 
   it("skips a status the caller already has", async () => {

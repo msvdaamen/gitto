@@ -7,6 +7,7 @@ import { remoteRouter } from "./features/remote/handler";
 import { stagingRouter } from "./features/staging/handler";
 import { stashRouter } from "./features/stash/handler";
 import { statusRouter } from "./features/status/handler";
+import { versionRouter } from "./features/version/handler";
 import { watchRouter } from "./features/watch/handler";
 
 /** Every git feature's router, matching `GitContract`. */
@@ -21,4 +22,5 @@ export const gitRouter = {
   remote: remoteRouter,
   stash: stashRouter,
   watch: watchRouter,
+  version: versionRouter,
 };

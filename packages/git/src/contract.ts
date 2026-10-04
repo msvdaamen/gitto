@@ -7,6 +7,7 @@ import { RemoteContract } from "./features/remote/contract";
 import { StagingContract } from "./features/staging/contract";
 import { StashContract } from "./features/stash/contract";
 import { StatusContract } from "./features/status/contract";
+import { VersionContract } from "./features/version/contract";
 import { WatchContract } from "./features/watch/contract";
 
 /** Every git feature's contract; the renderer calls these as `rpc.git.<feature>.<procedure>`. */
@@ -21,4 +22,5 @@ export const GitContract = {
   remote: RemoteContract,
   stash: StashContract,
   watch: WatchContract,
+  version: VersionContract,
 };
