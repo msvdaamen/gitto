@@ -12,21 +12,26 @@ import {
   RepositoryChangedError,
   RepositoryNotFoundError,
   StashConflictError,
+  UnsupportedGitError,
 } from "./errors";
 import type { GitRepos } from "./repo";
+import type { GitVersion } from "./version";
 
 export interface GitContext {
   gitRepos: GitRepos;
+  gitVersion: GitVersion;
 }
 
 /**
  * Opens the repository named by the procedure's `repositoryId` input as `context.repo`, and turns
- * the git package's errors into ones the renderer can show.
+ * the git package's errors into ones the renderer can show. Nothing runs with a git Gitto doesn't
+ * support: its commands would fail partway, or be misread, rather than say why.
  */
 export const withRepo = os
   .$context<GitContext>()
   .middleware(async ({ context, next }, input: { repositoryId: string }) => {
     try {
+      await context.gitVersion.require();
       return await next({ context: { repo: await context.gitRepos.open(input.repositoryId) } });
     } catch (error) {
       throw toApiError(error);
@@ -42,7 +47,7 @@ function toApiError(error: unknown): unknown {
   ) {
     return new ORPCError("NOT_FOUND", { message: error.message, cause: error });
   }
-  if (error instanceof NoUpstreamError) {
+  if (error instanceof NoUpstreamError || error instanceof UnsupportedGitError) {
     return new ORPCError("PRECONDITION_FAILED", { message: error.message, cause: error });
   }
   if (
