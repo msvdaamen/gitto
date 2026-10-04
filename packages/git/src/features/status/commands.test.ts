@@ -6,7 +6,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { Repo } from "../../core/repo";
 import { createHistoryRepo, createRepo, git, repos } from "../../test/fixtures";
 import { parseDiff } from "../diff/parse";
-import { getStatus } from "./commands";
+import { getStatus, MAX_COUNTED_FILES } from "./commands";
 
 describe("a repository with history", () => {
   let repo: Repo;
@@ -26,6 +26,12 @@ describe("a repository with history", () => {
     expect(status.counts).toEqual({ files: 2, staged: 0, unstaged: 2, conflicted: 0 });
   });
 
+  it("says how long reading it took", async () => {
+    const took: number[] = [];
+    await getStatus({ ...repo, statusTook: (ms) => took.push(ms) });
+    expect(took).toEqual([expect.any(Number)]);
+  });
+
   it("diffs the working tree against the index", async () => {
     expect((await getStatus(repo)).changes).toEqual({
       staged: [],
@@ -39,6 +45,7 @@ describe("a repository with history", () => {
           deletions: null,
         },
       ],
+      uncounted: false,
     });
   });
 });
@@ -63,7 +70,7 @@ describe("a repository without commits", () => {
       head: { kind: "unborn", name: "main" },
       counts: { files: 0, staged: 0, unstaged: 0, conflicted: 0 },
     });
-    expect(status.changes).toEqual({ staged: [], unstaged: [] });
+    expect(status.changes).toEqual({ staged: [], unstaged: [], uncounted: false });
   });
 });
 
@@ -89,7 +96,13 @@ async function fullDiffs(repo: Repo) {
           deletions: null,
         })),
     ],
+    uncounted: false,
   };
+}
+
+/** `files` as the status alone has them: without line counts. */
+function withoutCounts<T>(files: T[]) {
+  return files.map((file) => ({ ...file, additions: null, deletions: null }));
 }
 
 describe("the changed files", () => {
@@ -160,5 +173,55 @@ describe("the changed files", () => {
     const { changes } = await getStatus(repo);
     expect(changes.unstaged).toHaveLength(400);
     expect(changes).toEqual(await fullDiffs(repo));
+  });
+  it("come from the status alone, without line counts, when there are too many to diff", async () => {
+    const path = createRepo("uncounted");
+    const names = Array.from({ length: MAX_COUNTED_FILES }, (_, i) => `file-${i}.txt`);
+    for (const name of [...names, "both.txt", "gone.txt", "move.txt"]) {
+      writeFileSync(join(path, name), `${name}\n`);
+    }
+    writeFileSync(join(path, "bin.dat"), Buffer.from([0, 1, 2]));
+    git(path, "add", ".");
+    git(path, "commit", "-q", "-m", "first");
+    const repo = await repos.open("uncounted");
+
+    // One short of too many: still counted.
+    for (const name of names) writeFileSync(join(path, name), "changed\n");
+    expect((await getStatus(repo)).changes).toEqual(await fullDiffs(repo));
+
+    writeFileSync(join(path, "both.txt"), "staged\n");
+    git(path, "add", "both.txt");
+    writeFileSync(join(path, "both.txt"), "staged, then changed again\n");
+    rmSync(join(path, "gone.txt"));
+    git(path, "mv", "move.txt", "moved.txt");
+    writeFileSync(join(path, "bin.dat"), Buffer.from([3, 4, 5]));
+    writeFileSync(join(path, "new.txt"), "new\n");
+    const commands: string[] = [];
+    const watched: Repo = {
+      ...repo,
+      read: (args, options) => {
+        commands.push(args[0]!);
+        return repo.read(args, options);
+      },
+    };
+
+    const { changes, version } = await getStatus(watched);
+    expect(commands).toEqual(["status"]);
+    const diffs = await fullDiffs(repo);
+    expect(changes).toEqual({
+      staged: withoutCounts(diffs.staged),
+      unstaged: withoutCounts(diffs.unstaged),
+      uncounted: true,
+    });
+    expect(changes.staged).toEqual([
+      expect.objectContaining({ path: "both.txt", status: "modified" }),
+      expect.objectContaining({ path: "moved.txt", status: "renamed", origPath: "move.txt" }),
+    ]);
+
+    // Nothing shown depends on the files' contents then, so a change to them isn't a new status.
+    writeFileSync(join(path, names[0]!), "changed again\n");
+    expect((await getStatus(repo)).version).toBe(version);
+    git(path, "add", names[0]!);
+    expect((await getStatus(repo)).version).not.toBe(version);
   });
 });

@@ -6,7 +6,7 @@ export const ChangedFileSchema = z.object({
   path: z.string(),
   status: FileStatusSchema,
   origPath: z.string().nullable(),
-  /** `null` for binary files. */
+  /** `null` for binary files, and for files whose lines weren't counted. */
   additions: z.number().nullable(),
   deletions: z.number().nullable(),
 });

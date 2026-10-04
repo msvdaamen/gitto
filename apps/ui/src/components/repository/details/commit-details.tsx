@@ -14,6 +14,7 @@ import { useCommitFiles } from "@/git/queries/diff";
 import { useCommitDetails } from "@/git/queries/history";
 import { stashSha, WIP_ID, type CommitRow } from "@/git/rows";
 import { useRelativeTime } from "@/hooks/relative-time";
+import type { ScrollId } from "@/lib/scroll";
 
 import { ChangedFilesSection, DetailsError, FileTotals } from "./details-sections";
 import { StashDetails } from "./stash-details";
@@ -46,7 +47,11 @@ export function CommitDetails(props: { repositoryId: string; selectedId: string 
       when={props.selectedId}
       fallback={<EmptyState icon={GitCommitHorizontal} title="Nothing selected" />}
     >
-      <div ref={setScrollElement} class="flex h-full min-w-[280px] flex-col overflow-y-auto">
+      <div
+        ref={setScrollElement}
+        data-scroll-restoration-id={"details" satisfies ScrollId}
+        class="flex h-full min-w-[280px] flex-col overflow-y-auto"
+      >
         <div class="flex h-[38px] shrink-0 items-center justify-between border-b border-border py-0 pr-[9px] pl-[13px] text-[11.5px] font-[720] tracking-[.07em] text-muted uppercase">
           <span>
             {selectedId() === WIP_ID ? "Working directory" : stash() ? "Stash" : "Commit details"}

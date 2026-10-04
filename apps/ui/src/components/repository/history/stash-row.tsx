@@ -40,7 +40,7 @@ export function HistoryStashRow(
         <strong class="truncate text-[13px] font-[570] text-text-soft italic">
           {props.stash.message}
         </strong>
-        <Show when={props.selected}>
+        <Show when={props.selected && props.detailed}>
           <Suspense>
             <RowTotals
               repositoryId={props.stash.repositoryId}

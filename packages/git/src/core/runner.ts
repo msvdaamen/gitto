@@ -167,6 +167,9 @@ export class CommitGraphs {
  */
 const REFRESH_INDEX_AFTER_MS = 1000;
 
+/** A status that takes this long may be reading every file again (see `IndexRefreshes`). */
+const SLOW_STATUS_MS = 500;
+
 /**
  * Refreshes each repository's index after a write that rewrote files in the working tree, like a
  * checkout. Git can't tell whether a file written in the same second as the index changed since,
@@ -176,9 +179,18 @@ const REFRESH_INDEX_AFTER_MS = 1000;
  *
  * Through `WriteQueue`, as it takes the index's lock, once a second has passed without another such
  * write. It's only a cache, so a failure (the user's git holding the lock, say) is left alone.
+ *
+ * A fresh clone is in that state too: 19,939 files written in the index's second in vscode, and
+ * 1s rather than 25ms for every status. So the index is also refreshed when a repository's first
+ * status of this run was slow, whatever made it so. Only then: it holds the lock for as long as
+ * that status took, at a moment nobody asked Gitto to write, and a git command run in a terminal
+ * meanwhile fails on it. A checkout made in a terminal later is left to the next write there or
+ * here.
  */
 export class IndexRefreshes {
   private readonly timers = new Map<string, NodeJS.Timeout>();
+  /** The repositories whose first status of this run has been timed. */
+  private readonly timed = new Set<string>();
 
   constructor(private readonly writes: WriteQueue) {}
 
@@ -196,6 +208,13 @@ export class IndexRefreshes {
     // Not worth keeping the app from exiting for.
     timer.unref();
     this.timers.set(path, timer);
+  }
+
+  /** Schedules a refresh if this status, which took `ms`, is `path`'s first and was slow. */
+  statusTook(path: string, ms: number): void {
+    if (this.timed.has(path)) return;
+    this.timed.add(path);
+    if (ms >= SLOW_STATUS_MS) this.schedule(path);
   }
 }
 

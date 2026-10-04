@@ -138,7 +138,9 @@ describe.each(perfRepoPaths())("%s", (source) => {
     const root = mkdtempSync(join(tmpdir(), "gitto-watch-perf-"));
     clones.push(root);
     const path = join(root, basename(source));
-    execFileSync("git", ["clone", "-q", "--local", source, path]);
+    // Sharing the repository's objects, rather than linking to them: the temporary folder can be
+    // on another filesystem (a tmpfs, say), which `--local` fails on, and copying takes gigabytes.
+    execFileSync("git", ["clone", "-q", "--shared", source, path]);
     git(path, "config", "user.name", "Perf");
     git(path, "config", "user.email", "perf@example.com");
     git(path, "config", "commit.gpgsign", "false");

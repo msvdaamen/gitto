@@ -1,9 +1,9 @@
-import { rmSync } from "node:fs";
+import { rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { createRepo, rejection, repos } from "../test/fixtures";
+import { createRepo, git, rejection, repos } from "../test/fixtures";
 import { FolderNotFoundError, NotARepositoryError, RepositoryNotFoundError } from "./errors";
 import { runGit } from "./runner";
 
@@ -18,6 +18,39 @@ describe("opening repositories", () => {
     const error = await rejection(repos.open("deleted"));
     expect(error).toBeInstanceOf(FolderNotFoundError);
     expect(error).toMatchObject({ message: `${path} no longer exists.` });
+  });
+});
+
+/** A repository whose index is out of date: its file was written again, unchanged. */
+function createStaleRepo(name: string) {
+  const path = createRepo(name);
+  writeFileSync(join(path, "file.txt"), "x\n");
+  git(path, "add", ".");
+  git(path, "commit", "-q", "-m", "First");
+  const later = new Date(Date.now() + 5000);
+  utimesSync(join(path, "file.txt"), later, later);
+  return { path, written: () => statSync(join(path, ".git", "index")).mtimeMs };
+}
+
+describe("refreshing the index", () => {
+  it("is done after a slow first status, as a fresh clone's is", async () => {
+    const { written } = createStaleRepo("refresh-slow");
+    const repo = await repos.open("refresh-slow");
+    const before = written();
+
+    repo.statusTook(600);
+    await vi.waitFor(() => expect(written()).toBeGreaterThan(before), { timeout: 3000 });
+  });
+
+  it("isn't after a quick first status, nor after a later one that's slow", async () => {
+    const { written } = createStaleRepo("refresh-quick");
+    const repo = await repos.open("refresh-quick");
+    const before = written();
+
+    repo.statusTook(20);
+    repo.statusTook(600);
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(written()).toBe(before);
   });
 });
 

@@ -20,6 +20,7 @@ const status: Uncommitted = {
   changes: {
     staged: [],
     unstaged: [{ path: "a.txt", status: "modified", origPath: null, additions: 1, deletions: 0 }],
+    uncounted: false,
   },
   version: "v1",
 };

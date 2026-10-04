@@ -122,6 +122,7 @@ export function RefList(props: { repositoryId: string }) {
       </Show>
       <SidebarSection
         title="Workspace"
+        scrollId="sidebar-workspace"
         icon={Folder}
         count={1}
         {...collapsible("workspace")}
@@ -139,6 +140,7 @@ export function RefList(props: { repositoryId: string }) {
       </SidebarSection>
       <SidebarSection
         title="Local branches"
+        scrollId="sidebar-local-branches"
         icon={GitBranch}
         count={localBranches().length}
         {...collapsible("local")}
@@ -167,6 +169,7 @@ export function RefList(props: { repositoryId: string }) {
       </SidebarSection>
       <SidebarSection
         title="Remotes"
+        scrollId="sidebar-remotes"
         icon={Cloud}
         count={remoteBranches().length}
         {...collapsible("remotes")}
@@ -186,6 +189,7 @@ export function RefList(props: { repositoryId: string }) {
       </SidebarSection>
       <SidebarSection
         title="Pull requests"
+        scrollId="sidebar-pull-requests"
         icon={GitMerge}
         count={PULL_REQUESTS.length}
         {...collapsible("pullRequests")}
@@ -195,6 +199,7 @@ export function RefList(props: { repositoryId: string }) {
       </SidebarSection>
       <SidebarSection
         title="Tags"
+        scrollId="sidebar-tags"
         icon={Tag}
         count={tags().length}
         {...collapsible("tags")}
@@ -204,6 +209,7 @@ export function RefList(props: { repositoryId: string }) {
       </SidebarSection>
       <SidebarSection
         title="Stashes"
+        scrollId="sidebar-stashes"
         icon={Inbox}
         count={stashes.data?.length ?? 0}
         {...collapsible("stashes")}

@@ -41,6 +41,11 @@ export interface Repo {
    * waited for.
    */
   refreshIndex(): void;
+  /**
+   * Told how long reading the status took: the index is refreshed if the first one of this run
+   * was slow, as after a fresh clone (see `IndexRefreshes`).
+   */
+  statusTook(ms: number): void;
   /** Whether HEAD points at a commit; it doesn't on a branch without commits yet. */
   hasHead(): Promise<boolean>;
   /** Writes the commit-graph, which speeds up sorting the log, once per run (`CommitGraphs`). */
@@ -100,6 +105,7 @@ export class GitReposImpl implements GitRepos {
       fetching,
       exclusive: (task) => this.writes.run(path, () => task(run)),
       refreshIndex: () => this.indexRefreshes.schedule(path),
+      statusTook: (ms) => this.indexRefreshes.statusTook(path, ms),
       // Any failure is taken for no HEAD, as callers have always had it.
       hasHead: () => refExists(run, "HEAD").catch(() => false),
       updateCommitGraph: () => this.commitGraphs.update(path),

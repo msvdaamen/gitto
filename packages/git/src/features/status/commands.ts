@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import type { Repo } from "../../core/repo";
+import type { FileStatus } from "../../schema";
 import { parseDiff } from "../diff/parse";
 import type { ChangedFile } from "../diff/schema";
 import { parseStatus, STATUS_ARGS } from "./parse";
@@ -36,7 +37,9 @@ async function readStatus(
   repo: Repo,
   signal?: AbortSignal,
 ): Promise<{ uncommitted: Uncommitted; snapshot: string }> {
+  const start = performance.now();
   const output = await repo.read(STATUS_ARGS, { signal });
+  repo.statusTook(performance.now() - start);
   const { files, ...status } = parseStatus(output);
   const { changes, outputs } = await getWorkingTreeFiles(repo, files, signal);
   // Everything shown comes from git's output, so the same output means the same status.
@@ -69,15 +72,41 @@ function countFiles(files: StatusFile[]): StatusCounts {
 const MAX_PATHSPEC_LENGTH = 16_000;
 
 /**
+ * Past this many changed files, their lines aren't counted. Counting means diffing every one of
+ * them again whenever any file is saved: 0.2s for 1,000 modified files in vscode, 0.5s for 5,000
+ * and 2.2s for 20,000, on top of a status that takes 0.1-0.3s.
+ */
+export const MAX_COUNTED_FILES = 1000;
+
+/**
  * Staged and unstaged changes, with their line counts, for the files `git status` reported. The
  * status already walked the working tree, so this doesn't again: the untracked files come from
- * it, and the unstaged diff only looks at the files it says changed.
+ * it, and the unstaged diff only looks at the files it says changed. With more files than
+ * `MAX_COUNTED_FILES`, all of it comes from the status, which then has all there is to show.
  */
 async function getWorkingTreeFiles(
   repo: Repo,
   files: StatusFile[],
   signal?: AbortSignal,
 ): Promise<{ changes: WorkingTreeFiles; outputs: string[] }> {
+  const untracked = files
+    .filter((file) => file.unstaged === "untracked")
+    .map((file) => uncounted(file, "untracked"));
+  if (files.length - untracked.length > MAX_COUNTED_FILES) {
+    const staged: ChangedFile[] = [];
+    const unstaged: ChangedFile[] = [];
+    for (const file of files) {
+      if (file.staged) staged.push(uncounted(file, file.staged));
+      if (file.unstaged && file.unstaged !== "untracked") {
+        unstaged.push(uncounted(file, file.unstaged));
+      }
+    }
+    return {
+      changes: { staged, unstaged: [...unstaged, ...untracked], uncounted: true },
+      outputs: [],
+    };
+  }
+
   const hasStaged = files.some((file) => file.staged !== null);
   const unstagedPaths = files
     .filter((file) => file.unstaged !== null && file.unstaged !== "untracked")
@@ -95,18 +124,21 @@ async function getWorkingTreeFiles(
   ]);
   const changes = {
     staged: parseDiff(staged),
-    unstaged: [
-      ...parseDiff(unstaged),
-      ...files
-        .filter((file) => file.unstaged === "untracked")
-        .map<ChangedFile>((file) => ({
-          path: file.path,
-          status: "untracked",
-          origPath: null,
-          additions: null,
-          deletions: null,
-        })),
-    ],
+    unstaged: [...parseDiff(unstaged), ...untracked],
+    uncounted: false,
   };
   return { changes, outputs: [staged, unstaged] };
+}
+
+/** `file`'s change on one side of the index, as the status has it: without line counts. */
+function uncounted(file: StatusFile, status: FileStatus): ChangedFile {
+  // Its previous path belongs to the side that moved it.
+  const moved = status === "renamed" || status === "copied";
+  return {
+    path: file.path,
+    status,
+    origPath: moved ? file.origPath : null,
+    additions: null,
+    deletions: null,
+  };
 }

@@ -16,6 +16,27 @@ import type { GitDirChange } from "./schema";
  */
 const GIT_DIR_IGNORED = ["objects", "logs", "hooks", "lfs", "modules", "info"];
 
+/** The watcher's subscribes and unsubscribes run one at a time, in the order asked for. */
+let turn: Promise<unknown> = Promise.resolve();
+
+/**
+ * `subscribe`, in turn. The watcher shares what watches (on Linux, one inotify instance) between
+ * its subscriptions, and shuts it down with the last unsubscribe. A subscribe that started while
+ * that was still removing its watches ends up on the one being shut down, and never hears of a
+ * change: after switching from a big repository to another, the new one's git directory wasn't
+ * watched, and a commit made in a terminal didn't show.
+ */
+async function watch(...args: Parameters<typeof subscribe>): Promise<AsyncSubscription> {
+  const subscription = await inTurn(() => subscribe(...args));
+  return { unsubscribe: () => inTurn(() => subscription.unsubscribe()) };
+}
+
+function inTurn<T>(task: () => Promise<T>): Promise<T> {
+  const result = turn.then(task);
+  turn = result.catch(() => undefined);
+  return result;
+}
+
 /** Yields what changed in the repository's git directory (debounced), until `signal` aborts. */
 export async function* watchGitDir(
   repo: Repo,
@@ -36,7 +57,7 @@ export async function* watchGitDir(
   try {
     const subscribed = await Promise.allSettled(
       roots.map((root) =>
-        subscribe(
+        watch(
           root,
           (error, events) => {
             if (error) return changes.fail(error);
@@ -114,7 +135,7 @@ export async function* watchWorkingTree(repo: Repo, signal?: AbortSignal): Async
     tree = undefined;
     if (closed) return;
     // A new callback each time: the watcher shares subscriptions with the same callback and folder.
-    const next = await subscribe(
+    const next = await watch(
       root,
       (error, events) => {
         if (error) return changes.fail(error);
@@ -135,7 +156,7 @@ export async function* watchWorkingTree(repo: Repo, signal?: AbortSignal): Async
   try {
     await watchTree();
     // `.git/info/exclude` has ignore rules too. Fine to miss if `info` doesn't exist.
-    excludes = await subscribe(dirname(dirs.excludeFile), (error, events) => {
+    excludes = await watch(dirname(dirs.excludeFile), (error, events) => {
       if (!error && events.some((event) => basename(event.path) === basename(dirs.excludeFile))) {
         changes.add(EXCLUDES);
       }

@@ -114,6 +114,7 @@ describe("selecting a commit", () => {
           repositoryId="repo"
           search=""
           selectedId={selectedId()}
+          detailsId={selectedId()}
           onSelect={setSelectedId}
         />
         <CommitDetails repositoryId="repo" selectedId={selectedId()} />
@@ -178,7 +179,13 @@ describe("selecting a commit", () => {
       const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
       render(() => (
         <QueryClientProvider client={client}>
-          <HistoryTable repositoryId="repo" search="" selectedId={undefined} onSelect={() => {}} />
+          <HistoryTable
+            repositoryId="repo"
+            search=""
+            selectedId={undefined}
+            detailsId={undefined}
+            onSelect={() => {}}
+          />
         </QueryClientProvider>
       ));
 
@@ -198,6 +205,7 @@ describe("selecting a commit", () => {
           repositoryId="repo"
           search=""
           selectedId={selectedId()}
+          detailsId={selectedId()}
           onSelect={setSelectedId}
         />
         <CommitDetails repositoryId="repo" selectedId={selectedId()} />

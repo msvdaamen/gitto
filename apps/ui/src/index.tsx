@@ -5,6 +5,7 @@ import { RouterProvider, createRouter } from "@tanstack/solid-router";
 import { render } from "solid-js/web";
 
 import { queryClient } from "./lib/query-client";
+import { SCROLL_TO_TOP } from "./lib/scroll";
 import { traceLongFrames } from "./lib/trace";
 import { routeTree } from "./routeTree.gen";
 
@@ -14,6 +15,7 @@ const router = createRouter({
   routeTree,
   defaultPreload: "intent",
   scrollRestoration: true,
+  scrollToTopSelectors: SCROLL_TO_TOP,
 });
 
 // Register things for typesafety

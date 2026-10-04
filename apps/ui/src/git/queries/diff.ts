@@ -68,6 +68,8 @@ export function useWorkingTreeChanges(repositoryId: () => string) {
     (query.data?.value.staged ?? []).filter((file) => file.status !== "conflicted"),
   );
   const unstaged = createMemo(() => query.data?.value.unstaged ?? []);
+  /** Whether there are too many files for their lines to have been counted. */
+  const uncounted = () => query.data?.value.uncounted ?? false;
 
-  return { query, staged, unstaged };
+  return { query, staged, unstaged, uncounted };
 }
