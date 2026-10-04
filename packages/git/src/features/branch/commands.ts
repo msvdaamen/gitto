@@ -45,10 +45,12 @@ export async function switchBranch(repo: Repo, ref: string): Promise<void> {
   // One write, so nothing else changes the branches, the stashes or the working tree halfway.
   await repo.exclusive(async (run) => {
     const args = await switchArgs(run, ref, target);
+    // It rewrites the files that differ between the branches.
+    const switching = { rewritesFiles: true };
     let refused: GitError;
     try {
       // Git takes the changes along itself, as long as the branch doesn't change their files.
-      await run(args);
+      await run(args, switching);
       return;
     } catch (error) {
       if (!(error instanceof GitError && WOULD_LOSE.test(error.stderr))) throw error;
@@ -59,7 +61,7 @@ export async function switchBranch(repo: Repo, ref: string): Promise<void> {
     const from = await headPosition(run);
     let failed: unknown;
     try {
-      await run(args);
+      await run(args, switching);
     } catch (error) {
       // Back as they were, on the branch they were made on, when it didn't switch.
       if ((await headPosition(run)) === from) {

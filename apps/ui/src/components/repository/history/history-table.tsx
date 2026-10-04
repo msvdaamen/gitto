@@ -11,6 +11,7 @@ import { useHistory } from "@/git/queries/history";
 import type { CommitRow, StashRow, WipRow } from "@/git/rows";
 import { matchesSearch, searchNeedle } from "@/git/search";
 import { useDelayed } from "@/hooks/delayed";
+import type { ScrollId } from "@/lib/scroll";
 
 import { AuthorTooltipProvider } from "./author-tooltip";
 import { COLUMNS, MIN_WIDTH } from "./columns";
@@ -24,12 +25,15 @@ export function HistoryTable(props: {
   repositoryId: string;
   search: string;
   selectedId: string | undefined;
+  /** The row the details show: `selectedId`, once the selection stops moving quickly. */
+  detailsId: string | undefined;
   onSelect: (id: string) => void;
 }) {
   const [scrollElement, setScrollElement] = createSignal<HTMLElement>();
   return (
     <main
       ref={setScrollElement}
+      data-scroll-restoration-id={"history" satisfies ScrollId}
       class="min-h-0 min-w-0 overflow-auto bg-bg"
       style={{ "--graph-width": `${graphWidth(1)}px` }}
     >
@@ -81,6 +85,7 @@ function HistoryRows(props: {
   repositoryId: string;
   search: string;
   selectedId: string | undefined;
+  detailsId: string | undefined;
   onSelect: (id: string) => void;
   /** The table's scroll container; only the rows in view are rendered. */
   scrollElement: HTMLElement | undefined;
@@ -210,6 +215,9 @@ function HistoryRows(props: {
                 const rowProps = {
                   get selected() {
                     return history.selected()?.id === row().id;
+                  },
+                  get detailed() {
+                    return props.detailsId === row().id;
                   },
                   get position() {
                     return { index, count: visibleRows().length };

@@ -9,6 +9,8 @@ import { HistoryTable } from "./history-table";
 const SHAS = ["e5", "d4", "c3", "b2", "a1"];
 
 const rpc = vi.hoisted(() => ({
+  /** The commits whose files were asked for. */
+  fileCalls: [] as string[],
   git: {
     history: {
       log: async () =>
@@ -31,11 +33,16 @@ const rpc = vi.hoisted(() => ({
         ahead: 0,
         behind: 0,
         counts: { files: 0, staged: 0, unstaged: 0, conflicted: 0 },
-        changes: { staged: [], unstaged: [] },
+        changes: { staged: [], unstaged: [], uncounted: false },
         version: "1",
       }),
     },
-    diff: { commitFiles: async () => [] },
+    diff: {
+      commitFiles: async ({ sha }: { sha: string }) => {
+        rpc.fileCalls.push(sha);
+        return [];
+      },
+    },
     stash: { list: async () => [] },
   },
 }));
@@ -46,12 +53,15 @@ vi.mock("@/lib/rpc", () => ({ rpc }));
 async function renderHistory(search = "") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const [selectedId, setSelectedId] = createSignal<string>();
+  // The row the details show, which the test moves itself: it lags behind a selection on the move.
+  const [detailsId, setDetailsId] = createSignal<string>();
   render(() => (
     <QueryClientProvider client={client}>
       <HistoryTable
         repositoryId="repo"
         search={search}
         selectedId={selectedId()}
+        detailsId={detailsId()}
         onSelect={setSelectedId}
       />
     </QueryClientProvider>
@@ -59,7 +69,7 @@ async function renderHistory(search = "") {
   const list = await screen.findByRole("listbox", { name: "Commit history" });
   await vi.waitFor(() => expect(selectedId()).toBe("e5"));
   list.focus();
-  return { list, selectedId };
+  return { list, selectedId, setDetailsId };
 }
 
 /** The option the list says is selected. */
@@ -93,6 +103,21 @@ describe("moving through the history with the keyboard", () => {
     expect(selectedId()).toBe(SHAS[1]);
     // The list keeps the focus, whichever row is selected.
     expect(list).toHaveFocus();
+  });
+
+  it("only loads the files of the row the details show, not of every row passed", async () => {
+    rpc.fileCalls.length = 0;
+    const user = userEvent.setup();
+    const { selectedId, setDetailsId } = await renderHistory();
+    setDetailsId("e5");
+    await vi.waitFor(() => expect(rpc.fileCalls).toEqual(["e5"]));
+
+    await user.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}");
+    expect(selectedId()).toBe("b2");
+    expect(rpc.fileCalls).toEqual(["e5"]);
+
+    setDetailsId("b2");
+    await vi.waitFor(() => expect(rpc.fileCalls).toEqual(["e5", "b2"]));
   });
 
   it("stops at the first and the last row", async () => {

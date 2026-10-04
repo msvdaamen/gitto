@@ -83,6 +83,7 @@ function RouteComponent() {
           repositoryId={repositoryId()}
           search={search()}
           selectedId={selectedId()}
+          detailsId={detailsId()}
           onSelect={(id) => setSelection({ repositoryId: repositoryId(), id })}
         />
 

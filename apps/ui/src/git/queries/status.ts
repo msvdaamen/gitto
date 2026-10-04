@@ -55,7 +55,7 @@ export function useHeadSha(status: { data: StatusSummary | undefined }) {
 }
 
 /**
- * The staged and unstaged changes, with their line counts. A refetch that brings changes replaces
+ * The staged and unstaged changes, with their line counts if any. A refetch that brings changes replaces
  * the lists, rather than being merged into them file by file: there can be tens of thousands of
  * files (see `Opaque`), and their rows are rendered by position (see `VirtualRows`), so only the
  * ones in view are updated either way.

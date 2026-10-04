@@ -55,7 +55,7 @@ export function HistoryCommitRow(
         <strong class="truncate text-[13px] font-[570] text-text">{props.commit.message}</strong>
         {/* The author is otherwise only in the graph's tooltip, which assistive tech skips. */}
         <span class="sr-only">{`, by ${props.commit.author}`}</span>
-        <Show when={props.selected}>
+        <Show when={props.selected && props.detailed}>
           <Suspense>
             <RowTotals
               repositoryId={props.commit.repositoryId}

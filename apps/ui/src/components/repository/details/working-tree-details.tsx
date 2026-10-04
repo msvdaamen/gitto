@@ -19,6 +19,7 @@ import { useStage, useUnstage } from "@/git/queries/staging";
 import { useHeadSha, useStatus } from "@/git/queries/status";
 import { headLabel } from "@/git/status";
 import { useDelayed } from "@/hooks/delayed";
+import type { ScrollId } from "@/lib/scroll";
 
 import { ChangedFileList, type FileAction } from "./changed-file-list";
 import { CommitForm } from "./commit-form";
@@ -79,8 +80,10 @@ export function WorkingTreeDetails(props: { repositoryId: string }) {
 
       <FileSection
         title="Unstaged changes"
+        scrollId="unstaged-files"
         icon={FilePen}
         files={changes.unstaged()}
+        uncounted={changes.uncounted()}
         empty="Nothing left to stage."
         bulkLabel="Stage all"
         busy={busy()}
@@ -94,9 +97,11 @@ export function WorkingTreeDetails(props: { repositoryId: string }) {
       />
       <FileSection
         title="Staged changes"
+        scrollId="staged-files"
         icon={CircleCheck}
         tone="mint"
         files={changes.staged()}
+        uncounted={changes.uncounted()}
         empty="Stage files to include them in the next commit."
         bulkLabel="Unstage all"
         busy={busy()}
@@ -123,6 +128,9 @@ function FileSection(props: {
   icon: LucideIcon;
   tone?: "mint";
   files: ChangedFile[];
+  uncounted: boolean;
+  /** Marks the list, so it starts at the top again in another repository (see `SCROLL_IDS`). */
+  scrollId: ScrollId;
   empty: JSX.Element;
   bulkLabel: string;
   busy: boolean;
@@ -143,13 +151,18 @@ function FileSection(props: {
           {props.bulkLabel}
         </LinkButton>
       </SectionHeader>
-      <div ref={setScrollElement} class="min-h-0 flex-1 overflow-y-auto px-2.5 pb-3">
+      <div
+        ref={setScrollElement}
+        data-scroll-restoration-id={props.scrollId}
+        class="min-h-0 flex-1 overflow-y-auto px-2.5 pb-3"
+      >
         <Show
           when={props.files.length}
           fallback={<p class="m-0 px-1 pb-1 text-[11.5px] text-faint">{props.empty}</p>}
         >
           <ChangedFileList
             files={props.files}
+            uncounted={props.uncounted}
             scrollElement={scrollElement()}
             action={props.action}
           />

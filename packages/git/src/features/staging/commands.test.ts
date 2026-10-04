@@ -1,4 +1,4 @@
-import { existsSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -37,12 +37,14 @@ describe("staging files", () => {
     expect((await getStatus(repo)).changes).toEqual({
       staged: [change],
       unstaged: [untrackedFile],
+      uncounted: false,
     });
 
     await unstage(repo, ["a file.txt"]);
     expect((await getStatus(repo)).changes).toEqual({
       staged: [],
       unstaged: [change, untrackedFile],
+      uncounted: false,
     });
   });
 
@@ -58,6 +60,7 @@ describe("staging files", () => {
     expect((await getStatus(repo)).changes).toEqual({
       staged: [{ path: "x y.txt", status: "added", origPath: null, additions: 1, deletions: 0 }],
       unstaged: [],
+      uncounted: false,
     });
 
     await unstage(repo, ["x y.txt"]);
@@ -145,6 +148,86 @@ describe("a big working tree", () => {
       { path: "both.txt", origPath: null, staged: "conflicted", unstaged: "conflicted" },
     ]);
     expect(existsSync(join(path, ".git", "MERGE_HEAD"))).toBe(true);
+  });
+
+  it("unstages a folder that replaced a file, a symlink and a file made executable", async () => {
+    const path = createRepo("all-kinds");
+    writeFileSync(join(path, "thing"), "a file\n");
+    writeFileSync(join(path, "script.sh"), "echo\n");
+    writeFileSync(join(path, "tab\tand\nline.txt"), "odd name\n");
+    git(path, "add", ".");
+    git(path, "commit", "-q", "-m", "First");
+    rmSync(join(path, "thing"));
+    mkdirSync(join(path, "thing"));
+    writeFileSync(join(path, "thing", "inner.txt"), "now a folder\n");
+    symlinkSync("script.sh", join(path, "link"));
+    git(path, "update-index", "--chmod=+x", "script.sh");
+    writeFileSync(join(path, "tab\tand\nline.txt"), "changed\n");
+    git(path, "add", ".");
+    const repo = await repos.open("all-kinds");
+    const head = git(path, "ls-tree", "-r", "HEAD");
+
+    await unstageAll(repo);
+    expect((await getStatus(repo)).changes.staged).toEqual([]);
+    // The index is HEAD's again: modes, objects and all.
+    expect(git(path, "ls-files", "--stage").replaceAll(" 0\t", "\t")).toBe(
+      head.replaceAll(" blob ", " "),
+    );
+    expect(readFileSync(join(path, "thing", "inner.txt"), "utf8")).toBe("now a folder\n");
+  });
+
+  it("unstages a file whose name isn't UTF-8", async () => {
+    const path = createRepo("all-latin1");
+    // "café.txt" in Latin-1: read as UTF-8, its é doesn't come back as the byte it was.
+    const name = Buffer.concat([Buffer.from("caf"), Buffer.from([0xe9]), Buffer.from(".txt")]);
+    const file = Buffer.concat([Buffer.from(`${path}/`), name]);
+    writeFileSync(file, "a\n");
+    git(path, "add", ".");
+    git(path, "commit", "-q", "-m", "First");
+    writeFileSync(file, "changed\n");
+    git(path, "add", ".");
+    const repo = await repos.open("all-latin1");
+
+    await unstageAll(repo);
+    // Nothing staged, and no entry under another name.
+    expect(git(path, "diff", "--cached", "--name-only")).toBe("");
+    expect(git(path, "ls-files", "-z").split("\0").filter(Boolean)).toHaveLength(1);
+    // The change is still there, unstaged.
+    expect(git(path, "diff", "--name-only")).not.toBe("");
+  });
+
+  it("unstages everything without giving git the staged files as paths to look up", async () => {
+    const path = createRepo("all-unlisted");
+    writeFileSync(join(path, "a.txt"), "a\n");
+    git(path, "add", ".");
+    git(path, "commit", "-q", "-m", "First");
+    writeFileSync(join(path, "a.txt"), "changed\n");
+    writeFileSync(join(path, "b.txt"), "b\n");
+    git(path, "add", ".");
+    const repo = await repos.open("all-unlisted");
+
+    // Git looks every file in the index up in such a list: seconds, for thousands of them.
+    const commands: string[] = [];
+    const watched: Repo = {
+      ...repo,
+      write: (args, options) => {
+        commands.push(args.join(" "));
+        return repo.write(args, options);
+      },
+      exclusive: (task) =>
+        repo.exclusive((run) =>
+          task((args, options) => {
+            commands.push(args.join(" "));
+            return run(args, options);
+          }),
+        ),
+    };
+    await unstageAll(watched);
+    expect(commands.filter((command) => command.includes("pathspec"))).toEqual([]);
+    expect(await statusFiles(repo)).toEqual([
+      { path: "a.txt", origPath: null, staged: null, unstaged: "modified" },
+      { path: "b.txt", origPath: null, staged: null, unstaged: "untracked" },
+    ]);
   });
 
   it("stages and unstages everything before the first commit", async () => {

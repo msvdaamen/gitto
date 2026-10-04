@@ -7,6 +7,7 @@ import type { JSX } from "solid-js";
 
 import { VirtualList } from "@/components/ui/virtual-list";
 import { compactCount } from "@/lib/format";
+import type { ScrollId } from "@/lib/scroll";
 
 import { ROW_HEIGHT } from "./sidebar-row";
 
@@ -28,6 +29,8 @@ const SECTION_CHROME = 1 + HEADER_HEIGHT + 1 + 2 * LIST_PADDING;
  */
 export function SidebarSection<T>(props: {
   title: string;
+  /** Marks the rows' list, so it starts at the top again in another repository (`SCROLL_IDS`). */
+  scrollId: ScrollId;
   icon: LucideIcon;
   count: number;
   collapsed: boolean;
@@ -75,6 +78,7 @@ export function SidebarSection<T>(props: {
           items={props.items}
           rowHeight={ROW_HEIGHT}
           padding={LIST_PADDING}
+          scrollId={props.scrollId}
           class="border-t border-border-soft px-1.5 max-md:hidden"
         >
           {props.children}

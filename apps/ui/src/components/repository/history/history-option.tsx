@@ -25,6 +25,11 @@ export function optionId(index: number): string {
 /** What every history row gets from the table. */
 export interface HistoryRowProps {
   selected: boolean;
+  /**
+   * Whether the details show this row too: they follow the selection, but skip the rows it only
+   * passes while it moves quickly. What a row loads to show more of itself waits for that.
+   */
+  detailed: boolean;
   position: RowPosition;
   onSelect: () => void;
 }
@@ -34,7 +39,9 @@ export interface HistoryRowProps {
  * styles it. Not focused itself: the list has the focus, and moves the selection with the keyboard.
  * The selected one is outlined while the keyboard does.
  */
-export function HistoryOption(props: HistoryRowProps & { class: string; children: JSX.Element }) {
+export function HistoryOption(
+  props: Omit<HistoryRowProps, "detailed"> & { class: string; children: JSX.Element },
+) {
   return (
     <button
       id={optionId(props.position.index)}
@@ -76,7 +83,8 @@ export function RowKindBadge(props: { icon: LucideIcon; label: string }) {
 
 /**
  * The lines a commit or stash added and removed, as `useFiles` loads its files. Only shown for the
- * selected row, whose files are loaded anyway.
+ * selected row once the details show it (`HistoryRowProps.detailed`), whose files are loaded
+ * anyway: for every row an arrow key held down passes, it would run git once per row.
  */
 export function RowTotals(props: {
   repositoryId: string;

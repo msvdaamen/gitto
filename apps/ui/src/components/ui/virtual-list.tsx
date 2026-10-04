@@ -11,6 +11,8 @@ import {
   type JSX,
 } from "solid-js";
 
+import type { ScrollId } from "@/lib/scroll";
+
 /** Rows rendered past each edge of the viewport, so scrolling doesn't reveal blank space. */
 const OVERSCAN = 10;
 
@@ -27,6 +29,8 @@ export function VirtualList<T>(props: {
   padding?: number;
   /** Classes for the scroll container. */
   class?: string;
+  /** Marks the scroll container, so it starts at the top again in another repository. */
+  scrollId?: ScrollId;
   /** Renders a row; its item can change, as rows are rendered by position. */
   children: (item: () => T) => JSX.Element;
 }) {
@@ -50,7 +54,11 @@ export function VirtualList<T>(props: {
   });
 
   return (
-    <div ref={(el) => (container = el)} class={cn("min-h-0 overflow-y-auto", props.class)}>
+    <div
+      ref={(el) => (container = el)}
+      data-scroll-restoration-id={props.scrollId}
+      class={cn("min-h-0 overflow-y-auto", props.class)}
+    >
       <div class="relative" style={{ height: `${virtualizer.getTotalSize()}px` }}>
         <For each={virtualizer.getVirtualItems()}>
           {(row) => {

@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
-import { resolve as resolvePath } from "node:path";
 
 import { commandError, GitError } from "./errors";
 import { trace, tracing } from "./trace";
@@ -13,6 +12,17 @@ export interface RunOptions {
   env?: Record<string, string>;
   /** Settings for this command, e.g. `gc.auto=0`, as with `git -c`. */
   config?: string[];
+  /**
+   * Git's output, and `stdin`, as bytes, one per character, rather than as UTF-8: for paths that
+   * are handed back to git as it gave them. A file's name needn't be UTF-8, and one that isn't
+   * doesn't survive being read as it.
+   */
+  binary?: boolean;
+  /**
+   * The command rewrites files in the working tree, like a checkout: the repository's index is
+   * refreshed a little after it's done, or has failed partway (see `IndexRefreshes`).
+   */
+  rewritesFiles?: boolean;
   /**
    * Stopped (with all it started, like ssh) when Gitto exits, rather than left running in its
    * session (see `runGit`), out of reach: for a command that's safe to stop partway, like a fetch.
@@ -117,7 +127,7 @@ export function runGit(cwd: string, args: string[], options: RunOptions = {}): P
     });
 
     child.on("close", (code) => {
-      const out = Buffer.concat(stdout).toString("utf8");
+      const out = Buffer.concat(stdout).toString(options.binary ? "latin1" : "utf8");
       const err = Buffer.concat(stderr).toString("utf8");
       if (tracing) {
         const ms = (performance.now() - start).toFixed(0);
@@ -133,15 +143,16 @@ export function runGit(cwd: string, args: string[], options: RunOptions = {}): P
     // Git can exit before reading all of stdin, e.g. when the index is locked; writing the rest
     // then fails with EPIPE. Its exit code and stderr already say why, so that's not reported.
     child.stdin.on("error", () => undefined);
-    child.stdin.end(options.stdin);
+    if (options.stdin === undefined) child.stdin.end();
+    else child.stdin.end(options.stdin, options.binary ? "latin1" : "utf8");
   });
 }
 
 /**
  * Writes each repository's commit-graph, once per run of the app. With it, git looks commits up
- * instead of parsing them, which makes the history (sorted over all refs) several times faster:
- * 0.35s instead of 2.3s on vscode. Fresh clones don't have one: git only writes it in gc or
- * maintenance.
+ * instead of parsing them, which makes sorting the history over all refs, when it needs that (see
+ * `getLog`), several times faster: 0.5s instead of 3.4s on vscode. Fresh clones don't have one:
+ * git only writes it in gc or maintenance.
  *
  * Split, so it only adds the commits that aren't in it yet (in ~30ms when there are none), and
  * not through `WriteQueue`: it doesn't touch the index or refs, and can take seconds the first
@@ -150,35 +161,6 @@ export function runGit(cwd: string, args: string[], options: RunOptions = {}): P
  */
 export class CommitGraphs {
   private readonly writes = new Map<string, Promise<void>>();
-  /** The repositories known to have one; it isn't removed while the app runs. */
-  private readonly found = new Set<string>();
-
-  /** Whether `path` has a commit-graph yet, as a single file or split. */
-  async exists(path: string): Promise<boolean> {
-    if (this.found.has(path)) return true;
-    const files = await runGit(path, [
-      "rev-parse",
-      "--git-path",
-      "objects/info/commit-graph",
-      "--git-path",
-      "objects/info/commit-graphs/commit-graph-chain",
-    ]).then(
-      (output) => output.split("\n").filter(Boolean),
-      () => [],
-    );
-    const found = await Promise.all(
-      files.map((file) =>
-        // Relative to the repository, unless it's somewhere else.
-        stat(resolvePath(path, file)).then(
-          () => true,
-          () => false,
-        ),
-      ),
-    );
-    if (found.includes(true)) this.found.add(path);
-    return this.found.has(path);
-  }
-
   /** Writes `path`'s commit-graph if that hasn't been done yet; resolves once it's written. */
   update(path: string): Promise<void> {
     let write = this.writes.get(path);
@@ -190,6 +172,101 @@ export class CommitGraphs {
     }
     return write;
   }
+}
+
+/**
+ * How long after a write that rewrote files the index is refreshed: git compares the files' and the
+ * index's timestamps in whole seconds.
+ */
+const REFRESH_INDEX_AFTER_MS = 1000;
+
+/** A status that takes this long may be reading every file again (see `IndexRefreshes`). */
+const SLOW_STATUS_MS = 500;
+
+/**
+ * With this many files the index can't vouch for, a slow first status is put down to them. Fewer
+ * are always there after a commit, say, and are read in no time: 0.1ms each in vscode.
+ */
+const MANY_UNSURE_FILES = 1000;
+
+/**
+ * Refreshes each repository's index after a write that rewrote files in the working tree, like a
+ * checkout. Git can't tell whether a file written in the same second as the index changed since,
+ * so it reads it again, in full, whenever it compares the working tree with the index, until the
+ * index is written in a later second. Gitto's reads never write it (see `ENV`), so every `status`
+ * did: 0.5s instead of 80ms on vscode after switching to a branch 3,000 commits back.
+ *
+ * Through `WriteQueue`, as it takes the index's lock, once a second has passed without another such
+ * write. It's only a cache, so a failure (the user's git holding the lock, say) is left alone.
+ *
+ * A fresh clone is in that state too: 19,939 files written in the index's second in vscode, and
+ * 1s rather than 25ms for every status. So the index is also refreshed when a repository's first
+ * status of this run was slow and the index has many such files. Only then: it holds the lock for
+ * as long as that status took, at a moment nobody asked Gitto to write, and a git command run in
+ * a terminal meanwhile fails on it. So not for a status that was slow for another reason, like
+ * files that aren't in the disk's cache yet, and a checkout made in a terminal later is left to
+ * the next write there or here.
+ */
+export class IndexRefreshes {
+  private readonly timers = new Map<string, NodeJS.Timeout>();
+  /** The repositories whose first status of this run has been timed. */
+  private readonly timed = new Set<string>();
+
+  constructor(private readonly writes: WriteQueue) {}
+
+  schedule(path: string): void {
+    clearTimeout(this.timers.get(path));
+    const timer = setTimeout(() => {
+      this.timers.delete(path);
+      void this.writes
+        // `-q` and `--unmerged`: files that did change, and conflicts, aren't errors.
+        .run(path, () => runGit(path, ["update-index", "-q", "--unmerged", "--refresh"]))
+        .then(
+          () => trace(`refreshed the index of ${path}`),
+          (error: unknown) => trace(`couldn't refresh the index of ${path}: ${error}`),
+        );
+    }, REFRESH_INDEX_AFTER_MS);
+    // Not worth keeping the app from exiting for.
+    timer.unref();
+    this.timers.set(path, timer);
+  }
+
+  /**
+   * Schedules a refresh if this status, which took `ms`, is `path`'s first, was slow, and the
+   * index has many files it can't vouch for.
+   */
+  statusTook(path: string, ms: number): void {
+    if (this.timed.has(path)) return;
+    this.timed.add(path);
+    if (ms < SLOW_STATUS_MS) return;
+    void this.refreshUnsure(path, ms);
+  }
+
+  /** Schedules a refresh if `path`'s index has many files it can't vouch for. */
+  private async refreshUnsure(path: string, ms: number): Promise<void> {
+    // The repository is gone, say: nothing to refresh.
+    const count = await unsureFiles(path).catch(() => 0);
+    trace(`the first status of ${path} took ${ms.toFixed(0)}ms, with ${count} unsure files`);
+    if (count >= MANY_UNSURE_FILES) this.schedule(path);
+  }
+}
+
+/**
+ * How many of the index's files it can't vouch for: the ones it has as last written in the second
+ * it was written itself, or later.
+ */
+async function unsureFiles(path: string): Promise<number> {
+  const [entries, index] = await Promise.all([
+    runGit(path, ["ls-files", "--debug"]),
+    runGit(path, ["rev-parse", "--path-format=absolute", "--git-path", "index"]),
+  ]);
+  const written = Math.floor((await stat(index.trimEnd())).mtimeMs / 1000);
+  let count = 0;
+  // Each file's name, then what the index knows of it, indented: `  mtime: <seconds>:<nanoseconds>`.
+  for (const [, seconds] of entries.matchAll(/^ {2}mtime: (\d+):/gm)) {
+    if (Number(seconds) >= written) count++;
+  }
+  return count;
 }
 
 /**

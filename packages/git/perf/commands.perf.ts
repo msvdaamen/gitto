@@ -76,7 +76,7 @@ function operations(head: string): Operation[] {
     },
     {
       name: "log 200, no commit-graph",
-      run: (repo) => withoutCommitGraph(repo, (fresh) => getLog(fresh, { limit: 200, skip: 0 })),
+      run: (repo) => withoutCommitGraph(() => getLog(repo, { limit: 200, skip: 0 })),
       procedure: HistoryContract.log,
     },
     {
@@ -110,7 +110,7 @@ function operations(head: string): Operation[] {
 }
 
 /** Runs git as if the repository had no commit-graph file, as freshly cloned ones don't. */
-async function withoutCommitGraph<T>(repo: Repo, run: (repo: Repo) => Promise<T>): Promise<T> {
+async function withoutCommitGraph<T>(run: () => Promise<T>): Promise<T> {
   const config = {
     GIT_CONFIG_COUNT: "1",
     GIT_CONFIG_KEY_0: "core.commitGraph",
@@ -118,7 +118,7 @@ async function withoutCommitGraph<T>(repo: Repo, run: (repo: Repo) => Promise<T>
   };
   Object.assign(process.env, config);
   try {
-    return await run({ ...repo, hasCommitGraph: async () => false });
+    return await run();
   } finally {
     for (const key of Object.keys(config)) delete process.env[key];
   }

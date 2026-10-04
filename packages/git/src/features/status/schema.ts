@@ -42,6 +42,11 @@ export const WorkingTreeFilesSchema = z.object({
   staged: z.array(ChangedFileSchema),
   /** Changes in the working tree, compared to the index, followed by the untracked files. */
   unstaged: z.array(ChangedFileSchema),
+  /**
+   * Whether the files' lines weren't counted, as there are too many to diff on every change: none
+   * has line counts then, binary or not.
+   */
+  uncounted: z.boolean(),
 });
 
 export type WorkingTreeFiles = z.infer<typeof WorkingTreeFilesSchema>;
@@ -66,7 +71,7 @@ export const StatusSummarySchema = StatusSchema.omit({ files: true }).extend({
 
 export type StatusSummary = z.infer<typeof StatusSummarySchema>;
 
-/** Everything uncommitted: the summary and the changed files, with their line counts. */
+/** Everything uncommitted: the summary and the changed files, with their line counts if any. */
 export const UncommittedSchema = StatusSummarySchema.extend({
   changes: WorkingTreeFilesSchema,
   /** Changes whenever anything above does, so a caller can ask to skip a status it already has. */

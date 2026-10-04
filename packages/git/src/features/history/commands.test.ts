@@ -61,11 +61,9 @@ describe("the commit-graph", () => {
     git(path, "commit", "-q", "--allow-empty", "-m", "first");
     const repo = await repos.open("graph");
     expect(existsSync(chain(path))).toBe(false);
-    expect(await repo.hasCommitGraph()).toBe(false);
 
     await getLog(repo, page);
     await vi.waitFor(() => expect(existsSync(chain(path))).toBe(true));
-    expect(await repo.hasCommitGraph()).toBe(true);
     const written = readFileSync(chain(path), "utf8");
 
     // A commit since then isn't added until the app runs again.
@@ -88,11 +86,76 @@ describe("the commit-graph", () => {
     const repo = await repos.open("graph-backdated");
     const subjects = async () => (await getLog(repo, page)).map((commit) => commit.subject);
 
-    expect(await repo.hasCommitGraph()).toBe(false);
     expect(await subjects()).toEqual(["child", "parent"]);
     await repo.updateCommitGraph();
-    expect(await repo.hasCommitGraph()).toBe(true);
+    expect(existsSync(chain(path))).toBe(true);
     expect(await subjects()).toEqual(["child", "parent"]);
+  });
+
+  it("doesn't have git sort a log that's already in order", async () => {
+    const path = createRepo("graph-ordered");
+    git(path, "commit", "-q", "--allow-empty", "-m", "first");
+    const repo = await repos.open("graph-ordered");
+    await repo.updateCommitGraph();
+    expect(existsSync(chain(path))).toBe(true);
+
+    const logs: string[][] = [];
+    const counted: Repo = {
+      ...repo,
+      read: (args, options) => {
+        if (args[0] === "log") logs.push(args);
+        return repo.read(args, options);
+      },
+    };
+    expect(await getLog(counted, page)).toHaveLength(1);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).not.toContain("--date-order");
+  });
+
+  it("has git sort a log that needed it straight away from then on", async () => {
+    const path = createRepo("graph-remembered");
+    git(path, "commit", "-q", "--allow-empty", "-m", "parent");
+    execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "child"], {
+      cwd: path,
+      env: { ...process.env, GIT_COMMITTER_DATE: "2001-01-01T00:00:00Z" },
+    });
+    git(path, "branch", "old", "HEAD~1");
+    const repo = await repos.open("graph-remembered");
+    const logs: boolean[] = [];
+    const counted: Repo = {
+      ...repo,
+      read: (args, options) => {
+        if (args[0] === "log") logs.push(args.includes("--date-order"));
+        return repo.read(args, options);
+      },
+    };
+    const subjects = async () => (await getLog(counted, page)).map((commit) => commit.subject);
+
+    // Unsorted, then sorted.
+    expect(await subjects()).toEqual(["child", "parent"]);
+    expect(logs).toEqual([false, true]);
+    expect(await subjects()).toEqual(["child", "parent"]);
+    expect(logs).toEqual([false, true, true]);
+  });
+
+  it("skips to a later page in git's order, as each of them is", async () => {
+    const path = createRepo("graph-paged");
+    for (const subject of ["first", "second", "third"]) {
+      git(path, "commit", "-q", "--allow-empty", "-m", subject);
+    }
+    const repo = await repos.open("graph-paged");
+    const logs: boolean[] = [];
+    const counted: Repo = {
+      ...repo,
+      read: (args, options) => {
+        if (args[0] === "log") logs.push(args.includes("--date-order"));
+        return repo.read(args, options);
+      },
+    };
+
+    const later = await getLog(counted, { limit: 2, skip: 1 });
+    expect(later.map((commit) => commit.subject)).toEqual(["second", "first"]);
+    expect(logs).toEqual([true]);
   });
 
   it("doesn't fail the log when it can't be written", async () => {

@@ -3,7 +3,14 @@ import { stat } from "node:fs/promises";
 import type { RepositoryService } from "@gitto/repository/server";
 
 import { FolderNotFoundError, GitError, RepositoryNotFoundError } from "./errors";
-import { CommitGraphs, runGit, ShownStatuses, WriteQueue, type RunOptions } from "./runner";
+import {
+  CommitGraphs,
+  IndexRefreshes,
+  runGit,
+  ShownStatuses,
+  WriteQueue,
+  type RunOptions,
+} from "./runner";
 
 /** A repository on disk, with git commands bound to it. */
 export interface Repo {
@@ -28,12 +35,21 @@ export interface Repo {
    * runs before it's done. For a write that checks the repository before and after.
    */
   exclusive<T>(task: (run: GitCommand) => Promise<T>): Promise<T>;
+  /**
+   * Told how long reading the status took: the index is refreshed if the first one of this run
+   * was slow, as after a fresh clone (see `IndexRefreshes`).
+   */
+  statusTook(ms: number): void;
+  /**
+   * Whether the log has to be sorted by git: an earlier read, left unsorted, had a commit below one
+   * of its parents (see `getLog`). Remembered while the app runs, with `sortLog`.
+   */
+  sortsLog(): boolean;
+  sortLog(): void;
   /** Whether HEAD points at a commit; it doesn't on a branch without commits yet. */
   hasHead(): Promise<boolean>;
-  /** Writes the commit-graph, which speeds up the log, once per run (see `CommitGraphs`). */
+  /** Writes the commit-graph, which speeds up sorting the log, once per run (`CommitGraphs`). */
   updateCommitGraph(): Promise<void>;
-  /** Whether there's a commit-graph yet; a fresh clone has none until it's written. */
-  hasCommitGraph(): Promise<boolean>;
   /**
    * Remembers the status the UI is being sent, as its `statusSnapshot`: `snapshot` resolves to
    * `undefined` if the UI didn't get it after all (see `ShownStatuses`).
@@ -58,6 +74,9 @@ export class GitReposImpl implements GitRepos {
   private readonly fetches = new WriteQueue();
   private readonly commitGraphs = new CommitGraphs();
   private readonly shownStatuses = new ShownStatuses();
+  private readonly indexRefreshes = new IndexRefreshes(this.writes);
+  /** The repositories whose log git has to sort (see `Repo.sortsLog`). */
+  private readonly sortedLogs = new Set<string>();
 
   constructor(private readonly repositories: RepositoryService) {}
 
@@ -74,7 +93,15 @@ export class GitReposImpl implements GitRepos {
     );
     if (!isFolder) throw new FolderNotFoundError(path);
 
-    const run: GitCommand = (args, options) => runGit(path, args, options);
+    const run: GitCommand = (args, options) => {
+      const result = runGit(path, args, options);
+      if (options?.rewritesFiles) {
+        // Also after a failure: it may have rewritten some of them all the same.
+        const refresh = () => this.indexRefreshes.schedule(path);
+        result.then(refresh, refresh);
+      }
+      return result;
+    };
     const fetching = <T>(task: (run: GitCommand) => Promise<T>) =>
       this.fetches.run(path, () =>
         task((args, options) => run(args, { ...options, stopOnExit: true })),
@@ -87,10 +114,12 @@ export class GitReposImpl implements GitRepos {
       fetch: (args, options) => fetching((queued) => queued(args, options)),
       fetching,
       exclusive: (task) => this.writes.run(path, () => task(run)),
+      statusTook: (ms) => this.indexRefreshes.statusTook(path, ms),
+      sortsLog: () => this.sortedLogs.has(path),
+      sortLog: () => void this.sortedLogs.add(path),
       // Any failure is taken for no HEAD, as callers have always had it.
       hasHead: () => refExists(run, "HEAD").catch(() => false),
       updateCommitGraph: () => this.commitGraphs.update(path),
-      hasCommitGraph: () => this.commitGraphs.exists(path),
       showStatus: (snapshot) => this.shownStatuses.set(path, snapshot),
       shownStatus: () => this.shownStatuses.get(path),
     };

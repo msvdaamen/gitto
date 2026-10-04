@@ -48,6 +48,8 @@ const ROW_GAP = 2;
  */
 export function ChangedFileList(props: {
   files: ChangedFile[];
+  /** The files' lines weren't counted, so one without line counts isn't known to be binary. */
+  uncounted?: boolean;
   scrollElement: HTMLElement | undefined;
   action?: FileAction;
 }) {
@@ -84,7 +86,7 @@ export function ChangedFileList(props: {
               when={file().additions !== null}
               fallback={
                 <em class="text-faint not-italic">
-                  {file().status === "untracked" ? "new" : "binary"}
+                  {file().status === "untracked" ? "new" : props.uncounted ? "" : "binary"}
                 </em>
               }
             >

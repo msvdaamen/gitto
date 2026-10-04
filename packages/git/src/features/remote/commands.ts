@@ -126,7 +126,8 @@ async function integrate(
 
     let failure: GitError | undefined;
     try {
-      await run(args);
+      // The merge or rebase rewrites the files the upstream changed.
+      await run(args, { rewritesFiles: true });
     } catch (error) {
       if (!(error instanceof GitError)) throw error;
       failure = error;
