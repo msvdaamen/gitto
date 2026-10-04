@@ -84,9 +84,7 @@ export async function pull(repo: Repo): Promise<void> {
   try {
     await integrate(repo, gitDir, branch, upstream, fetched);
   } finally {
-    // Also after a merge that stopped at conflicts, say: the remotes are fetched all the same, and
-    // the index is refreshed for the files it rewrote (see `refreshIndex`).
-    repo.refreshIndex();
+    // Also after a merge that stopped at conflicts, say: the remotes are fetched all the same.
     fetchAfterPull(repo, remotesToFetch(settings, upstream.remote));
   }
 }
@@ -128,7 +126,8 @@ async function integrate(
 
     let failure: GitError | undefined;
     try {
-      await run(args);
+      // The merge or rebase rewrites the files the upstream changed.
+      await run(args, { rewritesFiles: true });
     } catch (error) {
       if (!(error instanceof GitError)) throw error;
       failure = error;

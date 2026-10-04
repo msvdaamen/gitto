@@ -32,7 +32,11 @@ export function parseDiff(output: string): ChangedFile[] {
       const status = CODES[code[0]!] ?? "modified";
       const origPath = status === "renamed" || status === "copied" ? records[++i]! : null;
       const path = records[++i]!;
-      files.set(path, { path, status, origPath, additions: null, deletions: null });
+      // A conflicted file is listed again as modified, compared to one side of the conflict: it
+      // stays conflicted, as the status has it.
+      if (files.get(path)?.status !== "conflicted") {
+        files.set(path, { path, status, origPath, additions: null, deletions: null });
+      }
       continue;
     }
 

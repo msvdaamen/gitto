@@ -12,6 +12,8 @@ const FIELDS = ["%H", "%P", "%ct", "%gs"];
  * with a glob.
  */
 const STASH_ENV = { env: { GIT_LITERAL_PATHSPECS: "0" } };
+/** For a stash or a pop, which put the changed files back as they are in HEAD or in the stash. */
+const STASH_WRITE = { ...STASH_ENV, rewritesFiles: true };
 
 /** The stashes, newest first. */
 export async function listStashes(repo: Repo, signal?: AbortSignal): Promise<Stash[]> {
@@ -38,9 +40,7 @@ export async function listStashes(repo: Repo, signal?: AbortSignal): Promise<Sta
  * does nothing.
  */
 export async function pushStash(repo: Repo): Promise<void> {
-  // The changed files are put back as they are in HEAD; the index is refreshed after (see
-  // `refreshIndex`), also after a failure, which may have done some of that.
-  await stashChanges(repo.write).finally(() => repo.refreshIndex());
+  await stashChanges(repo.write);
 }
 
 /** `pushStash` through `run` (e.g. a command of `repo.exclusive`), with `message` if given. */
@@ -48,7 +48,7 @@ export async function stashChanges(run: GitCommand, message?: string): Promise<v
   // Not `--quiet`, which keeps git from saying why it refused, too.
   await run(
     ["stash", "push", "--include-untracked", ...(message ? ["--message", message] : [])],
-    STASH_ENV,
+    STASH_WRITE,
   );
 }
 
@@ -73,7 +73,7 @@ export async function getStashFiles(
  */
 export async function popStash(repo: Repo, sha: string): Promise<void> {
   // One write, so no other stash of Gitto's can become the newest between checking and popping.
-  const popping = repo.exclusive(async (run) => {
+  await repo.exclusive(async (run) => {
     if ((await resolveRef(run, "refs/stash")) !== sha) {
       throw new RepositoryChangedError(
         "The stashes changed before the stash could be popped, so nothing was popped.",
@@ -81,8 +81,6 @@ export async function popStash(repo: Repo, sha: string): Promise<void> {
     }
     await popNewest(run);
   });
-  // Also after a pop that conflicted (see `refreshIndex`).
-  await popping.finally(() => repo.refreshIndex());
 }
 
 /**
@@ -97,7 +95,7 @@ export async function popNewest(run: GitCommand): Promise<void> {
     // Without staged changes, it either works, fails like a plain pop, or fails before changing
     // anything when the staged changes don't apply, and a plain pop follows.
     if (!staged && (await popIndex(run))) return;
-    await run(["stash", "pop", "--quiet"], STASH_ENV);
+    await run(["stash", "pop", "--quiet"], STASH_WRITE);
   } catch (error) {
     // Git won't pop over conflicts that were already there, and says so.
     if (error instanceof GitError && !conflicted && (await hasConflicts(run))) {
@@ -114,7 +112,7 @@ export async function popNewest(run: GitCommand): Promise<void> {
  * that won't apply to the index.
  */
 function popIndex(run: GitCommand): Promise<boolean> {
-  return run(["stash", "pop", "--index", "--quiet"], STASH_ENV).then(
+  return run(["stash", "pop", "--index", "--quiet"], STASH_WRITE).then(
     () => true,
     (error: unknown) => {
       if (!(error instanceof GitError)) throw error;

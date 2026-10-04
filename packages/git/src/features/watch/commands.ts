@@ -16,26 +16,62 @@ import type { GitDirChange } from "./schema";
  */
 const GIT_DIR_IGNORED = ["objects", "logs", "hooks", "lfs", "modules", "info"];
 
-/** The watcher's subscribes and unsubscribes run one at a time, in the order asked for. */
-let turn: Promise<unknown> = Promise.resolve();
-
 /**
- * `subscribe`, in turn. The watcher shares what watches (on Linux, one inotify instance) between
- * its subscriptions, and shuts it down with the last unsubscribe. A subscribe that started while
- * that was still removing its watches ends up on the one being shut down, and never hears of a
- * change: after switching from a big repository to another, the new one's git directory wasn't
- * watched, and a commit made in a terminal didn't show.
+ * `subscribe`, never while an unsubscribe runs, nor the other way around. The watcher shares what
+ * watches (on Linux, one inotify instance) between its subscriptions, and shuts it down with the
+ * last unsubscribe. A subscribe that started while that was still removing its watches ends up on
+ * the one being shut down, and never hears of a change: after switching from a big repository to
+ * another, the new one's git directory wasn't watched, and a commit made in a terminal didn't show.
  */
 async function watch(...args: Parameters<typeof subscribe>): Promise<AsyncSubscription> {
-  const subscription = await inTurn(() => subscribe(...args));
-  return { unsubscribe: () => inTurn(() => subscription.unsubscribe()) };
+  const subscription = await turns.take("subscribe", () => subscribe(...args));
+  return { unsubscribe: () => turns.take("unsubscribe", () => subscription.unsubscribe()) };
 }
 
-function inTurn<T>(task: () => Promise<T>): Promise<T> {
-  const result = turn.then(task);
-  turn = result.catch(() => undefined);
-  return result;
+type Turn = "subscribe" | "unsubscribe";
+
+/**
+ * Runs tasks of one kind together, and the other kind once those are done. A subscribe goes ahead
+ * of the unsubscribes that are waiting: a repository that's just been switched to isn't watched
+ * until it's done, so it doesn't wait for one that's being left to finish walking its folders.
+ */
+export class Turns {
+  private running: Turn | undefined;
+  private count = 0;
+  private readonly waiting: { kind: Turn; start: () => void }[] = [];
+
+  take<T>(kind: Turn, task: () => Promise<T>): Promise<T> {
+    return new Promise((resolve, reject) => {
+      const start = () => {
+        this.running = kind;
+        this.count++;
+        // Also if it throws rather than rejects.
+        void new Promise<T>((done) => done(task())).then(resolve, reject).finally(() => {
+          if (--this.count === 0) this.next();
+        });
+      };
+      // Along with what's running, if that's of its kind and no subscribe is waiting for it.
+      const joins =
+        this.running === kind &&
+        (kind === "subscribe" || !this.waiting.some((other) => other.kind === "subscribe"));
+      if (this.count === 0 || joins) start();
+      else this.waiting.push({ kind, start });
+    });
+  }
+
+  /** Starts what's waiting of one kind: the subscribes, if there are any. */
+  private next(): void {
+    this.running = undefined;
+    const kind = this.waiting.some((other) => other.kind === "subscribe")
+      ? "subscribe"
+      : "unsubscribe";
+    const starting = this.waiting.filter((other) => other.kind === kind);
+    for (const other of starting) this.waiting.splice(this.waiting.indexOf(other), 1);
+    for (const other of starting) other.start();
+  }
 }
+
+const turns = new Turns();
 
 /** Yields what changed in the repository's git directory (debounced), until `signal` aborts. */
 export async function* watchGitDir(

@@ -176,6 +176,26 @@ describe("a big working tree", () => {
     expect(readFileSync(join(path, "thing", "inner.txt"), "utf8")).toBe("now a folder\n");
   });
 
+  it("unstages a file whose name isn't UTF-8", async () => {
+    const path = createRepo("all-latin1");
+    // "café.txt" in Latin-1: read as UTF-8, its é doesn't come back as the byte it was.
+    const name = Buffer.concat([Buffer.from("caf"), Buffer.from([0xe9]), Buffer.from(".txt")]);
+    const file = Buffer.concat([Buffer.from(`${path}/`), name]);
+    writeFileSync(file, "a\n");
+    git(path, "add", ".");
+    git(path, "commit", "-q", "-m", "First");
+    writeFileSync(file, "changed\n");
+    git(path, "add", ".");
+    const repo = await repos.open("all-latin1");
+
+    await unstageAll(repo);
+    // Nothing staged, and no entry under another name.
+    expect(git(path, "diff", "--cached", "--name-only")).toBe("");
+    expect(git(path, "ls-files", "-z").split("\0").filter(Boolean)).toHaveLength(1);
+    // The change is still there, unstaged.
+    expect(git(path, "diff", "--name-only")).not.toBe("");
+  });
+
   it("unstages everything without giving git the staged files as paths to look up", async () => {
     const path = createRepo("all-unlisted");
     writeFileSync(join(path, "a.txt"), "a\n");

@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { stat } from "node:fs/promises";
 
 import { commandError, GitError } from "./errors";
 import { trace, tracing } from "./trace";
@@ -11,6 +12,17 @@ export interface RunOptions {
   env?: Record<string, string>;
   /** Settings for this command, e.g. `gc.auto=0`, as with `git -c`. */
   config?: string[];
+  /**
+   * Git's output, and `stdin`, as bytes, one per character, rather than as UTF-8: for paths that
+   * are handed back to git as it gave them. A file's name needn't be UTF-8, and one that isn't
+   * doesn't survive being read as it.
+   */
+  binary?: boolean;
+  /**
+   * The command rewrites files in the working tree, like a checkout: the repository's index is
+   * refreshed a little after it's done, or has failed partway (see `IndexRefreshes`).
+   */
+  rewritesFiles?: boolean;
   /**
    * Stopped (with all it started, like ssh) when Gitto exits, rather than left running in its
    * session (see `runGit`), out of reach: for a command that's safe to stop partway, like a fetch.
@@ -115,7 +127,7 @@ export function runGit(cwd: string, args: string[], options: RunOptions = {}): P
     });
 
     child.on("close", (code) => {
-      const out = Buffer.concat(stdout).toString("utf8");
+      const out = Buffer.concat(stdout).toString(options.binary ? "latin1" : "utf8");
       const err = Buffer.concat(stderr).toString("utf8");
       if (tracing) {
         const ms = (performance.now() - start).toFixed(0);
@@ -131,7 +143,8 @@ export function runGit(cwd: string, args: string[], options: RunOptions = {}): P
     // Git can exit before reading all of stdin, e.g. when the index is locked; writing the rest
     // then fails with EPIPE. Its exit code and stderr already say why, so that's not reported.
     child.stdin.on("error", () => undefined);
-    child.stdin.end(options.stdin);
+    if (options.stdin === undefined) child.stdin.end();
+    else child.stdin.end(options.stdin, options.binary ? "latin1" : "utf8");
   });
 }
 
@@ -171,6 +184,12 @@ const REFRESH_INDEX_AFTER_MS = 1000;
 const SLOW_STATUS_MS = 500;
 
 /**
+ * With this many files the index can't vouch for, a slow first status is put down to them. Fewer
+ * are always there after a commit, say, and are read in no time: 0.1ms each in vscode.
+ */
+const MANY_UNSURE_FILES = 1000;
+
+/**
  * Refreshes each repository's index after a write that rewrote files in the working tree, like a
  * checkout. Git can't tell whether a file written in the same second as the index changed since,
  * so it reads it again, in full, whenever it compares the working tree with the index, until the
@@ -182,10 +201,11 @@ const SLOW_STATUS_MS = 500;
  *
  * A fresh clone is in that state too: 19,939 files written in the index's second in vscode, and
  * 1s rather than 25ms for every status. So the index is also refreshed when a repository's first
- * status of this run was slow, whatever made it so. Only then: it holds the lock for as long as
- * that status took, at a moment nobody asked Gitto to write, and a git command run in a terminal
- * meanwhile fails on it. A checkout made in a terminal later is left to the next write there or
- * here.
+ * status of this run was slow and the index has many such files. Only then: it holds the lock for
+ * as long as that status took, at a moment nobody asked Gitto to write, and a git command run in
+ * a terminal meanwhile fails on it. So not for a status that was slow for another reason, like
+ * files that aren't in the disk's cache yet, and a checkout made in a terminal later is left to
+ * the next write there or here.
  */
 export class IndexRefreshes {
   private readonly timers = new Map<string, NodeJS.Timeout>();
@@ -199,7 +219,8 @@ export class IndexRefreshes {
     const timer = setTimeout(() => {
       this.timers.delete(path);
       void this.writes
-        .run(path, () => runGit(path, ["update-index", "-q", "--refresh"]))
+        // `-q` and `--unmerged`: files that did change, and conflicts, aren't errors.
+        .run(path, () => runGit(path, ["update-index", "-q", "--unmerged", "--refresh"]))
         .then(
           () => trace(`refreshed the index of ${path}`),
           (error: unknown) => trace(`couldn't refresh the index of ${path}: ${error}`),
@@ -210,12 +231,42 @@ export class IndexRefreshes {
     this.timers.set(path, timer);
   }
 
-  /** Schedules a refresh if this status, which took `ms`, is `path`'s first and was slow. */
+  /**
+   * Schedules a refresh if this status, which took `ms`, is `path`'s first, was slow, and the
+   * index has many files it can't vouch for.
+   */
   statusTook(path: string, ms: number): void {
     if (this.timed.has(path)) return;
     this.timed.add(path);
-    if (ms >= SLOW_STATUS_MS) this.schedule(path);
+    if (ms < SLOW_STATUS_MS) return;
+    void this.refreshUnsure(path, ms);
   }
+
+  /** Schedules a refresh if `path`'s index has many files it can't vouch for. */
+  private async refreshUnsure(path: string, ms: number): Promise<void> {
+    // The repository is gone, say: nothing to refresh.
+    const count = await unsureFiles(path).catch(() => 0);
+    trace(`the first status of ${path} took ${ms.toFixed(0)}ms, with ${count} unsure files`);
+    if (count >= MANY_UNSURE_FILES) this.schedule(path);
+  }
+}
+
+/**
+ * How many of the index's files it can't vouch for: the ones it has as last written in the second
+ * it was written itself, or later.
+ */
+async function unsureFiles(path: string): Promise<number> {
+  const [entries, index] = await Promise.all([
+    runGit(path, ["ls-files", "--debug"]),
+    runGit(path, ["rev-parse", "--path-format=absolute", "--git-path", "index"]),
+  ]);
+  const written = Math.floor((await stat(index.trimEnd())).mtimeMs / 1000);
+  let count = 0;
+  // Each file's name, then what the index knows of it, indented: `  mtime: <seconds>:<nanoseconds>`.
+  for (const [, seconds] of entries.matchAll(/^ {2}mtime: (\d+):/gm)) {
+    if (Number(seconds) >= written) count++;
+  }
+  return count;
 }
 
 /**

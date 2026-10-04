@@ -157,7 +157,13 @@ describe("the changed files", () => {
 
     const { changes, counts } = await getStatus(repo);
     expect(changes).toEqual(await fullDiffs(repo));
-    expect(changes.unstaged).toEqual([expect.objectContaining({ path: "file.txt" })]);
+    // Conflicted on both sides, as it is when there are too many files to diff.
+    expect(changes.unstaged).toEqual([
+      expect.objectContaining({ path: "file.txt", status: "conflicted", additions: 4 }),
+    ]);
+    expect(changes.staged).toEqual([
+      expect.objectContaining({ path: "file.txt", status: "conflicted" }),
+    ]);
     expect(counts).toEqual({ files: 1, staged: 0, unstaged: 0, conflicted: 1 });
   });
 

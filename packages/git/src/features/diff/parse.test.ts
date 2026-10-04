@@ -26,4 +26,21 @@ describe("parseDiff", () => {
       { path: "image.png", status: "added", origPath: null, additions: null, deletions: null },
     ]);
   });
+
+  it("keeps a conflicted file conflicted, though it's listed as modified too", () => {
+    // What `git diff --raw --numstat -z` has for a file with a conflict.
+    const output = [
+      ":000000 100644 000 000 U",
+      "both.txt",
+      ":100644 100644 aaa 000 M",
+      "both.txt",
+      "0\t0\tboth.txt",
+      "4\t0\tboth.txt",
+      "",
+    ].join("\0");
+
+    expect(parseDiff(output)).toEqual([
+      { path: "both.txt", status: "conflicted", origPath: null, additions: 4, deletions: 0 },
+    ]);
+  });
 });

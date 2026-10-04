@@ -21,20 +21,24 @@ describe("opening repositories", () => {
   });
 });
 
-/** A repository whose index is out of date: its file was written again, unchanged. */
-function createStaleRepo(name: string) {
+/**
+ * A repository of a thousand files, whose index was written an hour before them, as far as git can
+ * tell, or `after` them: before, it can't vouch for any of them, as in a fresh clone.
+ */
+function createClonedRepo(name: string, index: "before" | "after") {
   const path = createRepo(name);
-  writeFileSync(join(path, "file.txt"), "x\n");
+  for (let i = 0; i < 1000; i++) writeFileSync(join(path, `file-${i}.txt`), "x\n");
   git(path, "add", ".");
   git(path, "commit", "-q", "-m", "First");
-  const later = new Date(Date.now() + 5000);
-  utimesSync(join(path, "file.txt"), later, later);
-  return { path, written: () => statSync(join(path, ".git", "index")).mtimeMs };
+  const file = join(path, ".git", "index");
+  const written = new Date(Date.now() + (index === "before" ? -3_600_000 : 10_000));
+  utimesSync(file, written, written);
+  return { path, written: () => statSync(file).mtimeMs };
 }
 
 describe("refreshing the index", () => {
-  it("is done after a slow first status, as a fresh clone's is", async () => {
-    const { written } = createStaleRepo("refresh-slow");
+  it("is done after a slow first status, when the index can't vouch for its files", async () => {
+    const { written } = createClonedRepo("refresh-slow", "before");
     const repo = await repos.open("refresh-slow");
     const before = written();
 
@@ -42,8 +46,18 @@ describe("refreshing the index", () => {
     await vi.waitFor(() => expect(written()).toBeGreaterThan(before), { timeout: 3000 });
   });
 
+  it("isn't after a first status that was slow for another reason", async () => {
+    const { written } = createClonedRepo("refresh-sure", "after");
+    const repo = await repos.open("refresh-sure");
+    const before = written();
+
+    repo.statusTook(600);
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(written()).toBe(before);
+  });
+
   it("isn't after a quick first status, nor after a later one that's slow", async () => {
-    const { written } = createStaleRepo("refresh-quick");
+    const { written } = createClonedRepo("refresh-quick", "before");
     const repo = await repos.open("refresh-quick");
     const before = written();
 
@@ -51,6 +65,15 @@ describe("refreshing the index", () => {
     repo.statusTook(600);
     await new Promise((resolve) => setTimeout(resolve, 1500));
     expect(written()).toBe(before);
+  });
+
+  it("is done after a command that rewrites files, also one that fails", async () => {
+    const { written } = createClonedRepo("refresh-failed", "before");
+    const repo = await repos.open("refresh-failed");
+    const before = written();
+
+    await expect(repo.write(["switch", "missing"], { rewritesFiles: true })).rejects.toThrow();
+    await vi.waitFor(() => expect(written()).toBeGreaterThan(before), { timeout: 3000 });
   });
 });
 

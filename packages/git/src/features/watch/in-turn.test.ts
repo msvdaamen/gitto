@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createRepo, repos } from "../../test/fixtures";
-import { watchGitDir } from "./commands";
+import { Turns, watchGitDir } from "./commands";
 
 /** A watcher whose unsubscribes take a while, like removing a big repository's watches does. */
 const watcher = vi.hoisted(() => ({
@@ -45,5 +45,43 @@ describe("the watcher's subscriptions", () => {
 
     controller.abort();
     await Promise.all([stopped, started]);
+  });
+
+  it("start alongside each other, and ahead of an unsubscribe that's waiting for one", async () => {
+    const turns = new Turns();
+    const order: string[] = [];
+    /** A task that says when it starts, and ends when `end` is called. */
+    function task(name: string) {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      return { end: resolve, run: () => (order.push(name), promise) };
+    }
+    const [walking, leaving, shown] = [task("walking"), task("leaving"), task("shown")];
+
+    // The repository that's left is still starting to watch its folders when it's unwatched.
+    const first = turns.take("subscribe", walking.run);
+    const unsubscribed = turns.take("unsubscribe", leaving.run);
+    // The one that's shown doesn't wait for either.
+    const second = turns.take("subscribe", shown.run);
+    expect(order).toEqual(["walking", "shown"]);
+
+    shown.end();
+    await second;
+    expect(order).toEqual(["walking", "shown"]);
+    walking.end();
+    await first;
+    await vi.waitFor(() => expect(order).toEqual(["walking", "shown", "leaving"]));
+    leaving.end();
+    await unsubscribed;
+  });
+
+  it("carry on after one fails", async () => {
+    const turns = new Turns();
+    await expect(turns.take("subscribe", () => Promise.reject(new Error("no")))).rejects.toThrow();
+    await expect(
+      turns.take("unsubscribe", () => {
+        throw new Error("no");
+      }),
+    ).rejects.toThrow();
+    expect(await turns.take("subscribe", async () => "watching")).toBe("watching");
   });
 });

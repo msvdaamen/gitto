@@ -38,15 +38,11 @@ export async function unstageAll(repo: Repo): Promise<void> {
   // against 60ms this way. As one write, so stages still waiting to run are seen, and none comes
   // in between.
   await repo.exclusive(async (run) => {
-    const staged = await run([
-      "diff",
-      "--cached",
-      "--raw",
-      "-z",
-      "--no-abbrev",
-      "--no-renames",
-      "--diff-filter=u",
-    ]);
+    // As bytes: a path goes back to git as it came, also one that isn't UTF-8.
+    const staged = await run(
+      ["diff", "--cached", "--raw", "-z", "--no-abbrev", "--no-renames", "--diff-filter=u"],
+      { binary: true },
+    );
     // `:<mode in HEAD> <mode> <object in HEAD> <object> <status>`, then the path.
     const fields = staged.split("\0");
     let entries = "";
@@ -55,6 +51,8 @@ export async function unstageAll(repo: Repo): Promise<void> {
       // A file that isn't in HEAD has mode 0 there, which takes it out of the index.
       entries += `${mode} ${object}\t${fields[i + 1]}\0`;
     }
-    if (entries) await run(["update-index", "-z", "--index-info"], { stdin: entries });
+    if (entries) {
+      await run(["update-index", "-z", "--index-info"], { stdin: entries, binary: true });
+    }
   });
 }

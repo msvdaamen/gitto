@@ -36,16 +36,16 @@ export interface Repo {
    */
   exclusive<T>(task: (run: GitCommand) => Promise<T>): Promise<T>;
   /**
-   * Refreshes the index a little after a write that rewrote files in the working tree, like a
-   * checkout, so `status` doesn't read them all again every time (see `IndexRefreshes`). Not
-   * waited for.
-   */
-  refreshIndex(): void;
-  /**
    * Told how long reading the status took: the index is refreshed if the first one of this run
    * was slow, as after a fresh clone (see `IndexRefreshes`).
    */
   statusTook(ms: number): void;
+  /**
+   * Whether the log has to be sorted by git: an earlier read, left unsorted, had a commit below one
+   * of its parents (see `getLog`). Remembered while the app runs, with `sortLog`.
+   */
+  sortsLog(): boolean;
+  sortLog(): void;
   /** Whether HEAD points at a commit; it doesn't on a branch without commits yet. */
   hasHead(): Promise<boolean>;
   /** Writes the commit-graph, which speeds up sorting the log, once per run (`CommitGraphs`). */
@@ -75,6 +75,8 @@ export class GitReposImpl implements GitRepos {
   private readonly commitGraphs = new CommitGraphs();
   private readonly shownStatuses = new ShownStatuses();
   private readonly indexRefreshes = new IndexRefreshes(this.writes);
+  /** The repositories whose log git has to sort (see `Repo.sortsLog`). */
+  private readonly sortedLogs = new Set<string>();
 
   constructor(private readonly repositories: RepositoryService) {}
 
@@ -91,7 +93,15 @@ export class GitReposImpl implements GitRepos {
     );
     if (!isFolder) throw new FolderNotFoundError(path);
 
-    const run: GitCommand = (args, options) => runGit(path, args, options);
+    const run: GitCommand = (args, options) => {
+      const result = runGit(path, args, options);
+      if (options?.rewritesFiles) {
+        // Also after a failure: it may have rewritten some of them all the same.
+        const refresh = () => this.indexRefreshes.schedule(path);
+        result.then(refresh, refresh);
+      }
+      return result;
+    };
     const fetching = <T>(task: (run: GitCommand) => Promise<T>) =>
       this.fetches.run(path, () =>
         task((args, options) => run(args, { ...options, stopOnExit: true })),
@@ -104,8 +114,9 @@ export class GitReposImpl implements GitRepos {
       fetch: (args, options) => fetching((queued) => queued(args, options)),
       fetching,
       exclusive: (task) => this.writes.run(path, () => task(run)),
-      refreshIndex: () => this.indexRefreshes.schedule(path),
       statusTook: (ms) => this.indexRefreshes.statusTook(path, ms),
+      sortsLog: () => this.sortedLogs.has(path),
+      sortLog: () => void this.sortedLogs.add(path),
       // Any failure is taken for no HEAD, as callers have always had it.
       hasHead: () => refExists(run, "HEAD").catch(() => false),
       updateCommitGraph: () => this.commitGraphs.update(path),
