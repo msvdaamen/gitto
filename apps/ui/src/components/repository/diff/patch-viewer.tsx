@@ -18,9 +18,10 @@ import type * as EditModule from "@pierre/diffs/edit";
 import type { Editor } from "@pierre/diffs/edit";
 import { getOrCreateWorkerPoolSingleton, type WorkerPoolManager } from "@pierre/diffs/worker";
 import { cn } from "cn";
+import Minus from "lucide-solid/icons/minus";
+import Plus from "lucide-solid/icons/plus";
 import { createEffect, createMemo, createSignal, on, onCleanup, untrack } from "solid-js";
 
-import { Kbd } from "@/components/ui/kbd";
 import { useConnected } from "@/components/ui/virtual-list";
 import type { DiffStyle } from "@/hooks/diff-style";
 import { useTheme } from "@/hooks/theme";
@@ -156,8 +157,9 @@ const EXPAND_HIGHLIGHT_WAIT_MS = 1500;
  *
  * With `staging`, the lines of an uncommitted file's patch can be picked to stage or unstage: by
  * selecting them, with the mouse or with the arrow keys (Shift to extend), or a hunk at a time,
- * with its button or `[` and `]`. Space stages the selected ones, Esc clears the selection. Once
- * the keyboard staged some, the selection moves to the change that's in their place.
+ * with its button or `[` and `]`. The button in the gutter, by the changed line the pointer is on
+ * or the last one selected, or Space stages them; Esc clears the selection. Once the keyboard
+ * staged some, the selection moves to the change that's in their place.
  */
 export default function PatchViewer(props: {
   patch: string;
@@ -275,7 +277,7 @@ export default function PatchViewer(props: {
     // Picking lines to stage, in the patch on show.
     /** The changed lines of the diff on show, and the rows selected, if any. */
     let lines: ChangedLine[] = [];
-    let selection: SelectedLineRange | null = null;
+    const [selection, setSelection] = createSignal<SelectedLineRange | null>(null);
     /** The changed lines selected. */
     const [picked, setPicked] = createSignal<ChangedLine[]>([]);
     /** Whether the selection is of whole hunks, gone through with `[` and `]`, not by line. */
@@ -297,7 +299,7 @@ export default function PatchViewer(props: {
       diffs.getLineIndex(lineNumber, side)?.[props.diffStyle === "split" ? 1 : 0];
 
     const select = (range: SelectedLineRange | null) => {
-      selection = range;
+      setSelection(range);
       byHunk = false;
       setPicked(range ? selectedLines(lines, range, rowOf) : []);
     };
@@ -334,21 +336,39 @@ export default function PatchViewer(props: {
       }
     };
 
-    /** The button that stages the lines selected, next to the last of them. */
-    const stageSelected = (
+    /**
+     * The changed line the pointer is on, if any, which the gutter's button stages without a
+     * selection. Forgotten once another patch is on show, where it may be another line, until the
+     * pointer moves.
+     */
+    const [hovered, setHovered] = createSignal<ChangedLine>();
+    /** What the gutter's button stages: the lines selected, or else the line the pointer is on. */
+    const toStage = () =>
+      selection() ? picked() : [hovered()].filter((line) => line !== undefined);
+
+    const unstaging = () => props.staging?.action === "unstage";
+    const stageLabel = () =>
+      `${unstaging() ? "Unstage" : "Stage"} ${selection() ? "lines (Space)" : "line"}`;
+
+    /**
+     * The button in the gutter, by the number of the last line selected or else the changed line
+     * the pointer is on, which stages them.
+     */
+    const stageButton = (
       <button
         type="button"
+        aria-label={stageLabel()}
+        title={stageLabel()}
         class={cn(
-          "absolute top-0 left-[calc(100%+var(--diffs-column-content-width,0px))] z-10 flex h-full -translate-x-[calc(100%+8px)] cursor-pointer items-center gap-1.5 rounded-md border border-[color-mix(in_srgb,var(--primary)_45%,var(--border))] bg-panel-raised px-2 font-sans text-[11.5px] font-[600] whitespace-nowrap text-text shadow-[0_2px_8px_rgba(0,0,0,.18)] hover:bg-panel-hover focus-ring group-data-busy:cursor-default group-data-busy:opacity-50",
-          picked().length === 0 && "hidden",
+          "absolute top-px left-0 z-10 flex size-[calc(var(--diffs-line-height)-2px)] -translate-x-[calc(100%+4px)] cursor-pointer items-center justify-center rounded-[4px] bg-primary text-bg shadow-[0_1px_4px_rgba(0,0,0,.25)] hover:bg-primary-strong focus-ring group-data-busy:cursor-default group-data-busy:opacity-50",
+          toStage().length === 0 && "hidden",
         )}
         // Not a click on the line it's on, which would select that line alone: heard on the button
         // itself, before the library does in the diff, rather than delegated to the document.
         on:pointerdown={(event) => event.stopPropagation()}
-        onClick={() => void stage(picked(), false)}
+        onClick={() => void stage(toStage(), false)}
       >
-        {props.staging?.action === "unstage" ? "Unstage lines" : "Stage lines"}
-        <Kbd class="px-1 py-0 text-[10.5px]">Space</Kbd>
+        {unstaging() ? <Minus size={14} strokeWidth={2.5} /> : <Plus size={14} strokeWidth={2.5} />}
       </button>
     ) as HTMLElement;
 
@@ -379,10 +399,15 @@ export default function PatchViewer(props: {
       return {
         enableLineSelection: can,
         enableGutterUtility: can,
-        renderGutterUtility: () => stageSelected,
+        renderGutterUtility: () => stageButton,
         // Clicking a line gives the view the keyboard, to go on from there.
         onLineSelectionStart: () => root.focus({ preventScroll: true }),
         onLineSelected: select,
+        onLineEnter: ({ lineNumber, annotationSide }) =>
+          setHovered(
+            lines.find((line) => line.side === annotationSide && line.lineNumber === lineNumber),
+          ),
+        onLineLeave: () => setHovered(undefined),
         renderAnnotation: ({ metadata }) => (metadata ? hunkButton(metadata.hunk) : undefined),
       };
     };
@@ -447,6 +472,7 @@ export default function PatchViewer(props: {
       diffs.render({ fileDiff: diff, containerWrapper: wrapper, lineAnnotations: buttons(diff) });
       if (focused && !root.contains(document.activeElement)) root.focus({ preventScroll: true });
       lines = changedLines(diff);
+      setHovered(undefined);
       reselect(sameFile);
       report();
       props.onShown();
@@ -677,17 +703,18 @@ export default function PatchViewer(props: {
      */
     const move = (down: boolean, extend: boolean) => {
       const rows = changedRows(lines, rowOf);
+      const selected = selection();
       let target: (typeof rows)[number] | undefined;
-      if (!selection) target = inView(down);
+      if (!selected) target = inView(down);
       else {
-        const { top, bottom, end } = selectedRows(selection);
+        const { top, bottom, end } = selectedRows(selected);
         const from = extend ? end : down ? bottom : top;
         target = down ? rows.find(({ row }) => row > from) : rows.findLast(({ row }) => row < from);
       }
       if (!target) return;
       diffs.setSelectedLines(
-        extend && selection
-          ? { ...selection, end: target.line.lineNumber, endSide: target.line.side }
+        extend && selected
+          ? { ...selected, end: target.line.lineNumber, endSide: target.line.side }
           : rangeOf(target.line),
       );
       reveal(target.line);
@@ -696,10 +723,11 @@ export default function PatchViewer(props: {
     /** Selects the next hunk's changes down or up from the selection, or the first one in view. */
     const moveToHunk = (down: boolean) => {
       const rows = changedRows(lines, rowOf);
+      const selected = selection();
       let target: ChangedLine | undefined;
-      if (!selection) target = inView(down)?.line;
+      if (!selected) target = inView(down)?.line;
       else {
-        const { top, bottom } = selectedRows(selection);
+        const { top, bottom } = selectedRows(selected);
         // The first row of each hunk, down from the selection, or up from its top.
         const firsts = rows.filter(
           ({ line }, i) => i === 0 || rows[i - 1]!.line.hunk !== line.hunk,
@@ -735,7 +763,7 @@ export default function PatchViewer(props: {
           break;
         case "Escape":
           // Without a selection, Esc goes on to close the changes.
-          if (!selection) return;
+          if (!selection()) return;
           diffs.setSelectedLines(null);
           break;
         default:
