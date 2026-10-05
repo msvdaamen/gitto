@@ -10,7 +10,6 @@ export const SCROLL_IDS = [
   "staged-files",
   "sidebar-local-branches",
   "sidebar-remotes",
-  "sidebar-pull-requests",
   "sidebar-tags",
   "sidebar-stashes",
 ] as const;
