@@ -141,12 +141,12 @@ jobs:
           notes="Built from $GITHUB_SHA on main. Nightly builds aren't tested beyond CI."
           if ! gh release view nightly --json id > /dev/null; then
             gh release create nightly upload/* --verify-tag --prerelease \
-              --title "Nightly $VERSION" --notes "$notes"
+              --title "Gitto Nightly $VERSION" --notes "$notes"
             exit
           fi
           old=$(gh release view nightly --json assets --jq '.assets[].name')
           gh release upload nightly upload/* --clobber
-          gh release edit nightly --prerelease --title "Nightly $VERSION" --notes "$notes"
+          gh release edit nightly --prerelease --title "Gitto Nightly $VERSION" --notes "$notes"
           # The last build's files.
           while IFS= read -r name; do
             [[ -z "$name" || -e "upload/$name" ]] || gh release delete-asset nightly "$name" --yes

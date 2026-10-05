@@ -16,8 +16,9 @@ const config: ForgeConfig = {
   packagerConfig: {
     // Native binaries can't be loaded from inside the archive.
     asar: { unpack: "**/*.node" },
-    // The package name is scoped (@gitto/electron), so set a plain binary name explicitly.
-    executableName: "gitto",
+    // Gitto.exe and Gitto.app/Contents/MacOS/Gitto, but a lowercase `gitto` on Linux, as commands
+    // are there. Builds are made on the platform they're for (see packageAfterCopy).
+    executableName: process.platform === "linux" ? "gitto" : "Gitto",
     // Extension is picked per platform (icon.ico on Windows, icon.icns on macOS).
     icon: "assets/icon",
     // Copied to Resources/migrations; the main process applies them on startup.
@@ -43,8 +44,9 @@ const config: ForgeConfig = {
     },
   },
   makers: [
-    // Its NuGet package id would be the scoped package name, which can't have `@` or `/`.
-    new MakerSquirrel({ name: "gitto", setupIcon: "assets/icon.ico" }),
+    // The NuGet package's id, which names the folder it's installed in (src/squirrel.ts has it too).
+    // By default it's the scoped package name, which NuGet won't take.
+    new MakerSquirrel({ name: "Gitto", setupIcon: "assets/icon.ico" }),
     new MakerZIP({}, ["darwin"]),
     // Linux is packaged for Arch by arch/PKGBUILD instead (`pnpm make:arch`).
   ],

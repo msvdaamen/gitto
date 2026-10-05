@@ -39,7 +39,7 @@ The version comes from git tags; `package.json`'s stays at `0.0.0` and is set at
 
 Install the Arch package with `sudo pacman -U gitto-*.pkg.tar.zst`.
 
-- Every merge to `main` updates the **Nightly** pre-release. Its version follows the highest `v*`
+- Every merge to `main` updates the **Gitto Nightly** pre-release. Its version follows the highest `v*`
   tag: `1.2.4-nightly.20261005.42` after `v1.2.3` (the date, then the workflow's run number), and
   `1.3.0-rc.1.nightly.20261005.42` after `v1.3.0-rc.1`.
 - Pushing a `v1.3.0` tag publishes **Gitto 1.3.0** with generated notes. A tag with a pre-release
