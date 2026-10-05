@@ -50,10 +50,11 @@ export function parseLog(output: string): Commit[] {
 function parseDecorations(decorations: string): CommitRef[] {
   if (!decorations) return [];
   return decorations.split(", ").flatMap<CommitRef>((decoration) => {
-    if (decoration === "HEAD") return [{ kind: "head", name: "HEAD" }];
+    if (decoration === "HEAD") return [{ kind: "head", name: "HEAD", fullName: "HEAD" }];
     const checkedOut = decoration.startsWith("HEAD -> ");
-    const ref = parseRefName(decoration.replace(/^HEAD -> |^tag: /, ""));
+    const fullName = decoration.replace(/^HEAD -> |^tag: /, "");
+    const ref = parseRefName(fullName);
     if (!ref) return [];
-    return [checkedOut ? { ...ref, current: true } : ref];
+    return [checkedOut ? { ...ref, fullName, current: true } : { ...ref, fullName }];
   });
 }

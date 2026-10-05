@@ -5,6 +5,11 @@ export interface BranchLabel {
   kind: "branch";
   /** `main` for a local branch (and its remote copies), `origin/feature` for a remote one. */
   name: string;
+  /**
+   * The full ref name to switch to: the local branch's, e.g. `refs/heads/main`, or for a remote one
+   * `refs/remotes/origin/feature` (switching to it switches to the local branch tracking it).
+   */
+  ref: string;
   /** Whether a local branch points here. */
   local: boolean;
   /** Remotes whose copy of the branch points here, e.g. `origin`. */
@@ -34,7 +39,14 @@ export function toRefLabels(refs: CommitRef[]): RefLabel[] {
       .filter((ref) => ref.kind === "local")
       .map((ref) => [
         ref.name,
-        { kind: "branch", name: ref.name, local: true, remotes: [], current: !!ref.current },
+        {
+          kind: "branch",
+          name: ref.name,
+          ref: ref.fullName,
+          local: true,
+          remotes: [],
+          current: !!ref.current,
+        },
       ]),
   );
   // Remote branches without a local copy here; kept apart from the local ones, as a local branch
@@ -48,7 +60,16 @@ export function toRefLabels(refs: CommitRef[]): RefLabel[] {
     const remotes = slash === -1 ? [] : [ref.name.slice(0, slash)];
     const local = slash === -1 ? undefined : locals.get(ref.name.slice(slash + 1));
     if (local) local.remotes.push(...remotes);
-    else remoteOnly.push({ kind: "branch", name: ref.name, local: false, remotes, current: false });
+    else {
+      remoteOnly.push({
+        kind: "branch",
+        name: ref.name,
+        ref: ref.fullName,
+        local: false,
+        remotes,
+        current: false,
+      });
+    }
   }
 
   const tags = refs

@@ -162,7 +162,7 @@ export function RefList(props: { repositoryId: string }) {
                     : undefined
               }
               // The toolbar shows it running, and why it failed.
-              onDblClick={() => !branch().current && switchBranch.run(branch().fullName)}
+              onDblClick={() => switchBranch.run(branch().fullName)}
             />
           ))
         }

@@ -27,8 +27,8 @@ describe("a repository with history", () => {
     ]);
     expect(log[0]).toMatchObject({
       refs: [
-        { kind: "local", name: "main", current: true },
-        { kind: "tag", name: "v1" },
+        { kind: "local", name: "main", fullName: "refs/heads/main", current: true },
+        { kind: "tag", name: "v1", fullName: "refs/tags/v1" },
       ],
       authorName: "Test User",
     });

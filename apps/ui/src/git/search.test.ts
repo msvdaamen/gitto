@@ -13,7 +13,16 @@ const commit: CommitRow = {
   initials: "AL",
   avatarColor: "#000",
   committedAt: 0,
-  labels: [{ kind: "branch", name: "main", local: true, remotes: ["origin"], current: true }],
+  labels: [
+    {
+      kind: "branch",
+      name: "main",
+      ref: "refs/heads/main",
+      local: true,
+      remotes: ["origin"],
+      current: true,
+    },
+  ],
 };
 
 const stash: StashRow = {

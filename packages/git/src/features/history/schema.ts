@@ -10,6 +10,8 @@ export const CommitRefSchema = z.object({
   kind: z.enum(["head", ...RefKindSchema.options]),
   /** Short name, e.g. `main`, `origin/main`, `v1`; `HEAD` for a detached head. */
   name: z.string(),
+  /** Full name, e.g. `refs/heads/main`, `refs/remotes/origin/main`; `HEAD` for a detached head. */
+  fullName: z.string(),
   /** Whether it's the checked-out branch. */
   current: z.boolean().optional(),
 });

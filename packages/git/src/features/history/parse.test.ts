@@ -47,11 +47,11 @@ describe("parseLog", () => {
         authoredAt: 1_700_000_000_000,
         committedAt: 1_700_000_500_000,
         refs: [
-          { kind: "local", name: "main", current: true },
-          { kind: "remote", name: "origin/main" },
+          { kind: "local", name: "main", fullName: "refs/heads/main", current: true },
+          { kind: "remote", name: "origin/main", fullName: "refs/remotes/origin/main" },
           // A local branch that only looks like a remote one.
-          { kind: "local", name: "origin/local" },
-          { kind: "tag", name: "v1" },
+          { kind: "local", name: "origin/local", fullName: "refs/heads/origin/local" },
+          { kind: "tag", name: "v1", fullName: "refs/tags/v1" },
         ],
         subject: "Merge branch 'feature'",
         body: "Body line",
@@ -84,8 +84,8 @@ describe("parseLog", () => {
     ];
 
     expect(parseLog(output.join("\0"))[0]!.refs).toEqual([
-      { kind: "head", name: "HEAD" },
-      { kind: "local", name: "main" },
+      { kind: "head", name: "HEAD", fullName: "HEAD" },
+      { kind: "local", name: "main", fullName: "refs/heads/main" },
     ]);
   });
 
