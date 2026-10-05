@@ -1,14 +1,17 @@
+import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { open, realpath } from "node:fs/promises";
+import { open, realpath, rename, rm } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 
 import {
+  FileChangedOnDiskError,
   FileTooLargeError,
   NotUtf8Error,
   OutsideRepositoryError,
   WorkingTreeFileNotFoundError,
 } from "../../core/errors";
 import type { Repo } from "../../core/repo";
+import { WriteQueue } from "../../core/runner";
 import { MAX_BLOB_BYTES } from "./limits";
 
 /**
@@ -61,13 +64,25 @@ function isPlain(path: string): boolean {
   return path.split(/[\\/]/).every((part) => part !== ".." && part.toLowerCase() !== ".git");
 }
 
+/** A file in the working tree as it was read, and `version`, which names its bytes. */
+export interface WorkingTreeFile {
+  contents: string;
+  /** Changes whenever the file's bytes do: what a save checks the file still has. */
+  version: string;
+}
+
 /**
  * The contents of a file in the working tree, as they are on disk: to show more of its unstaged
- * changes, which git only has a patch of. Rejects with `FileTooLargeError` above `MAX_BLOB_BYTES`,
- * like a blob, and with `NotUtf8Error` for one that isn't UTF-8.
+ * changes, which git only has a patch of, and to edit it. Rejects with `FileTooLargeError` above
+ * `MAX_BLOB_BYTES`, like a blob, and with `NotUtf8Error` for one that isn't UTF-8.
  */
-export async function readWorkingTreeFile(repo: Repo, path: string): Promise<string> {
-  const resolved = await resolveWorkingTreePath(repo, path);
+export async function readWorkingTreeFile(repo: Repo, path: string): Promise<WorkingTreeFile> {
+  const { bytes } = await readFile(await resolveWorkingTreePath(repo, path), path);
+  return { contents: decodeUtf8(bytes), version: versionOf(bytes) };
+}
+
+/** The bytes and permissions of the file at `resolved` (the path `path` leads to). */
+async function readFile(resolved: string, path: string): Promise<{ bytes: Buffer; mode: number }> {
   // Not following a link put in its place since it was checked, and not waiting for a writer, as
   // opening a named pipe would: it's no file to read, which is only known once it's open.
   const file = await open(
@@ -78,10 +93,117 @@ export async function readWorkingTreeFile(repo: Repo, path: string): Promise<str
     const stats = await file.stat();
     if (!stats.isFile()) throw new OutsideRepositoryError(path);
     if (stats.size > MAX_BLOB_BYTES) throw new FileTooLargeError(stats.size);
-    return decodeUtf8(await file.readFile());
+    return { bytes: await file.readFile(), mode: stats.mode };
   } finally {
     await file.close();
   }
+}
+
+function versionOf(bytes: Uint8Array): string {
+  return createHash("sha1").update(bytes).digest("hex");
+}
+
+/** Saves to the same file, one after the other: a later one checks the file an earlier one wrote. */
+const saves = new WriteQueue();
+
+/**
+ * The version each file was at when Gitto last saved over it, and the one it saved, by its path
+ * on disk: a save over the first is one over the second, as long as nothing else wrote the file
+ * since. The last edits are sent as the window closes, without waiting for the version a save
+ * under way will leave the file at, which the window won't be there to get.
+ */
+const savedVersions = new Map<string, { from: string; to: string }>();
+
+/**
+ * Saves `contents` as the file at `path` in the working tree, which has to be as it was read
+ * (`version`, or one Gitto saved over it since) unless `overwrite`: rejects with
+ * `FileChangedOnDiskError` otherwise, or if it's gone, when `overwrite` makes it again. Only for a
+ * save the user asked for: Gitto doesn't write to the working tree on its own.
+ *
+ * The file keeps its permissions, and its CRLF line ends if it has them throughout: the edits can
+ * have LF ones, as git shows a file with `core.autocrlf` in its patches. Written to a file next to
+ * it, then put in its place, so it's never found half written. A link isn't saved through, nor is a
+ * file that isn't UTF-8. Resolves to the saved file's version.
+ */
+export async function saveWorkingTreeFile(
+  repo: Repo,
+  path: string,
+  contents: string,
+  expected: { version: string; overwrite: boolean },
+): Promise<string> {
+  // In the order they're asked for, by the path they're asked for.
+  return saves.run(`${repo.path}\0${path}`, async () => {
+    // Not following a link at its end, which is refused below.
+    const target = await confine(repo, path, false);
+    const before = await readExisting(target, path);
+    let text = "";
+    if (before) {
+      text = decodeUtf8(before.bytes);
+      const version = versionOf(before.bytes);
+      const saved = savedVersions.get(target);
+      const unchanged =
+        version === expected.version || (saved?.from === expected.version && saved.to === version);
+      if (!expected.overwrite && !unchanged) throw new FileChangedOnDiskError(path);
+    } else if (!expected.overwrite) {
+      throw new FileChangedOnDiskError(path, "deleted");
+    }
+    const bytes = Buffer.from(hasCrlfLineEnds(text) ? toCrlf(contents) : contents, "utf8");
+    await replaceFile(target, bytes, before?.mode);
+    const written = versionOf(bytes);
+    savedVersions.set(target, { from: expected.version, to: written });
+    return written;
+  });
+}
+
+/**
+ * The bytes and permissions of the file at `target` (the path `path` leads to); `undefined` if
+ * there's none. Rejects for a link, or anything else that isn't a file.
+ */
+async function readExisting(
+  target: string,
+  path: string,
+): Promise<{ bytes: Buffer; mode: number } | undefined> {
+  try {
+    return await readFile(target, path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    // `O_NOFOLLOW` refuses a link with ELOOP.
+    if ((error as NodeJS.ErrnoException).code === "ELOOP") throw new OutsideRepositoryError(path);
+    throw error;
+  }
+}
+
+/**
+ * Puts `bytes` in place of the file at `target`, all at once, with permissions `mode` (the file's
+ * own), or those of a new file if there was none.
+ */
+async function replaceFile(target: string, bytes: Uint8Array, mode?: number): Promise<void> {
+  const temporary = join(dirname(target), `.${basename(target)}.${randomUUID()}.gitto`);
+  try {
+    const file = await open(temporary, "wx", mode === undefined ? 0o666 : mode & 0o7777);
+    try {
+      await file.writeFile(bytes);
+      // Permissions as they were, whatever the umask took off when it was made.
+      if (mode !== undefined) await file.chmod(mode & 0o7777);
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+    await rename(temporary, target);
+  } catch (error) {
+    await rm(temporary, { force: true });
+    throw error;
+  }
+}
+
+/** Whether every line of `text` but its last ends in CRLF. */
+function hasCrlfLineEnds(text: string): boolean {
+  return text.includes("\r\n") && !/(^|[^\r])\n/.test(text);
+}
+
+/** `text` with its LF line ends made CRLF, and the CRLF ones left alone. */
+function toCrlf(text: string): string {
+  return text.replace(/\r?\n/g, "\r\n");
 }
 
 // A byte order mark is kept, as git keeps it in a patch's lines.

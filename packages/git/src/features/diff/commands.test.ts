@@ -1,5 +1,14 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 
 import { beforeAll, describe, expect, it } from "vitest";
@@ -8,6 +17,7 @@ import {
   ChangesTooLargeError,
   FileTooLargeError,
   GitError,
+  FileChangedOnDiskError,
   NotUtf8Error,
   OutsideRepositoryError,
   WorkingTreeFileNotFoundError,
@@ -32,7 +42,7 @@ import {
   MAX_PATCH_BYTES,
 } from "./commands";
 import { MAX_BLOB_BYTES } from "./limits";
-import { readWorkingTreeFile } from "./working-tree";
+import { readWorkingTreeFile, saveWorkingTreeFile } from "./working-tree";
 
 describe("getCommitFiles", () => {
   let repo: Repo;
@@ -236,8 +246,8 @@ describe("readWorkingTreeFile", () => {
   it("reads a file in the working tree, as it is on disk", async () => {
     const repo = await createHistoryRepo("read");
     writeFileSync(join(paths.get("read")!, "crlf.txt"), "\uFEFFone\r\ntwo\r\n");
-    expect(await readWorkingTreeFile(repo, "a file.txt")).toBe("changed\n");
-    expect(await readWorkingTreeFile(repo, "crlf.txt")).toBe("\uFEFFone\r\ntwo\r\n");
+    expect(await readWorkingTreeFile(repo, "a file.txt")).toMatchObject({ contents: "changed\n" });
+    expect((await readWorkingTreeFile(repo, "crlf.txt")).contents).toBe("\uFEFFone\r\ntwo\r\n");
   });
 
   it("won't read outside the working tree, or in the git directory", async () => {
@@ -251,7 +261,7 @@ describe("readWorkingTreeFile", () => {
       outside.map((name) => rejection(readWorkingTreeFile(repo, name))),
     );
     for (const error of errors) expect(error).toBeInstanceOf(OutsideRepositoryError);
-    expect(await readWorkingTreeFile(repo, "inside")).toBe("b\n");
+    expect((await readWorkingTreeFile(repo, "inside")).contents).toBe("b\n");
   });
 
   it("won't read the git directory through a link or in another case", async () => {
@@ -283,5 +293,105 @@ describe("readWorkingTreeFile", () => {
       FileTooLargeError,
     );
     expect(await rejection(readWorkingTreeFile(repo, "latin1.txt"))).toBeInstanceOf(NotUtf8Error);
+  });
+});
+
+describe("saveWorkingTreeFile", () => {
+  it("saves edits over the file as it was read, keeping its permissions", async () => {
+    const repo = await createHistoryRepo("save");
+    const path = paths.get("save")!;
+    chmodSync(join(path, "a file.txt"), 0o755);
+    const { version } = await readWorkingTreeFile(repo, "a file.txt");
+
+    const saved = await saveWorkingTreeFile(repo, "a file.txt", "edited\n", {
+      version,
+      overwrite: false,
+    });
+    expect(readFileSync(join(path, "a file.txt"), "utf8")).toBe("edited\n");
+    expect(statSync(join(path, "a file.txt")).mode & 0o777).toBe(0o755);
+    expect(saved).toBe((await readWorkingTreeFile(repo, "a file.txt")).version);
+    // Saved again from there, as edits go on.
+    await saveWorkingTreeFile(repo, "a file.txt", "again\n", { version: saved, overwrite: false });
+    expect(readFileSync(join(path, "a file.txt"), "utf8")).toBe("again\n");
+    expect(readdirSync(path).filter((name) => name.endsWith(".gitto"))).toEqual([]);
+  });
+
+  it("keeps CRLF line ends, and a byte order mark", async () => {
+    const repo = await createHistoryRepo("save-crlf");
+    const path = paths.get("save-crlf")!;
+    writeFileSync(join(path, "crlf.txt"), "\uFEFFone\r\ntwo\r\n");
+    const { contents, version } = await readWorkingTreeFile(repo, "crlf.txt");
+
+    // Edited as git shows it with `core.autocrlf`: with LF line ends.
+    const edited = contents.replaceAll("\r\n", "\n").replace("two", "2");
+    await saveWorkingTreeFile(repo, "crlf.txt", edited, { version, overwrite: false });
+    expect(readFileSync(join(path, "crlf.txt"), "utf8")).toBe("\uFEFFone\r\n2\r\n");
+  });
+
+  it("won't save over a file that changed on disk since, unless told to", async () => {
+    const repo = await createHistoryRepo("save-changed");
+    const path = paths.get("save-changed")!;
+    const { version } = await readWorkingTreeFile(repo, "a file.txt");
+    writeFileSync(join(path, "a file.txt"), "from an editor\n");
+
+    expect(
+      await rejection(
+        saveWorkingTreeFile(repo, "a file.txt", "mine\n", { version, overwrite: false }),
+      ),
+    ).toBeInstanceOf(FileChangedOnDiskError);
+    expect(readFileSync(join(path, "a file.txt"), "utf8")).toBe("from an editor\n");
+    await saveWorkingTreeFile(repo, "a file.txt", "mine\n", { version, overwrite: true });
+    expect(readFileSync(join(path, "a file.txt"), "utf8")).toBe("mine\n");
+  });
+
+  it("won't save through a link, outside the working tree, or over a file that isn't UTF-8", async () => {
+    const repo = await createHistoryRepo("save-refused");
+    const path = paths.get("save-refused")!;
+    symlinkSync(join(path, "c.txt"), join(path, "link"));
+    writeFileSync(join(path, "latin1.txt"), Buffer.from([0x63, 0x61, 0x66, 0xe9]));
+    const save = (name: string) =>
+      rejection(saveWorkingTreeFile(repo, name, "x\n", { version: "", overwrite: true }));
+
+    expect(await save("link")).toBeInstanceOf(OutsideRepositoryError);
+    expect(await save("../outside.txt")).toBeInstanceOf(OutsideRepositoryError);
+    expect(await save(".git/config")).toBeInstanceOf(OutsideRepositoryError);
+    expect(await save("latin1.txt")).toBeInstanceOf(NotUtf8Error);
+    expect(readFileSync(join(path, "c.txt"), "utf8")).toBe("b\n");
+  });
+
+  it("takes a save over the version an earlier save of its own started from", async () => {
+    const repo = await createHistoryRepo("save-chained");
+    const path = paths.get("save-chained")!;
+    const { version } = await readWorkingTreeFile(repo, "a file.txt");
+    // Both sent before either's done, as the last edits are when the window closes.
+    await Promise.all([
+      saveWorkingTreeFile(repo, "a file.txt", "first\n", { version, overwrite: false }),
+      saveWorkingTreeFile(repo, "a file.txt", "second\n", { version, overwrite: false }),
+    ]);
+    expect(readFileSync(join(path, "a file.txt"), "utf8")).toBe("second\n");
+    // Not once something else wrote it since.
+    writeFileSync(join(path, "a file.txt"), "from an editor\n");
+    expect(
+      await rejection(
+        saveWorkingTreeFile(repo, "a file.txt", "third\n", { version, overwrite: false }),
+      ),
+    ).toBeInstanceOf(FileChangedOnDiskError);
+  });
+
+  it("makes a file that was deleted again when overwriting, and only then", async () => {
+    const repo = await createHistoryRepo("save-deleted");
+    const path = paths.get("save-deleted")!;
+    const { version } = await readWorkingTreeFile(repo, "a file.txt");
+    rmSync(join(path, "a file.txt"));
+
+    const error = await rejection(
+      saveWorkingTreeFile(repo, "a file.txt", "mine\n", { version, overwrite: false }),
+    );
+    expect(error).toBeInstanceOf(FileChangedOnDiskError);
+    expect(error).toMatchObject({ message: expect.stringContaining("was deleted") });
+    await saveWorkingTreeFile(repo, "a file.txt", "mine\n", { version, overwrite: true });
+    expect(readFileSync(join(path, "a file.txt"), "utf8")).toBe("mine\n");
+    // A new file's permissions, not anyone's to write.
+    expect(statSync(join(path, "a file.txt")).mode & 0o777).toBe(0o666 & ~process.umask());
   });
 });

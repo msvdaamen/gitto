@@ -7,16 +7,43 @@ export type Side = "old" | "new";
 /**
  * `contents`, if they're the file `diff` is a patch of on its `side`: each of its hunks' lines is
  * where the patch has it. A file in the working tree can have changed since its patch was read, and
- * one with CRLF line ends is compared with LF ones (git's `core.autocrlf`), which the contents are
- * changed to then. Throws if they aren't.
+ * one with CRLF line ends throughout is compared with LF ones (git's `core.autocrlf`), which the
+ * contents are changed to then (see `asLf`). Throws if they aren't.
  */
 export function fitToPatch(diff: FileDiffMetadata, side: Side, contents: string): string {
   if (hasPatchLines(diff, side, contents)) return contents;
-  if (contents.includes("\r\n")) {
-    const lf = contents.replaceAll("\r\n", "\n");
-    if (hasPatchLines(diff, side, lf)) return lf;
-  }
-  throw new Error("The file has changed since its changes were loaded. Try again in a moment.");
+  const lf = asLf(contents);
+  if (lf !== undefined && hasPatchLines(diff, side, lf)) return lf;
+  throw changedError(contents);
+}
+
+/**
+ * `contents` with LF line ends, if they have CRLF ones throughout, which saving them makes CRLF
+ * again (see `saveWorkingTreeFile`); `undefined` otherwise. A file that mixes them isn't taken
+ * with LF ones: its line ends couldn't be told apart again, and saving it would change them all.
+ */
+function asLf(contents: string): string | undefined {
+  if (!contents.includes("\r\n") || /(^|[^\r])\n/.test(contents)) return undefined;
+  return contents.replaceAll("\r\n", "\n");
+}
+
+function changedError(contents: string): Error {
+  return new Error(
+    contents.includes("\r\n") && /(^|[^\r])\n/.test(contents)
+      ? "This file mixes CRLF and LF line ends, which git shows as all LF here."
+      : "The file has changed since its changes were loaded. Try again in a moment.",
+  );
+}
+
+/**
+ * `contents`, if they're all of `lines`, the new side of a patch that has the whole file (an added
+ * one), with LF line ends for CRLF ones as `fitToPatch` takes them. Throws if they aren't.
+ */
+export function fitToLines(lines: readonly string[], contents: string): string {
+  const whole = lines.join("");
+  if (contents === whole) return contents;
+  if (asLf(contents) === whole) return whole;
+  throw changedError(contents);
 }
 
 /** Whether `contents` have the lines of each of `diff`'s hunks on its `side`, where it has them. */

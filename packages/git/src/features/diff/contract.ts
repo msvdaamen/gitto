@@ -18,6 +18,23 @@ export const DiffContract = {
   stagedFilePatch: oc.input(FileInput).output(z.string()),
   /** A file's contents, by its object name, e.g. from a patch's `index` line. */
   blob: oc.input(RepositoryInput.extend({ oid: FullSha })).output(z.string()),
-  /** A file's contents in the working tree, which can change at any time. */
-  workingTreeFile: oc.input(RepositoryInput.extend({ path: z.string() })).output(z.string()),
+  /** A file's contents in the working tree, which can change at any time, with their version. */
+  workingTreeFile: oc
+    .input(RepositoryInput.extend({ path: z.string() }))
+    .output(z.object({ contents: z.string(), version: z.string() })),
+  /**
+   * Saves a file in the working tree, the user's edits to it, if it's still the `version` that was
+   * read (or to `overwrite` it all the same): fails with CONFLICT if it changed on disk since.
+   * Returns the saved file's version.
+   */
+  saveWorkingTreeFile: oc
+    .input(
+      RepositoryInput.extend({
+        path: z.string(),
+        contents: z.string(),
+        version: z.string(),
+        overwrite: z.boolean(),
+      }),
+    )
+    .output(z.object({ version: z.string() })),
 };
