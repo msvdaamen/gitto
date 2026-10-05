@@ -115,6 +115,19 @@ export class FileChangedOnDiskError extends MessageError {
   }
 }
 
+/**
+ * A file's changes that aren't what the user picked lines from any more, e.g. as the file was
+ * saved since: staging or unstaging lines of them would move others than the ones they saw.
+ */
+export class PatchChangedError extends MessageError {
+  constructor(action: "staged" | "unstaged") {
+    super(`The file changed since its changes were shown, so nothing was ${action}.`);
+  }
+}
+
+/** Lines that can't be staged or unstaged on their own, e.g. of a binary file. */
+export class LinesNotStageableError extends MessageError {}
+
 /** No repository with that id has been added to Gitto. */
 export class RepositoryNotFoundError extends MessageError {
   constructor(readonly repositoryId: string) {

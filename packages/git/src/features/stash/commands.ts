@@ -86,7 +86,7 @@ export async function getStashFilePatch(
   if (!untracked) return tracked;
   if (!tracked) {
     const args = ["diff-tree", "-p", "-r", "--root", "--full-index", "--no-commit-id", untracked];
-    return readPatch(repo.read, [...args, "--", file.path], signal);
+    return readPatch(repo.read, [...args, "--", file.path], { signal });
   }
   // In the stash's own diff, which its files are listed from, an untracked file can pair with a
   // tracked one that was deleted, as a rename, or take the place of one deleted from the index.
@@ -109,7 +109,7 @@ async function stashedFilePatch(
   signal?: AbortSignal,
 ): Promise<string | undefined> {
   const args = ["stash", "show", "-p", "--include-untracked", "-M", "--full-index"];
-  const patch = await readPatch(repo.read, [...args, ...PORCELAIN_DIFF, sha], signal);
+  const patch = await readPatch(repo.read, [...args, ...PORCELAIN_DIFF, sha], { signal });
   const header = `diff --git a/${file.origPath ?? file.path} b/${file.path}\n`;
   // Where the header is, from the newline before it, the patch's first line or not.
   const start = `\n${patch}`.indexOf(`\n${header}`);

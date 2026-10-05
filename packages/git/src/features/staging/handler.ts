@@ -1,7 +1,7 @@
 import { implement } from "@orpc/server";
 
 import { withRepo, type GitContext } from "../../core/middleware";
-import { stage, stageAll, unstage, unstageAll } from "./commands";
+import { stage, stageAll, stageLines, unstage, unstageAll, unstageLines } from "./commands";
 import { StagingContract } from "./contract";
 
 const os = implement(StagingContract).$context<GitContext>();
@@ -13,4 +13,10 @@ export const stagingRouter = os.router({
     .handler(({ context, input }) => unstage(context.repo, input.paths)),
   stageAll: os.stageAll.use(withRepo).handler(({ context }) => stageAll(context.repo)),
   unstageAll: os.unstageAll.use(withRepo).handler(({ context }) => unstageAll(context.repo)),
+  stageLines: os.stageLines.use(withRepo).handler(async ({ context, input }) => ({
+    patch: await stageLines(context.repo, input, input.patch, input.lines),
+  })),
+  unstageLines: os.unstageLines.use(withRepo).handler(async ({ context, input }) => ({
+    patch: await unstageLines(context.repo, input, input.patch, input.lines),
+  })),
 });

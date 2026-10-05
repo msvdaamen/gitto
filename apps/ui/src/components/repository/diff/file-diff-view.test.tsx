@@ -9,6 +9,7 @@ import type { DiffSource } from "@/git/diff-source";
 import { gitKeys } from "@/git/queries/keys";
 
 import { FileDiffView } from "./file-diff-view";
+import type { LineStaging } from "./patch-viewer";
 
 const rpc = vi.hoisted(() => ({
   git: {
@@ -19,13 +20,25 @@ const rpc = vi.hoisted(() => ({
       stagedFilePatch: vi.fn(patchOf),
     },
     status: { get: vi.fn(async () => uncommitted) },
+    staging: {
+      stage: vi.fn<(input: unknown) => Promise<void>>(),
+      unstage: vi.fn<(input: unknown) => Promise<void>>(),
+      stageLines: vi.fn<(input: unknown) => Promise<{ patch: string }>>(),
+      unstageLines: vi.fn<(input: unknown) => Promise<{ patch: string }>>(),
+    },
   },
 }));
+
+/** The props the viewer on show was given, to pick lines to stage with. */
+const viewer = vi.hoisted(() => ({ props: undefined as ViewerProps | undefined }));
+
+type ViewerProps = { patch: string; onShown: () => void; staging?: LineStaging };
 
 vi.mock("@/lib/rpc", () => ({ rpc }));
 // The viewer needs a layout and workers, which jsdom doesn't have.
 vi.mock("./patch-viewer", () => ({
-  default: (props: { patch: string; onShown: () => void }) => {
+  default: (props: ViewerProps) => {
+    viewer.props = props;
     if (props.patch === "patch of broken.txt") throw new Error("The patch has no file in it.");
     createEffect(on(() => props.patch, props.onShown));
     return <pre>{props.patch}</pre>;
@@ -402,5 +415,306 @@ describe("an uncommitted file's changes", () => {
     expect(rpc.git.diff.unstagedFilePatch.mock.calls.map(([input]) => input.path)).not.toContain(
       "c.log",
     );
+  });
+});
+
+/** The staging the viewer on show was given, once there is some. */
+function staging(): LineStaging {
+  expect(viewer.props?.staging).toBeDefined();
+  return viewer.props!.staging!;
+}
+
+describe("staging lines", () => {
+  const LINES = { deletions: [{ start: 1, end: 1 }], additions: [{ start: 1, end: 1 }] };
+  beforeEach(() => {
+    viewer.props = undefined;
+    rpc.git.diff.unstagedFilePatch.mockReset();
+    rpc.git.diff.unstagedFilePatch.mockImplementation(async ({ path }) =>
+      changedLine(path, `new ${path}`),
+    );
+    rpc.git.diff.stagedFilePatch.mockReset();
+    rpc.git.diff.stagedFilePatch.mockImplementation(async ({ path }) =>
+      changedLine(path, `staged ${path}`),
+    );
+    rpc.git.staging.stageLines.mockReset();
+    rpc.git.staging.unstageLines.mockReset();
+  });
+
+  it("stages the lines picked from the patch on show, and shows the patch they leave", async () => {
+    setChanges({ unstaged: [file("a.txt"), file("b.txt")] });
+    renderView(file("a.txt"), {}, UNSTAGED);
+    expect(await screen.findByText(/\+new a\.txt/)).toBeInTheDocument();
+    rpc.git.staging.stageLines.mockResolvedValue({ patch: changedLine("a.txt", "left") });
+    const fetchesOfA = () =>
+      rpc.git.diff.unstagedFilePatch.mock.calls.filter(([{ path }]) => path === "a.txt").length;
+    const fetched = fetchesOfA();
+    const statuses = rpc.git.status.get.mock.calls.length;
+
+    expect(staging().action).toBe("stage");
+    await staging().onStage(changedLine("a.txt", "new a.txt"), LINES);
+    expect(rpc.git.staging.stageLines).toHaveBeenCalledWith({
+      repositoryId: "repo",
+      path: "a.txt",
+      origPath: null,
+      untracked: false,
+      patch: changedLine("a.txt", "new a.txt"),
+      lines: LINES,
+    });
+    expect(await screen.findByText(/\+left/)).toBeInTheDocument();
+    // The lists are refetched, but not the patch, which came back with the lines.
+    await vi.waitFor(() => expect(rpc.git.status.get.mock.calls.length).toBeGreaterThan(statuses));
+    expect(fetchesOfA()).toBe(fetched);
+  });
+
+  it("stages lines of an untracked file as such", async () => {
+    const notes = { ...file("notes.txt", null, null), status: "untracked" } as const;
+    setChanges({ unstaged: [notes] });
+    renderView(notes, {}, UNSTAGED);
+    await screen.findByText(/\+new notes\.txt/);
+    rpc.git.staging.stageLines.mockResolvedValue({ patch: changedLine("notes.txt", "rest") });
+
+    await staging().onStage("the patch", LINES);
+    expect(rpc.git.staging.stageLines).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "notes.txt", untracked: true }),
+    );
+  });
+
+  it("unstages lines picked from the staged changes", async () => {
+    setChanges({ staged: [file("a.txt")] });
+    renderView(file("a.txt"), {}, { kind: "staged" });
+    expect(await screen.findByText(/\+staged a\.txt/)).toBeInTheDocument();
+    rpc.git.staging.unstageLines.mockResolvedValue({ patch: changedLine("a.txt", "still staged") });
+
+    expect(staging().action).toBe("unstage");
+    await staging().onStage("the patch", LINES);
+    expect(rpc.git.staging.unstageLines).toHaveBeenCalledWith({
+      repositoryId: "repo",
+      path: "a.txt",
+      origPath: null,
+      patch: "the patch",
+      lines: LINES,
+    });
+    expect(await screen.findByText(/\+still staged/)).toBeInTheDocument();
+  });
+
+  it("is busy until the patch the lines leave is on show", async () => {
+    setChanges({ unstaged: [file("a.txt")] });
+    renderView(file("a.txt"), {}, UNSTAGED);
+    await screen.findByText(/\+new a\.txt/);
+    let done!: (result: { patch: string }) => void;
+    rpc.git.staging.stageLines.mockReturnValue(new Promise((resolve) => (done = resolve)));
+
+    expect(staging().busy).toBe(false);
+    const staged = staging().onStage(changedLine("a.txt", "new a.txt"), LINES);
+    await vi.waitFor(() => expect(staging().busy).toBe(true));
+    done({ patch: changedLine("a.txt", "left") });
+    await staged;
+    await screen.findByText(/\+left/);
+    expect(staging().busy).toBe(false);
+  });
+
+  it("opens the next file once the last lines are staged, this one's staying on show till then", async () => {
+    setChanges({ unstaged: [file("a.txt"), file("b.txt")] });
+    const onOpen = vi.fn();
+    renderView(file("a.txt"), { onOpen }, UNSTAGED);
+    await screen.findByText(/\+new a\.txt/);
+    rpc.git.staging.stageLines.mockResolvedValue({ patch: "" });
+
+    await staging().onStage(changedLine("a.txt", "new a.txt"), LINES);
+    expect(onOpen).toHaveBeenCalledWith(UNSTAGED, file("b.txt"));
+    expect(screen.queryByText("No unstaged changes")).not.toBeInTheDocument();
+    expect(screen.getByText(/\+new a\.txt/)).toBeInTheDocument();
+  });
+
+  it("opens the one before, once the last file's last lines are staged", async () => {
+    setChanges({ unstaged: [file("a.txt"), file("b.txt")] });
+    const onOpen = vi.fn();
+    renderView(file("b.txt"), { onOpen }, UNSTAGED);
+    await screen.findByText(/\+new b\.txt/);
+    // Only its mode change is left.
+    rpc.git.staging.stageLines.mockResolvedValue({
+      patch: "diff --git a/b.txt b/b.txt\nold mode 100644\nnew mode 100755\n",
+    });
+
+    await staging().onStage(changedLine("b.txt", "new b.txt"), LINES);
+    expect(onOpen).toHaveBeenCalledWith(UNSTAGED, file("a.txt"));
+  });
+
+  it("says why lines couldn't be staged, and shows the changes as they are now", async () => {
+    setChanges({ unstaged: [file("a.txt")] });
+    renderView(file("a.txt"), {}, UNSTAGED);
+    await screen.findByText(/\+new a\.txt/);
+    const message = "The file changed since its changes were shown, so nothing was staged.";
+    rpc.git.staging.stageLines.mockRejectedValue(new Error(message));
+    rpc.git.diff.unstagedFilePatch.mockImplementation(async () => changedLine("a.txt", "saved"));
+
+    await expect(staging().onStage(changedLine("a.txt", "new a.txt"), LINES)).rejects.toThrow(
+      message,
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
+    expect(await screen.findByText(/\+saved/)).toBeInTheDocument();
+  });
+
+  it("doesn't pick lines of a commit's changes, nor of a link's", async () => {
+    renderView(FILES[0]!);
+    await screen.findByText("patch of a.txt");
+    expect(viewer.props?.staging).toBeUndefined();
+
+    viewer.props = undefined;
+    setChanges({ unstaged: [file("link")] });
+    rpc.git.diff.unstagedFilePatch.mockImplementation(
+      async () =>
+        "diff --git a/link b/link\nindex 1..2 120000\n--- a/link\n+++ b/link\n@@ -1 +1 @@\n-a\n\\ No newline at end of file\n+b\n\\ No newline at end of file\n",
+    );
+    renderView(file("link"), {}, UNSTAGED);
+    await screen.findByText(/\+b/);
+    const shown = viewer.props as ViewerProps | undefined;
+    expect(shown).toBeDefined();
+    expect(shown?.staging).toBeUndefined();
+  });
+});
+
+describe("staging the whole file", () => {
+  beforeEach(() => {
+    viewer.props = undefined;
+    rpc.git.diff.unstagedFilePatch.mockReset();
+    rpc.git.diff.unstagedFilePatch.mockImplementation(async ({ path }) =>
+      changedLine(path, `new ${path}`),
+    );
+    rpc.git.diff.stagedFilePatch.mockReset();
+    rpc.git.diff.stagedFilePatch.mockImplementation(async ({ path }) =>
+      changedLine(path, `staged ${path}`),
+    );
+    rpc.git.staging.stage.mockReset();
+    rpc.git.staging.unstage.mockReset();
+  });
+
+  it("stages it, then opens the next file in the list", async () => {
+    setChanges({ unstaged: [file("a.txt"), file("b.txt")] });
+    const onOpen = vi.fn();
+    renderView(file("a.txt"), { onOpen }, UNSTAGED);
+    await screen.findByText(/\+new a\.txt/);
+    rpc.git.staging.stage.mockImplementation(async () =>
+      setChanges({ staged: [file("a.txt")], unstaged: [file("b.txt")] }),
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Stage file" }));
+    expect(rpc.git.staging.stage).toHaveBeenCalledWith({ repositoryId: "repo", paths: ["a.txt"] });
+    await vi.waitFor(() => expect(onOpen).toHaveBeenCalledWith(UNSTAGED, file("b.txt")));
+  });
+
+  it("stages a renamed file by both its paths", async () => {
+    const renamed = { ...file("new.txt"), status: "renamed", origPath: "old.txt" } as const;
+    setChanges({ unstaged: [renamed] });
+    renderView(renamed, {}, UNSTAGED);
+    await screen.findByText(/\+new new\.txt/);
+    rpc.git.staging.stage.mockResolvedValue(undefined);
+
+    await userEvent.click(screen.getByRole("button", { name: "Stage file" }));
+    expect(rpc.git.staging.stage).toHaveBeenCalledWith({
+      repositoryId: "repo",
+      paths: ["new.txt", "old.txt"],
+    });
+  });
+
+  it("unstages a staged file, then opens the one before the last", async () => {
+    setChanges({ staged: [file("a.txt"), file("b.txt")] });
+    const onOpen = vi.fn();
+    renderView(file("b.txt"), { onOpen }, { kind: "staged" });
+    await screen.findByText(/\+staged b\.txt/);
+    rpc.git.staging.unstage.mockImplementation(async () =>
+      setChanges({ staged: [file("a.txt")], unstaged: [file("b.txt")] }),
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Unstage file" }));
+    expect(rpc.git.staging.unstage).toHaveBeenCalledWith({
+      repositoryId: "repo",
+      paths: ["b.txt"],
+    });
+    await vi.waitFor(() => expect(onOpen).toHaveBeenCalledWith({ kind: "staged" }, file("a.txt")));
+  });
+
+  it("says why it couldn't be staged", async () => {
+    setChanges({ unstaged: [file("a.txt")] });
+    const onOpen = vi.fn();
+    renderView(file("a.txt"), { onOpen }, UNSTAGED);
+    await screen.findByText(/\+new a\.txt/);
+    rpc.git.staging.stage.mockRejectedValue(new Error("The index is locked."));
+
+    await userEvent.click(screen.getByRole("button", { name: "Stage file" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The index is locked.");
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("opens the next file once it's staged, without waiting for the lists", async () => {
+    setChanges({ unstaged: [file("a.txt"), file("b.txt")] });
+    const onOpen = vi.fn();
+    renderView(file("a.txt"), { onOpen }, UNSTAGED);
+    await screen.findByText(/\+new a\.txt/);
+    rpc.git.staging.stage.mockResolvedValue(undefined);
+    rpc.git.status.get.mockImplementation(() => new Promise(() => {}));
+
+    try {
+      await userEvent.click(screen.getByRole("button", { name: "Stage file" }));
+      await vi.waitFor(() => expect(onOpen).toHaveBeenCalledWith(UNSTAGED, file("b.txt")));
+    } finally {
+      rpc.git.status.get.mockImplementation(async () => uncommitted);
+    }
+  });
+
+  it("stages nothing else while it's staged: not again, nor its lines", async () => {
+    setChanges({ unstaged: [file("a.txt")] });
+    renderView(file("a.txt"), {}, UNSTAGED);
+    await screen.findByText(/\+new a\.txt/);
+    let done!: () => void;
+    rpc.git.staging.stage.mockReturnValue(new Promise<void>((resolve) => (done = resolve)));
+
+    const button = screen.getByRole("button", { name: "Stage file" });
+    await userEvent.click(button);
+    expect(button).toBeDisabled();
+    expect(staging().busy).toBe(true);
+    await userEvent.click(button);
+    expect(rpc.git.staging.stage).toHaveBeenCalledTimes(1);
+    done();
+    await vi.waitFor(() => expect(staging().busy).toBe(false));
+  });
+
+  it("can't be staged while the last file is still on show, as another's changes load", async () => {
+    setChanges({ unstaged: [file("a.txt"), file("b.txt")] });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const [shown, setShown] = createSignal<ChangedFile>(file("a.txt"));
+    render(() => (
+      <QueryClientProvider client={client}>
+        <FileDiffView
+          repositoryId="repo"
+          source={UNSTAGED}
+          file={shown()}
+          onOpen={(_, next) => setShown(next)}
+          onClose={() => {}}
+        />
+      </QueryClientProvider>
+    ));
+    rpc.git.diff.unstagedFilePatch.mockImplementation(async ({ path }) =>
+      path === "b.txt" ? new Promise<string>(() => {}) : changedLine(path, `new ${path}`),
+    );
+    await screen.findByText(/\+new a\.txt/);
+
+    await userEvent.click(screen.getByRole("button", { name: "Next file" }));
+    expect(screen.getByRole("region", { name: "Changes in a.txt" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stage file" })).toBeDisabled();
+  });
+
+  it("isn't offered for a repository inside this one", async () => {
+    const nested = { ...file("sub/", null, null), status: "untracked" } as const;
+    setChanges({ unstaged: [nested] });
+    renderView(nested, {}, UNSTAGED);
+    expect(await screen.findByText("Another repository")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Stage file" })).not.toBeInTheDocument();
+  });
+
+  it("isn't offered for a commit's file", async () => {
+    renderView(FILES[0]!);
+    await screen.findByText("patch of a.txt");
+    expect(screen.queryByRole("button", { name: /stage file/i })).not.toBeInTheDocument();
   });
 });
