@@ -55,8 +55,8 @@ const config: ForgeConfig = {
   },
   makers: [
     // The NuGet package's id, which names the folder it's installed in (src/squirrel.ts has it too).
-    // By default it's the scoped package name, which NuGet won't take. Its version is a nightly's
-    // shortened, as NuGet's are short (see src/squirrel-version.ts); the installer's name has it whole.
+    // By default it's the scoped package name, which NuGet won't take. A nightly's version is made to
+    // fit NuGet's and Squirrel's (see src/squirrel-version.ts); the installer's name has it whole.
     new MakerSquirrel({
       name: "Gitto",
       setupIcon: "assets/icon.ico",

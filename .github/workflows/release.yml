@@ -100,8 +100,8 @@ jobs:
             last=$(git -c versionsort.suffix=- tag --list 'v[0-9]*' --sort=-v:refname \
               | sed 's/^v//' | { grep -E "$semver" || true; } | head -n 1)
             [[ "${last:=0.0.0}" =~ $semver ]]
-            # When it was built, to the second: always as long, as Squirrel compares its packages'
-            # versions as text (see apps/electron/src/squirrel-version.ts).
+            # When it was built, to the second. Windows' package has it as a shorter number (see
+            # apps/electron/src/squirrel-version.ts).
             nightly="nightly.$(date -u +%Y%m%d%H%M%S)"
             if [[ -n "${BASH_REMATCH[4]}" ]]; then
               # After 1.3.0-rc.1, 1.3.0-rc.1.nightly…: after it, and before 1.3.0-rc.2 and 1.3.0.
