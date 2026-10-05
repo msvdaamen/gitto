@@ -10,6 +10,7 @@ import { HistoryTable } from "@/components/repository/history/history-table";
 import { RefsSidebar } from "@/components/repository/sidebar/refs-sidebar";
 import { RepositoryToolbar } from "@/components/repository/toolbar";
 import { ResizeHandle } from "@/components/ui/resize-handle";
+import type { DiffSource, FileOpener } from "@/git/diff-source";
 import { useRepositoryWatcher } from "@/git/queries/watch";
 import { usePanelWidth } from "@/hooks/panel-width";
 import { useSettled } from "@/hooks/settled";
@@ -47,12 +48,13 @@ function RouteComponent() {
     const current = settledSelection();
     return current?.repositoryId === repositoryId() ? current.id : undefined;
   };
-  // The file whose changes are shown in place of the history, with the row it's from: closed once
-  // the details show another row, or another repository, so going back to it doesn't open them
-  // again. Not shown from then on, before it's closed.
+  // The file whose changes are shown in place of the history, with the row and the list it's from:
+  // closed once the details show another row, or another repository, so going back to it doesn't
+  // open them again. Not shown from then on, before it's closed.
   const [openFile, setOpenFile] = createSignal<{
     repositoryId: string;
     rowId: string;
+    source: DiffSource;
     file: ChangedFile;
   }>();
   const shownFile = () => {
@@ -64,8 +66,21 @@ function RouteComponent() {
   createEffect(() => {
     if (openFile() && !shownFile()) setOpenFile(undefined);
   });
-  const openFileOf = (rowId: string) => (file: ChangedFile) =>
-    setOpenFile({ repositoryId: repositoryId(), rowId, file });
+  const openFileOf = (rowId: string) => (source: DiffSource, file: ChangedFile) =>
+    setOpenFile({ repositoryId: repositoryId(), rowId, source, file });
+  // What the details' file lists open, from the row they're of.
+  const detailsFiles: FileOpener = {
+    open: (source, file) => {
+      const rowId = detailsId();
+      if (rowId) openFileOf(rowId)(source, file);
+    },
+    prefetch: (source, file, uncounted) =>
+      prefetchFileDiff(queryClient, repositoryId(), source, file, uncounted),
+    get shown() {
+      const open = shownFile();
+      return open && { source: open.source, path: open.file.path };
+    },
+  };
   const [sidebarOpen, setSidebarOpen] = createSignal(true);
   const [detailsOpen, setDetailsOpen] = createSignal(true);
   const sidebar = usePanelWidth("sidebar", SIDEBAR_BOUNDS);
@@ -127,7 +142,7 @@ function RouteComponent() {
                 <Suspense>
                   <FileDiffView
                     repositoryId={open().repositoryId}
-                    sha={open().rowId}
+                    source={open().source}
                     file={open().file}
                     onOpen={openFileOf(open().rowId)}
                     onClose={() => setOpenFile(undefined)}
@@ -147,15 +162,7 @@ function RouteComponent() {
           <CommitDetails
             repositoryId={repositoryId()}
             selectedId={detailsId()}
-            onOpenFile={(file) => {
-              const rowId = detailsId();
-              if (rowId) openFileOf(rowId)(file);
-            }}
-            openPath={shownFile()?.file.path}
-            onPrefetchFile={(file) => {
-              const rowId = detailsId();
-              if (rowId) prefetchFileDiff(queryClient, repositoryId(), rowId, file);
-            }}
+            files={detailsFiles}
           />
         </aside>
 

@@ -1,13 +1,37 @@
 import { execFileSync } from "node:child_process";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { GitError } from "../../core/errors";
-import { FileTooLargeError } from "../../core/errors";
+import {
+  ChangesTooLargeError,
+  FileTooLargeError,
+  GitError,
+  NotUtf8Error,
+  OutsideRepositoryError,
+} from "../../core/errors";
 import type { Repo } from "../../core/repo";
-import { createHistoryRepo, page, paths, rejection } from "../../test/fixtures";
+import {
+  createHistoryRepo,
+  createRepo,
+  git,
+  page,
+  paths,
+  rejection,
+  repos,
+} from "../../test/fixtures";
 import { getLog } from "../history/commands";
-import { getBlob, getCommitFilePatch, getCommitFiles, MAX_BLOB_BYTES } from "./commands";
+import {
+  getBlob,
+  getCommitFilePatch,
+  getCommitFiles,
+  getStagedFilePatch,
+  getUnstagedFilePatch,
+  MAX_BLOB_BYTES,
+  MAX_PATCH_BYTES,
+} from "./commands";
+import { readWorkingTreeFile } from "./working-tree";
 
 describe("getCommitFiles", () => {
   let repo: Repo;
@@ -98,5 +122,124 @@ describe("getBlob", () => {
       encoding: "utf8",
     }).trim();
     expect(await rejection(getBlob(repo, oid))).toBeInstanceOf(FileTooLargeError);
+  });
+});
+
+describe("getUnstagedFilePatch", () => {
+  it("compares the working tree with the index, ignoring the user's diff settings", async () => {
+    const repo = await createHistoryRepo("unstaged");
+    const path = paths.get("unstaged")!;
+    git(path, "config", "diff.noprefix", "true");
+    git(path, "config", "diff.external", "false");
+    git(path, "config", "color.diff", "always");
+    const patch = await getUnstagedFilePatch(repo, {
+      path: "a file.txt",
+      origPath: null,
+      untracked: false,
+    });
+    expect(patch).toMatch(
+      /^diff --git a\/a file.txt b\/a file.txt\nindex [0-9a-f]{40}\.\.[0-9a-f]{40} 100644\n/,
+    );
+    expect(patch).toContain("@@ -1,2 +1 @@\n-a\n-more\n+changed\n");
+  });
+
+  it("shows an untracked file as added, in full", async () => {
+    const repo = await createHistoryRepo("untracked");
+    const path = paths.get("untracked")!;
+    git(path, "config", "diff.noprefix", "true");
+    git(path, "config", "diff.mnemonicPrefix", "true");
+    const patch = await getUnstagedFilePatch(repo, {
+      path: "new file.txt",
+      origPath: null,
+      untracked: true,
+    });
+    expect(patch).toMatch(/^diff --git a\/new file.txt b\/new file.txt\nnew file mode 100644\n/);
+    // A name with a space ends in a tab, as in other diffs.
+    expect(patch).toContain("--- /dev/null\n+++ b/new file.txt\t\n@@ -0,0 +1 @@\n+new\n");
+  });
+
+  it("says why an untracked path can't be compared, like another repository's folder", async () => {
+    const repo = await createHistoryRepo("nested");
+    mkdirSync(join(paths.get("nested")!, "inner"));
+    const error = await rejection(
+      getUnstagedFilePatch(repo, { path: "inner/", origPath: null, untracked: true }),
+    );
+    expect(error).toBeInstanceOf(GitError);
+  });
+
+  it("is empty for a file without unstaged changes", async () => {
+    const repo = await createHistoryRepo("clean");
+    expect(
+      await getUnstagedFilePatch(repo, { path: "b.txt", origPath: null, untracked: false }),
+    ).toBe("");
+  });
+
+  it("refuses changes too large to send", async () => {
+    const repo = await createHistoryRepo("huge");
+    writeFileSync(join(paths.get("huge")!, "huge.log"), "line\n".repeat(MAX_PATCH_BYTES / 4));
+    const error = await rejection(
+      getUnstagedFilePatch(repo, { path: "huge.log", origPath: null, untracked: true }),
+    );
+    expect(error).toBeInstanceOf(ChangesTooLargeError);
+  });
+});
+
+describe("getStagedFilePatch", () => {
+  it("compares the index with HEAD, finding renames", async () => {
+    const repo = await createHistoryRepo("staged");
+    const path = paths.get("staged")!;
+    git(path, "add", "a file.txt");
+    git(path, "mv", "c.txt", "d.txt");
+    expect(await getStagedFilePatch(repo, { path: "a file.txt", origPath: null })).toContain(
+      "@@ -1,2 +1 @@\n-a\n-more\n+changed\n",
+    );
+    expect(await getStagedFilePatch(repo, { path: "d.txt", origPath: "c.txt" })).toContain(
+      "rename from c.txt\nrename to d.txt\n",
+    );
+    expect(await getStagedFilePatch(repo, { path: "s.txt", origPath: null })).toBe("");
+  });
+
+  it("compares with nothing before the first commit", async () => {
+    const path = createRepo("unborn");
+    const repo = await repos.open("unborn");
+    writeFileSync(join(path, "first.txt"), "first\n");
+    git(path, "add", "first.txt");
+    const patch = await getStagedFilePatch(repo, { path: "first.txt", origPath: null });
+    expect(patch).toContain("new file mode 100644\n");
+    expect(patch).toContain("@@ -0,0 +1 @@\n+first\n");
+  });
+});
+
+describe("readWorkingTreeFile", () => {
+  it("reads a file in the working tree, as it is on disk", async () => {
+    const repo = await createHistoryRepo("read");
+    writeFileSync(join(paths.get("read")!, "crlf.txt"), "\uFEFFone\r\ntwo\r\n");
+    expect(await readWorkingTreeFile(repo, "a file.txt")).toBe("changed\n");
+    expect(await readWorkingTreeFile(repo, "crlf.txt")).toBe("\uFEFFone\r\ntwo\r\n");
+  });
+
+  it("won't read outside the working tree, or in the git directory", async () => {
+    const repo = await createHistoryRepo("confined");
+    const path = paths.get("confined")!;
+    symlinkSync(join(path, ".."), join(path, "up"));
+    symlinkSync(join(path, "c.txt"), join(path, "inside"));
+    writeFileSync(join(path, "..", "outside.txt"), "secret\n");
+    const outside = ["../outside.txt", "up/outside.txt", ".git/config", "/etc/hosts"];
+    const errors = await Promise.all(
+      outside.map((name) => rejection(readWorkingTreeFile(repo, name))),
+    );
+    for (const error of errors) expect(error).toBeInstanceOf(OutsideRepositoryError);
+    expect(await readWorkingTreeFile(repo, "inside")).toBe("b\n");
+  });
+
+  it("won't read a file that's too large, or isn't UTF-8", async () => {
+    const repo = await createHistoryRepo("unreadable");
+    const path = paths.get("unreadable")!;
+    writeFileSync(join(path, "large.txt"), "x".repeat(MAX_BLOB_BYTES + 1));
+    writeFileSync(join(path, "latin1.txt"), Buffer.from([0x63, 0x61, 0x66, 0xe9]));
+    expect(await rejection(readWorkingTreeFile(repo, "large.txt"))).toBeInstanceOf(
+      FileTooLargeError,
+    );
+    expect(await rejection(readWorkingTreeFile(repo, "latin1.txt"))).toBeInstanceOf(NotUtf8Error);
   });
 });

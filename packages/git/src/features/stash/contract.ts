@@ -12,6 +12,12 @@ export const StashContract = {
   push: oc.input(RepositoryInput),
   /** The files a stash changed compared to its base, untracked ones included. */
   files: oc.input(RepositoryInput.extend({ sha: FullSha })).output(z.array(ChangedFileSchema)),
+  /** The patch of one file a stash changed, compared to its base, as in its files. */
+  filePatch: oc
+    .input(
+      RepositoryInput.extend({ sha: FullSha, path: z.string(), origPath: z.string().nullable() }),
+    )
+    .output(z.string()),
   /**
    * Puts the newest stash's changes back, and drops it. Takes its full SHA, and fails if another
    * stash has become the newest since, so it's always the one the user saw that's popped. A pop

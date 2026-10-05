@@ -1,9 +1,12 @@
-import type { ChangedFile } from "@gitto/git/types";
+import type { ChangedFile, Uncommitted, WorkingTreeFiles } from "@gitto/git/types";
 import { render, screen } from "@solidjs/testing-library";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import userEvent from "@testing-library/user-event";
-import { createEffect, createSignal, on, Show } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createEffect, createSignal, on, Show, Suspense } from "solid-js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { DiffSource } from "@/git/diff-source";
+import { gitKeys } from "@/git/queries/keys";
 
 import { FileDiffView } from "./file-diff-view";
 
@@ -12,7 +15,10 @@ const rpc = vi.hoisted(() => ({
     diff: {
       commitFiles: async () => FILES,
       commitFilePatch: vi.fn(patchOf),
+      unstagedFilePatch: vi.fn(patchOf),
+      stagedFilePatch: vi.fn(patchOf),
     },
+    status: { get: vi.fn(async () => uncommitted) },
   },
 }));
 
@@ -38,25 +44,45 @@ function file(path: string, additions: number | null = 1, deletions: number | nu
 
 const FILES: ChangedFile[] = [file("a.txt"), file("b.txt"), file("c.txt")];
 
+const COMMIT: DiffSource = { kind: "commit", sha: "a1" };
+const UNSTAGED: DiffSource = { kind: "unstaged" };
+
+/** What the status says is uncommitted, for the tests of uncommitted changes to set. */
+let uncommitted: Uncommitted;
+
+function setChanges(changes: Partial<WorkingTreeFiles>) {
+  uncommitted = {
+    head: { kind: "branch", name: "main", sha: "a1" },
+    upstream: null,
+    ahead: 0,
+    behind: 0,
+    counts: { files: 0, staged: 0, unstaged: 0, conflicted: 0 },
+    changes: { staged: [], unstaged: [], uncounted: false, ...changes },
+    version: String(Math.random()),
+  };
+}
+
 /** Closes on Esc like a popover's layer: on the document, marking it handled. */
 const popover = (event: KeyboardEvent) => event.preventDefault();
 
 function renderView(
   shown: ChangedFile,
   handlers: Partial<{ onOpen: () => void; onClose: () => void }> = {},
+  source = COMMIT,
 ) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(() => (
     <QueryClientProvider client={client}>
       <FileDiffView
         repositoryId="repo"
-        sha="a1"
+        source={source}
         file={shown}
         onOpen={handlers.onOpen ?? (() => {})}
         onClose={handlers.onClose ?? (() => {})}
       />
     </QueryClientProvider>
   ));
+  return client;
 }
 
 describe("a file's changes", () => {
@@ -71,9 +97,9 @@ describe("a file's changes", () => {
 
     expect(await screen.findByText("patch of b.txt")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Next file" }));
-    expect(onOpen).toHaveBeenLastCalledWith(FILES[2]);
+    expect(onOpen).toHaveBeenLastCalledWith(COMMIT, FILES[2]);
     await userEvent.click(screen.getByRole("button", { name: "Previous file" }));
-    expect(onOpen).toHaveBeenLastCalledWith(FILES[0]);
+    expect(onOpen).toHaveBeenLastCalledWith(COMMIT, FILES[0]);
   });
 
   it("keeps the last file on show, header and all, until the next one's changes are in", async () => {
@@ -83,9 +109,9 @@ describe("a file's changes", () => {
       <QueryClientProvider client={client}>
         <FileDiffView
           repositoryId="repo"
-          sha="a1"
+          source={COMMIT}
           file={shown()}
-          onOpen={setShown}
+          onOpen={(_, next) => setShown(next)}
           onClose={() => {}}
         />
       </QueryClientProvider>
@@ -154,9 +180,9 @@ describe("a file's changes", () => {
       <QueryClientProvider client={client}>
         <FileDiffView
           repositoryId="repo"
-          sha="a1"
+          source={COMMIT}
           file={shown()}
-          onOpen={setShown}
+          onOpen={(_, next) => setShown(next)}
           onClose={() => {}}
         />
       </QueryClientProvider>
@@ -197,7 +223,7 @@ describe("a file's changes", () => {
         <Show when={open()}>
           <FileDiffView
             repositoryId="repo"
-            sha="a1"
+            source={COMMIT}
             file={FILES[0]!}
             onOpen={() => {}}
             onClose={() => setOpen(false)}
@@ -218,5 +244,115 @@ describe("a file's changes", () => {
     await screen.findByText("patch of a.txt");
     await userEvent.keyboard("{Escape}");
     expect(onClose).toHaveBeenCalledOnce();
+  });
+});
+
+/** A patch of `path` with one line changed to `line`, as git would give it. */
+function changedLine(path: string, line: string) {
+  return `diff --git a/${path} b/${path}\nindex 1..2 100644\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-old\n+${line}\n`;
+}
+
+describe("an uncommitted file's changes", () => {
+  beforeEach(() => {
+    rpc.git.diff.unstagedFilePatch.mockReset();
+    rpc.git.diff.unstagedFilePatch.mockImplementation(async ({ path }) =>
+      changedLine(path, `new ${path}`),
+    );
+  });
+
+  it("are updated in place when they change on disk", async () => {
+    setChanges({ unstaged: [file("a.txt")] });
+    const client = renderView(file("a.txt"), {}, UNSTAGED);
+    expect(await screen.findByText(/\+new a\.txt/)).toBeInTheDocument();
+
+    rpc.git.diff.unstagedFilePatch.mockImplementation(async () => changedLine("a.txt", "saved"));
+    await client.invalidateQueries({ queryKey: gitKeys.uncommitted("repo") });
+    expect(await screen.findByText(/\+saved/)).toBeInTheDocument();
+  });
+
+  it("says when the file has no unstaged changes left, with a way to its staged ones", async () => {
+    setChanges({ unstaged: [file("a.txt")] });
+    const onOpen = vi.fn();
+    const client = renderView(file("a.txt"), { onOpen }, UNSTAGED);
+    expect(await screen.findByText(/\+new a\.txt/)).toBeInTheDocument();
+
+    setChanges({ staged: [file("a.txt")] });
+    rpc.git.diff.unstagedFilePatch.mockImplementation(async () => "");
+    await client.invalidateQueries({ queryKey: gitKeys.uncommitted("repo") });
+    expect(await screen.findByText("No unstaged changes")).toBeInTheDocument();
+    expect(screen.queryByText(/\+new a\.txt/)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Show staged changes" }));
+    expect(onOpen).toHaveBeenCalledWith({ kind: "staged" }, file("a.txt"));
+  });
+
+  it("tells from the patch whether an untracked file is binary", async () => {
+    const image = { ...file("image.png", null, null), status: "untracked" } as const;
+    setChanges({ unstaged: [image] });
+    rpc.git.diff.unstagedFilePatch.mockImplementation(
+      async () =>
+        "diff --git a/image.png b/image.png\nnew file mode 100644\nindex 0000000..1111111\nBinary files /dev/null and b/image.png differ\n",
+    );
+    renderView(image, {}, UNSTAGED);
+
+    expect(await screen.findByText("Binary file")).toBeInTheDocument();
+    expect(rpc.git.diff.unstagedFilePatch).toHaveBeenCalledWith(
+      { repositoryId: "repo", path: "image.png", origPath: null, untracked: true },
+      expect.anything(),
+    );
+  });
+
+  it("asks before showing a large file that wasn't counted", async () => {
+    const log = file("huge.log", null, null);
+    setChanges({ unstaged: [log], uncounted: true });
+    const lines = "+line\n".repeat(25_000);
+    rpc.git.diff.unstagedFilePatch.mockImplementation(
+      async () =>
+        `diff --git a/huge.log b/huge.log\nindex 1..2 100644\n@@ -0,0 +1,25000 @@\n${lines}`,
+    );
+    renderView(log, {}, UNSTAGED);
+
+    expect(await screen.findByText(/25,000 lines changed/)).toBeInTheDocument();
+  });
+
+  it("doesn't load a conflicted file's patch", async () => {
+    const conflicted = { ...file("both.txt"), status: "conflicted" } as const;
+    setChanges({ unstaged: [conflicted] });
+    renderView(conflicted, {}, UNSTAGED);
+
+    expect(await screen.findByText("This file has conflicts")).toBeInTheDocument();
+    expect(rpc.git.diff.unstagedFilePatch).not.toHaveBeenCalled();
+  });
+
+  it("stays on the page while they're refetched, so the view keeps its scroll position", async () => {
+    setChanges({ unstaged: [file("a.txt")] });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client.setQueryDefaults(gitKeys.all, { staleTime: Infinity });
+    render(() => (
+      <QueryClientProvider client={client}>
+        <Suspense>
+          <FileDiffView
+            repositoryId="repo"
+            source={{ kind: "unstaged" }}
+            file={file("a.txt")}
+            onOpen={() => {}}
+            onClose={() => {}}
+          />
+        </Suspense>
+      </QueryClientProvider>
+    ));
+    const shown = await screen.findByText(/\+new a\.txt/);
+    // Suspending takes the view off the page and puts it back, scrolled to the top.
+    const removed: Node[] = [];
+    const observer = new MutationObserver((records) => {
+      for (const record of records) removed.push(...record.removedNodes);
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    setChanges({ unstaged: [file("a.txt", 2, 1)] });
+    rpc.git.diff.unstagedFilePatch.mockImplementation(async () => changedLine("a.txt", "saved"));
+    await client.invalidateQueries({ queryKey: gitKeys.uncommitted("repo") });
+    expect(await screen.findByText(/\+saved/)).toBe(shown);
+    observer.disconnect();
+    expect(removed.filter((node) => node.contains(shown))).toEqual([]);
   });
 });

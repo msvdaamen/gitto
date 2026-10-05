@@ -7,7 +7,7 @@ import { RepositoryChangedError, StashConflictError } from "../../core/errors";
 import type { Repo } from "../../core/repo";
 import { createRepo, git, repos } from "../../test/fixtures";
 import { parseStatus, STATUS_ARGS } from "../status/parse";
-import { getStashFiles, listStashes, popStash, pushStash } from "./commands";
+import { getStashFilePatch, getStashFiles, listStashes, popStash, pushStash } from "./commands";
 
 /** Each changed file, with how it changed in the index and the working tree. */
 async function statusFiles(repo: Repo) {
@@ -184,5 +184,36 @@ describe("stashes", () => {
     writeFileSync(join(path, "a.txt"), "a\n");
     git(path, "add", "a.txt");
     await expect(pushStash(await repos.open("unborn"))).rejects.toThrow(/initial commit/);
+  });
+});
+
+describe("getStashFilePatch", () => {
+  it("shows a stashed file's changes compared to the stash's base, untracked ones as added", async () => {
+    const path = createCommittedRepo("stash-patches");
+    const repo = await repos.open("stash-patches");
+    writeFileSync(join(path, "a.txt"), "a\nmore\n");
+    git(path, "mv", "b.txt", "c.txt");
+    writeFileSync(join(path, "new.txt"), "new\n");
+    await pushStash(repo);
+    const sha = await newest(repo);
+
+    expect(await getStashFilePatch(repo, sha, { path: "a.txt", origPath: null })).toContain(
+      "@@ -1 +1,2 @@\n a\n+more\n",
+    );
+    expect(await getStashFilePatch(repo, sha, { path: "c.txt", origPath: "b.txt" })).toContain(
+      "rename from b.txt\nrename to c.txt\n",
+    );
+    const untracked = await getStashFilePatch(repo, sha, { path: "new.txt", origPath: null });
+    expect(untracked).toMatch(/^diff --git a\/new.txt b\/new.txt\nnew file mode 100644\n/);
+    expect(untracked).toContain("@@ -0,0 +1 @@\n+new\n");
+  });
+
+  it("is empty for a file the stash didn't change, with or without untracked files", async () => {
+    const path = createCommittedRepo("stash-unchanged");
+    const repo = await repos.open("stash-unchanged");
+    writeFileSync(join(path, "a.txt"), "changed\n");
+    git(path, "stash", "push", "-q");
+    const sha = await newest(repo);
+    expect(await getStashFilePatch(repo, sha, { path: "b.txt", origPath: null })).toBe("");
   });
 });

@@ -2,6 +2,7 @@ import { ORPCError, os } from "@orpc/server";
 
 import {
   ChangesStashedError,
+  ChangesTooLargeError,
   FileTooLargeError,
   FolderNotFoundError,
   GitError,
@@ -9,6 +10,8 @@ import {
   IndexLockedError,
   NoUpstreamError,
   NotARepositoryError,
+  NotUtf8Error,
+  OutsideRepositoryError,
   PullInterruptedError,
   RepositoryChangedError,
   RepositoryNotFoundError,
@@ -48,8 +51,14 @@ function toApiError(error: unknown): unknown {
   ) {
     return new ORPCError("NOT_FOUND", { message: error.message, cause: error });
   }
-  if (error instanceof FileTooLargeError) {
+  if (error instanceof FileTooLargeError || error instanceof ChangesTooLargeError) {
     return new ORPCError("PAYLOAD_TOO_LARGE", { message: error.message, cause: error });
+  }
+  if (error instanceof OutsideRepositoryError) {
+    return new ORPCError("FORBIDDEN", { message: error.message, cause: error });
+  }
+  if (error instanceof NotUtf8Error) {
+    return new ORPCError("UNSUPPORTED_MEDIA_TYPE", { message: error.message, cause: error });
   }
   if (error instanceof NoUpstreamError || error instanceof UnsupportedGitError) {
     return new ORPCError("PRECONDITION_FAILED", { message: error.message, cause: error });

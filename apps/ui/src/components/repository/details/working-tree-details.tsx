@@ -14,6 +14,7 @@ import { Mascot } from "@/components/ui/mascot";
 import { SectionHeader } from "@/components/ui/section-header";
 import { UpdatingIndicator } from "@/components/ui/updating-indicator";
 import { stagingPaths } from "@/git/changes";
+import { shownPathIn, type FileOpener, type UncommittedSource } from "@/git/diff-source";
 import { useWorkingTreeChanges } from "@/git/queries/diff";
 import { useStage, useUnstage } from "@/git/queries/staging";
 import { useHeadSha, useStatus } from "@/git/queries/status";
@@ -29,7 +30,7 @@ import { CommitForm } from "./commit-form";
  * two file lists split the space evenly and scroll on their own, so moving files between them
  * doesn't shift the layout.
  */
-export function WorkingTreeDetails(props: { repositoryId: string }) {
+export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOpener }) {
   const changes = useWorkingTreeChanges(() => props.repositoryId);
   const status = useStatus(() => props.repositoryId);
   const stage = useStage(() => props.repositoryId);
@@ -81,6 +82,8 @@ export function WorkingTreeDetails(props: { repositoryId: string }) {
       <FileSection
         title="Unstaged changes"
         scrollId="unstaged-files"
+        source={{ kind: "unstaged" }}
+        opener={props.files}
         icon={FilePen}
         files={changes.unstaged()}
         uncounted={changes.uncounted()}
@@ -98,6 +101,8 @@ export function WorkingTreeDetails(props: { repositoryId: string }) {
       <FileSection
         title="Staged changes"
         scrollId="staged-files"
+        source={{ kind: "staged" }}
+        opener={props.files}
         icon={CircleCheck}
         tone="mint"
         files={changes.staged()}
@@ -131,6 +136,10 @@ function FileSection(props: {
   uncounted: boolean;
   /** Marks the list, so it starts at the top again in another repository (see `SCROLL_IDS`). */
   scrollId: ScrollId;
+  /** Which side of the uncommitted changes the files are. */
+  source: UncommittedSource;
+  /** Shows a file's changes when it's clicked. */
+  opener?: FileOpener;
   empty: JSX.Element;
   bulkLabel: string;
   busy: boolean;
@@ -165,6 +174,12 @@ function FileSection(props: {
             uncounted={props.uncounted}
             scrollElement={scrollElement()}
             action={props.action}
+            onOpen={props.opener && ((file) => props.opener?.open(props.source, file))}
+            openPath={shownPathIn(props.opener, props.source)}
+            onPrefetch={
+              props.opener &&
+              ((file) => props.opener?.prefetch(props.source, file, props.uncounted))
+            }
           />
         </Show>
       </div>

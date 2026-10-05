@@ -6,6 +6,8 @@ import ChevronUp from "lucide-solid/icons/chevron-up";
 import Columns2 from "lucide-solid/icons/columns-2";
 import FileCheck from "lucide-solid/icons/file-check";
 import FileWarning from "lucide-solid/icons/file-exclamation-point";
+import FolderGit from "lucide-solid/icons/folder-git-2";
+import GitMerge from "lucide-solid/icons/git-merge";
 import LoaderCircle from "lucide-solid/icons/loader-circle";
 import Rows2 from "lucide-solid/icons/rows-2";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
@@ -28,12 +30,17 @@ import { FileStatusBadge } from "@/components/repository/details/changed-file-li
 import { Button, IconButton } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LineStats } from "@/components/ui/line-stats";
+import { diffFileKey, isSameSource, isUncommitted, type DiffSource } from "@/git/diff-source";
+import { summarizePatch, patchVersion } from "@/git/patch";
+import { fetchBlob } from "@/git/queries/diff";
 import {
-  fetchBlob,
-  fetchCommitFilePatch,
-  useCommitFilePatch,
-  useCommitFiles,
-} from "@/git/queries/diff";
+  fetchFilePatch,
+  fetchWorkingTreeFile,
+  useDiffSourceFiles,
+  useFilePatch,
+  type FilePatch,
+} from "@/git/queries/file-diff";
+import { useUnsuspendedData } from "@/git/queries/unsuspended";
 import { useDelayed } from "@/hooks/delayed";
 import { useDiffStyle } from "@/hooks/diff-style";
 
@@ -56,75 +63,179 @@ const LARGE_DIFF_LINES = 20_000;
  */
 const PREFETCH_DIFF_LINES = 5_000;
 
-/** Names a file's patch in the highlighting cache, by its commit and path. */
-const patchCacheKey = (sha: string, path: string) => `${sha}:${path}`;
+/**
+ * Names a file's patch in the highlighting cache. A commit's or a stash's never changes, so its
+ * file's name will do; an uncommitted one's is named by what's in it too (see `patchVersion`).
+ */
+function patchCacheKey(source: DiffSource, data: FilePatch): string {
+  return isUncommitted(source) ? `${data.key}:${patchVersion(data.patch)}` : data.key;
+}
+
+/** Lines added and removed. */
+interface LineCounts {
+  additions: number;
+  deletions: number;
+}
+
+/** A file's line counts, as its list has them; `undefined` if they weren't counted. */
+function countsOf(file: ChangedFile): LineCounts | undefined {
+  return file.additions === null
+    ? undefined
+    : { additions: file.additions, deletions: file.deletions ?? 0 };
+}
+
+/** Whether `file`'s list says it's binary: it has no line counts, though its list does. */
+function isKnownBinary(file: ChangedFile, uncounted: boolean): boolean {
+  return file.additions === null && !uncounted && file.status !== "untracked";
+}
+
+/**
+ * Whether `file` has changes to show as a patch, as far as its list can tell: not for one that's
+ * conflicted, binary, or without changed lines, nor for a folder git lists as untracked, which is
+ * a repository of its own.
+ */
+function hasPatch(file: ChangedFile, uncounted: boolean): boolean {
+  if (file.status === "conflicted" || isNestedRepository(file)) return false;
+  if (isKnownBinary(file, uncounted)) return false;
+  const counts = countsOf(file);
+  return !counts || total(counts) > 0;
+}
+
+/** Whether `file` is a repository inside this one: git lists one as an untracked folder. */
+function isNestedRepository(file: ChangedFile): boolean {
+  return file.status === "untracked" && file.path.endsWith("/");
+}
+
+const total = (counts: LineCounts) => counts.additions + counts.deletions;
 
 /**
  * Loads and highlights a file's changes ahead of opening them, e.g. when it's pointed at, so they
  * show at once; the first time, that starts the viewer too. Not for one that's binary, or large.
+ * One without line counts (untracked, say) is loaded, but only highlighted if it turns out not to
+ * be. An uncommitted file's are named by what's in them in the highlighting cache, and refetched
+ * like the status once the working tree changes, so what's loaded ahead is never shown stale.
  */
 export function prefetchFileDiff(
   client: QueryClient,
   repositoryId: string,
-  sha: string,
+  source: DiffSource,
   file: ChangedFile,
+  uncounted = false,
 ): void {
-  if (file.additions === null) return;
-  const lines = file.additions + (file.deletions ?? 0);
-  if (lines === 0 || lines > PREFETCH_DIFF_LINES) return;
-  void Promise.all([fetchCommitFilePatch(client, repositoryId, sha, file), loadViewer()])
-    .then(([data, viewer]) =>
-      viewer.preparePatch(data.patch, patchCacheKey(data.sha, data.file.path)),
-    )
+  if (!hasPatch(file, uncounted)) return;
+  const counts = countsOf(file);
+  if (counts && total(counts) > PREFETCH_DIFF_LINES) return;
+  void Promise.all([fetchFilePatch(client, repositoryId, source, file), loadViewer()])
+    .then(([data, viewer]) => {
+      if (!data.patch) return;
+      if (!counts) {
+        const summary = summarizePatch(data.patch);
+        if (summary.binary || total(summary) > PREFETCH_DIFF_LINES) return;
+      }
+      return viewer.preparePatch(data.patch, patchCacheKey(source, data));
+    })
     // Only ahead of time: opening it says what went wrong.
     .catch(() => undefined);
 }
 
 /**
- * The changes in one of a commit's files, in place of the history. Esc, or the back button, goes
- * back to the history; the commit's other files are a step away.
+ * The changes in one file of a commit, a stash or the uncommitted changes, in place of the
+ * history. Esc, or the back button, goes back to the history; the other files in the same list
+ * are a step away. Uncommitted changes are kept up to date as they change on disk, in place; once
+ * the file has none left on its side, that's said instead.
  */
 export function FileDiffView(props: {
   repositoryId: string;
-  sha: string;
+  source: DiffSource;
   file: ChangedFile;
-  /** Shows another of the commit's files. */
-  onOpen: (file: ChangedFile) => void;
+  /** Shows another file's changes, e.g. the next one in the list. */
+  onOpen: (source: DiffSource, file: ChangedFile) => void;
   onClose: () => void;
 }) {
   const { diffStyle, setDiffStyle } = useDiffStyle();
   const queryClient = useQueryClient();
-  const commitFiles = useCommitFiles(
-    () => props.repositoryId,
-    () => props.sha,
-  );
-  const index = createMemo(() =>
-    commitFiles.files().findIndex((file) => file.path === props.file.path),
-  );
-  const previous = () => (index() > 0 ? commitFiles.files()[index() - 1] : undefined);
-  const next = () => (index() === -1 ? undefined : commitFiles.files()[index() + 1]);
+  // The same source, as one object, for as long as it is: a list's is made anew whenever it's read.
+  const source = createMemo(() => props.source, undefined, { equals: isSameSource });
+  const lists = useDiffSourceFiles(() => props.repositoryId, source);
+  const fileKey = () => diffFileKey(props.source, props.file.path);
+  const found = createMemo(() => lists.files().findIndex((file) => file.path === props.file.path));
+  // Where the file was in its list, after it's gone from it: the files around it stay a step away.
+  const place = createMemo((last: number) => (found() === -1 ? last : found()), -1);
+  const previous = () => (place() > 0 ? lists.files()[place() - 1] : undefined);
+  const next = () =>
+    place() === -1 ? undefined : lists.files()[found() === -1 ? place() : place() + 1];
 
-  const lines = () => (props.file.additions ?? 0) + (props.file.deletions ?? 0);
-  const binary = () => props.file.additions === null;
-  // The large file the user asked to see anyway, by its path.
+  /**
+   * The file as its list has it now: uncommitted changes change on disk, and are listed anew. As
+   * it was opened if it's gone from the list.
+   */
+  const file = () => (isUncommitted(props.source) && lists.files()[found()]) || props.file;
+  // Whether the file has gone from its list: it's been staged in full, say.
+  const gone = () => isUncommitted(props.source) && lists.loaded() && found() === -1;
+
+  // The large file the user asked to see anyway.
   const [shownLarge, setShownLarge] = createSignal<string>();
-  const large = () => lines() > LARGE_DIFF_LINES && shownLarge() !== props.file.path;
-  const showsPatch = () => !binary() && lines() > 0 && !large();
-  const patch = useCommitFilePatch(
-    () => props.repositoryId,
-    () => props.sha,
-    () => props.file,
-    showsPatch,
-  );
+  const fetches = () => {
+    const counts = countsOf(file());
+    if (!hasPatch(file(), lists.uncounted())) return false;
+    return !counts || total(counts) <= LARGE_DIFF_LINES || shownLarge() === fileKey();
+  };
+  // What the patch's query is of, changing only when that does: an uncommitted file's list is
+  // replaced whenever anything in the working tree changes, and the query's options are set again
+  // (and its resource refetched) whenever they're read anew.
+  const patchFile = createMemo(file, undefined, {
+    equals: (a, b) => a.path === b.path && a.origPath === b.origPath && a.status === b.status,
+  });
+  const patchEnabled = createMemo(() => !gone() && fetches());
+  const patchQuery = useFilePatch(() => props.repositoryId, source, patchFile, patchEnabled);
+  // Without Suspense: an uncommitted file's patch is refetched while it's on show.
+  const patch = useUnsuspendedData(patchQuery);
+  /** The patch of this file, rather than of the last one, still on show while it loads. */
+  const current = () => (patch()?.key === fileKey() ? patch() : undefined);
+  // What the patch says of the changes: an uncommitted file's line counts can be older than its
+  // patch, and some files have none at all.
+  const summaryOf = (data: FilePatch) =>
+    isUncommitted(props.source) || data.file.additions === null
+      ? summarizePatch(data.patch)
+      : undefined;
+  const summary = createMemo(() => {
+    const data = current();
+    return data && summaryOf(data);
+  });
+  const empty = () => current()?.patch === "";
+  const binary = () => isKnownBinary(file(), lists.uncounted()) || summary()?.binary === true;
+  /** How many lines changed; `undefined` until the patch says, for a file without counts. */
+  const counts = () => (summary() && !summary()!.binary ? summary() : countsOf(file()));
+  const lines = () => (counts() ? total(counts()!) : undefined);
+  const large = () => (lines() ?? 0) > LARGE_DIFF_LINES && shownLarge() !== fileKey();
+  const showsPatch = () =>
+    !gone() &&
+    !empty() &&
+    file().status !== "conflicted" &&
+    !isNestedRepository(file()) &&
+    !binary() &&
+    lines() !== 0 &&
+    !large();
+
   // The file whose patch is on show. Going to another, the last one stays on show, header and
   // all, until the new one's is loaded and highlighted: they're swapped at once, without flicker.
-  const [shownPatchFile, setShownPatchFile] = createSignal<ChangedFile>();
+  const [shownPatch, setShownPatch] = createSignal<{
+    key: string;
+    file: ChangedFile;
+    counts: LineCounts | undefined;
+  }>();
   /** The file on show: the one asked for, or the last one, while its patch is on its way. */
-  const shown = () => (showsPatch() && shownPatchFile()) || props.file;
+  const shown = () =>
+    (showsPatch() && shownPatch()) || {
+      key: fileKey(),
+      file: file(),
+      // None to count once it has no changes left on its side.
+      counts: gone() || empty() ? undefined : counts(),
+    };
   // Whether the whole file is being loaded, to show more of it, and why it couldn't be.
   const [loadingFiles, setLoadingFiles] = createSignal(false);
   const [filesError, setFilesError] = createSignal<string>();
-  const busy = useDelayed(() => shown().path !== props.file.path || loadingFiles());
+  const busy = useDelayed(() => shown().key !== fileKey() || loadingFiles());
 
   let section: HTMLElement | undefined;
   const onKeyDown = (event: KeyboardEvent) => {
@@ -149,48 +260,63 @@ export function FileDiffView(props: {
     }
   });
 
-  // The files a step away are loaded ahead once this one's on show, so stepping to them shows them
-  // at once.
+  // The files a step away are loaded ahead once another one's on show, so stepping to them shows
+  // them at once. Not again when the same one's patch is refetched, as an uncommitted file's is
+  // whenever the working tree changes: theirs are refetched once they're opened.
+  const shownKey = createMemo(() => shownPatch()?.key);
   createEffect(
-    on(shownPatchFile, (file) => {
-      if (!file) return;
+    on(shownKey, (key) => {
+      if (!key) return;
       for (const near of [previous(), next()]) {
-        if (near) prefetchFileDiff(queryClient, props.repositoryId, props.sha, near);
+        if (near) {
+          prefetchFileDiff(queryClient, props.repositoryId, props.source, near, lists.uncounted());
+        }
       }
     }),
   );
 
-  const name = () => shown().path.slice(shown().path.lastIndexOf("/") + 1);
-  const folder = () => shown().path.slice(0, shown().path.lastIndexOf("/") + 1);
+  /** Reads one side of the file on show in full: an unstaged file's new side is on disk. */
+  const loadFile = (path: string) => (side: "old" | "new", oid: string) =>
+    props.source.kind === "unstaged" && side === "new"
+      ? fetchWorkingTreeFile(props.repositoryId, path)
+      : fetchBlob(queryClient, props.repositoryId, oid);
+
+  const name = () => shown().file.path.slice(shown().file.path.lastIndexOf("/") + 1);
+  const folder = () => shown().file.path.slice(0, shown().file.path.lastIndexOf("/") + 1);
 
   return (
     <section
       ref={(el) => (section = el)}
       class="flex h-full min-h-0 min-w-0 flex-col bg-bg"
-      aria-label={`Changes in ${shown().path}`}
+      aria-label={`Changes in ${shown().file.path}`}
     >
       <header class="flex h-[42px] shrink-0 items-center gap-2 border-b border-border pr-2 pl-1.5">
         <IconButton label="Back to the history (Esc)" icon={ArrowLeft} onClick={props.onClose} />
-        <FileStatusBadge status={shown().status} />
+        <FileStatusBadge status={shown().file.status} />
         <span class="flex min-w-0 items-baseline gap-2">
-          <span class="truncate text-[12.5px]" title={shown().path}>
+          <span class="truncate text-[12.5px]" title={shown().file.path}>
             <span class="text-faint">{folder()}</span>
             <strong class="font-[600]">{name()}</strong>
           </span>
-          <Show when={shown().origPath}>
+          <Show when={shown().file.origPath}>
             {(origPath) => (
               <span class="shrink-[2] truncate text-[11px] text-faint" title={origPath()}>
                 from {origPath()}
               </span>
             )}
           </Show>
+          <Show when={sourceLabel(props.source)}>
+            {(label) => <span class="shrink-0 text-[11px] text-faint">{label()}</span>}
+          </Show>
         </span>
-        <Show when={shown().additions !== null}>
-          <LineStats
-            additions={shown().additions ?? 0}
-            deletions={shown().deletions ?? 0}
-            class="shrink-0 text-[11px]"
-          />
+        <Show when={shown().counts}>
+          {(shownCounts) => (
+            <LineStats
+              additions={shownCounts().additions}
+              deletions={shownCounts().deletions}
+              class="shrink-0 text-[11px]"
+            />
+          )}
         </Show>
         <Show when={busy()}>
           <LoaderCircle
@@ -205,13 +331,13 @@ export function FileDiffView(props: {
             label="Previous file"
             icon={ChevronUp}
             disabled={!previous()}
-            onClick={() => previous() && props.onOpen(previous()!)}
+            onClick={() => previous() && props.onOpen(props.source, previous()!)}
           />
           <IconButton
             label="Next file"
             icon={ChevronDown}
             disabled={!next()}
-            onClick={() => next() && props.onOpen(next()!)}
+            onClick={() => next() && props.onOpen(props.source, next()!)}
           />
           <span class="mx-1.5 h-4 w-px bg-border" />
           <IconButton
@@ -242,6 +368,25 @@ export function FileDiffView(props: {
 
       <div class="min-h-0 flex-1">
         <Switch>
+          <Match when={gone() || empty()}>
+            <NoLongerChanged
+              source={props.source}
+              file={props.file}
+              staged={lists.staged()}
+              unstaged={lists.unstaged()}
+              onOpen={props.onOpen}
+            />
+          </Match>
+          <Match when={file().status === "conflicted"}>
+            <EmptyState icon={GitMerge} title="This file has conflicts" class="h-full">
+              Resolve them in your editor, then stage the file.
+            </EmptyState>
+          </Match>
+          <Match when={isNestedRepository(file())}>
+            <EmptyState icon={FolderGit} title="Another repository" class="h-full">
+              This folder is a git repository of its own, so its files aren't listed here.
+            </EmptyState>
+          </Match>
           <Match when={binary()}>
             <EmptyState icon={FileCheck} title="Binary file" class="h-full">
               Its changes can't be shown as text.
@@ -249,14 +394,14 @@ export function FileDiffView(props: {
           </Match>
           <Match when={lines() === 0}>
             <EmptyState icon={FileCheck} title="No changed lines" class="h-full">
-              {unchangedReason(props.file)}
+              {unchangedReason(file())}
             </EmptyState>
           </Match>
           <Match when={large()}>
             <EmptyState icon={FileWarning} title="Large change" class="h-full">
               <span class="flex flex-col items-center gap-3">
-                {lines().toLocaleString()} lines changed. Showing them may take a moment.
-                <Button onClick={() => setShownLarge(props.file.path)}>Show anyway</Button>
+                {lines()!.toLocaleString()} lines changed. Showing them may take a moment.
+                <Button onClick={() => setShownLarge(fileKey())}>Show anyway</Button>
               </span>
             </EmptyState>
           </Match>
@@ -264,44 +409,41 @@ export function FileDiffView(props: {
             <ErrorBoundary
               fallback={(error: Error, reset) => {
                 // Another file is tried afresh.
-                createEffect(
-                  on(
-                    () => props.file.path,
-                    () => reset(),
-                    { defer: true },
-                  ),
-                );
+                createEffect(on(fileKey, () => reset(), { defer: true }));
                 return <DiffError error={error} />;
               }}
             >
               <Suspense fallback={<Loading />}>
                 <Show
-                  when={patch.error}
+                  when={patchQuery.error}
                   keyed
                   fallback={
                     <Show
                       // Another file's patch is only kept while it's on show: one isn't started
                       // with it.
-                      when={
-                        patch.data &&
-                        (patch.data.file.path === props.file.path || shownPatchFile()) &&
-                        patch.data
-                      }
+                      when={patch() && (patch()!.key === fileKey() || shownPatch()) && patch()}
                       fallback={<Loading />}
                     >
                       {(data) => {
                         onCleanup(() => {
-                          setShownPatchFile(undefined);
+                          setShownPatch(undefined);
                           setLoadingFiles(false);
                           setFilesError(undefined);
                         });
                         return (
                           <PatchViewer
                             patch={data().patch}
-                            cacheKey={patchCacheKey(data().sha, data().file.path)}
+                            fileKey={data().key}
+                            cacheKey={patchCacheKey(props.source, data())}
                             diffStyle={diffStyle()}
-                            loadFile={(oid) => fetchBlob(queryClient, props.repositoryId, oid)}
-                            onShown={() => setShownPatchFile(data().file)}
+                            loadFile={loadFile(data().file.path)}
+                            onShown={() =>
+                              setShownPatch({
+                                key: data().key,
+                                file: data().file,
+                                counts: summaryOf(data()) ?? countsOf(data().file),
+                              })
+                            }
                             onLoadingFiles={setLoadingFiles}
                             onFilesError={setFilesError}
                           />
@@ -321,10 +463,56 @@ export function FileDiffView(props: {
   );
 }
 
+/** Which side of the uncommitted changes the file's are, in the header. */
+function sourceLabel(source: DiffSource): string | undefined {
+  if (source.kind === "unstaged") return "Unstaged";
+  if (source.kind === "staged") return "Staged";
+  return undefined;
+}
+
+/**
+ * Says that an uncommitted file has no changes left on its side, e.g. once it's been staged, with
+ * a way to the other side's if it has some there.
+ */
+function NoLongerChanged(props: {
+  source: DiffSource;
+  file: ChangedFile;
+  staged: ChangedFile[];
+  unstaged: ChangedFile[];
+  onOpen: (source: DiffSource, file: ChangedFile) => void;
+}) {
+  const other = createMemo(() => {
+    const kind = props.source.kind === "unstaged" ? "staged" : "unstaged";
+    const files = kind === "staged" ? props.staged : props.unstaged;
+    const file = files.find((candidate) => candidate.path === props.file.path);
+    return file && { source: { kind } as const, file };
+  });
+  return (
+    <EmptyState
+      icon={FileCheck}
+      title={props.source.kind === "staged" ? "No staged changes" : "No unstaged changes"}
+      class="h-full"
+    >
+      <span class="flex flex-col items-center gap-3">
+        {props.source.kind === "staged"
+          ? "This file's changes were unstaged or committed."
+          : "This file's changes were staged or undone."}
+        <Show when={other()}>
+          {(side) => (
+            <Button onClick={() => props.onOpen(side().source, side().file)}>
+              {side().source.kind === "staged" ? "Show staged changes" : "Show unstaged changes"}
+            </Button>
+          )}
+        </Show>
+      </span>
+    </EmptyState>
+  );
+}
+
 /** Why a file without binary contents has no changed lines. */
 function unchangedReason(file: ChangedFile): string {
   if (file.origPath) return `Renamed from ${file.origPath}, with the same contents.`;
-  if (file.status === "added") return "An empty file was added.";
+  if (file.status === "added" || file.status === "untracked") return "An empty file was added.";
   if (file.status === "deleted") return "An empty file was deleted.";
   return "Only the file's mode changed.";
 }

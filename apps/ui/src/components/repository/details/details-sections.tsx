@@ -6,6 +6,7 @@ import { Show } from "solid-js";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LineStats } from "@/components/ui/line-stats";
 import { SectionHeader } from "@/components/ui/section-header";
+import { shownPathIn, type DiffSource, type FileOpener } from "@/git/diff-source";
 
 import { ChangedFileList } from "./changed-file-list";
 
@@ -44,14 +45,15 @@ export function FileTotals(props: {
   );
 }
 
-/** The changed files, under their heading. */
+/** The changed files of a commit or stash, under their heading. */
 export function ChangedFilesSection(props: {
   files: ChangedFile[];
   /** The details' scroll container, which scrolls the files along with what's above them. */
   scrollElement: HTMLElement | undefined;
-  onOpen?: (file: ChangedFile) => void;
-  openPath?: string;
-  onPrefetch?: (file: ChangedFile) => void;
+  /** The commit or stash the files are of. */
+  source: DiffSource;
+  /** Shows a file's changes when it's clicked; not before the files on show are `source`'s. */
+  opener?: FileOpener;
 }) {
   return (
     <div class="border-b border-border px-2.5 py-3">
@@ -64,9 +66,9 @@ export function ChangedFilesSection(props: {
       <ChangedFileList
         files={props.files}
         scrollElement={props.scrollElement}
-        onOpen={props.onOpen}
-        openPath={props.openPath}
-        onPrefetch={props.onPrefetch}
+        onOpen={props.opener && ((file) => props.opener?.open(props.source, file))}
+        openPath={shownPathIn(props.opener, props.source)}
+        onPrefetch={props.opener && ((file) => props.opener?.prefetch(props.source, file, false))}
       />
     </div>
   );

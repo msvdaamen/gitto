@@ -1,5 +1,6 @@
 import { GitError, RepositoryChangedError, StashConflictError } from "../../core/errors";
 import { resolveRef, type GitCommand, type Repo } from "../../core/repo";
+import { getCommitFilePatch, readPatch } from "../diff/commands";
 import { parseDiff } from "../diff/parse";
 import type { ChangedFile } from "../diff/schema";
 import type { Stash } from "./schema";
@@ -64,6 +65,39 @@ export async function getStashFiles(
     { ...STASH_ENV, signal },
   );
   return parseDiff(output);
+}
+
+/**
+ * The patch of one file the stash `sha` changed, compared to its base like `getStashFiles`. A stash
+ * is a merge of what was staged into its base, with the working tree's files, so the tracked ones
+ * are compared to its first parent like a commit's. The untracked files it stashed are in a commit
+ * of their own, its third parent, without one.
+ */
+export async function getStashFilePatch(
+  repo: Repo,
+  sha: string,
+  file: { path: string; origPath: string | null },
+  signal?: AbortSignal,
+): Promise<string> {
+  const patch = await getCommitFilePatch(repo, sha, file, signal);
+  if (patch || file.origPath) return patch;
+  const untracked = await resolveRef(repo.read, `${sha}^3`);
+  if (!untracked) return patch;
+  return readPatch(
+    repo.read,
+    [
+      "diff-tree",
+      "-p",
+      "-r",
+      "--root",
+      "--full-index",
+      "--no-commit-id",
+      untracked,
+      "--",
+      file.path,
+    ],
+    signal,
+  );
 }
 
 /**

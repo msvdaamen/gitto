@@ -9,6 +9,7 @@ import {
   type FileDiffLoadedFiles,
   type FileDiffMetadata,
   type FileDiffOptions,
+  type HunkExpansionRegion,
   type PostRenderPhase,
 } from "@pierre/diffs";
 import { getOrCreateWorkerPoolSingleton, type WorkerPoolManager } from "@pierre/diffs/worker";
@@ -17,6 +18,8 @@ import { createEffect, createMemo, on, onCleanup, untrack } from "solid-js";
 import { useConnected } from "@/components/ui/virtual-list";
 import type { DiffStyle } from "@/hooks/diff-style";
 import { useTheme } from "@/hooks/theme";
+
+import { carriedExpansion, fitToPatch, hasMatchingEnds, type Side } from "./patch-files";
 
 /** Highlighting runs in workers; one diff is on show at a time, so a couple is plenty. */
 const WORKERS = 2;
@@ -84,15 +87,24 @@ const EXPAND_HIGHLIGHT_WAIT_MS = 1500;
  * object names on the patch's `index` line, once the lines between are asked for.
  *
  * Given another patch, it keeps the last one on show until the new one is highlighted (see
- * `HIGHLIGHT_WAIT_MS`), then shows it in its place and calls `onShown`. What it says of loading
- * the whole file is of the patch on show.
+ * `HIGHLIGHT_WAIT_MS`), then shows it in its place and calls `onShown`. Another file's starts at
+ * its top, with none of its lines shown around the changes; a new patch of the same file, which
+ * uncommitted changes get whenever it's saved, takes the place of the last where it's scrolled to,
+ * with the same lines shown around its changes. What it says of loading the whole file is of the
+ * patch on show.
  */
 export default function PatchViewer(props: {
   patch: string;
-  /** Names the patch in the highlighting cache, e.g. by its commit and path. */
+  /** Names the file the patch is of: a new patch with the same name is of the same file. */
+  fileKey: string;
+  /**
+   * Names the patch in the highlighting cache, e.g. by its commit and path: another patch, even of
+   * the same file, needs another name, or it's shown with the last one's highlighting.
+   */
   cacheKey: string;
   diffStyle: DiffStyle;
-  loadFile: (oid: string) => Promise<string>;
+  /** Reads one side of the file in full, by the object name the patch has for it. */
+  loadFile: (side: Side, oid: string) => Promise<string>;
   /** The last patch given is on show. */
   onShown: () => void;
   /** Whether the whole file is being loaded, to show more of it. */
@@ -101,12 +113,17 @@ export default function PatchViewer(props: {
   onFilesError: (message: string | undefined) => void;
 }) {
   const { theme } = useTheme();
-  const fileDiff = createMemo(() => parsed(props.patch, props.cacheKey));
+  const next = createMemo(
+    () => ({ diff: parsed(props.patch, props.cacheKey), fileKey: props.fileKey }),
+    undefined,
+    { equals: (a, b) => a.diff === b.diff && a.fileKey === b.fileKey },
+  );
   let scroller: HTMLDivElement | undefined;
   let content: HTMLDivElement | undefined;
-  let instance: VirtualizedFileDiff<undefined, undefined> | undefined;
-  /** The diff on show, once there's one. */
+  let instance: ExpandableFileDiff | undefined;
+  /** The diff on show, once there's one, and the file it's of. */
   let shown: FileDiffMetadata | undefined;
+  let shownFileKey: string | undefined;
   /** Loads of the whole file under way, by the diff they're for. */
   const loads = new Map<FileDiffMetadata, number>();
   /** Why the whole file couldn't be loaded, by the diff it's of: it's no use trying again. */
@@ -126,7 +143,7 @@ export default function PatchViewer(props: {
       loads.set(diff, (loads.get(diff) ?? 0) + 1);
       report();
       try {
-        return await loadFiles(diff, props.loadFile);
+        return (await loadFiles(diff, props.loadFile)).files;
       } catch (error) {
         failures.set(diff, error instanceof Error ? error.message : String(error));
         if (diff === shown) rerender();
@@ -164,7 +181,7 @@ export default function PatchViewer(props: {
   function setUp(root: HTMLDivElement, wrapper: HTMLDivElement) {
     const virtualizer = new Virtualizer();
     virtualizer.setup(root, wrapper);
-    const diffs = new VirtualizedFileDiff(
+    const diffs = new ExpandableFileDiff(
       options(props.diffStyle),
       virtualizer,
       undefined,
@@ -179,21 +196,46 @@ export default function PatchViewer(props: {
       virtualizer.cleanUp();
     });
 
-    const show = async (diff: FileDiffMetadata) => {
+    const show = async (patch: { diff: FileDiffMetadata; fileKey: string }) => {
+      const sameFile = shown !== undefined && shownFileKey === patch.fileKey;
+      // The same file, with lines shown around its changes: the new patch is filled in with the
+      // whole file too, to show the same ones.
+      const kept = sameFile && !shown!.isPartial ? await keptExpansion(patch.diff) : undefined;
+      const diff = kept?.diff ?? patch.diff;
       await highlighted(diff, HIGHLIGHT_WAIT_MS);
       // Passed over for another patch meanwhile.
-      if (disposed || fileDiff() !== diff) return;
+      if (disposed || next() !== patch) return;
       // Another file starts at its top.
-      if (shown) root.scrollTop = 0;
+      if (shown && !sameFile) root.scrollTop = 0;
+      // The lines shown around the last one's changes are by hunk, which another's don't match.
+      diffs.expanded = kept?.expanded ?? new Map();
+      if (sameFile && shown!.cacheKey !== diff.cacheKey) forget(shown!);
       shown = diff;
+      shownFileKey = patch.fileKey;
       diffs.setOptions(options(props.diffStyle));
       diffs.render({ fileDiff: diff, containerWrapper: wrapper });
       report();
       props.onShown();
     };
-    createEffect(on(fileDiff, (diff) => void show(diff)));
+
+    /**
+     * `diff` filled in with the whole file, and the lines shown around the changes on show, moved
+     * to its own; `undefined` if it can't be, e.g. as the file changed again since.
+     */
+    const keptExpansion = async (diff: FileDiffMetadata) => {
+      const from = shown!;
+      const expanded = diffs.expanded;
+      try {
+        const { hydrated } = await loadFiles(diff, props.loadFile);
+        return { diff: hydrated, expanded: carriedExpansion(from, expanded, hydrated) };
+      } catch {
+        return undefined;
+      }
+    };
+
+    createEffect(on(next, (patch) => void show(patch)));
     createEffect(on(() => props.diffStyle, rerender, { defer: true }));
-    createEffect(on(theme, (next) => diffs.setThemeType(next), { defer: true }));
+    createEffect(on(theme, (type) => diffs.setThemeType(type), { defer: true }));
   }
 
   return (
@@ -207,6 +249,31 @@ export default function PatchViewer(props: {
       <div ref={(el) => (content = el)} class="[&>*]:min-h-px" />
     </div>
   );
+}
+
+/**
+ * The library's virtualized diff, with the lines shown around each hunk in reach: they're kept by
+ * hunk across diffs, so another file's would show the last one's (see `show`).
+ */
+class ExpandableFileDiff extends VirtualizedFileDiff<undefined, undefined> {
+  get expanded(): ReadonlyMap<number, HunkExpansionRegion> {
+    return this.hunksRenderer.getExpandedHunksMap();
+  }
+
+  set expanded(expanded: Map<number, HunkExpansionRegion>) {
+    this.hunksRenderer.setExpandedHunksMap(expanded);
+  }
+}
+
+/**
+ * Drops a patch of a file that's been replaced by a newer one from the highlighting cache, which
+ * has room for a hundred diffs: an uncommitted file can be saved many times while it's on show.
+ */
+function forget(diff: FileDiffMetadata) {
+  if (!diff.cacheKey) return;
+  workerPool().evictDiffFromCache(diff.cacheKey);
+  const partial = diff.cacheKey.replace(/:hydrated$/, "");
+  if (partial !== diff.cacheKey) workerPool().evictDiffFromCache(partial);
 }
 
 /**
@@ -284,20 +351,37 @@ export function parsePatch(patch: string, cacheKey: string): FileDiffMetadata {
   return file;
 }
 
-/** Both sides of `diff` in full, read by the object names on its `index` line. */
+/**
+ * Both sides of `diff` in full, read by the object names on its `index` line, and a copy of `diff`
+ * filled in with them. Rejects if they aren't the files the patch is of, as a file in the working
+ * tree can have changed since.
+ */
 async function loadFiles(
   diff: FileDiffMetadata,
-  loadFile: (oid: string) => Promise<string>,
-): Promise<FileDiffLoadedFiles> {
+  loadFile: (side: Side, oid: string) => Promise<string>,
+): Promise<{ files: FileDiffLoadedFiles; hydrated: FileDiffMetadata }> {
   const { prevObjectId, newObjectId } = diff;
   if (!prevObjectId || !newObjectId) throw new Error("The patch doesn't name its files.");
-  const [before, after] = await Promise.all([loadFile(prevObjectId), loadFile(newObjectId)]);
+  const [before, after] = await Promise.all([
+    loadFile("old", prevObjectId),
+    loadFile("new", newObjectId),
+  ]);
+  // Named in the highlighting cache by the patch's object names: the working tree's side is by
+  // what git would store it as, so another version of the file has another name too.
   const files = {
-    oldFile: { name: diff.prevName ?? diff.name, contents: before, cacheKey: prevObjectId },
-    newFile: { name: diff.name, contents: after, cacheKey: newObjectId },
+    oldFile: {
+      name: diff.prevName ?? diff.name,
+      contents: fitToPatch(diff, "old", before),
+      cacheKey: prevObjectId,
+    },
+    newFile: { name: diff.name, contents: fitToPatch(diff, "new", after), cacheKey: newObjectId },
   };
-  // Highlighted before they're handed over (see `EXPAND_HIGHLIGHT_WAIT_MS`): a copy, filled in
+  const hydrated = hydratePartialDiff("clone", diff, files);
+  if (!hasMatchingEnds(hydrated)) {
+    throw new Error("The file has changed since its changes were loaded. Try again in a moment.");
+  }
+  // Highlighted before they're handed over (see `EXPAND_HIGHLIGHT_WAIT_MS`): the copy, filled in
   // as the viewer will, has the same key in the highlighting cache.
-  await highlighted(hydratePartialDiff("clone", diff, files), EXPAND_HIGHLIGHT_WAIT_MS);
-  return files;
+  await highlighted(hydrated, EXPAND_HIGHLIGHT_WAIT_MS);
+  return { files, hydrated };
 }

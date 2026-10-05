@@ -1,5 +1,5 @@
-import { FileTooLargeError } from "../../core/errors";
-import type { Repo } from "../../core/repo";
+import { ChangesTooLargeError, FileTooLargeError, GitError } from "../../core/errors";
+import type { GitCommand, Repo } from "../../core/repo";
 import { parseDiff } from "./parse";
 import type { ChangedFile } from "./schema";
 
@@ -37,7 +37,8 @@ export function getCommitFilePatch(
   file: { path: string; origPath: string | null },
   signal?: AbortSignal,
 ): Promise<string> {
-  return repo.read(
+  return readPatch(
+    repo.read,
     [
       "diff-tree",
       "-p",
@@ -49,11 +50,112 @@ export function getCommitFilePatch(
       "--diff-merges=first-parent",
       sha,
       "--",
-      file.path,
-      ...(file.origPath ? [file.origPath] : []),
+      ...filePaths(file),
     ],
-    { signal },
+    signal,
   );
+}
+
+/**
+ * The patch of one file's unstaged changes: the working tree compared to the index, as in the list
+ * of unstaged files. The `index` line names the working tree's side by what git would store it as,
+ * which isn't in the repository: `readWorkingTreeFile` reads it whole. An untracked file is shown
+ * as added, in full.
+ */
+export function getUnstagedFilePatch(
+  repo: Repo,
+  file: { path: string; origPath: string | null; untracked: boolean },
+  signal?: AbortSignal,
+): Promise<string> {
+  if (file.untracked) return getUntrackedFilePatch(repo, file.path, signal);
+  return readPatch(
+    repo.read,
+    ["diff-files", "-p", "-M", "--full-index", "--", ...filePaths(file)],
+    signal,
+  );
+}
+
+/**
+ * An untracked file, compared to nothing. Git only compares files outside the index with porcelain
+ * `diff --no-index`, which reads the user's diff settings: the flags undo the ones that would change
+ * the patch, like other prefixes than `a/` and `b/`, an external diff tool, or a textconv filter.
+ */
+async function getUntrackedFilePatch(
+  repo: Repo,
+  path: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const args = [
+    "diff",
+    "--no-index",
+    "--full-index",
+    "--no-color",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+    "--",
+    "/dev/null",
+    path,
+  ];
+  try {
+    return await readPatch(repo.read, args, signal);
+  } catch (error) {
+    // Exits with 1 when the files differ, which they always do, but also when it can't read one,
+    // like a folder: the patch tells them apart.
+    if (error instanceof GitError && error.exitCode === 1 && error.stdout) return error.stdout;
+    throw error;
+  }
+}
+
+/**
+ * The patch of one file's staged changes: the index compared to HEAD, as in the list of staged
+ * files, or to nothing before the first commit. Both sides are in the repository, by the object
+ * names on the `index` line.
+ */
+export async function getStagedFilePatch(
+  repo: Repo,
+  file: { path: string; origPath: string | null },
+  signal?: AbortSignal,
+): Promise<string> {
+  const diff = (base: string) =>
+    readPatch(
+      repo.read,
+      ["diff-index", "-p", "--cached", "-M", "--full-index", base, "--", ...filePaths(file)],
+      signal,
+    );
+  try {
+    return await diff("HEAD");
+  } catch (error) {
+    // Asked only once it failed: there's a HEAD all but before the first commit.
+    if (!(error instanceof GitError) || (await repo.hasHead())) throw error;
+    return diff(await emptyTree(repo.read));
+  }
+}
+
+/** The object name of a tree without files, in the repository's hash. */
+async function emptyTree(run: GitCommand): Promise<string> {
+  return (await run(["hash-object", "-t", "tree", "--stdin"], { stdin: "" })).trim();
+}
+
+/** A file's path, and its previous one if it was renamed: a rename is only found with both. */
+function filePaths(file: { path: string; origPath: string | null }): string[] {
+  return file.origPath ? [file.path, file.origPath] : [file.path];
+}
+
+/**
+ * The size of the largest patch sent to the renderer, which parses and highlights all of it. The UI
+ * asks before showing a change of many lines, but can't tell how many there are in a file without
+ * line counts, like an untracked one: a log of hundreds of megabytes, say.
+ */
+export const MAX_PATCH_BYTES = 10 * 1024 * 1024;
+
+/** Runs a diff command for one file's patch, through `run`; stopped past `MAX_PATCH_BYTES`. */
+export function readPatch(run: GitCommand, args: string[], signal?: AbortSignal): Promise<string> {
+  return run(args, {
+    signal,
+    maxOutput: { bytes: MAX_PATCH_BYTES, error: () => new ChangesTooLargeError(MAX_PATCH_BYTES) },
+  });
 }
 
 /**

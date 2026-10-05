@@ -2,6 +2,7 @@ import Archive from "lucide-solid/icons/archive";
 import { createMemo, Show } from "solid-js";
 
 import { Badge } from "@/components/ui/badge";
+import type { FileOpener } from "@/git/diff-source";
 import { useStashes, useStashFiles } from "@/git/queries/stash";
 import { useRelativeTime } from "@/hooks/relative-time";
 
@@ -13,6 +14,7 @@ export function StashDetails(props: {
   sha: string;
   /** The details' scroll container, which scrolls the files along with the summary. */
   scrollElement: HTMLElement | undefined;
+  files?: FileOpener;
 }) {
   const stashes = useStashes(() => props.repositoryId);
   const changes = useStashFiles(
@@ -46,7 +48,13 @@ export function StashDetails(props: {
           </div>
         )}
       </Show>
-      <ChangedFilesSection files={changes.files()} scrollElement={props.scrollElement} />
+      <ChangedFilesSection
+        files={changes.files()}
+        scrollElement={props.scrollElement}
+        source={{ kind: "stash", sha: props.sha }}
+        // Only once the files on show are this stash's, so another's aren't opened as its.
+        opener={changes.shownSha() === props.sha ? props.files : undefined}
+      />
     </div>
   );
 }

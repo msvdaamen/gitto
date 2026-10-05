@@ -10,15 +10,39 @@ import { Opaque } from "./opaque";
 import { useUncommittedFiles } from "./status";
 
 /** Loads the files a commit or stash changed. */
-type FilesFetcher = (
+export type FilesFetcher = (
   input: { repositoryId: string; sha: string },
   options: { signal: AbortSignal },
 ) => Promise<ChangedFile[]>;
 
 /**
- * The files the commit or stash `sha` changed, which never change, as `fetch` loads them under
+ * Loads the files the commit or stash `sha` changed, which never change, with `fetch` under
  * `queryKey`. While another one's load, the previous ones stay on show rather than suspending;
- * `shownSha` says whose they are, so what's shown with them can match.
+ * they come with the SHA they're of.
+ */
+export function changedFilesQuery(
+  repositoryId: string,
+  sha: string,
+  queryKey: (repositoryId: string, sha: string) => QueryKey,
+  fetch: FilesFetcher,
+  enabled = true,
+) {
+  return {
+    queryKey: queryKey(repositoryId, sha),
+    queryFn: async ({ signal }: { signal: AbortSignal }) => ({
+      sha,
+      // A commit can change tens of thousands of files.
+      files: new Opaque(await fetch({ repositoryId, sha }, { signal })),
+    }),
+    staleTime: Infinity,
+    placeholderData: keepPreviousData,
+    enabled,
+  };
+}
+
+/**
+ * The files the commit or stash `sha` changed (see `changedFilesQuery`); `shownSha` says whose are
+ * on show, so what's shown with them can match.
  */
 export function useChangedFiles(
   repositoryId: () => string,
@@ -26,20 +50,7 @@ export function useChangedFiles(
   queryKey: (repositoryId: string, sha: string) => QueryKey,
   fetch: FilesFetcher,
 ) {
-  const query = useQuery(() => {
-    const id = repositoryId();
-    const target = sha();
-    return {
-      queryKey: queryKey(id, target),
-      queryFn: async ({ signal }: { signal: AbortSignal }) => ({
-        sha: target,
-        // A commit can change tens of thousands of files.
-        files: new Opaque(await fetch({ repositoryId: id, sha: target }, { signal })),
-      }),
-      staleTime: Infinity,
-      placeholderData: keepPreviousData,
-    };
-  });
+  const query = useQuery(() => changedFilesQuery(repositoryId(), sha(), queryKey, fetch));
 
   const files = createMemo(() => query.data?.files.value ?? []);
   const totals = createMemo(() => lineTotals(files()));
@@ -49,56 +60,13 @@ export function useChangedFiles(
   return { query, files, totals, shownSha };
 }
 
+/** Loads the files a commit changed, for `changedFilesQuery`. */
+export const fetchCommitFiles: FilesFetcher = (input, options) =>
+  rpc.git.diff.commitFiles(input, options);
+
 /** Files changed by a commit, compared to its first parent. */
 export function useCommitFiles(repositoryId: () => string, sha: () => string) {
-  return useChangedFiles(repositoryId, sha, gitKeys.commitFiles, (input, options) =>
-    rpc.git.diff.commitFiles(input, options),
-  );
-}
-
-/** The patch of one file a commit changed, compared to its first parent, with what it's of. */
-function commitFilePatchQuery(repositoryId: string, sha: string, file: ChangedFile) {
-  return {
-    queryKey: gitKeys.commitFilePatch(repositoryId, sha, file.path),
-    queryFn: async ({ signal }: { signal: AbortSignal }) => ({
-      sha,
-      file,
-      patch: await rpc.git.diff.commitFilePatch(
-        { repositoryId, sha, path: file.path, origPath: file.origPath },
-        { signal },
-      ),
-    }),
-    // It never changes.
-    staleTime: Infinity,
-  };
-}
-
-/**
- * The patch of one file a commit changed, compared to its first parent. While another file's
- * loads, the previous one's stays on show rather than suspending: it comes with the commit and
- * file it's of.
- */
-export function useCommitFilePatch(
-  repositoryId: () => string,
-  sha: () => string,
-  file: () => ChangedFile,
-  enabled: () => boolean,
-) {
-  return useQuery(() => ({
-    ...commitFilePatchQuery(repositoryId(), sha(), file()),
-    placeholderData: keepPreviousData,
-    enabled: enabled(),
-  }));
-}
-
-/** Loads the patch `useCommitFilePatch` would, ahead of it, e.g. for a file about to be opened. */
-export function fetchCommitFilePatch(
-  client: QueryClient,
-  repositoryId: string,
-  sha: string,
-  file: ChangedFile,
-) {
-  return client.fetchQuery(commitFilePatchQuery(repositoryId, sha, file));
+  return useChangedFiles(repositoryId, sha, gitKeys.commitFiles, fetchCommitFiles);
 }
 
 /** A file's contents by their object name, e.g. to show more of it around a patch's changes. */
@@ -117,13 +85,15 @@ export function fetchBlob(client: QueryClient, repositoryId: string, oid: string
 export function useWorkingTreeChanges(repositoryId: () => string) {
   const query = useUncommittedFiles(repositoryId);
 
-  // A conflict shows up on both sides, but it's resolved (and so staged) by staging it.
-  const staged = createMemo(() =>
-    (query.data?.value.staged ?? []).filter((file) => file.status !== "conflicted"),
-  );
+  const staged = createMemo(() => stagedFiles(query.data?.value.staged ?? []));
   const unstaged = createMemo(() => query.data?.value.unstaged ?? []);
   /** Whether there are too many files for their lines to have been counted. */
   const uncounted = () => query.data?.value.uncounted ?? false;
 
   return { query, staged, unstaged, uncounted };
+}
+
+/** The staged files to list: a conflict shows up on both sides, but it's resolved by staging it. */
+export function stagedFiles(staged: ChangedFile[]): ChangedFile[] {
+  return staged.filter((file) => file.status !== "conflicted");
 }
