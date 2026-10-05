@@ -1,9 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/solid-query";
+import { useNavigate } from "@tanstack/solid-router";
 import { createMemo } from "solid-js";
 
 import { rpc } from "@/lib/rpc";
 
 export const REPOSITORIES_KEY = ["repositories"] as const;
+
+/** A repository added to Gitto. */
+export type Repository = Awaited<ReturnType<typeof rpc.repository.list>>[number];
 
 /** The repositories added to Gitto (name and path), in the order they were added. */
 export function useRepositories() {
@@ -37,6 +41,19 @@ export function useAddRepository() {
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: REPOSITORIES_KEY }),
   }));
+}
+
+/** Asks for a folder, adds the repository in it (see `useAddRepository`), and opens it. */
+export function useOpenRepository() {
+  const navigate = useNavigate();
+  const addRepository = useAddRepository();
+  return () =>
+    addRepository.mutate(undefined, {
+      onSuccess: (repository) => {
+        if (repository) void navigate({ to: "/$repoId", params: { repoId: repository.id } });
+      },
+      onError: (error) => console.error("Failed to add repository", error),
+    });
 }
 
 /** Removes a repository from Gitto; the folder on disk is left untouched. */

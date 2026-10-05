@@ -14,6 +14,8 @@ export const gitKeys = {
   log: (repositoryId: string) => [...gitKeys.repository(repositoryId), "log"] as const,
   refs: (repositoryId: string) => [...gitKeys.repository(repositoryId), "refs"] as const,
   stashes: (repositoryId: string) => [...gitKeys.repository(repositoryId), "stashes"] as const,
+  /** What the home page shows of a repository, beyond its status. */
+  overview: (repositoryId: string) => [...gitKeys.repository(repositoryId), "overview"] as const,
   /** Which remote branch has a commit: refetched when the refs change, e.g. after a push. */
   pushedTo: (repositoryId: string, sha: string) =>
     [...gitKeys.repository(repositoryId), "pushed-to", sha] as const,
