@@ -24,10 +24,10 @@ export const diffRouter = os.router({
     ),
   unstagedFilePatch: os.unstagedFilePatch
     .use(withRepo)
-    .handler(({ context, input, signal }) => getUnstagedFilePatch(context.repo, input, signal)),
+    .handler(({ context, input, signal }) => getUnstagedFilePatch(context.repo, input, { signal })),
   stagedFilePatch: os.stagedFilePatch
     .use(withRepo)
-    .handler(({ context, input, signal }) => getStagedFilePatch(context.repo, input, signal)),
+    .handler(({ context, input, signal }) => getStagedFilePatch(context.repo, input, { signal })),
   blob: os.blob
     .use(withRepo)
     .handler(({ context, input, signal }) => getBlob(context.repo, input.oid, signal)),

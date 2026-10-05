@@ -40,12 +40,14 @@ import {
   useFilePatch,
   type FilePatch,
 } from "@/git/queries/file-diff";
+import { hasHunks, useStageLines } from "@/git/queries/staging";
 import { useUnsuspendedData } from "@/git/queries/unsuspended";
 import { useDelayed } from "@/hooks/delayed";
 import { useDiffStyle } from "@/hooks/diff-style";
 
 import { useFileEditing } from "./file-editing";
 import type * as ViewerModule from "./patch-viewer";
+import type { LineStaging } from "./patch-viewer";
 
 let viewerModule: Promise<typeof ViewerModule> | undefined;
 /** The viewer's module, loaded once, the first time it's needed: it brings Shiki. */
@@ -139,6 +141,9 @@ export function prefetchFileDiff(
  * history. Esc, or the back button, goes back to the history; the other files in the same list
  * are a step away. Uncommitted changes are kept up to date as they change on disk, in place; once
  * the file has none left on its side, that's said instead.
+ *
+ * An uncommitted file's lines can be staged, or unstaged, a hunk or a selection at a time (see
+ * `PatchViewer`). Once that leaves it without changes on its side, the next file in its list opens.
  */
 export function FileDiffView(props: {
   repositoryId: string;
@@ -250,6 +255,7 @@ export function FileDiffView(props: {
   const [shownPatch, setShownPatch] = createSignal<{
     key: string;
     file: ChangedFile;
+    patch: string;
     counts: LineCounts | undefined;
   }>();
   /** The file on show: the one asked for, or the last one, while its patch is on its way. */
@@ -274,6 +280,50 @@ export function FileDiffView(props: {
     shown().key === fileKey() &&
     file().status !== "deleted" &&
     !isLink(current()?.patch ?? "");
+
+  // Staging and unstaging lines.
+  const stageLines = useStageLines();
+  /** The patch lines were last staged from: none are again while it's on show and another's in. */
+  const [stagedFrom, setStagedFrom] = createSignal<string>();
+  /** Why the last lines couldn't be staged, and of which file. */
+  const [stagingError, setStagingError] = createSignal<{ key: string; message: string }>();
+  const lineStaging = (): LineStaging | undefined => {
+    const data = current();
+    if (!isUncommitted(props.source) || editing() || !showsPatch() || !data) return undefined;
+    if (stagedWhole(data.patch)) return undefined;
+    const action = props.source.kind === "staged" ? "unstage" : "stage";
+    const last = stagedFrom();
+    return {
+      action,
+      busy:
+        stageLines.isPending ||
+        (last !== undefined && shownPatch()?.patch === last && data.patch !== last),
+      onStage: async (from, picked) => {
+        const key = fileKey();
+        setStagingError(undefined);
+        let left: string;
+        try {
+          left = await stageLines.mutateAsync({
+            repositoryId: props.repositoryId,
+            action,
+            file: file(),
+            patch: from,
+            lines: picked,
+          });
+        } catch (error) {
+          setStagingError({ key, message: error instanceof Error ? error.message : String(error) });
+          throw error;
+        }
+        // The patch staged from stays on show until the one they leave is highlighted. Once there
+        // are none left on this side, on to the next file in the list, or the one before the last,
+        // as one would stage them one after the other: this one's stays on show until that one's
+        // is in.
+        setStagedFrom(from);
+        const target = hasHunks(left) ? undefined : (next() ?? previous());
+        if (target && key === fileKey()) props.onOpen(props.source, target);
+      },
+    };
+  };
 
   let section: HTMLElement | undefined;
   const onKeyDown = (event: KeyboardEvent) => {
@@ -397,6 +447,17 @@ export function FileDiffView(props: {
         </span>
       </header>
       <fileEditing.Banner />
+      <Show when={stagingError()?.key === fileKey() && stagingError()}>
+        {(error) => (
+          <p
+            role="alert"
+            class="m-0 flex shrink-0 items-center gap-1.5 border-b border-border px-3 py-1.5 text-[11.5px] text-muted"
+          >
+            <TriangleAlert size={13} class="shrink-0 text-amber" />
+            {error().message}
+          </p>
+        )}
+      </Show>
       <Show when={filesError()}>
         {(message) => (
           <p
@@ -487,6 +548,7 @@ export function FileDiffView(props: {
                               setShownPatch({
                                 key: data().key,
                                 file: data().file,
+                                patch: data().patch,
                                 counts: summaryOf(data()) ?? countsOf(data().file),
                               });
                               fileEditing.onShown();
@@ -497,6 +559,7 @@ export function FileDiffView(props: {
                             onEditFailed={fileEditing.viewer.onEditFailed}
                             onLoadingFiles={setLoadingFiles}
                             onFilesError={setFilesError}
+                            staging={lineStaging()}
                           />
                         );
                       }}
@@ -584,6 +647,16 @@ function Loading() {
       <EmptyState icon={LoaderCircle} loading title="Loading changes…" class="h-full" />
     </Show>
   );
+}
+
+/**
+ * Whether `patch`'s lines can only be staged all at once: a link's, whose contents are the path it
+ * points to, a submodule's, or a file's that changed type, which git has as two files.
+ */
+function stagedWhole(patch: string): boolean {
+  const body = patch.indexOf("\n@@ ");
+  const header = body === -1 ? patch : patch.slice(0, body);
+  return / 1[26]0000$/m.test(header) || patch.includes("\ndiff --git ");
 }
 
 /** Whether `patch` is of a symbolic link, whose contents are the path it points to. */

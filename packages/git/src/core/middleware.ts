@@ -9,10 +9,12 @@ import {
   GitError,
   HeadMovedError,
   IndexLockedError,
+  LinesNotStageableError,
   NoUpstreamError,
   NotARepositoryError,
   NotUtf8Error,
   OutsideRepositoryError,
+  PatchChangedError,
   PullInterruptedError,
   RepositoryChangedError,
   RepositoryNotFoundError,
@@ -63,6 +65,9 @@ function toApiError(error: unknown): unknown {
   if (error instanceof NotUtf8Error) {
     return new ORPCError("UNSUPPORTED_MEDIA_TYPE", { message: error.message, cause: error });
   }
+  if (error instanceof LinesNotStageableError) {
+    return new ORPCError("UNPROCESSABLE_CONTENT", { message: error.message, cause: error });
+  }
   if (error instanceof NoUpstreamError || error instanceof UnsupportedGitError) {
     return new ORPCError("PRECONDITION_FAILED", { message: error.message, cause: error });
   }
@@ -73,7 +78,8 @@ function toApiError(error: unknown): unknown {
     error instanceof PullInterruptedError ||
     error instanceof RepositoryChangedError ||
     error instanceof StashConflictError ||
-    error instanceof FileChangedOnDiskError
+    error instanceof FileChangedOnDiskError ||
+    error instanceof PatchChangedError
   ) {
     return new ORPCError("CONFLICT", { message: error.message, cause: error });
   }

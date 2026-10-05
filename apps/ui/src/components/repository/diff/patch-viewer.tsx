@@ -1,4 +1,5 @@
 // The diff viewer, from @pierre/diffs. Loaded on its own (see `FileDiffView`), as it brings Shiki.
+import type { LineSelection } from "@gitto/git/types";
 import {
   getSharedHighlighter,
   hydratePartialDiff,
@@ -11,16 +12,30 @@ import {
   type FileDiffOptions,
   type HunkExpansionRegion,
   type PostRenderPhase,
+  type SelectedLineRange,
 } from "@pierre/diffs";
 import type * as EditModule from "@pierre/diffs/edit";
 import type { Editor } from "@pierre/diffs/edit";
 import { getOrCreateWorkerPoolSingleton, type WorkerPoolManager } from "@pierre/diffs/worker";
-import { createEffect, createMemo, on, onCleanup, untrack } from "solid-js";
+import { cn } from "cn";
+import { createEffect, createMemo, createSignal, on, onCleanup, untrack } from "solid-js";
 
+import { Kbd } from "@/components/ui/kbd";
 import { useConnected } from "@/components/ui/virtual-list";
 import type { DiffStyle } from "@/hooks/diff-style";
 import { useTheme } from "@/hooks/theme";
 
+import {
+  changedLines,
+  changedRows,
+  hunkButtons,
+  rangeOf,
+  selectedLines,
+  toSelection,
+  type ChangedLine,
+  type HunkButton,
+  type RowOf,
+} from "./line-staging";
 import {
   carriedExpansion,
   fitToLines,
@@ -31,6 +46,18 @@ import {
 
 /** One side of a file, read in full: with its version if it's the working tree's. */
 export type LoadedFile = string | { contents: string; version: string };
+
+/** Staging or unstaging lines of the patch on show, which can then be picked (see `PatchViewer`). */
+export interface LineStaging {
+  action: "stage" | "unstage";
+  /** Lines are being staged: no others are until the patch that leaves is on show. */
+  busy: boolean;
+  /**
+   * Stages `lines` of `patch`, the patch on show they were picked from; resolves once they're
+   * staged, and rejects if they couldn't be.
+   */
+  onStage: (patch: string, lines: LineSelection) => Promise<void>;
+}
 
 /** Editing the file on show: what it started from, and what can be done with it meanwhile. */
 export interface EditSession {
@@ -126,6 +153,11 @@ const EXPAND_HIGHLIGHT_WAIT_MS = 1500;
  * uncommitted changes get whenever it's saved, takes the place of the last where it's scrolled to,
  * with the same lines shown around its changes. What it says of loading the whole file is of the
  * patch on show.
+ *
+ * With `staging`, the lines of an uncommitted file's patch can be picked to stage or unstage: by
+ * selecting them, with the mouse or with the arrow keys (Shift to extend), or a hunk at a time,
+ * with its button or `[` and `]`. Space stages the selected ones, Esc clears the selection. Once
+ * the keyboard staged some, the selection moves to the change that's in their place.
  */
 export default function PatchViewer(props: {
   patch: string;
@@ -151,6 +183,8 @@ export default function PatchViewer(props: {
   onEdit?: (text: string) => void;
   /** Why editing couldn't start, e.g. as the file changed again meanwhile. */
   onEditFailed?: (message: string) => void;
+  /** Stages or unstages lines picked in the patch on show; not while it's edited. */
+  staging?: LineStaging;
   /** The last patch given is on show. */
   onShown: () => void;
   /** Whether the whole file is being loaded, to show more of it. */
@@ -160,7 +194,11 @@ export default function PatchViewer(props: {
 }) {
   const { theme } = useTheme();
   const next = createMemo(
-    () => ({ diff: parsed(props.patch, props.cacheKey), fileKey: props.fileKey }),
+    () => ({
+      diff: parsed(props.patch, props.cacheKey),
+      fileKey: props.fileKey,
+      patch: props.patch,
+    }),
     undefined,
     { equals: (a, b) => a.diff === b.diff && a.fileKey === b.fileKey },
   );
@@ -174,8 +212,12 @@ export default function PatchViewer(props: {
   const loads = new Map<FileDiffMetadata, number>();
   /** Why the whole file couldn't be loaded, by the diff it's of: it's no use trying again. */
   const failures = new Map<FileDiffMetadata, string>();
+  /** What picking lines to stage adds to the options, once the viewer's set up (see `setUp`). */
+  let picking: (() => FileDiffOptions<HunkButton, undefined>) | undefined;
+  /** Whether lines can be picked to stage: only of a patch that isn't being edited. */
+  const pickable = () => props.staging !== undefined && !props.editing;
 
-  const options = (diffStyle: DiffStyle): FileDiffOptions<undefined, undefined> => ({
+  const options = (diffStyle: DiffStyle): FileDiffOptions<HunkButton, undefined> => ({
     theme: THEMES,
     themeType: theme(),
     diffStyle,
@@ -205,6 +247,7 @@ export default function PatchViewer(props: {
         report();
       }
     },
+    ...picking?.(),
   });
 
   /** Says how loading the whole file on show is going. */
@@ -229,6 +272,123 @@ export default function PatchViewer(props: {
   });
 
   function setUp(root: HTMLDivElement, wrapper: HTMLDivElement) {
+    // Picking lines to stage, in the patch on show.
+    /** The changed lines of the diff on show, and the rows selected, if any. */
+    let lines: ChangedLine[] = [];
+    let selection: SelectedLineRange | null = null;
+    /** The changed lines selected. */
+    const [picked, setPicked] = createSignal<ChangedLine[]>([]);
+    /** Whether the selection is of whole hunks, gone through with `[` and `]`, not by line. */
+    let byHunk = false;
+    /**
+     * Whether the diff on show is the patch's, which lines are picked from: not while it's edited,
+     * nor the edits left on show after, until the next patch is.
+     */
+    let live = false;
+    /**
+     * Where the keyboard staged lines from, by the line numbers of the side the patch leaves as it
+     * is (the working tree's, staging; HEAD's, unstaging): the change found there in the next patch
+     * on show is selected (see `show`), or its hunk, if they were picked a hunk at a time; if they
+     * couldn't be staged, the same lines are, in the patch refetched.
+     */
+    let stagedAt: { side: "old" | "new"; position: number; hunks: boolean } | undefined;
+    /** The row a line is on in the diff on show, unified or side by side. */
+    const rowOf: RowOf = (lineNumber, side) =>
+      diffs.getLineIndex(lineNumber, side)?.[props.diffStyle === "split" ? 1 : 0];
+
+    const select = (range: SelectedLineRange | null) => {
+      selection = range;
+      byHunk = false;
+      setPicked(range ? selectedLines(lines, range, rowOf) : []);
+    };
+
+    /** Selects the changes of `line`'s hunk, to go through them a hunk at a time. */
+    const selectHunk = (line: ChangedLine) => {
+      const hunk = changedRows(lines, rowOf).filter((row) => row.line.hunk === line.hunk);
+      diffs.setSelectedLines(rangeOf(hunk[0]!.line, hunk.at(-1)!.line));
+      byHunk = true;
+      return hunk;
+    };
+
+    /**
+     * Whether the patch on show is the one lines are picked from: not one being edited, nor the
+     * last file's, while the next one's is on its way, which `staging` isn't of.
+     */
+    const current = () => live && shownPatch?.fileKey === props.fileKey;
+
+    /** Stages `changed`, of the patch on show, if lines can be staged now. */
+    const stage = async (changed: ChangedLine[], byKeyboard: boolean) => {
+      const staging = props.staging;
+      if (!staging || staging.busy || !current() || changed.length === 0) return;
+      const side: "new" | "old" = staging.action === "stage" ? "new" : "old";
+      const at = byKeyboard
+        ? { side, position: Math.min(...changed.map((line) => line[side])), hunks: byHunk }
+        : undefined;
+      stagedAt = at;
+      try {
+        await staging.onStage(shownPatch!.patch, toSelection(changed));
+      } catch {
+        // Not staged, e.g. as the file changed since: the patch refetched is selected in the same
+        // place, if another is on its way, and the selection stays where it is otherwise.
+        if (stagedAt === at && next() === shownPatch) stagedAt = undefined;
+      }
+    };
+
+    /** The button that stages the lines selected, next to the last of them. */
+    const stageSelected = (
+      <button
+        type="button"
+        class={cn(
+          "absolute top-0 left-[calc(100%+var(--diffs-column-content-width,0px))] z-10 flex h-full -translate-x-[calc(100%+8px)] cursor-pointer items-center gap-1.5 rounded-md border border-[color-mix(in_srgb,var(--primary)_45%,var(--border))] bg-panel-raised px-2 font-sans text-[11.5px] font-[600] whitespace-nowrap text-text shadow-[0_2px_8px_rgba(0,0,0,.18)] hover:bg-panel-hover focus-ring group-data-busy:cursor-default group-data-busy:opacity-50",
+          picked().length === 0 && "hidden",
+        )}
+        // Not a click on the line it's on, which would select that line alone: heard on the button
+        // itself, before the library does in the diff, rather than delegated to the document.
+        on:pointerdown={(event) => event.stopPropagation()}
+        onClick={() => void stage(picked(), false)}
+      >
+        {props.staging?.action === "unstage" ? "Unstage lines" : "Stage lines"}
+        <Kbd class="px-1 py-0 text-[10.5px]">Space</Kbd>
+      </button>
+    ) as HTMLElement;
+
+    /** A hunk's button, above its first change. */
+    const hunkButton = (hunk: number) => {
+      const label = props.staging?.action === "unstage" ? "Unstage hunk" : "Stage hunk";
+      return (
+        <div class="flex justify-end px-2 py-0.5 font-sans">
+          <button
+            type="button"
+            class="cursor-pointer rounded-md border border-border bg-panel-raised px-2 py-px text-[11px] font-[600] text-text-soft hover:bg-panel-hover hover:text-text focus-ring group-data-busy:cursor-default group-data-busy:opacity-50"
+            on:pointerdown={(event) => event.stopPropagation()}
+            onClick={() =>
+              void stage(
+                lines.filter((line) => line.hunk === hunk),
+                false,
+              )
+            }
+          >
+            {label}
+          </button>
+        </div>
+      ) as HTMLElement;
+    };
+
+    picking = () => {
+      const can = pickable();
+      return {
+        enableLineSelection: can,
+        enableGutterUtility: can,
+        renderGutterUtility: () => stageSelected,
+        // Clicking a line gives the view the keyboard, to go on from there.
+        onLineSelectionStart: () => root.focus({ preventScroll: true }),
+        onLineSelected: select,
+        renderAnnotation: ({ metadata }) => (metadata ? hunkButton(metadata.hunk) : undefined),
+      };
+    };
+    /** The hunks' buttons for `diff`, if lines can be picked from it. */
+    const buttons = (diff: FileDiffMetadata) => (pickable() ? hunkButtons(diff) : []);
+
     const virtualizer = new Virtualizer();
     virtualizer.setup(root, wrapper);
     const diffs = new ViewerFileDiff(
@@ -240,7 +400,7 @@ export default function PatchViewer(props: {
     instance = diffs;
     let disposed = false;
     /** The editor while editing, how to finish it, and the patch on show (to know when another is). */
-    let editor: Editor<"file-diff"> | undefined;
+    let editor: Editor<"file-diff", HunkButton> | undefined;
     let finishEditing: (() => void) | undefined;
     let editing = false;
     /** The whole file's diff the edits started from. */
@@ -259,7 +419,7 @@ export default function PatchViewer(props: {
       virtualizer.cleanUp();
     });
 
-    const show = async (patch: { diff: FileDiffMetadata; fileKey: string }) => {
+    const show = async (patch: ReturnType<typeof next>) => {
       // Held while editing: the editor would take it for its text.
       if (editing) return;
       const sameFile = shown !== undefined && shownFileKey === patch.fileKey;
@@ -278,10 +438,38 @@ export default function PatchViewer(props: {
       shown = diff;
       shownFileKey = patch.fileKey;
       shownPatch = patch;
+      live = true;
+      // The lines selected are of the last patch: their numbers may be others' in this one.
+      diffs.setSelectedLines(null);
+      // A hunk's button that had the focus goes with its patch: the view keeps it.
+      const focused = root.contains(document.activeElement);
       diffs.setOptions(options(props.diffStyle));
-      diffs.render({ fileDiff: diff, containerWrapper: wrapper });
+      diffs.render({ fileDiff: diff, containerWrapper: wrapper, lineAnnotations: buttons(diff) });
+      if (focused && !root.contains(document.activeElement)) root.focus({ preventScroll: true });
+      lines = changedLines(diff);
+      reselect(sameFile);
       report();
       props.onShown();
+    };
+
+    /**
+     * Selects the change in place of the lines the keyboard staged, in the patch they left, so the
+     * next is a key away: the first one after where they were, on the side that didn't change, or
+     * its hunk if they were picked a hunk at a time. In another file (the next one, once the last
+     * lines were staged), its first change, or hunk.
+     */
+    const reselect = (sameFile: boolean) => {
+      const at = stagedAt;
+      stagedAt = undefined;
+      if (!at || !pickable()) return;
+      const rows = changedRows(lines, rowOf);
+      const target = sameFile
+        ? (rows.find(({ line }) => line[at.side] >= at.position) ?? rows.at(-1))
+        : rows[0];
+      if (!target) return;
+      if (at.hunks) selectHunk(target.line);
+      else diffs.setSelectedLines(rangeOf(target.line));
+      reveal(target.line);
     };
 
     /**
@@ -308,6 +496,7 @@ export default function PatchViewer(props: {
       const from = shown;
       if (!from || editing) return;
       editing = true;
+      live = false;
       try {
         const [whole, { Editor }] = await Promise.all([
           wholeFile(from).then(async (file) => {
@@ -326,7 +515,7 @@ export default function PatchViewer(props: {
         // Without an `editStateKey`, which would keep the undo history for when the file's edited
         // again: picking it up has the library highlight the whole file again on the main thread
         // (1.6s for 2,500 lines, the window frozen), rather than start from the workers'.
-        const opened = new Editor<"file-diff">("file-diff", {});
+        const opened = new Editor<"file-diff", HunkButton>("file-diff", {});
         editor = opened;
         finishEditing = opened.edit(diffs);
         opened.focus();
@@ -381,7 +570,7 @@ export default function PatchViewer(props: {
     };
 
     /** The edits as `opened` has them, in a whole file's diff, highlighted. */
-    const editedDiff = async (opened: Editor<"file-diff">) => {
+    const editedDiff = async (opened: Editor<"file-diff", HunkButton>) => {
       const from = editedFrom!;
       const oldFile =
         from.type === "new"
@@ -436,13 +625,140 @@ export default function PatchViewer(props: {
     );
     createEffect(on(next, (patch) => void show(patch)));
     createEffect(on(() => props.diffStyle, rerender, { defer: true }));
+    // Lines can be picked, or no longer (as editing starts, say): the hunks' buttons, and selecting
+    // lines, come and go with that, on the patch on show.
+    createEffect(
+      on(
+        pickable,
+        (can) => {
+          // Another file's patch is on its way, with the buttons it has.
+          if (!shown || !current()) return;
+          if (!can) diffs.setSelectedLines(null);
+          diffs.setLineAnnotations(buttons(shown));
+          rerender();
+        },
+        { defer: true },
+      ),
+    );
+
+    /** Scrolls the view, if it has to, to show `line`'s row. */
+    const reveal = (line: ChangedLine) => {
+      const position = diffs.getLinePosition(line.lineNumber, line.side);
+      if (!position) return;
+      const top = position.top + (diffs.top ?? 0);
+      // A few rows around it stay in sight, as when moving through a list.
+      const margin = position.height * 3;
+      if (top - margin < root.scrollTop) root.scrollTop = Math.max(0, top - margin);
+      else if (top + position.height + margin > root.scrollTop + root.clientHeight) {
+        root.scrollTop = top + position.height + margin - root.clientHeight;
+      }
+    };
+
+    /** The first changed row from the top of the view, or the last one above its bottom. */
+    const inView = (down: boolean) => {
+      const rows = changedRows(lines, rowOf);
+      const topOf = ({ line }: (typeof rows)[number]) =>
+        (diffs.getLinePosition(line.lineNumber, line.side)?.top ?? 0) + (diffs.top ?? 0);
+      return down
+        ? (rows.find((row) => topOf(row) >= root.scrollTop) ?? rows.at(-1))
+        : (rows.findLast((row) => topOf(row) < root.scrollTop + root.clientHeight) ?? rows[0]);
+    };
+
+    /** The rows the selection spans, top and bottom, and the one it was extended to. */
+    const selectedRows = (range: SelectedLineRange) => {
+      const start = rowOf(range.start, range.side ?? "additions") ?? 0;
+      const end = rowOf(range.end, range.endSide ?? range.side ?? "additions") ?? 0;
+      return { top: Math.min(start, end), bottom: Math.max(start, end), end };
+    };
+
+    /**
+     * Selects the next changed row down or up from the selection, or extends the selection to it;
+     * without a selection, the first one in view.
+     */
+    const move = (down: boolean, extend: boolean) => {
+      const rows = changedRows(lines, rowOf);
+      let target: (typeof rows)[number] | undefined;
+      if (!selection) target = inView(down);
+      else {
+        const { top, bottom, end } = selectedRows(selection);
+        const from = extend ? end : down ? bottom : top;
+        target = down ? rows.find(({ row }) => row > from) : rows.findLast(({ row }) => row < from);
+      }
+      if (!target) return;
+      diffs.setSelectedLines(
+        extend && selection
+          ? { ...selection, end: target.line.lineNumber, endSide: target.line.side }
+          : rangeOf(target.line),
+      );
+      reveal(target.line);
+    };
+
+    /** Selects the next hunk's changes down or up from the selection, or the first one in view. */
+    const moveToHunk = (down: boolean) => {
+      const rows = changedRows(lines, rowOf);
+      let target: ChangedLine | undefined;
+      if (!selection) target = inView(down)?.line;
+      else {
+        const { top, bottom } = selectedRows(selection);
+        // The first row of each hunk, down from the selection, or up from its top.
+        const firsts = rows.filter(
+          ({ line }, i) => i === 0 || rows[i - 1]!.line.hunk !== line.hunk,
+        );
+        target = (
+          down ? firsts.find(({ row }) => row > bottom) : firsts.findLast(({ row }) => row < top)
+        )?.line;
+      }
+      if (!target) return;
+      const hunk = selectHunk(target);
+      reveal(hunk.at(-1)!.line);
+      reveal(hunk[0]!.line);
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!pickable() || !current() || event.defaultPrevented) return;
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
+      // A button's own keys: a hunk's, or the one to stage the lines selected.
+      if (event.target instanceof HTMLButtonElement) return;
+      switch (event.key) {
+        case "ArrowDown":
+        case "ArrowUp":
+          move(event.key === "ArrowDown", event.shiftKey);
+          break;
+        case "]":
+        case "[":
+          moveToHunk(event.key === "]");
+          break;
+        case " ":
+          // Without lines selected, Space scrolls, as it does elsewhere.
+          if (picked().length === 0) return;
+          void stage(picked(), true);
+          break;
+        case "Escape":
+          // Without a selection, Esc goes on to close the changes.
+          if (!selection) return;
+          diffs.setSelectedLines(null);
+          break;
+        default:
+          return;
+      }
+      event.preventDefault();
+    };
+    root.addEventListener("keydown", onKeyDown);
+    onCleanup(() => root.removeEventListener("keydown", onKeyDown));
     createEffect(on(theme, (type) => diffs.setThemeType(type), { defer: true }));
   }
 
   return (
     <div
       ref={(el) => (scroller = el)}
-      class="h-full min-h-0 overflow-auto bg-bg [--diffs-font-size:12px] [--diffs-line-height:20px]"
+      // Focusable, to scroll it with the keyboard, and pick lines to stage with it.
+      tabIndex={0}
+      aria-label="Changed lines"
+      aria-keyshortcuts={
+        pickable() ? "ArrowUp ArrowDown Shift+ArrowUp Shift+ArrowDown [ ] Space" : undefined
+      }
+      data-busy={props.staging?.busy || undefined}
+      class="group h-full min-h-0 overflow-auto bg-bg outline-none [--diffs-font-size:12px] [--diffs-line-height:20px] focus-visible:shadow-[inset_0_0_0_1px_var(--primary)]"
     >
       {/* Never empty: before its first render, a diff without height at the top of the view is
           taken by the virtualizer for one above it, and kept in place by its bottom edge, which
@@ -453,7 +769,7 @@ export default function PatchViewer(props: {
 }
 
 /** The library's virtualized diff, with some of what it keeps to itself in reach. */
-class ViewerFileDiff extends VirtualizedFileDiff<undefined, undefined> {
+class ViewerFileDiff extends VirtualizedFileDiff<HunkButton, undefined> {
   /**
    * The lines shown around each hunk: they're kept by hunk across diffs, so another file's would
    * show the last one's (see `show`).

@@ -54,7 +54,7 @@ export function getCommitFilePatch(
       "--",
       ...filePaths(file),
     ],
-    signal,
+    { signal },
   );
 }
 
@@ -67,13 +67,13 @@ export function getCommitFilePatch(
 export function getUnstagedFilePatch(
   repo: Repo,
   file: { path: string; origPath: string | null; untracked: boolean },
-  signal?: AbortSignal,
+  options?: PatchOptions,
 ): Promise<string> {
-  if (file.untracked) return getUntrackedFilePatch(repo, file.path, signal);
+  if (file.untracked) return getUntrackedFilePatch(repo, file.path, options);
   return readPatch(
     repo.read,
     ["diff-files", "-p", "-M", "--full-index", "--", ...filePaths(file)],
-    signal,
+    options,
   );
 }
 
@@ -85,12 +85,12 @@ export function getUnstagedFilePatch(
 async function getUntrackedFilePatch(
   repo: Repo,
   path: string,
-  signal?: AbortSignal,
+  options?: PatchOptions,
 ): Promise<string> {
   await checkWorkingTreePath(repo, path);
   const args = ["diff", "--no-index", "--full-index", ...PORCELAIN_DIFF, "--", "/dev/null", path];
   try {
-    return await readPatch(repo.read, args, signal);
+    return await readPatch(repo.read, args, options);
   } catch (error) {
     // Exits with 1 when the files differ, which they always do, but also when it can't read one,
     // like a folder: the patch tells them apart.
@@ -107,13 +107,13 @@ async function getUntrackedFilePatch(
 export async function getStagedFilePatch(
   repo: Repo,
   file: { path: string; origPath: string | null },
-  signal?: AbortSignal,
+  options?: PatchOptions,
 ): Promise<string> {
   const diff = (base: string) =>
     readPatch(
       repo.read,
       ["diff-index", "-p", "--cached", "-M", "--full-index", base, "--", ...filePaths(file)],
-      signal,
+      options,
     );
   try {
     return await diff("HEAD");
@@ -141,10 +141,25 @@ function filePaths(file: { path: string; origPath: string | null }): string[] {
  */
 export const MAX_PATCH_BYTES = 10 * 1024 * 1024;
 
+/** How a file's patch is read. */
+export interface PatchOptions {
+  signal?: AbortSignal;
+  /**
+   * As bytes, one per character (see `RunOptions.binary`), rather than as UTF-8: to hand a patch
+   * of a file that isn't UTF-8 back to git as it came.
+   */
+  binary?: boolean;
+}
+
 /** Runs a diff command for one file's patch, through `run`; stopped past `MAX_PATCH_BYTES`. */
-export function readPatch(run: GitCommand, args: string[], signal?: AbortSignal): Promise<string> {
+export function readPatch(
+  run: GitCommand,
+  args: string[],
+  { signal, binary }: PatchOptions = {},
+): Promise<string> {
   return run(args, {
     signal,
+    binary,
     maxOutput: { bytes: MAX_PATCH_BYTES, error: () => new ChangesTooLargeError(MAX_PATCH_BYTES) },
   });
 }
