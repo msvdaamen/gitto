@@ -1,10 +1,7 @@
 import type { Ref } from "@gitto/git/types";
 import Archive from "lucide-solid/icons/archive";
 import Cloud from "lucide-solid/icons/cloud";
-import File from "lucide-solid/icons/file";
-import Folder from "lucide-solid/icons/folder";
 import GitBranch from "lucide-solid/icons/git-branch";
-import GitMerge from "lucide-solid/icons/git-merge";
 import Inbox from "lucide-solid/icons/inbox";
 import Tag from "lucide-solid/icons/tag";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
@@ -15,7 +12,6 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { useSwitchBranch } from "@/git/queries/branch";
 import { useRefs } from "@/git/queries/refs";
 import { useStashes } from "@/git/queries/stash";
-import { useStatus } from "@/git/queries/status";
 import { buildRefTree, flattenRefTree } from "@/git/ref-tree";
 import type { RefFolder, RefLeaf, RefTreeRow } from "@/git/ref-tree";
 import { useCollapsed } from "@/hooks/collapsed";
@@ -26,19 +22,12 @@ import { CreateBranchDialog } from "./create-branch-dialog";
 import { SidebarFolder, SidebarRow } from "./sidebar-row";
 import { SidebarSection } from "./sidebar-section";
 
-// Placeholders until pull requests are loaded from the repository.
-const PULL_REQUESTS = [
-  { label: "#24 Polish desktop shell", meta: "open" },
-  { label: "#18 Theme tokens", meta: "merged" },
-];
-
 /**
- * The sidebar's sections: the working directory, branches, remotes, pull requests, tags, stashes.
+ * The sidebar's sections: branches, remotes, tags, stashes.
  * Double-clicking a branch switches to it; for a remote one, to the local branch tracking it.
  * Right-clicking one opens a menu of what can be done with it, like creating a branch from it.
  */
 export function RefList(props: { repositoryId: string }) {
-  const status = useStatus(() => props.repositoryId);
   const refs = useRefs(() => props.repositoryId);
   const stashes = useStashes(() => props.repositoryId);
   const switchBranch = useSwitchBranch(() => props.repositoryId);
@@ -158,24 +147,6 @@ export function RefList(props: { repositoryId: string }) {
         onCreateBranch={setBranchFrom}
       >
         <SidebarSection
-          title="Workspace"
-          scrollId="sidebar-workspace"
-          icon={Folder}
-          count={1}
-          {...collapsible("workspace")}
-          items={["working-directory"]}
-        >
-          {() => (
-            <SidebarRow
-              icon={File}
-              label="Working directory"
-              active
-              count={status.data?.counts.files ?? 0}
-              tone="amber"
-            />
-          )}
-        </SidebarSection>
-        <SidebarSection
           title="Local branches"
           scrollId="sidebar-local-branches"
           icon={GitBranch}
@@ -194,16 +165,6 @@ export function RefList(props: { repositoryId: string }) {
           items={remoteRows()}
         >
           {(row) => treeRow(row, branchRow)}
-        </SidebarSection>
-        <SidebarSection
-          title="Pull requests"
-          scrollId="sidebar-pull-requests"
-          icon={GitMerge}
-          count={PULL_REQUESTS.length}
-          {...collapsible("pullRequests")}
-          items={PULL_REQUESTS}
-        >
-          {(pr) => <SidebarRow icon={GitMerge} label={pr().label} meta={pr().meta} />}
         </SidebarSection>
         <SidebarSection
           title="Tags"

@@ -2,6 +2,8 @@
 
 Electron desktop app with a SolidJS + TanStack Router UI.
 
+To install it on Windows, macOS or Arch Linux, see [Installing Gitto](docs/install.md).
+
 ## Structure
 
 ```
@@ -37,7 +39,7 @@ history URLs.
 Linux (`.pkg.tar.zst`, made by `apps/electron/arch/PKGBUILD`) and publishes it to GitHub Releases.
 The version comes from git tags; `package.json`'s stays at `0.0.0` and is set at build time.
 
-Install the Arch package with `sudo pacman -U gitto-*.pkg.tar.zst`.
+How to install each build is in [Installing Gitto](docs/install.md).
 
 - Every merge to `main` updates the **Gitto Nightly** pre-release. Its version follows the highest `v*`
   tag: `1.2.4-nightly.20261005134259` after `v1.2.3` (when it was built, in UTC), and
