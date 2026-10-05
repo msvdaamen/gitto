@@ -49,6 +49,29 @@ describe("opening a file", () => {
     vi.restoreAllMocks();
   });
 
+  it("loads a file's changes ahead once the pointer rests on it", async () => {
+    const onPrefetch = vi.fn();
+    const scroller = document.createElement("div");
+    render(() => (
+      <ChangedFileList
+        files={[...FILES]}
+        scrollElement={scroller}
+        onOpen={() => {}}
+        onPrefetch={onPrefetch}
+      />
+    ));
+    const row = await screen.findByRole("button", { name: "Show changes in image.png" });
+
+    // Passed over on the way somewhere else: nothing's loaded.
+    await userEvent.hover(row);
+    await userEvent.unhover(row);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(onPrefetch).not.toHaveBeenCalled();
+
+    await userEvent.hover(row);
+    await vi.waitFor(() => expect(onPrefetch).toHaveBeenCalledWith(FILES[0]));
+  });
+
   it("shows its changes when it's clicked, and marks the one on show", async () => {
     const onOpen = vi.fn();
     const scroller = document.createElement("div");

@@ -56,10 +56,27 @@ export function useCommitFiles(repositoryId: () => string, sha: () => string) {
   );
 }
 
+/** The patch of one file a commit changed, compared to its first parent, with what it's of. */
+function commitFilePatchQuery(repositoryId: string, sha: string, file: ChangedFile) {
+  return {
+    queryKey: gitKeys.commitFilePatch(repositoryId, sha, file.path),
+    queryFn: async ({ signal }: { signal: AbortSignal }) => ({
+      sha,
+      file,
+      patch: await rpc.git.diff.commitFilePatch(
+        { repositoryId, sha, path: file.path, origPath: file.origPath },
+        { signal },
+      ),
+    }),
+    // It never changes.
+    staleTime: Infinity,
+  };
+}
+
 /**
- * The patch of one file a commit changed, compared to its first parent; it never changes. While
- * another file's loads, the previous one's stays on show rather than suspending: it comes with the
- * commit and file it's of.
+ * The patch of one file a commit changed, compared to its first parent. While another file's
+ * loads, the previous one's stays on show rather than suspending: it comes with the commit and
+ * file it's of.
  */
 export function useCommitFilePatch(
   repositoryId: () => string,
@@ -67,25 +84,21 @@ export function useCommitFilePatch(
   file: () => ChangedFile,
   enabled: () => boolean,
 ) {
-  return useQuery(() => {
-    const id = repositoryId();
-    const target = sha();
-    const changed = file();
-    return {
-      queryKey: gitKeys.commitFilePatch(id, target, changed.path),
-      queryFn: async ({ signal }: { signal: AbortSignal }) => ({
-        sha: target,
-        file: changed,
-        patch: await rpc.git.diff.commitFilePatch(
-          { repositoryId: id, sha: target, path: changed.path, origPath: changed.origPath },
-          { signal },
-        ),
-      }),
-      staleTime: Infinity,
-      placeholderData: keepPreviousData,
-      enabled: enabled(),
-    };
-  });
+  return useQuery(() => ({
+    ...commitFilePatchQuery(repositoryId(), sha(), file()),
+    placeholderData: keepPreviousData,
+    enabled: enabled(),
+  }));
+}
+
+/** Loads the patch `useCommitFilePatch` would, ahead of it, e.g. for a file about to be opened. */
+export function fetchCommitFilePatch(
+  client: QueryClient,
+  repositoryId: string,
+  sha: string,
+  file: ChangedFile,
+) {
+  return client.fetchQuery(commitFilePatchQuery(repositoryId, sha, file));
 }
 
 /** A file's contents by their object name, e.g. to show more of it around a patch's changes. */

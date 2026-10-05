@@ -1,5 +1,5 @@
 import type { ChangedFile } from "@gitto/git/types";
-import { useQueryClient } from "@tanstack/solid-query";
+import { useQueryClient, type QueryClient } from "@tanstack/solid-query";
 import ArrowLeft from "lucide-solid/icons/arrow-left";
 import ChevronDown from "lucide-solid/icons/chevron-down";
 import ChevronUp from "lucide-solid/icons/chevron-up";
@@ -28,17 +28,57 @@ import { FileStatusBadge } from "@/components/repository/details/changed-file-li
 import { Button, IconButton } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LineStats } from "@/components/ui/line-stats";
-import { fetchBlob, useCommitFilePatch, useCommitFiles } from "@/git/queries/diff";
+import {
+  fetchBlob,
+  fetchCommitFilePatch,
+  useCommitFilePatch,
+  useCommitFiles,
+} from "@/git/queries/diff";
 import { useDelayed } from "@/hooks/delayed";
 import { useDiffStyle } from "@/hooks/diff-style";
 
-const PatchViewer = lazy(() => import("./patch-viewer"));
+import type * as ViewerModule from "./patch-viewer";
+
+let viewerModule: Promise<typeof ViewerModule> | undefined;
+/** The viewer's module, loaded once, the first time it's needed: it brings Shiki. */
+const loadViewer = () => (viewerModule ??= import("./patch-viewer"));
+const PatchViewer = lazy(loadViewer);
 
 /**
  * Changed lines above which a file's changes are only shown when asked: reading and parsing them
  * takes a noticeable moment, and such a change is rarely read line by line (a lockfile, say).
  */
 const LARGE_DIFF_LINES = 20_000;
+
+/**
+ * Changed lines above which a file's changes aren't loaded ahead (see `prefetchFileDiff`): parsing
+ * them on the main thread starts to take a while, for a file that may not be opened after all.
+ */
+const PREFETCH_DIFF_LINES = 5_000;
+
+/** Names a file's patch in the highlighting cache, by its commit and path. */
+const patchCacheKey = (sha: string, path: string) => `${sha}:${path}`;
+
+/**
+ * Loads and highlights a file's changes ahead of opening them, e.g. when it's pointed at, so they
+ * show at once; the first time, that starts the viewer too. Not for one that's binary, or large.
+ */
+export function prefetchFileDiff(
+  client: QueryClient,
+  repositoryId: string,
+  sha: string,
+  file: ChangedFile,
+): void {
+  if (file.additions === null) return;
+  const lines = file.additions + (file.deletions ?? 0);
+  if (lines === 0 || lines > PREFETCH_DIFF_LINES) return;
+  void Promise.all([fetchCommitFilePatch(client, repositoryId, sha, file), loadViewer()])
+    .then(([data, viewer]) =>
+      viewer.preparePatch(data.patch, patchCacheKey(data.sha, data.file.path)),
+    )
+    // Only ahead of time: opening it says what went wrong.
+    .catch(() => undefined);
+}
 
 /**
  * The changes in one of a commit's files, in place of the history. Esc, or the back button, goes
@@ -108,6 +148,17 @@ export function FileDiffView(props: {
       opener.focus({ preventScroll: true });
     }
   });
+
+  // The files a step away are loaded ahead once this one's on show, so stepping to them shows them
+  // at once.
+  createEffect(
+    on(shownPatchFile, (file) => {
+      if (!file) return;
+      for (const near of [previous(), next()]) {
+        if (near) prefetchFileDiff(queryClient, props.repositoryId, props.sha, near);
+      }
+    }),
+  );
 
   const name = () => shown().path.slice(shown().path.lastIndexOf("/") + 1);
   const folder = () => shown().path.slice(0, shown().path.lastIndexOf("/") + 1);
@@ -247,7 +298,7 @@ export function FileDiffView(props: {
                         return (
                           <PatchViewer
                             patch={data().patch}
-                            cacheKey={`${data().sha}:${data().file.path}`}
+                            cacheKey={patchCacheKey(data().sha, data().file.path)}
                             diffStyle={diffStyle()}
                             loadFile={(oid) => fetchBlob(queryClient, props.repositoryId, oid)}
                             onShown={() => setShownPatchFile(data().file)}
