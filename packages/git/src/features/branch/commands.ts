@@ -3,22 +3,48 @@ import { join } from "node:path";
 
 import { ChangesStashedError, GitError } from "../../core/errors";
 import { currentBranch, resolveRef, type GitCommand, type Repo } from "../../core/repo";
+import type { RunOptions } from "../../core/runner";
 import { parseRefName } from "../refs/parse";
 import type { RefKind } from "../refs/schema";
 import { popNewest, stashChanges } from "../stash/commands";
 
 /**
- * Creates the branch `name` at HEAD and switches to it. HEAD stays on the same commit, so every
- * uncommitted change, staged or not, comes along to the new branch as it is. It doesn't track the
- * branch it was made from, so pulling it doesn't pull that one's commits into it. Git refuses a
- * name that's taken or not a valid branch name, and to switch in the middle of a merge or rebase,
- * saying so.
+ * Creates the branch `name` and switches to it: at HEAD, or at the branch `from` (a full ref name),
+ * which must be there.
+ * At HEAD, it stays on the same commit, so every uncommitted change, staged or not, comes along to
+ * the new branch as it is; from a branch, they come along as when switching to it (see
+ * `switchBranch`), through the stash if need be. It doesn't track the branch it was made from, so
+ * pulling it doesn't pull that one's commits into it. Git refuses a name that's taken or not a valid
+ * branch name, and to switch in the middle of a merge or rebase, saying so.
  */
-export async function createBranch(repo: Repo, name: string): Promise<void> {
+export async function createBranch(repo: Repo, name: string, from?: string): Promise<void> {
+  const args = ["switch", "--no-track", "--create", name];
   // Without the hint pointing to `git help check-ref-format` after an invalid name.
-  await repo.write(["switch", "--no-track", "--create", name], {
-    config: ["advice.refSyntax=false"],
+  const options = { config: ["advice.refSyntax=false"] };
+  if (from === undefined) {
+    await repo.write(args, options);
+    return;
+  }
+  const target = parseRefName(from);
+  if (!target || target.kind === "tag") throw new Error(`${from} isn't a branch.`);
+  // One write, so nothing else changes the branches, the stashes or the working tree halfway.
+  await repo.exclusive(async (run) => {
+    // That ref itself, rather than git reading `from` as a revision, like `refs/heads/main~3`.
+    if (!(await isRef(run, from))) throw new Error(`${from} isn't a branch.`);
+    await switchTakingChanges(run, repo.path, [...args, "--", from], name, options);
   });
+}
+
+/** Whether `ref` is the full name of a ref that's there. */
+async function isRef(run: GitCommand, ref: string): Promise<boolean> {
+  return run(["show-ref", "--verify", "--quiet", ref]).then(
+    () => true,
+    (error: unknown) => {
+      // Exits with 1, saying nothing, when there's no such ref.
+      if (error instanceof GitError && error.exitCode === 1) return false;
+      throw error;
+    },
+  );
 }
 
 /**
@@ -43,42 +69,57 @@ export async function switchBranch(repo: Repo, ref: string): Promise<void> {
   const target = parseRefName(ref);
   if (!target || target.kind === "tag") throw new Error(`${ref} isn't a branch.`);
   // One write, so nothing else changes the branches, the stashes or the working tree halfway.
-  await repo.exclusive(async (run) => {
-    const args = await switchArgs(run, ref, target);
-    // It rewrites the files that differ between the branches.
-    const switching = { rewritesFiles: true };
-    let refused: GitError;
-    try {
-      // Git takes the changes along itself, as long as the branch doesn't change their files.
-      await run(args, switching);
-      return;
-    } catch (error) {
-      if (!(error instanceof GitError && WOULD_LOSE.test(error.stderr))) throw error;
-      refused = error;
-    }
+  await repo.exclusive(async (run) =>
+    switchTakingChanges(run, repo.path, await switchArgs(run, ref, target), target.name),
+  );
+}
 
-    const stash = await stashToSwitch(run, target.name, refused);
-    const from = await headPosition(run);
-    let failed: unknown;
-    try {
-      await run(args, switching);
-    } catch (error) {
-      // Back as they were, on the branch they were made on, when it didn't switch.
-      if ((await headPosition(run)) === from) {
-        await popNewest(run);
-        throw error;
-      }
-      // It switched, but failed after, at a post-checkout hook, say: thrown once they're back.
-      failed = error;
+/**
+ * Runs the `git switch` `args`, to the branch `name`, taking the uncommitted changes along: when
+ * git won't, as the branch changes the files they're in, they're stashed, it's switched, and the
+ * stash popped there; if it wouldn't pop without conflicts, it's kept, and that's thrown as a
+ * `ChangesStashedError`. For a repository at `root`, in a write of its own (`Repo.exclusive`).
+ */
+async function switchTakingChanges(
+  run: GitCommand,
+  root: string,
+  args: string[],
+  name: string,
+  options?: RunOptions,
+): Promise<void> {
+  // It rewrites the files that differ between the branches.
+  const switching = { ...options, rewritesFiles: true };
+  let refused: GitError;
+  try {
+    // Git takes the changes along itself, as long as the branch doesn't change their files.
+    await run(args, switching);
+    return;
+  } catch (error) {
+    if (!(error instanceof GitError && WOULD_LOSE.test(error.stderr))) throw error;
+    refused = error;
+  }
+
+  const stash = await stashToSwitch(run, name, refused);
+  const from = await headPosition(run);
+  let failed: unknown;
+  try {
+    await run(args, switching);
+  } catch (error) {
+    // Back as they were, on the branch they were made on, when it didn't switch.
+    if ((await headPosition(run)) === from) {
+      await popNewest(run);
+      throw error;
     }
-    if (!(await popsCleanly(run, repo.path, stash))) {
-      throw new ChangesStashedError(
-        `Switched to ${(await currentBranch(run)) ?? "the branch"}, but your uncommitted changes conflict with it, so they're kept in the stash.`,
-      );
-    }
-    await popNewest(run);
-    if (failed) throw failed;
-  });
+    // It switched, but failed after, at a post-checkout hook, say: thrown once they're back.
+    failed = error;
+  }
+  if (!(await popsCleanly(run, root, stash))) {
+    throw new ChangesStashedError(
+      `Switched to ${(await currentBranch(run)) ?? "the branch"}, but your uncommitted changes conflict with it, so they're kept in the stash.`,
+    );
+  }
+  await popNewest(run);
+  if (failed) throw failed;
 }
 
 /** The `git switch` that switches to the branch `ref`, of `target`'s kind and short name. */

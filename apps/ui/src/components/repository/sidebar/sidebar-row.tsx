@@ -4,6 +4,7 @@ import ChevronDown from "lucide-solid/icons/chevron-down";
 import ChevronRight from "lucide-solid/icons/chevron-right";
 import Folder from "lucide-solid/icons/folder";
 import FolderOpen from "lucide-solid/icons/folder-open";
+import { splitProps, type JSX } from "solid-js";
 
 import { toneClasses } from "@/components/ui/tone";
 
@@ -40,43 +41,66 @@ export function SidebarFolder(props: {
   );
 }
 
-/** An item in a section: a ref, or the working directory, a pull request or a stash. */
-export function SidebarRow(props: {
-  icon: LucideIcon;
-  label: string;
-  title?: string;
-  depth?: number;
-  active?: boolean;
-  count?: number;
-  meta?: string;
-  tone?: "amber";
-  onDblClick?: () => void;
-}) {
+/**
+ * An item in a section: a ref, or the working directory, a pull request or a stash. Other
+ * attributes go to the button, e.g. one marking it for a menu (see `BranchMenu`).
+ */
+export function SidebarRow(
+  props: Omit<JSX.ButtonHTMLAttributes<HTMLButtonElement>, "title" | "onDblClick"> & {
+    icon: LucideIcon;
+    label: string;
+    title?: string;
+    depth?: number;
+    active?: boolean;
+    /** Shown as if hovered, e.g. while its menu is open. */
+    highlighted?: boolean;
+    count?: number;
+    meta?: string;
+    tone?: "amber";
+    onDblClick?: () => void;
+  },
+) {
+  const [local, others] = splitProps(props, [
+    "icon",
+    "label",
+    "title",
+    "depth",
+    "active",
+    "highlighted",
+    "count",
+    "meta",
+    "tone",
+    "onDblClick",
+  ]);
   return (
     <button
+      {...others}
       class={cn(
         "grid w-full cursor-pointer grid-cols-[16px_minmax(0,1fr)_auto_auto] items-center gap-[5px] rounded-[5px] border-0 bg-transparent pr-[7px] text-left text-muted hover:bg-panel-hover hover:text-text-soft focus-ring-inset",
-        props.active && "bg-primary-soft text-text [&>svg]:text-primary-strong",
+        // The active one stands out already.
+        local.active
+          ? "bg-primary-soft text-text [&>svg]:text-primary-strong"
+          : local.highlighted && "bg-panel-hover text-text-soft",
       )}
       style={{
         height: ROW_BOX,
-        "padding-left": `${25 + (props.depth ?? 0) * DEPTH_INDENT}px`,
+        "padding-left": `${25 + (local.depth ?? 0) * DEPTH_INDENT}px`,
       }}
-      title={props.title ?? props.label}
+      title={local.title ?? local.label}
       // Read on each double-click: Solid binds a handler once.
-      onDblClick={() => props.onDblClick?.()}
+      onDblClick={() => local.onDblClick?.()}
     >
-      <props.icon size={13} />
-      <span class="truncate text-[12.5px]">{props.label}</span>
-      {props.meta && <small class="text-[10.5px] text-blue">{props.meta}</small>}
-      {props.count !== undefined && (
+      <local.icon size={13} />
+      <span class="truncate text-[12.5px]">{local.label}</span>
+      {local.meta && <small class="text-[10.5px] text-blue">{local.meta}</small>}
+      {local.count !== undefined && (
         <em
           class={cn(
             "min-w-[17px] rounded-lg px-1 py-0.5 text-center text-[10.5px] not-italic",
-            toneClasses[props.tone ?? "neutral"],
+            toneClasses[local.tone ?? "neutral"],
           )}
         >
-          {props.count}
+          {local.count}
         </em>
       )}
     </button>
