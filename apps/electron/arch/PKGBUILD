@@ -19,6 +19,8 @@ options=('!strip' '!debug')
 package() {
   install -d "$pkgdir/usr/lib/$pkgname" "$pkgdir/usr/bin"
   cp -a "$startdir/../out/Gitto-linux-x64/." "$pkgdir/usr/lib/$pkgname/"
+  # The packager's folder is only its owner's (0700), and `cp -a` copied that onto this one.
+  chmod 755 "$pkgdir/usr/lib/$pkgname"
   # Chromium's sandbox helper only works setuid root.
   chmod 4755 "$pkgdir/usr/lib/$pkgname/chrome-sandbox"
   ln -s "/usr/lib/$pkgname/gitto" "$pkgdir/usr/bin/gitto"
