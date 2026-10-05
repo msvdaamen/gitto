@@ -7,6 +7,7 @@ import { createEffect, createMemo, createSignal, Match, Show, Suspense, Switch }
 import { EmptyState } from "@/components/ui/empty-state";
 import { UpdatingIndicator } from "@/components/ui/updating-indicator";
 import { VirtualRows } from "@/components/ui/virtual-list";
+import { useSwitchBranch } from "@/git/queries/branch";
 import { useHistory } from "@/git/queries/history";
 import type { CommitRow, StashRow, WipRow } from "@/git/rows";
 import { matchesSearch, searchNeedle } from "@/git/search";
@@ -102,6 +103,8 @@ function HistoryRows(props: {
       props.onSelect(row.id);
     }
   });
+  // The toolbar shows a switch running, and why it failed.
+  const switchBranch = useSwitchBranch(() => props.repositoryId);
   // The log is reloaded whenever a branch or tag changes, which takes a while in a big repository.
   const updating = useDelayed(() => history.log.isRefetching);
   const lanes = createMemo(() =>
@@ -233,7 +236,12 @@ function HistoryRows(props: {
                       <HistoryStashRow {...rowProps} stash={stash()!} searching={!!needle()} />
                     </Match>
                     <Match when={row().kind === "commit"}>
-                      <HistoryCommitRow {...rowProps} commit={commit()!} search={needle()} />
+                      <HistoryCommitRow
+                        {...rowProps}
+                        commit={commit()!}
+                        search={needle()}
+                        onSwitchBranch={switchBranch.run}
+                      />
                     </Match>
                   </Switch>
                 );

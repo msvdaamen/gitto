@@ -1,3 +1,4 @@
+import type { Uncommitted } from "@gitto/git/types";
 import { useQueryClient } from "@tanstack/solid-query";
 
 import { rpc } from "@/lib/rpc";
@@ -24,11 +25,14 @@ const SWITCH = "switch";
  * Switches to a branch, by its full ref name: for a remote one, the local branch tracking it, or a
  * new one that does. The uncommitted changes come along, or are kept in the stash when they
  * conflict with it. Whether it's running, and why it last failed. It counts as running until the
- * repository has reloaded, also after a failure: it may have switched and stashed.
+ * repository has reloaded, also after a failure: it may have switched and stashed. Switching to the
+ * checked-out branch does nothing, rather than reloading the whole repository.
  */
 export function useSwitchBranch(repositoryId: () => string) {
   const queryClient = useQueryClient();
   return useRepositoryOperation(SWITCH, repositoryId, async (id, ref: string) => {
+    const head = queryClient.getQueryData<Uncommitted>(gitKeys.status(id))?.head;
+    if (head?.kind === "branch" && ref === `refs/heads/${head.name}`) return;
     try {
       await rpc.git.branch.switch({ repositoryId: id, ref });
     } finally {

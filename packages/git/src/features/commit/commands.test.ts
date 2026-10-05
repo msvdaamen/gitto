@@ -33,7 +33,7 @@ describe("createCommit", () => {
       expect.objectContaining({
         subject: "Initial commit",
         body: "With body",
-        refs: [{ kind: "local", name: "main", current: true }],
+        refs: [{ kind: "local", name: "main", fullName: "refs/heads/main", current: true }],
       }),
     ]);
   });

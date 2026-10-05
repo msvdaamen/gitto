@@ -18,6 +18,8 @@ export function HistoryCommitRow(
      * commit's node, as its lines would lead to rows the search hides.
      */
     search: string;
+    /** Switches to a branch, by its full ref name, when its label is double-clicked. */
+    onSwitchBranch: (ref: string) => void;
   },
 ) {
   const ago = useRelativeTime();
@@ -37,6 +39,7 @@ export function HistoryCommitRow(
         labels={props.commit.labels}
         search={props.search}
         color={laneColor(props.commit.graph?.column ?? 0)}
+        onSwitch={props.onSwitchBranch}
       />
       <div class="h-full overflow-x-clip">
         <Show when={props.commit.graph}>
