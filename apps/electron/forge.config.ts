@@ -13,7 +13,7 @@ import { copyDependencies, findDependencies } from "./src/native-deps";
 /** Native modules: left out of the bundle (see vite.main.config.ts), so they're copied in. */
 const NATIVE_DEPENDENCIES = ["@parcel/watcher"];
 
-/** Set by CI at build time (see .github/workflows/release.yml), e.g. 1.2.4-nightly.20261005.42. */
+/** Set by CI at build time (see .github/workflows/release.yml), e.g. 1.2.4-nightly.20261005134259. */
 const { version } = JSON.parse(readFileSync(new URL("package.json", import.meta.url), "utf8")) as {
   version: string;
 };

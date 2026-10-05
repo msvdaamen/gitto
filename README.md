@@ -40,8 +40,8 @@ The version comes from git tags; `package.json`'s stays at `0.0.0` and is set at
 Install the Arch package with `sudo pacman -U gitto-*.pkg.tar.zst`.
 
 - Every merge to `main` updates the **Gitto Nightly** pre-release. Its version follows the highest `v*`
-  tag: `1.2.4-nightly.20261005.42` after `v1.2.3` (the date, then the workflow's run number), and
-  `1.3.0-rc.1.nightly.20261005.42` after `v1.3.0-rc.1`.
+  tag: `1.2.4-nightly.20261005134259` after `v1.2.3` (when it was built, in UTC), and
+  `1.3.0-rc.1.nightly.20261005134259` after `v1.3.0-rc.1`.
 - Pushing a `v1.3.0` tag publishes **Gitto 1.3.0** with generated notes. A tag with a pre-release
   part, like `v1.3.0-beta.1`, is published as a pre-release; that part has to start with a letter.
 
@@ -50,6 +50,23 @@ git tag v1.3.0 && git push origin v1.3.0
 ```
 
 The builds aren't code-signed, so macOS and Windows warn before opening them.
+
+### Updates
+
+Gitto updates itself on Windows and macOS (`apps/electron/src/updater.ts`), from its own channel: a
+nightly only to the next nightly, a release only to the next release. It checks when it starts and
+every hour, downloads a newer version in the background, and offers to restart into it in the footer;
+otherwise it's installed the next time Gitto starts.
+
+Each release has the files it checks:
+
+- `update.json`, with the release's version. A nightly reads the `nightly` release's, a release the
+  latest release's, which GitHub never takes a pre-release for (so a `v1.3.0-beta.1` isn't offered).
+- `RELEASES` and the `.nupkg`, which Squirrel updates from on Windows.
+- `update-darwin-arm64.json`, which points Squirrel.Mac to the zip. Squirrel.Mac only installs a
+  code-signed app, so updates on macOS need the builds to be signed.
+
+On Linux, Gitto doesn't update itself: pacman does, once it's on the AUR.
 
 ## Adding routes
 

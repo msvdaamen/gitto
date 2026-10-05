@@ -10,6 +10,7 @@ import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, protocol, shell 
 import iconDataUrl from "../assets/icon.png?inline";
 import { resolveRendererPath } from "./renderer-path";
 import { handleSquirrelEvent } from "./squirrel";
+import { Updater } from "./updater";
 
 // Production builds are served from a custom protocol instead of file:// so the UI can use
 // regular browser history routing (e.g. app://gitto/about).
@@ -85,9 +86,9 @@ async function selectFolder() {
   return result.canceled ? null : (result.filePaths[0] ?? null);
 }
 
-function registerRpc() {
+function registerRpc(updates: Updater) {
   const handler = createRpcHandler();
-  const context = createContainer(openDatabase(), { selectFolder });
+  const context = createContainer(openDatabase(), { selectFolder, updates });
 
   // Each renderer connection sends one end of a MessageChannel (see the preload).
   ipcMain.on(RPC_CONNECT_CHANNEL, (event) => {
@@ -160,6 +161,8 @@ app.on("ready", () => {
   if (squirrelRun) return;
   if (process.env.GITTO_TRACE) traceEventLoopStalls();
   registerAppProtocol();
-  registerRpc();
+  const updater = new Updater();
+  registerRpc(updater);
   createWindow();
+  updater.start();
 });
