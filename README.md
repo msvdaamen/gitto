@@ -24,8 +24,8 @@ history URLs.
 | `pnpm dev`       | Start the app (Vite HMR; type `rs` or edit main to restart) |
 | `pnpm dev:ui`    | Run only the UI in the browser                              |
 | `pnpm package`   | Package the app into `apps/electron/out`                    |
-| `pnpm make`      | Create distributables (Windows installer, macOS zip)        |
-| `pnpm make:arch` | Create an Arch Linux package (needs `makepkg`)              |
+| `pnpm make`      | Create distributables on Windows and macOS                  |
+| `pnpm make:arch` | Create an Arch Linux package; Linux has no `pnpm make`      |
 | `pnpm typecheck` | Typecheck all apps                                          |
 | `pnpm test`      | Run all tests with Vitest                                   |
 | `pnpm lint`      | Lint with oxlint                                            |
@@ -39,11 +39,11 @@ The version comes from git tags; `package.json`'s stays at `0.0.0` and is set at
 
 Install the Arch package with `sudo pacman -U gitto-*.pkg.tar.zst`.
 
-- Every merge to `main` replaces the **Nightly** pre-release. Its version is the next patch after the
-  last `v*` tag, e.g. `1.2.4-nightly.20261005.42` after `v1.2.3` (date, then the workflow's run
-  number).
+- Every merge to `main` updates the **Nightly** pre-release. Its version follows the highest `v*`
+  tag: `1.2.4-nightly.20261005.42` after `v1.2.3` (the date, then the workflow's run number), and
+  `1.3.0-rc.1.nightly.20261005.42` after `v1.3.0-rc.1`.
 - Pushing a `v1.3.0` tag publishes **Gitto 1.3.0** with generated notes. A tag with a pre-release
-  part, like `v1.3.0-beta.1`, is published as a pre-release.
+  part, like `v1.3.0-beta.1`, is published as a pre-release; that part has to start with a letter.
 
 ```sh
 git tag v1.3.0 && git push origin v1.3.0

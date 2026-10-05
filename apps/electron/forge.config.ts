@@ -43,7 +43,8 @@ const config: ForgeConfig = {
     },
   },
   makers: [
-    new MakerSquirrel({ setupIcon: "assets/icon.ico" }),
+    // Its NuGet package id would be the scoped package name, which can't have `@` or `/`.
+    new MakerSquirrel({ name: "gitto", setupIcon: "assets/icon.ico" }),
     new MakerZIP({}, ["darwin"]),
     // Linux is packaged for Arch by arch/PKGBUILD instead (`pnpm make:arch`).
   ],
