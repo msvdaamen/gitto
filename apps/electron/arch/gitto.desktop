@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Gitto
+Comment=Gitto desktop app
+Exec=gitto %U
+Icon=gitto
+Categories=Development;RevisionControl;
+StartupWMClass=Gitto

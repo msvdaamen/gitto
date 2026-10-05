@@ -1,6 +1,5 @@
 import { fileURLToPath } from "node:url";
 
-import { MakerDeb } from "@electron-forge/maker-deb";
 import { MakerSquirrel } from "@electron-forge/maker-squirrel";
 import { MakerZIP } from "@electron-forge/maker-zip";
 import { FusesPlugin } from "@electron-forge/plugin-fuses";
@@ -45,8 +44,8 @@ const config: ForgeConfig = {
   },
   makers: [
     new MakerSquirrel({ setupIcon: "assets/icon.ico" }),
-    new MakerZIP({}, ["darwin", "linux"]),
-    new MakerDeb({ options: { name: "gitto", bin: "gitto", icon: "assets/icon.png" } }),
+    new MakerZIP({}, ["darwin"]),
+    // Linux is packaged for Arch by arch/PKGBUILD instead (`pnpm make:arch`).
   ],
   plugins: [
     new VitePlugin({

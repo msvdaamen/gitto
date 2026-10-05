@@ -6,3 +6,6 @@ out/
 .DS_Store
 .env*
 !.env.example
+apps/electron/arch/src/
+apps/electron/arch/pkg/
+apps/electron/arch/*.pkg.tar.*
