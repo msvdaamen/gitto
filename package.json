@@ -7,6 +7,7 @@
     "dev:ui": "pnpm --filter @gitto/ui dev",
     "package": "pnpm --filter @gitto/electron package",
     "make": "pnpm --filter @gitto/electron make",
+    "make:arch": "pnpm --filter @gitto/electron make:arch",
     "typecheck": "pnpm -r typecheck",
     "test": "vitest run",
     "perf": "vitest run --config vitest.perf.config.ts",

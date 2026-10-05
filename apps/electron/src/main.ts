@@ -9,6 +9,7 @@ import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, protocol, shell 
 
 import iconDataUrl from "../assets/icon.png?inline";
 import { resolveRendererPath } from "./renderer-path";
+import { handleSquirrelEvent } from "./squirrel";
 
 // Production builds are served from a custom protocol instead of file:// so the UI can use
 // regular browser history routing (e.g. app://gitto/about).
@@ -22,9 +23,13 @@ if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
   app.setPath("userData", `${app.getPath("userData")}-dev`);
 }
 
+// Squirrel's runs while installing, updating or uninstalling only see to the shortcuts. They go
+// ahead with Gitto running.
+const squirrelRun = handleSquirrelEvent();
+
 // A second instance would contend for the same profile locks and take ~4s to show anything,
 // so hand off to the running instance instead.
-if (!app.requestSingleInstanceLock()) {
+if (!squirrelRun && !app.requestSingleInstanceLock()) {
   app.exit(0);
 }
 
@@ -152,6 +157,7 @@ function traceEventLoopStalls() {
 
 // Not `await app.whenReady()`: top-level await in the ESM entry blocks Electron's startup.
 app.on("ready", () => {
+  if (squirrelRun) return;
   if (process.env.GITTO_TRACE) traceEventLoopStalls();
   registerAppProtocol();
   registerRpc();

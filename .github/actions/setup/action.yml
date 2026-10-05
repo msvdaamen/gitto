@@ -1,0 +1,24 @@
+name: Setup
+description: Installs pnpm, Node and the dependencies, after the repository is checked out.
+
+inputs:
+  version:
+    description: The version to build Gitto as, set in apps/electron/package.json. Kept if empty.
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - uses: pnpm/action-setup@v6
+    - uses: actions/setup-node@v7
+      with:
+        node-version: 24
+        cache: pnpm
+    - run: pnpm install --frozen-lockfile
+      shell: bash
+    - if: inputs.version != ''
+      run: npm pkg set "version=$VERSION"
+      shell: bash
+      working-directory: apps/electron
+      env:
+        VERSION: ${{ inputs.version }}
