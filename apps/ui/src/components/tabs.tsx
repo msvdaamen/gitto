@@ -5,7 +5,7 @@ import Plus from "lucide-solid/icons/plus";
 import X from "lucide-solid/icons/x";
 import { createEffect, createSignal, For, onCleanup, Show, Suspense, type JSX } from "solid-js";
 
-import { useAddRepository, useRemoveRepository, useRepositories } from "@/hooks/repositories";
+import { useOpenRepository, useRemoveRepository, useRepositories } from "@/hooks/repositories";
 
 import { IconButton } from "./ui/button";
 import { GittoIcon } from "./ui/gitto-icon";
@@ -17,7 +17,7 @@ export function Tabs() {
   const params = useParams({ strict: false });
   const navigate = useNavigate();
   const repositories = useRepositories();
-  const addRepository = useAddRepository();
+  const openRepository = useOpenRepository();
   const removeRepository = useRemoveRepository();
   const selectedTab = () => params().repoId ?? HOME_TAB;
 
@@ -44,15 +44,6 @@ export function Tabs() {
   }
 
   createEffect(updateUnderline);
-
-  function add() {
-    addRepository.mutate(undefined, {
-      onSuccess: (repository) => {
-        if (repository) void navigate({ to: "/$repoId", params: { repoId: repository.id } });
-      },
-      onError: (error) => console.error("Failed to add repository", error),
-    });
-  }
 
   function remove(id: string) {
     removeRepository.mutate(id, {
@@ -84,7 +75,7 @@ export function Tabs() {
         label="Open new repository"
         icon={Plus}
         class="ml-1.25 shrink-0 self-center"
-        onClick={add}
+        onClick={openRepository}
       />
 
       {/* Only mounted once measured, so it doesn't slide in from the left on first render. */}

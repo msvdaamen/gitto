@@ -1,33 +1,42 @@
 import { createFileRoute } from "@tanstack/solid-router";
 
-import { PinnedRepositories } from "@/components/home/pinned-repositories";
-import { QuickTip } from "@/components/home/quick-tip";
 import { RecentActivity } from "@/components/home/recent-activity";
-import { RecentRepositories } from "@/components/home/recent-repositories";
+import { RepositoryList } from "@/components/home/repository-list";
+import { useRepositorySummaries } from "@/components/home/summaries";
 import { WelcomeHero } from "@/components/home/welcome-hero";
-import { activities, repositories } from "@/data/mock-data";
+import { useUnsuspendedData } from "@/git/queries/unsuspended";
+import { useUserName } from "@/git/queries/user";
+import { useOpenRepository, useRepositories } from "@/hooks/repositories";
 
 export const Route = createFileRoute("/(main)/")({
   component: HomeComponent,
 });
 
-const pinned = repositories.filter((repository) => repository.pinned);
-
-// Not wired up yet.
-function openRepository() {}
-
 function HomeComponent() {
+  // Read without Suspense, like the repositories' summaries: the page shows straight away, and
+  // fills in as they load.
+  const repositories = useUnsuspendedData(useRepositories());
+  const summaries = useRepositorySummaries(() => repositories() ?? []);
+  const userName = useUnsuspendedData(useUserName());
+  const openRepository = useOpenRepository();
+
   return (
     <div class="h-full overflow-auto bg-[radial-gradient(circle_at_17%_-8%,rgba(163,115,215,.1),transparent_31%),var(--bg)] px-[clamp(22px,3vw,46px)] pt-6 pb-10.5 max-md:p-4.5">
-      <WelcomeHero onOpenRepository={openRepository} />
+      <WelcomeHero
+        userName={userName()}
+        summaries={summaries()}
+        onOpenRepository={openRepository}
+      />
 
       <div class="mx-auto grid max-w-322.5 grid-cols-[minmax(0,1fr)_320px] gap-4.5 max-lg:grid-cols-[minmax(0,1fr)_280px] max-md:grid-cols-1 max-sm:block">
-        <RecentRepositories repositories={repositories} onOpenRepository={openRepository} />
+        <RepositoryList
+          summaries={summaries()}
+          loaded={repositories() !== undefined}
+          onOpenRepository={openRepository}
+        />
 
-        <aside class="flex flex-col gap-3 max-md:grid max-md:grid-cols-2 max-sm:mt-3.5 max-sm:grid-cols-1">
-          <PinnedRepositories repositories={pinned} onOpenRepository={openRepository} />
-          <RecentActivity activities={activities} />
-          <QuickTip />
+        <aside class="flex flex-col gap-3 max-sm:mt-3.5">
+          <RecentActivity summaries={summaries()} />
         </aside>
       </div>
     </div>

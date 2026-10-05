@@ -7,6 +7,7 @@ import { rpc } from "@/lib/rpc";
 
 import { gitKeys } from "./keys";
 import { Opaque } from "./opaque";
+import { UNWATCHED } from "./watch";
 
 /**
  * The uncommitted changes come in one query (so the working tree is only walked once), but most of
@@ -45,6 +46,11 @@ const selectChanges = (data: Uncommitted) => new Opaque<WorkingTreeFiles>(data.c
 /** Where HEAD is, and how many files changed. */
 export function useStatus(repositoryId: () => string) {
   return useQuery(() => uncommittedQuery(repositoryId(), selectSummary));
+}
+
+/** `useStatus`, for a repository that isn't watched, like those on the home page (see `UNWATCHED`). */
+export function useUnwatchedStatus(repositoryId: () => string) {
+  return useQuery(() => ({ ...uncommittedQuery(repositoryId(), selectSummary), ...UNWATCHED }));
 }
 
 /**

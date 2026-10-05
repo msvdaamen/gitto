@@ -14,6 +14,13 @@ import { gitKeys } from "./keys";
 export const UNWATCH_AFTER_MS = 5 * 60_000;
 
 /**
+ * Options for a query of a repository that isn't watched, like those on the home page: refetched
+ * whenever it's shown, and when the window gets focus, rather than only when the watcher says it
+ * changed (see `queryClient`).
+ */
+export const UNWATCHED = { staleTime: 0, refetchOnWindowFocus: true } as const;
+
+/**
  * Refetches the repository's git data when it changes on disk; nothing else does (see
  * `queryClient`). The git directory (commits, checkouts, staging) is watched all the time. The
  * working tree is watched while the window has focus and for a while after; changes to it while
