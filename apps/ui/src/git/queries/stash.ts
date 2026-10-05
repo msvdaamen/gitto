@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/solid-query";
 
 import { rpc } from "@/lib/rpc";
 
-import { useChangedFiles } from "./diff";
+import { useChangedFiles, type FilesFetcher } from "./diff";
 import { gitKeys } from "./keys";
 import { useRepositoryOperation } from "./operation";
 
@@ -20,11 +20,13 @@ export function useStashes(repositoryId: () => string) {
   });
 }
 
+/** Loads the files a stash changed, for `changedFilesQuery`. */
+export const fetchStashFiles: FilesFetcher = (input, options) =>
+  rpc.git.stash.files(input, options);
+
 /** The files a stash changed compared to the commit it was made on, untracked ones included. */
 export function useStashFiles(repositoryId: () => string, sha: () => string) {
-  return useChangedFiles(repositoryId, sha, gitKeys.stashFiles, (input, options) =>
-    rpc.git.stash.files(input, options),
-  );
+  return useChangedFiles(repositoryId, sha, gitKeys.stashFiles, fetchStashFiles);
 }
 
 /**

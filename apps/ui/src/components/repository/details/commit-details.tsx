@@ -10,6 +10,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { IconButton } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { lineTotals } from "@/git/changes";
+import type { DiffSource, FileOpener } from "@/git/diff-source";
 import { useCommitFiles } from "@/git/queries/diff";
 import { useCommitDetails } from "@/git/queries/history";
 import { stashSha, WIP_ID, type CommitRow } from "@/git/rows";
@@ -27,12 +28,8 @@ import { WorkingTreeDetails } from "./working-tree-details";
 export function CommitDetails(props: {
   repositoryId: string;
   selectedId: string | undefined;
-  /** Shows the changes in one of a commit's files. */
-  onOpenFile?: (file: ChangedFile) => void;
-  /** The path of the file whose changes are on show, if any. */
-  openPath?: string;
-  /** Loads the changes in one of a commit's files ahead, as it's likely to be opened. */
-  onPrefetchFile?: (file: ChangedFile) => void;
+  /** Shows the changes in the files listed, when they're clicked. */
+  files?: FileOpener;
 }) {
   const [scrollElement, setScrollElement] = createSignal<HTMLDivElement>();
   // The selected row and its repository, kept while the selection is briefly empty: switching
@@ -74,20 +71,19 @@ export function CommitDetails(props: {
                 repositoryId={repositoryId()}
                 sha={selectedId()}
                 scrollElement={scrollElement()}
-                onOpenFile={props.onOpenFile}
-                openPath={props.openPath}
-                onPrefetchFile={props.onPrefetchFile}
+                files={props.files}
               />
             }
           >
             <Match when={selectedId() === WIP_ID}>
-              <WorkingTreeDetails repositoryId={repositoryId()} />
+              <WorkingTreeDetails repositoryId={repositoryId()} files={props.files} />
             </Match>
             <Match when={stash()}>
               <StashDetails
                 repositoryId={repositoryId()}
                 sha={shownStash()!}
                 scrollElement={scrollElement()}
+                files={props.files}
               />
             </Match>
           </Switch>
@@ -102,9 +98,7 @@ function SelectedCommit(props: {
   sha: string;
   /** The details' scroll container, which scrolls the files along with the commit's message. */
   scrollElement: HTMLElement | undefined;
-  onOpenFile?: (file: ChangedFile) => void;
-  openPath?: string;
-  onPrefetchFile?: (file: ChangedFile) => void;
+  files?: FileOpener;
 }) {
   const details = useCommitDetails(
     () => props.repositoryId,
@@ -124,6 +118,9 @@ function SelectedCommit(props: {
   }, undefined);
   const files = () => shown()?.files ?? changes.files();
   const totals = createMemo(() => lineTotals(files()));
+  const source = (): DiffSource => ({ kind: "commit", sha: props.sha });
+  // Only once the files on show are this commit's, so another's aren't opened as its.
+  const opener = () => (shown()?.commit.id === props.sha ? props.files : undefined);
 
   // One element, so the file list sees it change size when the message above the files loads.
   return (
@@ -138,10 +135,8 @@ function SelectedCommit(props: {
       <ChangedFilesSection
         files={files()}
         scrollElement={props.scrollElement}
-        // Only once the files on show are this commit's, so another's aren't opened as its.
-        onOpen={shown()?.commit.id === props.sha ? props.onOpenFile : undefined}
-        openPath={props.openPath}
-        onPrefetch={shown()?.commit.id === props.sha ? props.onPrefetchFile : undefined}
+        source={source()}
+        opener={opener()}
       />
     </div>
   );

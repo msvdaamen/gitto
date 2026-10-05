@@ -8,6 +8,8 @@ export class GitError extends Error {
     readonly args: readonly string[],
     readonly exitCode: number | null,
     readonly stderr: string,
+    /** What it printed on stdout, for a command whose output still says something when it fails. */
+    readonly stdout = "",
   ) {
     super(message);
     this.name = new.target.name;
@@ -75,6 +77,34 @@ export class FileTooLargeError extends MessageError {
   }
 }
 
+/** A file's changes, too many to send whole: an untracked log file of hundreds of megabytes, say. */
+export class ChangesTooLargeError extends MessageError {
+  constructor(bytes: number) {
+    super(`These changes are over ${(bytes / 1024 / 1024).toFixed(0)} MB, too large to show.`);
+  }
+}
+
+/** A path that isn't a file inside the repository's working tree, e.g. with `..`, or a link out. */
+export class OutsideRepositoryError extends MessageError {
+  constructor(path: string) {
+    super(`${path} isn't a file in this repository.`);
+  }
+}
+
+/** A file that's no longer in the working tree, e.g. deleted since its changes were read. */
+export class WorkingTreeFileNotFoundError extends MessageError {
+  constructor(path: string) {
+    super(`${path} is no longer in the working tree.`);
+  }
+}
+
+/** A file whose contents aren't UTF-8, which can't be shown or edited as text. */
+export class NotUtf8Error extends MessageError {
+  constructor() {
+    super("This file isn't UTF-8 text.");
+  }
+}
+
 /** No repository with that id has been added to Gitto. */
 export class RepositoryNotFoundError extends MessageError {
   constructor(readonly repositoryId: string) {
@@ -110,5 +140,5 @@ export function commandError(
   }
   // Some failures, like "nothing to commit", are only explained on stdout.
   const message = stderr.trim() || stdout.trim() || `git ${args[0]} exited with code ${exitCode}`;
-  return new GitError(message, args, exitCode, stderr);
+  return new GitError(message, args, exitCode, stderr, stdout);
 }

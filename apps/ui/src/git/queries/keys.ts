@@ -8,6 +8,9 @@ export const gitKeys = {
     [...gitKeys.repository(repositoryId), "uncommitted"] as const,
   /** The status, with the changed files: one query, so the working tree is only walked once. */
   status: (repositoryId: string) => [...gitKeys.uncommitted(repositoryId), "status"] as const,
+  /** The patch of a file's unstaged or staged changes, by its path. */
+  uncommittedFilePatch: (repositoryId: string, side: "unstaged" | "staged", path: string) =>
+    [...gitKeys.uncommitted(repositoryId), "patch", side, path] as const,
   log: (repositoryId: string) => [...gitKeys.repository(repositoryId), "log"] as const,
   refs: (repositoryId: string) => [...gitKeys.repository(repositoryId), "refs"] as const,
   stashes: (repositoryId: string) => [...gitKeys.repository(repositoryId), "stashes"] as const,
@@ -28,4 +31,7 @@ export const gitKeys = {
   /** A stash is a commit too, and never changes either. */
   stashFiles: (repositoryId: string, sha: string) =>
     [...gitKeys.commit(repositoryId, sha), "stash-files"] as const,
+  /** The patch of one of a stash's files, by its path. */
+  stashFilePatch: (repositoryId: string, sha: string, path: string) =>
+    [...gitKeys.commit(repositoryId, sha), "stash-patch", path] as const,
 };

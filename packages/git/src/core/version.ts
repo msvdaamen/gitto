@@ -4,7 +4,7 @@ import type { GitInstall } from "../features/version/schema";
 import { UnsupportedGitError } from "./errors";
 
 /** The oldest git Gitto works with: it uses options and output that older ones don't have. */
-export const MIN_GIT_VERSION = "2.40";
+export const MIN_GIT_VERSION = "2.41";
 
 /**
  * The version in `git version`'s output, e.g. `2.45.1` from `git version 2.45.1.windows.1` or

@@ -13,11 +13,12 @@ describe("parseGitVersion", () => {
 });
 
 describe("isSupportedVersion", () => {
-  it("accepts 2.40 and newer", () => {
-    expect(isSupportedVersion("2.40")).toBe(true);
-    expect(isSupportedVersion("2.40.0")).toBe(true);
+  it("accepts 2.41 and newer", () => {
+    expect(isSupportedVersion("2.41")).toBe(true);
+    expect(isSupportedVersion("2.41.0")).toBe(true);
     expect(isSupportedVersion("2.51.2")).toBe(true);
     expect(isSupportedVersion("3.0.0")).toBe(true);
+    expect(isSupportedVersion("2.40.1")).toBe(false);
     expect(isSupportedVersion("2.39.5")).toBe(false);
     expect(isSupportedVersion("2.4.0")).toBe(false);
     expect(isSupportedVersion("1.99.0")).toBe(false);
@@ -37,13 +38,13 @@ describe("GitVersion", () => {
   });
 
   it("checks an unsupported git again, until it's been updated", async () => {
-    const outputs = ["git version 2.39.3\n", null, "git version 2.40.1\n"];
+    const outputs = ["git version 2.39.3\n", null, "git version 2.41.1\n"];
     let reads = 0;
     const version = new GitVersion(async () => outputs[reads++] ?? null);
 
     await expect(version.check()).resolves.toMatchObject({ version: "2.39.3", supported: false });
     await expect(version.require()).rejects.toThrow("Gitto couldn't find Git.");
-    await expect(version.check()).resolves.toMatchObject({ version: "2.40.1", supported: true });
+    await expect(version.check()).resolves.toMatchObject({ version: "2.41.1", supported: true });
     await version.require();
     expect(reads).toBe(3);
   });
@@ -56,7 +57,7 @@ describe("GitVersion", () => {
   it("runs the installed git", async () => {
     await expect(new GitVersion().check()).resolves.toMatchObject({
       version: expect.stringMatching(/^\d+\.\d+/),
-      required: "2.40",
+      required: "2.41",
     });
   });
 });

@@ -13,10 +13,11 @@ import { Opaque } from "./opaque";
  * the UI only shows the summary. Each `useQuery` keeps its own copy of what it selects, so the file
  * lists, which can be huge, are only selected (and kept up to date) where they're shown.
  */
-function uncommittedQuery<T>(id: string, select: (data: Uncommitted) => T) {
+function uncommittedQuery<T>(id: string, select: (data: Uncommitted) => T, enabled = true) {
   const queryKey = gitKeys.status(id);
   return {
     queryKey,
+    enabled,
     queryFn: async ({ signal, client }: QueryFunctionContext) => {
       const previous = client.getQueryData<Uncommitted>(queryKey);
       const result = await rpc.git.status.get(
@@ -60,6 +61,6 @@ export function useHeadSha(status: { data: StatusSummary | undefined }) {
  * files (see `Opaque`), and their rows are rendered by position (see `VirtualRows`), so only the
  * ones in view are updated either way.
  */
-export function useUncommittedFiles(repositoryId: () => string) {
-  return useQuery(() => uncommittedQuery(repositoryId(), selectChanges));
+export function useUncommittedFiles(repositoryId: () => string, enabled?: () => boolean) {
+  return useQuery(() => uncommittedQuery(repositoryId(), selectChanges, enabled?.()));
 }

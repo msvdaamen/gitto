@@ -4,7 +4,7 @@ import { z } from "zod";
 export const GitInstallSchema = z.object({
   /** As git reports it, e.g. `2.39.3`; `null` if git couldn't be run (it isn't installed, say). */
   version: z.string().nullable(),
-  /** The oldest version Gitto works with, e.g. `2.40`. */
+  /** The oldest version Gitto works with, e.g. `2.41`. */
   required: z.string(),
   /** Whether `version` is `required` or newer. */
   supported: z.boolean(),
