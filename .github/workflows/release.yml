@@ -6,6 +6,17 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+    # A merge that only touches docs keeps the last nightly. GitHub doesn't apply paths to tags, so
+    # a release always builds.
+    paths:
+      - "apps/**"
+      - "packages/**"
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - tsconfig.base.json
+      - .github/actions/**
+      - .github/workflows/release.yml
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
