@@ -22,8 +22,7 @@ const { platform, arch, argv } = process;
 
 describe("versions", () => {
   it("are on the nightly channel with a nightly part, else on the release channel", () => {
-    expect(channelOf("1.2.4-nightly.20261005134259")).toBe("nightly");
-    expect(channelOf("1.3.0-rc.1.nightly.20261005134259")).toBe("nightly");
+    expect(channelOf("1.2.4-nightly29853462")).toBe("nightly");
     expect(channelOf("1.2.3")).toBe("release");
     expect(channelOf("1.3.0-beta.1")).toBe("release");
     expect(channelOf("0.0.0")).toBe("release");
@@ -38,8 +37,9 @@ describe("versions", () => {
     const ordered = [
       "0.9.9",
       "1.2.3",
-      "1.2.4-nightly.20261005134259",
-      "1.2.4-nightly.20261006090000",
+      "1.2.4-nightly29853462",
+      "1.2.4-nightly29853463",
+      "1.2.4-nightly99930239",
       "1.2.4",
       "1.2.10",
       "1.3.0-alpha",
@@ -47,8 +47,8 @@ describe("versions", () => {
       "1.3.0-alpha.beta",
       "1.3.0-beta.2",
       "1.3.0-beta.11",
+      "1.3.0-nightly29853462",
       "1.3.0-rc.1",
-      "1.3.0-rc.1.nightly.20261005134259",
       "1.3.0-rc.2",
       "1.3.0",
     ];
@@ -98,8 +98,8 @@ describe("the updater", () => {
   });
 
   it("checks a nightly's channel, and downloads a newer nightly", async () => {
-    published("1.2.4-nightly.20261006090000");
-    const updates = updater("1.2.4-nightly.20261005134259");
+    published("1.2.4-nightly29854900");
+    const updates = updater("1.2.4-nightly29853462");
     const { states, stop } = watch(updates);
     updates.start();
 
@@ -110,16 +110,16 @@ describe("the updater", () => {
     autoUpdater.emit("update-downloaded");
     await vi.waitFor(() => expect(states).toHaveLength(3));
     expect(states).toEqual([
-      { version: "1.2.4-nightly.20261005134259", channel: "nightly", update: null },
+      { version: "1.2.4-nightly29853462", channel: "nightly", update: null },
       {
-        version: "1.2.4-nightly.20261005134259",
+        version: "1.2.4-nightly29853462",
         channel: "nightly",
-        update: { version: "1.2.4-nightly.20261006090000", ready: false },
+        update: { version: "1.2.4-nightly29854900", ready: false },
       },
       {
-        version: "1.2.4-nightly.20261005134259",
+        version: "1.2.4-nightly29853462",
         channel: "nightly",
-        update: { version: "1.2.4-nightly.20261006090000", ready: true },
+        update: { version: "1.2.4-nightly29854900", ready: true },
       },
     ]);
 

@@ -11,9 +11,9 @@ const CHECK_EVERY_MS = 60 * 60_000;
 const SEMVER =
   /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[A-Za-z][0-9A-Za-z-]*(\.[0-9A-Za-z-]+)*)?$/;
 
-/** A nightly's version has a `nightly` part: 1.2.4-nightly.20261005134259 or 1.3.0-rc.1.nightly.… */
+/** A nightly's version is `nightly` and when it was built, in minutes: 1.2.4-nightly29853462. */
 export function channelOf(version: string): UpdateChannel {
-  return prerelease(version).includes("nightly") ? "nightly" : "release";
+  return prerelease(version).some((part) => /^nightly\d+$/.test(part)) ? "nightly" : "release";
 }
 
 /**
