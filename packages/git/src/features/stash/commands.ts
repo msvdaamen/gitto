@@ -109,12 +109,7 @@ async function stashedFilePatch(
   signal?: AbortSignal,
 ): Promise<string | undefined> {
   const args = ["stash", "show", "-p", "--include-untracked", "-M", "--full-index"];
-  const patch = await readPatch(
-    repo.read,
-    [...args, ...PORCELAIN_DIFF.flags, sha],
-    signal,
-    PORCELAIN_DIFF.config,
-  );
+  const patch = await readPatch(repo.read, [...args, ...PORCELAIN_DIFF, sha], signal);
   const header = `diff --git a/${file.origPath ?? file.path} b/${file.path}\n`;
   // Where the header is, from the newline before it, the patch's first line or not.
   const start = `\n${patch}`.indexOf(`\n${header}`);

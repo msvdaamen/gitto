@@ -85,7 +85,7 @@ describe("the router", () => {
 
     expect(await call(gitRouter.version.check, undefined, { context: outdated })).toEqual({
       version: "2.39.3",
-      required: "2.40",
+      required: "2.41",
       supported: false,
     });
     expect(
@@ -94,7 +94,7 @@ describe("the router", () => {
       ),
     ).toMatchObject({
       code: "PRECONDITION_FAILED",
-      message: "Gitto needs Git 2.40 or newer, but Git 2.39.3 is installed.",
+      message: "Gitto needs Git 2.41 or newer, but Git 2.39.3 is installed.",
     });
 
     output = null;
@@ -104,7 +104,7 @@ describe("the router", () => {
       ),
     ).toMatchObject({
       code: "PRECONDITION_FAILED",
-      message: "Gitto couldn't find Git. Install Git 2.40 or newer.",
+      message: "Gitto couldn't find Git. Install Git 2.41 or newer.",
     });
 
     // Updated since: it works again without a restart.

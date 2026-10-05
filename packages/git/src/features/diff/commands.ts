@@ -88,17 +88,9 @@ async function getUntrackedFilePatch(
   signal?: AbortSignal,
 ): Promise<string> {
   await checkWorkingTreePath(repo, path);
-  const args = [
-    "diff",
-    "--no-index",
-    "--full-index",
-    ...PORCELAIN_DIFF.flags,
-    "--",
-    "/dev/null",
-    path,
-  ];
+  const args = ["diff", "--no-index", "--full-index", ...PORCELAIN_DIFF, "--", "/dev/null", path];
   try {
-    return await readPatch(repo.read, args, signal, PORCELAIN_DIFF.config);
+    return await readPatch(repo.read, args, signal);
   } catch (error) {
     // Exits with 1 when the files differ, which they always do, but also when it can't read one,
     // like a folder: the patch tells them apart.
@@ -149,19 +141,10 @@ function filePaths(file: { path: string; origPath: string | null }): string[] {
  */
 export const MAX_PATCH_BYTES = 10 * 1024 * 1024;
 
-/**
- * Runs a diff command for one file's patch, through `run`, with settings `config` (as with
- * `git -c`); stopped past `MAX_PATCH_BYTES`.
- */
-export function readPatch(
-  run: GitCommand,
-  args: string[],
-  signal?: AbortSignal,
-  config?: string[],
-): Promise<string> {
+/** Runs a diff command for one file's patch, through `run`; stopped past `MAX_PATCH_BYTES`. */
+export function readPatch(run: GitCommand, args: string[], signal?: AbortSignal): Promise<string> {
   return run(args, {
     signal,
-    config,
     maxOutput: { bytes: MAX_PATCH_BYTES, error: () => new ChangesTooLargeError(MAX_PATCH_BYTES) },
   });
 }
@@ -169,18 +152,10 @@ export function readPatch(
 /**
  * Undoes the user's diff settings that would change a patch from a porcelain command, which reads
  * them (plumbing doesn't): other prefixes than `a/` and `b/`, an external diff tool, a textconv
- * filter. The prefixes are settings rather than `--src-prefix` and `--dst-prefix`, which `git stash
- * show` mangles, and `--default-prefix` is newer than the git Gitto needs.
+ * filter. `--default-prefix` rather than `--src-prefix` and `--dst-prefix`, which `git stash show`
+ * mangles.
  */
-export const PORCELAIN_DIFF = {
-  config: [
-    "diff.noprefix=false",
-    "diff.mnemonicPrefix=false",
-    "diff.srcPrefix=a/",
-    "diff.dstPrefix=b/",
-  ],
-  flags: ["--no-color", "--no-ext-diff", "--no-textconv"],
-};
+export const PORCELAIN_DIFF = ["--default-prefix", "--no-color", "--no-ext-diff", "--no-textconv"];
 
 /** The contents of a file, by its object name; rejects with `FileTooLargeError` above `MAX_BLOB_BYTES`. */
 export async function getBlob(repo: Repo, oid: string, signal?: AbortSignal): Promise<string> {

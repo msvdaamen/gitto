@@ -29,7 +29,7 @@ describe("the git version dialog", () => {
   it("isn't shown with a supported git", async () => {
     rpc.git.version.check.mockResolvedValue({
       version: "2.43.0",
-      required: "2.40",
+      required: "2.41",
       supported: true,
     });
     renderDialog();
@@ -43,7 +43,7 @@ describe("the git version dialog", () => {
     const open = vi.spyOn(window, "open").mockReturnValue(null);
     rpc.git.version.check.mockResolvedValue({
       version: "2.39.3",
-      required: "2.40",
+      required: "2.41",
       supported: false,
     });
     const client = renderDialog();
@@ -51,7 +51,7 @@ describe("the git version dialog", () => {
 
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog).toHaveTextContent("Gitto needs a newer version of Git");
-    expect(dialog).toHaveTextContent("Git 2.39.3 is installed, but Gitto needs Git 2.40 or newer.");
+    expect(dialog).toHaveTextContent("Git 2.39.3 is installed, but Gitto needs Git 2.41 or newer.");
 
     // It can't be dismissed: nothing works until git is updated.
     await user.keyboard("{Escape}");
@@ -65,7 +65,7 @@ describe("the git version dialog", () => {
 
     rpc.git.version.check.mockResolvedValue({
       version: "2.51.0",
-      required: "2.40",
+      required: "2.41",
       supported: true,
     });
     await user.click(screen.getByRole("button", { name: "Check again" }));
@@ -75,11 +75,11 @@ describe("the git version dialog", () => {
   });
 
   it("says when git can't be found", async () => {
-    rpc.git.version.check.mockResolvedValue({ version: null, required: "2.40", supported: false });
+    rpc.git.version.check.mockResolvedValue({ version: null, required: "2.41", supported: false });
     renderDialog();
 
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog).toHaveTextContent("Gitto couldn't find Git");
-    expect(dialog).toHaveTextContent("Install Git 2.40 or newer to get started.");
+    expect(dialog).toHaveTextContent("Install Git 2.41 or newer to get started.");
   });
 });
