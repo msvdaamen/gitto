@@ -68,6 +68,13 @@ export class HeadMovedError extends MessageError {
   }
 }
 
+/** A file too large to be read whole, e.g. to show more of it around its changes. */
+export class FileTooLargeError extends MessageError {
+  constructor(bytes: number) {
+    super(`This file is ${(bytes / 1024 / 1024).toFixed(1)} MB, too large to show more of it.`);
+  }
+}
+
 /** No repository with that id has been added to Gitto. */
 export class RepositoryNotFoundError extends MessageError {
   constructor(readonly repositoryId: string) {
