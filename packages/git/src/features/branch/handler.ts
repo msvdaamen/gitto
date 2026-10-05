@@ -9,7 +9,7 @@ const os = implement(BranchContract).$context<GitContext>();
 export const branchRouter = os.router({
   create: os.create
     .use(withRepo)
-    .handler(({ context, input }) => createBranch(context.repo, input.name)),
+    .handler(({ context, input }) => createBranch(context.repo, input.name, input.from)),
   switch: os.switch
     .use(withRepo)
     .handler(({ context, input }) => switchBranch(context.repo, input.ref)),

@@ -41,7 +41,32 @@ export function useSwitchBranch(repositoryId: () => string) {
   });
 }
 
-/** Whether a switch of branches (see `useSwitchBranch`) is running, and why it last failed. */
+/**
+ * Creates a branch at the branch `from`, by its full ref name, and switches to it, taking the
+ * uncommitted changes along, or keeping them in the stash when they conflict with it. That's a
+ * switch of branches, like `useSwitchBranch`'s: it's shown as one, and doesn't run alongside one.
+ * It counts as running until the repository has reloaded, also after a failure: it may have
+ * switched and stashed.
+ */
+export function useCreateBranchFrom(repositoryId: () => string) {
+  const queryClient = useQueryClient();
+  return useRepositoryOperation(
+    SWITCH,
+    repositoryId,
+    async (id, input: { name: string; from: string }) => {
+      try {
+        await rpc.git.branch.create({ repositoryId: id, ...input });
+      } finally {
+        await queryClient.invalidateQueries({ queryKey: gitKeys.repository(id) });
+      }
+    },
+  );
+}
+
+/**
+ * Whether a switch of branches (see `useSwitchBranch` and `useCreateBranchFrom`) is running, and
+ * why it last failed.
+ */
 export function useSwitchBranchState(repositoryId: () => string) {
   return useRepositoryOperationState(SWITCH, repositoryId);
 }

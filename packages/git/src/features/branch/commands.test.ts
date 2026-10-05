@@ -288,3 +288,84 @@ describe("switching branches", () => {
     expect(git(path, "symbolic-ref", "--short", "HEAD")).toBe("a-mine");
   });
 });
+
+describe("creating a branch from another", () => {
+  it("switches to a new branch at it, taking the changes along", async () => {
+    const path = createBranchedRepo("create-from");
+    writeFileSync(join(path, "b.txt"), "staged\n");
+    git(path, "add", "b.txt");
+    writeFileSync(join(path, "new.txt"), "new\n");
+    const before = git(path, "status", "--porcelain");
+
+    await createBranch(await repos.open("create-from"), "topic", "refs/heads/other");
+    expect(git(path, "symbolic-ref", "--short", "HEAD")).toBe("topic");
+    expect(git(path, "rev-parse", "topic")).toBe(git(path, "rev-parse", "other"));
+    expect(git(path, "status", "--porcelain")).toBe(before);
+  });
+
+  it("brings changes to files it changes along, when they merge", async () => {
+    const path = createBranchedRepo("create-from-merge");
+    writeFileSync(join(path, "a.txt"), "a\nmine\n");
+
+    await createBranch(await repos.open("create-from-merge"), "topic", "refs/heads/other");
+    expect(git(path, "symbolic-ref", "--short", "HEAD")).toBe("topic");
+    expect(read(path, "a.txt")).toBe("other\na\nmine\n");
+    expect(git(path, "stash", "list")).toBe("");
+  });
+
+  it("keeps the changes in the stash when they conflict with it", async () => {
+    const path = createBranchedRepo("create-from-conflict");
+    writeFileSync(join(path, "a.txt"), "mine\n");
+
+    await expect(
+      createBranch(await repos.open("create-from-conflict"), "topic", "refs/heads/other"),
+    ).rejects.toThrow(
+      "Switched to topic, but your uncommitted changes conflict with it, so they're kept in the stash.",
+    );
+    expect(git(path, "rev-parse", "topic")).toBe(git(path, "rev-parse", "other"));
+    expect(git(path, "status", "--porcelain")).toBe("");
+    expect(git(path, "stash", "list")).toBe(
+      "stash@{0}: On main: Uncommitted changes when switching to topic",
+    );
+  });
+
+  it("makes one from a remote branch that doesn't track it", async () => {
+    const origin = createBranchedRepo("create-from-remote-origin");
+    const path = cloneRepo("create-from-remote", origin);
+    git(path, "config", "branch.autoSetupMerge", "always");
+
+    await createBranch(
+      await repos.open("create-from-remote"),
+      "topic",
+      "refs/remotes/origin/other",
+    );
+    expect(git(path, "symbolic-ref", "--short", "HEAD")).toBe("topic");
+    expect(git(path, "rev-parse", "topic")).toBe(git(path, "rev-parse", "origin/other"));
+    expect(git(path, "for-each-ref", "--format=%(upstream)", "refs/heads/topic")).toBe("");
+  });
+
+  it("leaves everything be when the name is taken", async () => {
+    const path = createBranchedRepo("create-from-taken");
+    writeFileSync(join(path, "a.txt"), "mine\n");
+
+    await expect(
+      createBranch(await repos.open("create-from-taken"), "main", "refs/heads/other"),
+    ).rejects.toThrow("fatal: a branch named 'main' already exists");
+    expect(git(path, "symbolic-ref", "--short", "HEAD")).toBe("main");
+    expect(git(path, "status", "--porcelain")).toBe("M a.txt");
+    expect(git(path, "stash", "list")).toBe("");
+  });
+
+  it("refuses to make one from what isn't a branch", async () => {
+    const path = createBranchedRepo("create-from-other-refs");
+    git(path, "tag", "v1");
+    const repo = await repos.open("create-from-other-refs");
+
+    for (const from of ["refs/heads/other~1", "refs/heads/missing", "refs/tags/v1"]) {
+      // oxlint-disable-next-line no-await-in-loop -- one at a time, on purpose.
+      await expect(createBranch(repo, "topic", from)).rejects.toThrow(`${from} isn't a branch.`);
+    }
+    expect(git(path, "symbolic-ref", "--short", "HEAD")).toBe("main");
+    expect(git(path, "branch", "--format=%(refname:short)")).toBe("main\nother");
+  });
+});
