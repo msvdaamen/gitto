@@ -1,10 +1,11 @@
 import { ChangesTooLargeError, FileTooLargeError, GitError } from "../../core/errors";
 import type { GitCommand, Repo } from "../../core/repo";
-import { MAX_BLOB_BYTES } from "./limits";
+import { MAX_BLOB_BYTES, MAX_PATCH_BYTES } from "./limits";
 import { parseDiff } from "./parse";
 import type { ChangedFile } from "./schema";
 import { checkWorkingTreePath } from "./working-tree";
 
+/** The files the commit `sha` changed compared to its first parent, with their line counts. */
 export async function getCommitFiles(
   repo: Repo,
   sha: string,
@@ -133,13 +134,6 @@ async function emptyTree(run: GitCommand): Promise<string> {
 function filePaths(file: { path: string; origPath: string | null }): string[] {
   return file.origPath ? [file.path, file.origPath] : [file.path];
 }
-
-/**
- * The size of the largest patch sent to the renderer, which parses and highlights all of it. The UI
- * asks before showing a change of many lines, but can't tell how many there are in a file without
- * line counts, like an untracked one: a log of hundreds of megabytes, say.
- */
-export const MAX_PATCH_BYTES = 10 * 1024 * 1024;
 
 /** How a file's patch is read. */
 export interface PatchOptions {

@@ -3,6 +3,14 @@ import type { LucideIcon } from "lucide-solid";
 import type { JSX } from "solid-js";
 import { Dynamic } from "solid-js/web";
 
+const variants = {
+  primary:
+    "border-[#ad7ada] bg-[linear-gradient(135deg,#c696ed,#9f72db)] text-[#1f1328] shadow-[0_8px_22px_rgba(133,81,186,.2)] enabled:hover:bg-[linear-gradient(135deg,#d0a3f3,#aa7be4)]",
+  secondary:
+    "bg-panel-raised text-text enabled:hover:border-[color-mix(in_srgb,var(--primary)_45%,var(--border))] enabled:hover:bg-panel-hover",
+  ghost: "border-transparent bg-transparent text-text-soft enabled:hover:bg-panel-hover",
+};
+
 export function Button(props: {
   children: JSX.Element;
   icon?: LucideIcon;
@@ -12,14 +20,6 @@ export function Button(props: {
   class?: string;
   onClick?: () => void;
 }) {
-  const variants = {
-    primary:
-      "border-[#ad7ada] bg-[linear-gradient(135deg,#c696ed,#9f72db)] text-[#1f1328] shadow-[0_8px_22px_rgba(133,81,186,.2)] enabled:hover:bg-[linear-gradient(135deg,#d0a3f3,#aa7be4)]",
-    secondary:
-      "bg-panel-raised text-text enabled:hover:border-[color-mix(in_srgb,var(--primary)_45%,var(--border))] enabled:hover:bg-panel-hover",
-    ghost: "border-transparent bg-transparent text-text-soft enabled:hover:bg-panel-hover",
-  };
-
   return (
     <button
       type={props.type ?? "button"}

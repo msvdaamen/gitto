@@ -14,6 +14,12 @@ export class GitError extends Error {
     super(message);
     this.name = new.target.name;
   }
+
+  /** This failure worded as `message`; of the same class, so it reaches the renderer the same way. */
+  withMessage(message: string): GitError {
+    const Class = this.constructor as typeof GitError;
+    return new Class(message, this.args, this.exitCode, this.stderr, this.stdout);
+  }
 }
 
 /** An error that's only a message for the user; `name` is its class's, as for `GitError`. */

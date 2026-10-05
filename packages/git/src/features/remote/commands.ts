@@ -7,8 +7,15 @@ import {
   PullInterruptedError,
   RepositoryChangedError,
 } from "../../core/errors";
-import { currentBranch, refExists, resolveRef, type GitCommand, type Repo } from "../../core/repo";
-import { gitDirs, type GitDirs } from "../watch/git-dirs";
+import { gitDirs, type GitDirs } from "../../core/git-dirs";
+import {
+  currentBranch,
+  hasConflicts,
+  refExists,
+  resolveRef,
+  type GitCommand,
+  type Repo,
+} from "../../core/repo";
 import { NO_BRANCH, noUpstream, REBASING } from "./pull-blocker";
 
 /**
@@ -411,10 +418,6 @@ interface Progress {
   applying: boolean;
 }
 
-async function hasConflicts(run: GitCommand): Promise<boolean> {
-  return (await run(["ls-files", "--unmerged"])) !== "";
-}
-
 function exists(file: string): Promise<boolean> {
   return stat(file).then(
     () => true,
@@ -506,7 +509,5 @@ function withoutHints(error: GitError): GitError {
     .filter((line) => !line.startsWith("hint:"))
     .join("\n")
     .trim();
-  if (!message || message === error.message) return error;
-  const Class = error.constructor as typeof GitError;
-  return new Class(message, error.args, error.exitCode, error.stderr);
+  return !message || message === error.message ? error : error.withMessage(message);
 }

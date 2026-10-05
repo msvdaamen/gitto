@@ -3,11 +3,12 @@ import { basename, dirname, relative, sep } from "node:path";
 
 import { subscribe, type AsyncSubscription } from "@parcel/watcher";
 
+import { gitDirs } from "../../core/git-dirs";
 import type { Repo } from "../../core/repo";
 import { trace } from "../../core/trace";
 import { statusSnapshot } from "../status/commands";
 import { Batches } from "./batches";
-import { classify, gitDirs, inside } from "./git-dirs";
+import { classify, inside } from "./git-dirs";
 import type { GitDirChange } from "./schema";
 
 /**

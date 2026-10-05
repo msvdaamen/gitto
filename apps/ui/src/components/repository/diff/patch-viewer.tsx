@@ -22,7 +22,7 @@ import Minus from "lucide-solid/icons/minus";
 import Plus from "lucide-solid/icons/plus";
 import { createEffect, createMemo, createSignal, on, onCleanup, untrack } from "solid-js";
 
-import { useConnected } from "@/components/ui/virtual-list";
+import { useConnected } from "@/hooks/connected";
 import type { DiffStyle } from "@/hooks/diff-style";
 import { useTheme } from "@/hooks/theme";
 
@@ -64,8 +64,6 @@ export interface LineStaging {
 export interface EditSession {
   /** The version of the file on disk the edits are of (see `readWorkingTreeFile`). */
   version: string;
-  /** The file as the editing started. */
-  text: string;
   /** Drops the edits made since the last save, and stops editing. */
   discard: () => void;
   /** Whether there's a selection for Esc to collapse, or several to make one, in the editor. */
@@ -547,7 +545,6 @@ export default function PatchViewer(props: {
         opened.focus();
         props.onEditing?.({
           version: whole.version,
-          text: opened.getText(),
           discard: () => void stopEditing(true),
           hasSelection: () => {
             const selections = opened.getViewState().selections ?? [];
@@ -810,16 +807,16 @@ class ViewerFileDiff extends VirtualizedFileDiff<HunkButton, undefined> {
     this.hunksRenderer.setExpandedHunksMap(expanded);
   }
 
-  /**
-   * Names the diff being edited in the highlighting cache, which the library leaves unnamed: once
-   * editing stops, a diff with edits is highlighted again, in the workers only if it has a name,
-   * on the main thread otherwise (1.7s for 2,500 lines, the window frozen).
-   */
   /** The diff being edited, while it is. */
   editedDiff(): FileDiffMetadata | undefined {
     return this.getLatestDiff();
   }
 
+  /**
+   * Names the diff being edited in the highlighting cache, which the library leaves unnamed: once
+   * editing stops, a diff with edits is highlighted again, in the workers only if it has a name,
+   * on the main thread otherwise (1.7s for 2,500 lines, the window frozen).
+   */
   nameEditedDiff(cacheKey: string) {
     const diff = this.getLatestDiff();
     if (diff && diff.cacheKey == null) diff.cacheKey = cacheKey;

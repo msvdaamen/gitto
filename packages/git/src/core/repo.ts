@@ -143,6 +143,11 @@ export async function refExists(run: GitCommand, ref: string): Promise<boolean> 
   return (await resolveRef(run, ref)) !== null;
 }
 
+/** Whether the index has unmerged files, as after a merge or pop that conflicted. */
+export async function hasConflicts(run: GitCommand): Promise<boolean> {
+  return (await run(["ls-files", "--unmerged"])) !== "";
+}
+
 /** The checked-out branch's name; `null` when HEAD is detached. */
 export async function currentBranch(run: GitCommand): Promise<string | null> {
   let ref: string;

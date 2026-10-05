@@ -119,8 +119,6 @@ export function createAutosave(save: SaveFile, delayMs = AUTOSAVE_DELAY_MS) {
   };
 }
 
-export type Autosave = ReturnType<typeof createAutosave>;
-
 /**
  * Whether saving failed because the file changed, or went, on disk since it was read: the main
  * process's error for that (see `toApiError`), which an overwrite doesn't get.

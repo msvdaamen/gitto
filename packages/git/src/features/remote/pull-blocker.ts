@@ -10,7 +10,7 @@ export const REBASING = "A rebase is under way. Continue or abort it, then pull.
  * Why a detached HEAD can't be pulled into, when it's not known whether a rebase is under way:
  * the status, which the UI goes by, doesn't say.
  */
-export const DETACHED = "Not on a branch: HEAD is detached, or a rebase is under way.";
+const DETACHED = "Not on a branch: HEAD is detached, or a rebase is under way.";
 
 /** Why `branch` can't be pulled into when it has no upstream. */
 export function noUpstream(branch: string): string {

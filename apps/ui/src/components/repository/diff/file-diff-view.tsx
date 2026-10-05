@@ -28,12 +28,12 @@ import {
   Switch,
 } from "solid-js";
 
-import { FileStatusBadge } from "@/components/repository/details/changed-file-list";
 import { Button, IconButton } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
+import { FileStatusBadge } from "@/components/ui/file-status-badge";
 import { LineStats } from "@/components/ui/line-stats";
 import { diffFileKey, isSameSource, isUncommitted, type DiffSource } from "@/git/diff-source";
-import { summarizePatch, patchVersion } from "@/git/patch";
+import { hasHunks, isLink, patchVersion, stagedWhole, summarizePatch } from "@/git/patch";
 import { fetchBlob } from "@/git/queries/diff";
 import {
   fetchFilePatch,
@@ -42,7 +42,7 @@ import {
   useFilePatch,
   type FilePatch,
 } from "@/git/queries/file-diff";
-import { hasHunks, useStageFile, useStageLines } from "@/git/queries/staging";
+import { useStageFile, useStageLines } from "@/git/queries/staging";
 import { useUnsuspendedData } from "@/git/queries/unsuspended";
 import { useDelayed } from "@/hooks/delayed";
 import { useDiffStyle } from "@/hooks/diff-style";
@@ -145,8 +145,8 @@ export function prefetchFileDiff(
  * the file has none left on its side, that's said instead.
  *
  * An uncommitted file can be staged, or unstaged, whole, or its lines a hunk or a selection at a
- * time (see `PatchViewer`); one at a time. Once that leaves it without changes on its side, the next file in its
- * list opens.
+ * time (see `PatchViewer`), one at a time. Once that leaves it without changes on its side, the next
+ * file in its list opens.
  */
 export function FileDiffView(props: {
   repositoryId: string;
@@ -715,22 +715,6 @@ function Loading() {
       <EmptyState icon={LoaderCircle} loading title="Loading changes…" class="h-full" />
     </Show>
   );
-}
-
-/**
- * Whether `patch`'s lines can only be staged all at once: a link's, whose contents are the path it
- * points to, a submodule's, or a file's that changed type, which git has as two files.
- */
-function stagedWhole(patch: string): boolean {
-  const body = patch.indexOf("\n@@ ");
-  const header = body === -1 ? patch : patch.slice(0, body);
-  return / 1[26]0000$/m.test(header) || patch.includes("\ndiff --git ");
-}
-
-/** Whether `patch` is of a symbolic link, whose contents are the path it points to. */
-function isLink(patch: string): boolean {
-  const body = patch.indexOf("\n@@ ");
-  return / 120000$/m.test(body === -1 ? patch : patch.slice(0, body));
 }
 
 /** Whether a key pressed in `target` is typing, e.g. in the commit message. */

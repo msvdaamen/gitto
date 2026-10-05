@@ -15,9 +15,9 @@ import { useDelayed } from "@/hooks/delayed";
 import type { ScrollId } from "@/lib/scroll";
 
 import { AuthorTooltipProvider } from "./author-tooltip";
-import { COLUMNS, MIN_WIDTH } from "./columns";
+import { COLUMNS, MIN_WIDTH, ROW_HEIGHT } from "./columns";
 import { HistoryCommitRow } from "./commit-row";
-import { graphWidth, ROW_HEIGHT } from "./history-graph";
+import { graphWidth } from "./history-graph";
 import { optionId } from "./history-option";
 import { HistoryStashRow } from "./stash-row";
 import { HistoryWipRow } from "./wip-row";

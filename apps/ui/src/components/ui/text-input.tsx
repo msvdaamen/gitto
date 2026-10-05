@@ -6,7 +6,6 @@ import { Dynamic } from "solid-js/web";
 export function TextInput(props: {
   value?: string;
   placeholder?: string;
-  label?: string;
   onChange?: (value: string) => void;
   compact?: boolean;
   icon?: LucideIcon;
@@ -20,7 +19,6 @@ export function TextInput(props: {
       value={props.value}
       onChange={props.onChange}
     >
-      {props.label && <TextField.Label>{props.label}</TextField.Label>}
       {props.icon ? <Dynamic component={props.icon} size={15} strokeWidth={1.8} /> : undefined}
       <TextField.Input
         class="w-full min-w-0 border-0 bg-transparent text-text outline-0 placeholder:text-faint"

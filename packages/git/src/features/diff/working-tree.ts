@@ -20,7 +20,7 @@ import { MAX_BLOB_BYTES } from "./limits";
  * (with `..`, or through a link) or into the git directory, and with `WorkingTreeFileNotFoundError`
  * if there's nothing there.
  */
-export function resolveWorkingTreePath(repo: Repo, path: string): Promise<string> {
+function resolveWorkingTreePath(repo: Repo, path: string): Promise<string> {
   return confine(repo, path, true);
 }
 
@@ -65,7 +65,7 @@ function isPlain(path: string): boolean {
 }
 
 /** A file in the working tree as it was read, and `version`, which names its bytes. */
-export interface WorkingTreeFile {
+interface WorkingTreeFile {
   contents: string;
   /** Changes whenever the file's bytes do: what a save checks the file still has. */
   version: string;
