@@ -11,7 +11,7 @@ const rpc = vi.hoisted(() => ({
   git: {
     diff: {
       commitFiles: async () => FILES,
-      commitFilePatch: vi.fn(async ({ path }: { path: string }) => `patch of ${path}`),
+      commitFilePatch: vi.fn(patchOf),
     },
   },
 }));
@@ -24,9 +24,14 @@ vi.mock("./patch-viewer", () => ({
     createEffect(on(() => props.patch, props.onShown));
     return <pre>{props.patch}</pre>;
   },
+  preparePatch: async () => undefined,
 }));
 
-// A function declaration, so it's hoisted above `vi.hoisted` too.
+// Function declarations, so they're hoisted above `vi.hoisted` too.
+async function patchOf({ path }: { path: string }) {
+  return `patch of ${path}`;
+}
+
 function file(path: string, additions: number | null = 1, deletions: number | null = 0) {
   return { path, status: "modified", origPath: null, additions, deletions } as const;
 }
@@ -57,6 +62,7 @@ function renderView(
 describe("a file's changes", () => {
   afterEach(() => {
     rpc.git.diff.commitFilePatch.mockClear();
+    rpc.git.diff.commitFilePatch.mockImplementation(patchOf);
   });
 
   it("shows the file's patch, a step away from the commit's other files", async () => {
@@ -84,21 +90,30 @@ describe("a file's changes", () => {
         />
       </QueryClientProvider>
     ));
+    let next!: (patch: string) => void;
+    rpc.git.diff.commitFilePatch.mockImplementation(({ path }) =>
+      path === "b.txt" ? new Promise<string>((done) => (next = done)) : patchOf({ path }),
+    );
     expect(await screen.findByText("patch of a.txt")).toBeInTheDocument();
 
-    rpc.git.diff.commitFilePatch.mockClear();
-    let next!: (patch: string) => void;
-    rpc.git.diff.commitFilePatch.mockImplementationOnce(
-      () => new Promise<string>((done) => (next = done)),
-    );
     await userEvent.click(screen.getByRole("button", { name: "Next file" }));
-    expect(rpc.git.diff.commitFilePatch).toHaveBeenCalledOnce();
     expect(screen.getByText("patch of a.txt")).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Changes in a.txt" })).toBeInTheDocument();
 
     next("patch of b.txt");
     expect(await screen.findByText("patch of b.txt")).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Changes in b.txt" })).toBeInTheDocument();
+  });
+
+  it("loads the files a step away ahead, once it's on show", async () => {
+    renderView(FILES[1]!);
+
+    expect(await screen.findByText("patch of b.txt")).toBeInTheDocument();
+    await vi.waitFor(() =>
+      expect(
+        rpc.git.diff.commitFilePatch.mock.calls.map(([input]) => input.path).toSorted(),
+      ).toEqual(["a.txt", "b.txt", "c.txt"]),
+    );
   });
 
   it("can't step past the first file", async () => {

@@ -31,6 +31,8 @@ export function CommitDetails(props: {
   onOpenFile?: (file: ChangedFile) => void;
   /** The path of the file whose changes are on show, if any. */
   openPath?: string;
+  /** Loads the changes in one of a commit's files ahead, as it's likely to be opened. */
+  onPrefetchFile?: (file: ChangedFile) => void;
 }) {
   const [scrollElement, setScrollElement] = createSignal<HTMLDivElement>();
   // The selected row and its repository, kept while the selection is briefly empty: switching
@@ -74,6 +76,7 @@ export function CommitDetails(props: {
                 scrollElement={scrollElement()}
                 onOpenFile={props.onOpenFile}
                 openPath={props.openPath}
+                onPrefetchFile={props.onPrefetchFile}
               />
             }
           >
@@ -101,6 +104,7 @@ function SelectedCommit(props: {
   scrollElement: HTMLElement | undefined;
   onOpenFile?: (file: ChangedFile) => void;
   openPath?: string;
+  onPrefetchFile?: (file: ChangedFile) => void;
 }) {
   const details = useCommitDetails(
     () => props.repositoryId,
@@ -137,6 +141,7 @@ function SelectedCommit(props: {
         // Only once the files on show are this commit's, so another's aren't opened as its.
         onOpen={shown()?.commit.id === props.sha ? props.onOpenFile : undefined}
         openPath={props.openPath}
+        onPrefetch={shown()?.commit.id === props.sha ? props.onPrefetchFile : undefined}
       />
     </div>
   );

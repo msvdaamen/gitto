@@ -1,5 +1,6 @@
 // The diff viewer, from @pierre/diffs. Loaded on its own (see `FileDiffView`), as it brings Shiki.
 import {
+  getSharedHighlighter,
   hydratePartialDiff,
   parseDiffFromFile,
   parsePatchFiles,
@@ -8,8 +9,9 @@ import {
   type FileDiffLoadedFiles,
   type FileDiffMetadata,
   type FileDiffOptions,
+  type PostRenderPhase,
 } from "@pierre/diffs";
-import { getOrCreateWorkerPoolSingleton } from "@pierre/diffs/worker";
+import { getOrCreateWorkerPoolSingleton, type WorkerPoolManager } from "@pierre/diffs/worker";
 import { createEffect, createMemo, on, onCleanup, untrack } from "solid-js";
 
 import { useConnected } from "@/components/ui/virtual-list";
@@ -21,16 +23,35 @@ const WORKERS = 2;
 
 const THEMES = { dark: "pierre-dark", light: "pierre-light" } as const;
 
-/** The app's background and colours for added and removed lines, in place of the theme's. */
-const APP_COLORS = `:host {
+/**
+ * The app's background and colours for added and removed lines, in place of the theme's, and the
+ * focus ring on the buttons that show more lines (see `focusableExpandButtons`).
+ */
+const APP_CSS = `:host {
   --diffs-dark-bg: var(--bg);
   --diffs-light-bg: var(--bg);
   --diffs-addition-color-override: var(--mint);
   --diffs-deletion-color-override: var(--coral);
+}
+[data-expand-button]:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
 }`;
 
-const workerPool = () =>
-  getOrCreateWorkerPoolSingleton({
+let pool: WorkerPoolManager | undefined;
+
+/** The workers that highlight, started the first time they're needed. */
+function workerPool(): WorkerPoolManager {
+  if (pool) return pool;
+  // The main thread has a highlighter of its own, which only draws plain text in the viewer (and
+  // edits, in the library's editor): Shiki's JavaScript engine does, without loading and compiling
+  // the WebAssembly one there. The first one asked for is the one that's shared, so it's this.
+  void getSharedHighlighter({
+    themes: [THEMES.dark, THEMES.light],
+    langs: ["text"],
+    preferredHighlighter: "shiki-js",
+  }).catch((error: unknown) => console.error("Couldn't start the highlighter", error));
+  pool = getOrCreateWorkerPoolSingleton({
     poolOptions: {
       workerFactory: () =>
         new Worker(new URL("@pierre/diffs/worker/worker.js", import.meta.url), { type: "module" }),
@@ -40,6 +61,8 @@ const workerPool = () =>
     // diff of thousands of lines (1.5s against 3s for 6,000), and no slower on small ones.
     highlighterOptions: { theme: THEMES, preferredHighlighter: "shiki-wasm" },
   });
+  return pool;
+}
 
 /**
  * How long a diff waits for its highlighting before it's shown without, until it's highlighted:
@@ -78,7 +101,7 @@ export default function PatchViewer(props: {
   onFilesError: (message: string | undefined) => void;
 }) {
   const { theme } = useTheme();
-  const fileDiff = createMemo(() => parsePatch(props.patch, props.cacheKey));
+  const fileDiff = createMemo(() => parsed(props.patch, props.cacheKey));
   let scroller: HTMLDivElement | undefined;
   let content: HTMLDivElement | undefined;
   let instance: VirtualizedFileDiff<undefined, undefined> | undefined;
@@ -95,7 +118,8 @@ export default function PatchViewer(props: {
     diffStyle,
     // The view's own header names the file.
     disableFileHeader: true,
-    unsafeCSS: APP_COLORS,
+    unsafeCSS: APP_CSS,
+    onPostRender: focusableExpandButtons,
     // Without the buttons to show more, once the whole file couldn't be loaded.
     hunkSeparators: shown && failures.has(shown) ? "simple" : "line-info",
     loadDiffFiles: async (diff) => {
@@ -185,6 +209,28 @@ export default function PatchViewer(props: {
   );
 }
 
+/**
+ * Makes the buttons that show more lines reachable with the keyboard, after each render, as the
+ * library draws them as `div`s that take a click: Enter or Space clicks the one with the focus.
+ */
+function focusableExpandButtons(container: HTMLElement, _: unknown, phase: PostRenderPhase) {
+  const root = container.shadowRoot;
+  if (!root || phase === "unmount") return;
+  for (const button of root.querySelectorAll<HTMLElement>("[data-expand-button]:not([tabindex])")) {
+    button.tabIndex = 0;
+    button.setAttribute("aria-label", "Show unmodified lines");
+  }
+  if (phase === "mount") root.addEventListener("keydown", clickExpandButton);
+}
+
+function clickExpandButton(event: Event) {
+  const { key, target } = event as KeyboardEvent;
+  if (key !== "Enter" && key !== " ") return;
+  if (!(target instanceof HTMLElement) || !target.hasAttribute("data-expand-button")) return;
+  event.preventDefault();
+  target.click();
+}
+
 /** Resolves once `diff` is highlighted, or `ms` later; never rejects. */
 function highlighted(diff: FileDiffMetadata, ms: number): Promise<void> {
   return Promise.race([
@@ -194,6 +240,33 @@ function highlighted(diff: FileDiffMetadata, ms: number): Promise<void> {
       .catch(() => undefined),
     new Promise<void>((resolve) => setTimeout(resolve, ms)),
   ]);
+}
+
+/** Patches parsed lately, by their cache key, so one prepared ahead isn't parsed again. */
+const parsedPatches = new Map<string, { patch: string; diff: FileDiffMetadata }>();
+const PARSED_PATCHES_KEPT = 16;
+
+/** `parsePatch`, of a patch that may have been parsed lately. */
+function parsed(patch: string, cacheKey: string): FileDiffMetadata {
+  const kept = parsedPatches.get(cacheKey);
+  if (kept?.patch === patch) return kept.diff;
+  const diff = parsePatch(patch, cacheKey);
+  parsedPatches.delete(cacheKey);
+  parsedPatches.set(cacheKey, { patch, diff });
+  // The oldest go first: a map keeps the order things were put in.
+  for (const key of parsedPatches.keys()) {
+    if (parsedPatches.size <= PARSED_PATCHES_KEPT) break;
+    parsedPatches.delete(key);
+  }
+  return diff;
+}
+
+/**
+ * Parses and highlights a patch ahead of showing it, with the same `cacheKey`, so it shows at once.
+ * Rejects if it can't be parsed.
+ */
+export async function preparePatch(patch: string, cacheKey: string): Promise<void> {
+  await workerPool().primeDiffHighlightCache(parsed(patch, cacheKey));
 }
 
 /** The one file in `patch`. */

@@ -51,6 +51,7 @@ export function ChangedFilesSection(props: {
   scrollElement: HTMLElement | undefined;
   onOpen?: (file: ChangedFile) => void;
   openPath?: string;
+  onPrefetch?: (file: ChangedFile) => void;
 }) {
   return (
     <div class="border-b border-border px-2.5 py-3">
@@ -65,6 +66,7 @@ export function ChangedFilesSection(props: {
         scrollElement={props.scrollElement}
         onOpen={props.onOpen}
         openPath={props.openPath}
+        onPrefetch={props.onPrefetch}
       />
     </div>
   );

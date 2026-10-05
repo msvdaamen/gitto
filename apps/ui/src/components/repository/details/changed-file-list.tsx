@@ -1,7 +1,7 @@
 import type { ChangedFile, FileStatus } from "@gitto/git/types";
 import { cn } from "cn";
 import type { LucideIcon } from "lucide-solid";
-import { Show } from "solid-js";
+import { onCleanup, Show } from "solid-js";
 import { Dynamic } from "solid-js/web";
 
 import { LineStats } from "@/components/ui/line-stats";
@@ -53,6 +53,9 @@ export interface FileAction {
   run: (file: ChangedFile) => void;
 }
 
+/** How long the pointer rests on a file before it's taken for one about to be opened. */
+const HOVER_MS = 80;
+
 /** Height of a file's row, and the space below it. */
 const ROW_HEIGHT = 42;
 const ROW_GAP = 2;
@@ -71,7 +74,11 @@ export function ChangedFileList(props: {
   onOpen?: (file: ChangedFile) => void;
   /** The path of the file whose changes are on show, if one's in the list. */
   openPath?: string;
+  /** Loads a file's changes ahead, once the pointer rests on it: it's likely to be opened. */
+  onPrefetch?: (file: ChangedFile) => void;
 }) {
+  let hover: ReturnType<typeof setTimeout> | undefined;
+  onCleanup(() => clearTimeout(hover));
   return (
     <VirtualRows
       items={props.files}
@@ -98,6 +105,11 @@ export function ChangedFileList(props: {
             aria-label={props.onOpen ? `Show changes in ${file().path}` : undefined}
             aria-current={(props.onOpen && props.openPath === file().path) || undefined}
             onClick={props.onOpen && (() => props.onOpen?.(file()))}
+            onPointerEnter={() => {
+              clearTimeout(hover);
+              if (props.onPrefetch) hover = setTimeout(() => props.onPrefetch?.(file()), HOVER_MS);
+            }}
+            onPointerLeave={() => clearTimeout(hover)}
           >
             <FileStatusBadge status={file().status} />
             <span class="flex min-w-0 flex-col gap-0.5">

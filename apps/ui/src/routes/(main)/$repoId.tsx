@@ -1,10 +1,11 @@
 import type { ChangedFile } from "@gitto/git/types";
+import { useQueryClient } from "@tanstack/solid-query";
 import { createFileRoute } from "@tanstack/solid-router";
 import { cn } from "cn";
 import { createEffect, createMemo, createSignal, Show, Suspense } from "solid-js";
 
 import { CommitDetails } from "@/components/repository/details/commit-details";
-import { FileDiffView } from "@/components/repository/diff/file-diff-view";
+import { FileDiffView, prefetchFileDiff } from "@/components/repository/diff/file-diff-view";
 import { HistoryTable } from "@/components/repository/history/history-table";
 import { RefsSidebar } from "@/components/repository/sidebar/refs-sidebar";
 import { RepositoryToolbar } from "@/components/repository/toolbar";
@@ -29,6 +30,7 @@ function RouteComponent() {
   const repositoryId = createMemo((last: string) => params()?.repoId ?? last, "");
   useRepositoryWatcher(repositoryId);
 
+  const queryClient = useQueryClient();
   const [search, setSearch] = createSignal("");
   // Tagged with its repository: the route component is reused when switching repositories, and the
   // new one starts without a selection.
@@ -150,6 +152,10 @@ function RouteComponent() {
               if (rowId) openFileOf(rowId)(file);
             }}
             openPath={shownFile()?.file.path}
+            onPrefetchFile={(file) => {
+              const rowId = detailsId();
+              if (rowId) prefetchFileDiff(queryClient, repositoryId(), rowId, file);
+            }}
           />
         </aside>
 
