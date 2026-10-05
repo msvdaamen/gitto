@@ -4,6 +4,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
@@ -356,5 +357,41 @@ describe("saveWorkingTreeFile", () => {
     expect(await save(".git/config")).toBeInstanceOf(OutsideRepositoryError);
     expect(await save("latin1.txt")).toBeInstanceOf(NotUtf8Error);
     expect(readFileSync(join(path, "c.txt"), "utf8")).toBe("b\n");
+  });
+
+  it("takes a save over the version an earlier save of its own started from", async () => {
+    const repo = await createHistoryRepo("save-chained");
+    const path = paths.get("save-chained")!;
+    const { version } = await readWorkingTreeFile(repo, "a file.txt");
+    // Both sent before either's done, as the last edits are when the window closes.
+    await Promise.all([
+      saveWorkingTreeFile(repo, "a file.txt", "first\n", { version, overwrite: false }),
+      saveWorkingTreeFile(repo, "a file.txt", "second\n", { version, overwrite: false }),
+    ]);
+    expect(readFileSync(join(path, "a file.txt"), "utf8")).toBe("second\n");
+    // Not once something else wrote it since.
+    writeFileSync(join(path, "a file.txt"), "from an editor\n");
+    expect(
+      await rejection(
+        saveWorkingTreeFile(repo, "a file.txt", "third\n", { version, overwrite: false }),
+      ),
+    ).toBeInstanceOf(FileChangedOnDiskError);
+  });
+
+  it("makes a file that was deleted again when overwriting, and only then", async () => {
+    const repo = await createHistoryRepo("save-deleted");
+    const path = paths.get("save-deleted")!;
+    const { version } = await readWorkingTreeFile(repo, "a file.txt");
+    rmSync(join(path, "a file.txt"));
+
+    const error = await rejection(
+      saveWorkingTreeFile(repo, "a file.txt", "mine\n", { version, overwrite: false }),
+    );
+    expect(error).toBeInstanceOf(FileChangedOnDiskError);
+    expect(error).toMatchObject({ message: expect.stringContaining("was deleted") });
+    await saveWorkingTreeFile(repo, "a file.txt", "mine\n", { version, overwrite: true });
+    expect(readFileSync(join(path, "a file.txt"), "utf8")).toBe("mine\n");
+    // A new file's permissions, not anyone's to write.
+    expect(statSync(join(path, "a file.txt")).mode & 0o777).toBe(0o666 & ~process.umask());
   });
 });

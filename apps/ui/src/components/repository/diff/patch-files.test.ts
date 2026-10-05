@@ -47,6 +47,12 @@ describe("fitToPatch", () => {
     const crlf = lines(40, { 10: "ten" }).replaceAll("\n", "\r\n");
     expect(fitToPatch(changed10, "new", crlf)).toBe(lines(40, { 10: "ten" }));
   });
+
+  it("doesn't take a file mixing CRLF and LF for a patch with LF ones, which saving would change", () => {
+    // CRLF where the changes are (as `core.autocrlf` has git show them with LF), LF at the end.
+    const mixed = lines(40, { 10: "ten" }).replaceAll("\n", "\r\n").replace(/\r\n$/, "\n");
+    expect(() => fitToPatch(changed10, "new", mixed)).toThrow(/mixes CRLF and LF/);
+  });
 });
 
 describe("fitToLines", () => {

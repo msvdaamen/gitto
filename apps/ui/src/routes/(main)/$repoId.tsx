@@ -80,7 +80,9 @@ function RouteComponent() {
     if (await mayLeaveFile()) setOpenFile(undefined);
   };
   // Nor is another repository opened, or the home page, before the file's edits are saved.
-  useBlocker({ shouldBlockFn: async () => !(await mayLeaveFile()) });
+  // Not on unload, which it would block without asking: Electron doesn't show the prompt, so the
+  // window couldn't close (see `useFileEditing` for edits left as it does).
+  useBlocker({ shouldBlockFn: async () => !(await mayLeaveFile()), enableBeforeUnload: false });
   // What the details' file lists open, from the row they're of.
   const detailsFiles: FileOpener = {
     open: (source, file) => {

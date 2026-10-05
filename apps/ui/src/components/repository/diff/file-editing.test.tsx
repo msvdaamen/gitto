@@ -207,4 +207,34 @@ describe("editing an unstaged file", () => {
     fireEvent.keyDown(document.body, { key: "Escape" });
     expect(onClose).toHaveBeenCalledOnce();
   });
+
+  it("asks once when leaving is asked for twice, with the same answer for both", async () => {
+    rpc.git.diff.saveWorkingTreeFile.mockRejectedValue(changedOnDisk());
+    const { leave } = renderView(file("a.txt"));
+    await screen.findByText(/\+old/);
+    await startEditing();
+    viewer.onEdit!("mine\n");
+    await screen.findByText(/changed on disk/);
+
+    // Esc, then the back button, say.
+    const first = leave();
+    const second = leave();
+    await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    expect(await Promise.all([first, second])).toEqual([false, false]);
+  });
+
+  it("keeps editing when the changes can't be refetched meanwhile", async () => {
+    const { client } = renderView(file("a.txt"));
+    await screen.findByText(/\+old/);
+    await startEditing();
+
+    rpc.git.diff.unstagedFilePatch.mockRejectedValueOnce(
+      new Error("These changes are over 10 MB."),
+    );
+    await client.invalidateQueries({ queryKey: gitKeys.uncommitted("repo") });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.queryByText(/over 10 MB/)).not.toBeInTheDocument();
+    expect(screen.getByText(/\+old/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop editing (Esc)" })).toBeInTheDocument();
+  });
 });

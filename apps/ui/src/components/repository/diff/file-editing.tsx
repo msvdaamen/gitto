@@ -24,8 +24,12 @@ export function useFileEditing(props: {
   const [session, setSession] = createSignal<EditSession>();
   /** Why editing couldn't start. */
   const [startError, setStartError] = createSignal<string>();
-  /** Editing again once the file as it's on disk is on show, after dropping the edits. */
-  let reloading = false;
+  /**
+   * The file to edit again once it's on show as it is on disk, after its edits were dropped: only
+   * with that file's next patch, and not once another file is opened, or this one has no changes
+   * to show (see `cancelReload`), so no file is edited without being asked.
+   */
+  let reloading: string | undefined;
   // Saved to the file being edited when editing started, whichever is on show by then.
   const [editedPath, setEditedPath] = createSignal("");
   const autosave = createAutosave((text, version, overwrite) =>
@@ -56,9 +60,16 @@ export function useFileEditing(props: {
 
   /**
    * Stops editing, once what's left is saved, or the user says what to do with it; resolves to
-   * whether editing stopped (or wasn't on), which leaving the file waits for.
+   * whether editing stopped (or wasn't on), which leaving the file waits for. Asked again before
+   * that's known (Esc, then the back button, say), it's the same answer.
    */
-  async function leave(): Promise<boolean> {
+  let leaving: Promise<boolean> | undefined;
+  function leave(): Promise<boolean> {
+    leaving ??= saveAndStop().finally(() => (leaving = undefined));
+    return leaving;
+  }
+
+  async function saveAndStop(): Promise<boolean> {
     if (!editing()) return true;
     if (!(await autosave.flush())) {
       const choice = await ask();
@@ -80,26 +91,28 @@ export function useFileEditing(props: {
 
   /** Drops the edits, and edits the file as it is on disk once that's on show. */
   function reload() {
-    reloading = true;
+    reloading = editedPath();
     discard();
   }
 
   // Esc leaves edit mode, before the editor takes it to collapse the selection: only when there's
-  // one to collapse, or the editor's search is open, is it left to the editor.
+  // one to collapse, or the editor's search is open (which Esc closes), is it left to the editor.
   const onEscape = (event: KeyboardEvent) => {
     if (event.key !== "Escape" || !editing() || asking()) return;
     const target = event.composedPath()[0];
     if (target instanceof HTMLElement) {
       if (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
-      if (target.isContentEditable && session()?.hasSelection()) return;
+      const searching =
+        target.getRootNode() instanceof ShadowRoot &&
+        (target.getRootNode() as ShadowRoot).querySelector("[data-search-panel]") !== null;
+      if (target.isContentEditable && (searching || session()?.hasSelection())) return;
     }
     event.preventDefault();
     event.stopPropagation();
     void leave();
   };
-  // Edits not saved yet as the window closes are saved as it does: the save is under way before
-  // the page goes.
-  const onUnload = () => void autosave.flush();
+  // Edits not saved yet as the window closes are saved as it does: sent before the page goes.
+  const onUnload = () => autosave.flushNow();
   onMount(() => {
     window.addEventListener("keydown", onEscape, true);
     window.addEventListener("beforeunload", onUnload);
@@ -129,6 +142,11 @@ export function useFileEditing(props: {
         setSession(next);
         setEdited(false);
         if (next) autosave.start(next.version);
+        else if (editing()) {
+          // Ended without being asked to (the viewer went): what's left is saved all the same.
+          setEditing(false);
+          void autosave.flush().then(() => autosave.stop());
+        }
       },
       onEdit: (text: string) => {
         setEdited(true);
@@ -139,11 +157,15 @@ export function useFileEditing(props: {
         setStartError(message);
       },
     },
+    /** The patch went off the page, e.g. as the file has no changes left: no reload to finish. */
+    cancelReload() {
+      reloading = undefined;
+    },
     /** A patch was shown: the file as it's on disk, after a reload. */
     onShown() {
-      if (!reloading) return;
-      reloading = false;
-      start();
+      const reloaded = reloading;
+      reloading = undefined;
+      if (reloaded !== undefined && reloaded === props.path()) start();
     },
     /** The edit mode's button, and how saving is going. */
     Controls(controlProps: { editable: boolean }) {

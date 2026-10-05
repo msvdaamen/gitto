@@ -252,6 +252,8 @@ export default function PatchViewer(props: {
       if (finishEditing) {
         diffs.nameEditedDiff(`${shownFileKey}:edited:${++editedDiffs}`);
         finishEditing();
+        // Taken off the page while editing: that's over.
+        props.onEditing?.(undefined);
       }
       diffs.cleanUp();
       virtualizer.cleanUp();

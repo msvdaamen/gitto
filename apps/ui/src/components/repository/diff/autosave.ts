@@ -90,6 +90,17 @@ export function createAutosave(save: SaveFile, delayMs = AUTOSAVE_DELAY_MS) {
       await (unsaved === undefined ? saves : run(false));
       return unsaved === undefined && state().kind === "saved";
     },
+    /**
+     * Sends the edits that are left at once, as the window closes: not after a save under way,
+     * whose answer the window won't be there to get. Over the version that save started from,
+     * which the main process takes as the one it's saving (see `saveWorkingTreeFile`).
+     */
+    flushNow() {
+      clearTimeout(timer);
+      if (unsaved === undefined || version === undefined) return;
+      if (state().kind === "changed-on-disk") return;
+      void save(unsaved, version, false).catch(() => undefined);
+    },
     /** Saves the edits over the file whatever it is now; resolves to whether they're saved. */
     async overwrite(): Promise<boolean> {
       await run(true);
@@ -112,9 +123,8 @@ export type Autosave = ReturnType<typeof createAutosave>;
 
 /**
  * Whether saving failed because the file changed, or went, on disk since it was read: the main
- * process's error codes for those (see `toApiError`).
+ * process's error for that (see `toApiError`), which an overwrite doesn't get.
  */
 function isChangedOnDisk(error: unknown): boolean {
-  const code = (error as { code?: unknown } | null)?.code;
-  return code === "CONFLICT" || code === "NOT_FOUND";
+  return (error as { code?: unknown } | null)?.code === "CONFLICT";
 }

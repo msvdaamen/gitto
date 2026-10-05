@@ -90,4 +90,30 @@ describe("autosave", () => {
     expect(save).toHaveBeenLastCalledWith("ab", "v1", false);
     expect(autosave.state()).toEqual({ kind: "saved" });
   });
+
+  it("sends what's left at once as the window closes, over the version a save under way started from", async () => {
+    const save = vi
+      .fn<(text: string, version: string) => Promise<string>>()
+      .mockImplementationOnce(() => new Promise(() => {}))
+      .mockResolvedValue("v2");
+    const autosave = createAutosave(save, 100);
+    autosave.start("v0");
+    autosave.change("a");
+    await vi.advanceTimersByTimeAsync(100);
+    autosave.change("ab");
+
+    autosave.flushNow();
+    expect(save).toHaveBeenLastCalledWith("ab", "v0", false);
+  });
+
+  it("takes a file that's gone, or a repository, for a failed save, not one to overwrite", async () => {
+    const save = vi.fn(async () => {
+      throw apiError("NOT_FOUND", "Repository not found.");
+    });
+    const autosave = createAutosave(save, 100);
+    autosave.start("v0");
+    autosave.change("a");
+    expect(await autosave.flush()).toBe(false);
+    expect(autosave.state()).toEqual({ kind: "failed", message: "Repository not found." });
+  });
 });

@@ -209,7 +209,9 @@ export function FileDiffView(props: {
   const patchFile = createMemo(file, undefined, {
     equals: (a, b) => a.path === b.path && a.origPath === b.origPath && a.status === b.status,
   });
-  const patchEnabled = createMemo(() => !gone() && fetches());
+  // Not refetched while it's edited, as each save would: the view keeps the patch editing started
+  // from (see `file`), and gets the last one once editing stops.
+  const patchEnabled = createMemo(() => !editing() && !gone() && fetches());
   const patchQuery = useFilePatch(() => props.repositoryId, source, patchFile, patchEnabled);
   // Without Suspense: an uncommitted file's patch is refetched while it's on show.
   const livePatch = useUnsuspendedData(patchQuery);
@@ -456,7 +458,9 @@ export function FileDiffView(props: {
             >
               <Suspense fallback={<Loading />}>
                 <Show
-                  when={patchQuery.error}
+                  // Nor does an error take the editor's place: it's the last one's, from before.
+                  // (`null` either way: this is keyed, so `false` would make the viewer anew.)
+                  when={editing() ? null : patchQuery.error}
                   keyed
                   fallback={
                     <Show
@@ -467,6 +471,7 @@ export function FileDiffView(props: {
                     >
                       {(data) => {
                         onCleanup(() => {
+                          fileEditing.cancelReload();
                           setShownPatch(undefined);
                           setLoadingFiles(false);
                           setFilesError(undefined);

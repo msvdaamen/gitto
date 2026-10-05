@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, open, realpath, rename, rm, stat } from "node:fs/promises";
+import { open, realpath, rename, rm } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 
 import {
@@ -11,6 +11,7 @@ import {
   WorkingTreeFileNotFoundError,
 } from "../../core/errors";
 import type { Repo } from "../../core/repo";
+import { WriteQueue } from "../../core/runner";
 import { MAX_BLOB_BYTES } from "./limits";
 
 /**
@@ -76,12 +77,12 @@ export interface WorkingTreeFile {
  * `MAX_BLOB_BYTES`, like a blob, and with `NotUtf8Error` for one that isn't UTF-8.
  */
 export async function readWorkingTreeFile(repo: Repo, path: string): Promise<WorkingTreeFile> {
-  const bytes = await readBytes(await resolveWorkingTreePath(repo, path), path);
+  const { bytes } = await readFile(await resolveWorkingTreePath(repo, path), path);
   return { contents: decodeUtf8(bytes), version: versionOf(bytes) };
 }
 
-/** The bytes of the file at `resolved` (the path `path` leads to). */
-async function readBytes(resolved: string, path: string): Promise<Buffer> {
+/** The bytes and permissions of the file at `resolved` (the path `path` leads to). */
+async function readFile(resolved: string, path: string): Promise<{ bytes: Buffer; mode: number }> {
   // Not following a link put in its place since it was checked, and not waiting for a writer, as
   // opening a named pipe would: it's no file to read, which is only known once it's open.
   const file = await open(
@@ -92,7 +93,7 @@ async function readBytes(resolved: string, path: string): Promise<Buffer> {
     const stats = await file.stat();
     if (!stats.isFile()) throw new OutsideRepositoryError(path);
     if (stats.size > MAX_BLOB_BYTES) throw new FileTooLargeError(stats.size);
-    return await file.readFile();
+    return { bytes: await file.readFile(), mode: stats.mode };
   } finally {
     await file.close();
   }
@@ -102,11 +103,22 @@ function versionOf(bytes: Uint8Array): string {
   return createHash("sha1").update(bytes).digest("hex");
 }
 
+/** Saves to the same file, one after the other: a later one checks the file an earlier one wrote. */
+const saves = new WriteQueue();
+
+/**
+ * The version each file was at when Gitto last saved over it, and the one it saved, by its path
+ * on disk: a save over the first is one over the second, as long as nothing else wrote the file
+ * since. The last edits are sent as the window closes, without waiting for the version a save
+ * under way will leave the file at, which the window won't be there to get.
+ */
+const savedVersions = new Map<string, { from: string; to: string }>();
+
 /**
  * Saves `contents` as the file at `path` in the working tree, which has to be as it was read
- * (`version`) unless `overwrite`: rejects with `FileChangedOnDiskError` otherwise, or with
- * `WorkingTreeFileNotFoundError` once it's gone. Only for a save the user asked for: Gitto doesn't
- * write to the working tree on its own.
+ * (`version`, or one Gitto saved over it since) unless `overwrite`: rejects with
+ * `FileChangedOnDiskError` otherwise, or if it's gone, when `overwrite` makes it again. Only for a
+ * save the user asked for: Gitto doesn't write to the working tree on its own.
  *
  * The file keeps its permissions, and its CRLF line ends if it has them throughout: the edits can
  * have LF ones, as git shows a file with `core.autocrlf` in its patches. Written to a file next to
@@ -119,34 +131,69 @@ export async function saveWorkingTreeFile(
   contents: string,
   expected: { version: string; overwrite: boolean },
 ): Promise<string> {
-  const resolved = await resolveWorkingTreePath(repo, path);
-  if ((await lstat(join(await realpath(repo.path), path))).isSymbolicLink()) {
-    throw new OutsideRepositoryError(path);
-  }
-  const before = await readBytes(resolved, path);
-  const text = decodeUtf8(before);
-  if (!expected.overwrite && versionOf(before) !== expected.version) {
-    throw new FileChangedOnDiskError(path);
-  }
-  const bytes = Buffer.from(hasCrlfLineEnds(text) ? toCrlf(contents) : contents, "utf8");
-  const { mode } = await stat(resolved);
-  const temporary = join(dirname(resolved), `.${basename(resolved)}.${randomUUID()}.gitto`);
+  // In the order they're asked for, by the path they're asked for.
+  return saves.run(`${repo.path}\0${path}`, async () => {
+    // Not following a link at its end, which is refused below.
+    const target = await confine(repo, path, false);
+    const before = await readExisting(target, path);
+    let text = "";
+    if (before) {
+      text = decodeUtf8(before.bytes);
+      const version = versionOf(before.bytes);
+      const saved = savedVersions.get(target);
+      const unchanged =
+        version === expected.version || (saved?.from === expected.version && saved.to === version);
+      if (!expected.overwrite && !unchanged) throw new FileChangedOnDiskError(path);
+    } else if (!expected.overwrite) {
+      throw new FileChangedOnDiskError(path, "deleted");
+    }
+    const bytes = Buffer.from(hasCrlfLineEnds(text) ? toCrlf(contents) : contents, "utf8");
+    await replaceFile(target, bytes, before?.mode);
+    const written = versionOf(bytes);
+    savedVersions.set(target, { from: expected.version, to: written });
+    return written;
+  });
+}
+
+/**
+ * The bytes and permissions of the file at `target` (the path `path` leads to); `undefined` if
+ * there's none. Rejects for a link, or anything else that isn't a file.
+ */
+async function readExisting(
+  target: string,
+  path: string,
+): Promise<{ bytes: Buffer; mode: number } | undefined> {
   try {
-    const file = await open(temporary, "wx", mode & 0o7777);
+    return await readFile(target, path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    // `O_NOFOLLOW` refuses a link with ELOOP.
+    if ((error as NodeJS.ErrnoException).code === "ELOOP") throw new OutsideRepositoryError(path);
+    throw error;
+  }
+}
+
+/**
+ * Puts `bytes` in place of the file at `target`, all at once, with permissions `mode` (the file's
+ * own), or those of a new file if there was none.
+ */
+async function replaceFile(target: string, bytes: Uint8Array, mode?: number): Promise<void> {
+  const temporary = join(dirname(target), `.${basename(target)}.${randomUUID()}.gitto`);
+  try {
+    const file = await open(temporary, "wx", mode === undefined ? 0o666 : mode & 0o7777);
     try {
       await file.writeFile(bytes);
       // Permissions as they were, whatever the umask took off when it was made.
-      await file.chmod(mode & 0o7777);
+      if (mode !== undefined) await file.chmod(mode & 0o7777);
       await file.sync();
     } finally {
       await file.close();
     }
-    await rename(temporary, resolved);
+    await rename(temporary, target);
   } catch (error) {
     await rm(temporary, { force: true });
     throw error;
   }
-  return versionOf(bytes);
 }
 
 /** Whether every line of `text` but its last ends in CRLF. */
