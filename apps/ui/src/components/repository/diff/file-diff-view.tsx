@@ -32,7 +32,6 @@ import { FileStatusBadge } from "@/components/repository/details/changed-file-li
 import { Button, IconButton } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LineStats } from "@/components/ui/line-stats";
-import { stagingPaths } from "@/git/changes";
 import { diffFileKey, isSameSource, isUncommitted, type DiffSource } from "@/git/diff-source";
 import { summarizePatch, patchVersion } from "@/git/patch";
 import { fetchBlob } from "@/git/queries/diff";
@@ -43,7 +42,7 @@ import {
   useFilePatch,
   type FilePatch,
 } from "@/git/queries/file-diff";
-import { hasHunks, useStage, useStageLines, useUnstage } from "@/git/queries/staging";
+import { hasHunks, useStageFile, useStageLines } from "@/git/queries/staging";
 import { useUnsuspendedData } from "@/git/queries/unsuspended";
 import { useDelayed } from "@/hooks/delayed";
 import { useDiffStyle } from "@/hooks/diff-style";
@@ -146,7 +145,7 @@ export function prefetchFileDiff(
  * the file has none left on its side, that's said instead.
  *
  * An uncommitted file can be staged, or unstaged, whole, or its lines a hunk or a selection at a
- * time (see `PatchViewer`). Once that leaves it without changes on its side, the next file in its
+ * time (see `PatchViewer`); one at a time. Once that leaves it without changes on its side, the next file in its
  * list opens.
  */
 export function FileDiffView(props: {
@@ -285,23 +284,40 @@ export function FileDiffView(props: {
     file().status !== "deleted" &&
     !isLink(current()?.patch ?? "");
 
-  // Staging and unstaging lines.
+  // Staging and unstaging lines, or the whole file.
+  /** What's done with the file's changes: staged, or unstaged, by the side they're on. */
+  const stagingAction = () => (props.source.kind === "staged" ? "unstage" : "stage");
   const stageLines = useStageLines();
+  const stageFile = useStageFile();
+  /** The whole file is being staged, from saving its edits on. */
+  const [stagingWhole, setStagingWhole] = createSignal(false);
+  /** Lines, or the whole file, are being staged: nothing else is until they are. */
+  const staging = () => stageLines.isPending || stagingWhole();
   /** The patch lines were last staged from: none are again while it's on show and another's in. */
   const [stagedFrom, setStagedFrom] = createSignal<string>();
-  /** Why the last lines couldn't be staged, and of which file. */
+  /** Why the last lines, or the whole file, couldn't be staged, and of which file. */
   const [stagingError, setStagingError] = createSignal<{ key: string; message: string }>();
+  const failed = (key: string, error: unknown) =>
+    setStagingError({ key, message: error instanceof Error ? error.message : String(error) });
+  /**
+   * Once the file `key` names has no changes left on its side, on to `target`: the next file in
+   * its list, or the one before the last, as one would stage them one after the other. Not if
+   * another file was opened meanwhile.
+   */
+  const moveOn = (key: string, target: ChangedFile | undefined) => {
+    if (target && key === fileKey()) props.onOpen(props.source, target);
+  };
+
   const lineStaging = (): LineStaging | undefined => {
     const data = current();
     if (!isUncommitted(props.source) || editing() || !showsPatch() || !data) return undefined;
     if (stagedWhole(data.patch)) return undefined;
-    const action = props.source.kind === "staged" ? "unstage" : "stage";
+    const action = stagingAction();
     const last = stagedFrom();
     return {
       action,
       busy:
-        stageLines.isPending ||
-        (last !== undefined && shownPatch()?.patch === last && data.patch !== last),
+        staging() || (last !== undefined && shownPatch()?.patch === last && data.patch !== last),
       onStage: async (from, picked) => {
         const key = fileKey();
         setStagingError(undefined);
@@ -315,50 +331,51 @@ export function FileDiffView(props: {
             lines: picked,
           });
         } catch (error) {
-          setStagingError({ key, message: error instanceof Error ? error.message : String(error) });
+          failed(key, error);
           throw error;
         }
-        // The patch staged from stays on show until the one they leave is highlighted. Once there
-        // are none left on this side, on to the next file in the list, or the one before the last,
-        // as one would stage them one after the other: this one's stays on show until that one's
-        // is in.
+        // The patch staged from stays on show until the one they leave is highlighted; once there
+        // are none left, so does this file's until the next one's is in.
         setStagedFrom(from);
-        const target = hasHunks(left) ? undefined : (next() ?? previous());
-        if (target && key === fileKey()) props.onOpen(props.source, target);
+        if (!hasHunks(left)) moveOn(key, next() ?? previous());
       },
     };
   };
 
-  // Staging and unstaging the whole file.
-  const stageFile = useStage(() => props.repositoryId);
-  const unstageFile = useUnstage(() => props.repositoryId);
-  /** Whether the file is staged, or unstaged, whole: if it's one of the uncommitted changes listed. */
+  /**
+   * Whether the file can be staged, or unstaged, whole: one of the uncommitted changes in its list,
+   * but not a repository inside this one, which would be added as a submodule without its URL.
+   */
   const wholeFile = () =>
-    isUncommitted(props.source) && found() !== -1
-      ? props.source.kind === "staged"
-        ? "unstage"
-        : "stage"
+    isUncommitted(props.source) && found() !== -1 && !isNestedRepository(file())
+      ? stagingAction()
       : undefined;
-  const stagingFile = () => stageFile.isPending || unstageFile.isPending || stageLines.isPending;
+  /** Whether the file in the header is another one, still on show while this one's changes load. */
+  const showsOther = () => shown().key !== fileKey();
   /**
    * Stages, or unstages, the whole file, its edits saved first so they're staged with it; then on
-   * to the next file in its list, as once its last lines are.
+   * to the next file, as once its last lines are.
    */
   const stageWhole = async () => {
     const action = wholeFile();
-    if (!action || stagingFile()) return;
+    if (!action || staging() || showsOther()) return;
     const key = fileKey();
-    if (!(await fileEditing.leave()) || key !== fileKey()) return;
-    setStagingError(undefined);
+    setStagingWhole(true);
     try {
-      // Settles once the lists are refetched, without the file.
-      await (action === "stage" ? stageFile : unstageFile).mutateAsync(stagingPaths([liveFile()]));
-    } catch (error) {
-      setStagingError({ key, message: error instanceof Error ? error.message : String(error) });
-      return;
+      if (!(await fileEditing.leave()) || key !== fileKey()) return;
+      // Picked while the file's still in its list: it's staged before the list is refetched.
+      const target = next() ?? previous();
+      setStagingError(undefined);
+      try {
+        await stageFile.mutateAsync({ repositoryId: props.repositoryId, action, file: liveFile() });
+      } catch (error) {
+        failed(key, error);
+        return;
+      }
+      moveOn(key, target);
+    } finally {
+      setStagingWhole(false);
     }
-    const target = next() ?? previous();
-    if (target && key === fileKey()) props.onOpen(props.source, target);
   };
 
   let section: HTMLElement | undefined;
@@ -454,19 +471,14 @@ export function FileDiffView(props: {
           <Show when={wholeFile()}>
             {(action) => (
               <>
-                <button
-                  type="button"
-                  disabled={stagingFile()}
-                  class="inline-flex h-[26px] shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-border bg-panel-raised px-2 text-[11.5px] font-[600] text-text-soft enabled:hover:bg-panel-hover enabled:hover:text-text focus-ring disabled:cursor-default disabled:opacity-50"
+                <Button
+                  icon={action() === "stage" ? Plus : Minus}
+                  disabled={staging() || showsOther()}
+                  class="h-[26px] gap-1.5 rounded-md px-2 text-[11.5px] font-[600] enabled:hover:translate-y-0"
                   onClick={() => void stageWhole()}
                 >
-                  {action() === "stage" ? (
-                    <Plus size={13} strokeWidth={2.2} />
-                  ) : (
-                    <Minus size={13} strokeWidth={2.2} />
-                  )}
                   {action() === "stage" ? "Stage file" : "Unstage file"}
-                </button>
+                </Button>
                 <span class="mx-1.5 h-4 w-px bg-border" />
               </>
             )}

@@ -1,6 +1,7 @@
 import type { ChangedFile, LineSelection } from "@gitto/git/types";
 import { hashKey, useMutation, useQueryClient } from "@tanstack/solid-query";
 
+import { stagingPaths } from "@/git/changes";
 import { rpc } from "@/lib/rpc";
 
 import type { FilePatch } from "./file-diff";
@@ -35,6 +36,29 @@ function useStagingMutation(
     // The watcher would catch this too, but refetching right away feels snappier.
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: gitKeys.uncommitted(repositoryId()) }),
+  }));
+}
+
+/** A file to stage or unstage whole. */
+export interface FileToStage {
+  repositoryId: string;
+  action: "stage" | "unstage";
+  file: ChangedFile;
+}
+
+/**
+ * Stages or unstages a whole file: a renamed one by both its paths. Settles once that's done,
+ * rather than once the uncommitted changes are refetched after, so the view can move on at once.
+ */
+export function useStageFile() {
+  const queryClient = useQueryClient();
+  return useMutation(() => ({
+    mutationFn: ({ repositoryId, action, file }: FileToStage) => {
+      const input = { repositoryId, paths: stagingPaths([file]) };
+      return action === "stage" ? rpc.git.staging.stage(input) : rpc.git.staging.unstage(input);
+    },
+    onSettled: (_result, _error, { repositoryId }) =>
+      void queryClient.invalidateQueries({ queryKey: gitKeys.uncommitted(repositoryId) }),
   }));
 }
 
