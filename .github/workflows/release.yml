@@ -86,6 +86,13 @@ jobs:
               echo "::error::$REF_NAME isn't v<major>.<minor>.<patch>, with an optional pre-release part starting with a letter."
               exit 1
             fi
+            # Squirrel's NuGet takes a pre-release part of at most 20 characters, without its dots.
+            pre="${BASH_REMATCH[4]#-}"
+            pre="${pre//./}"
+            if (( ${#pre} > 20 )); then
+              echo "::error::$REF_NAME's pre-release part is longer than Windows' installer takes: 20 characters, leaving out dots."
+              exit 1
+            fi
           else
             tag=nightly
             # The highest release, merged here or not, so a nightly sorts after every release that's
@@ -94,7 +101,7 @@ jobs:
               | sed 's/^v//' | { grep -E "$semver" || true; } | head -n 1)
             [[ "${last:=0.0.0}" =~ $semver ]]
             # When it was built, to the second: always as long, as Squirrel compares its packages'
-            # versions as text, with the dots taken out (1.2.4-nightly20261005134259).
+            # versions as text (see apps/electron/src/squirrel-version.ts).
             nightly="nightly.$(date -u +%Y%m%d%H%M%S)"
             if [[ -n "${BASH_REMATCH[4]}" ]]; then
               # After 1.3.0-rc.1, 1.3.0-rc.1.nightly…: after it, and before 1.3.0-rc.2 and 1.3.0.
