@@ -26,4 +26,6 @@ export default defineConfig({
   build: {
     target: "esnext",
   },
+  // ES module workers: the diff viewer's highlighting worker loads each language as it's needed.
+  worker: { format: "es" },
 });

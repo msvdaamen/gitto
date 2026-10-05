@@ -189,7 +189,7 @@ export function VirtualRows<T>(props: {
  * container's document when it first gets one, so it's only handed over once it's on the page: on
  * mount it can still be detached, being rendered inside a `Suspense` boundary.
  */
-function useConnected(element: () => HTMLElement | undefined) {
+export function useConnected(element: () => HTMLElement | undefined) {
   const [connected, setConnected] = createSignal(false);
   onMount(() => {
     let frame = 0;

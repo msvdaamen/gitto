@@ -24,7 +24,14 @@ import { WorkingTreeDetails } from "./working-tree-details";
  * Details of the selected history row: a commit, a stash, or the uncommitted changes. Loads what it
  * shows by itself, so it only needs the row's id from the history table.
  */
-export function CommitDetails(props: { repositoryId: string; selectedId: string | undefined }) {
+export function CommitDetails(props: {
+  repositoryId: string;
+  selectedId: string | undefined;
+  /** Shows the changes in one of a commit's files. */
+  onOpenFile?: (file: ChangedFile) => void;
+  /** The path of the file whose changes are on show, if any. */
+  openPath?: string;
+}) {
   const [scrollElement, setScrollElement] = createSignal<HTMLDivElement>();
   // The selected row and its repository, kept while the selection is briefly empty: switching
   // repositories clears it until the history picks a row, and effects in the details can still run
@@ -65,6 +72,8 @@ export function CommitDetails(props: { repositoryId: string; selectedId: string 
                 repositoryId={repositoryId()}
                 sha={selectedId()}
                 scrollElement={scrollElement()}
+                onOpenFile={props.onOpenFile}
+                openPath={props.openPath}
               />
             }
           >
@@ -90,6 +99,8 @@ function SelectedCommit(props: {
   sha: string;
   /** The details' scroll container, which scrolls the files along with the commit's message. */
   scrollElement: HTMLElement | undefined;
+  onOpenFile?: (file: ChangedFile) => void;
+  openPath?: string;
 }) {
   const details = useCommitDetails(
     () => props.repositoryId,
@@ -120,7 +131,13 @@ function SelectedCommit(props: {
       <Show when={shown()?.commit ?? (changes.query.error && details.commit())} keyed>
         {(commit) => <CommitSummary commit={commit} fileCount={files().length} totals={totals()} />}
       </Show>
-      <ChangedFilesSection files={files()} scrollElement={props.scrollElement} />
+      <ChangedFilesSection
+        files={files()}
+        scrollElement={props.scrollElement}
+        // Only once the files on show are this commit's, so another's aren't opened as its.
+        onOpen={shown()?.commit.id === props.sha ? props.onOpenFile : undefined}
+        openPath={props.openPath}
+      />
     </div>
   );
 }

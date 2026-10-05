@@ -49,6 +49,8 @@ export function ChangedFilesSection(props: {
   files: ChangedFile[];
   /** The details' scroll container, which scrolls the files along with what's above them. */
   scrollElement: HTMLElement | undefined;
+  onOpen?: (file: ChangedFile) => void;
+  openPath?: string;
 }) {
   return (
     <div class="border-b border-border px-2.5 py-3">
@@ -58,7 +60,12 @@ export function ChangedFilesSection(props: {
         count={props.files.length}
         class="px-1 pb-2"
       />
-      <ChangedFileList files={props.files} scrollElement={props.scrollElement} />
+      <ChangedFileList
+        files={props.files}
+        scrollElement={props.scrollElement}
+        onOpen={props.onOpen}
+        openPath={props.openPath}
+      />
     </div>
   );
 }

@@ -1,8 +1,10 @@
+import type { ChangedFile } from "@gitto/git/types";
 import { createFileRoute } from "@tanstack/solid-router";
 import { cn } from "cn";
-import { createMemo, createSignal, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, Show, Suspense } from "solid-js";
 
 import { CommitDetails } from "@/components/repository/details/commit-details";
+import { FileDiffView } from "@/components/repository/diff/file-diff-view";
 import { HistoryTable } from "@/components/repository/history/history-table";
 import { RefsSidebar } from "@/components/repository/sidebar/refs-sidebar";
 import { RepositoryToolbar } from "@/components/repository/toolbar";
@@ -43,6 +45,25 @@ function RouteComponent() {
     const current = settledSelection();
     return current?.repositoryId === repositoryId() ? current.id : undefined;
   };
+  // The file whose changes are shown in place of the history, with the row it's from: closed once
+  // the details show another row, or another repository, so going back to it doesn't open them
+  // again. Not shown from then on, before it's closed.
+  const [openFile, setOpenFile] = createSignal<{
+    repositoryId: string;
+    rowId: string;
+    file: ChangedFile;
+  }>();
+  const shownFile = () => {
+    const current = openFile();
+    return current?.repositoryId === repositoryId() && current.rowId === detailsId()
+      ? current
+      : undefined;
+  };
+  createEffect(() => {
+    if (openFile() && !shownFile()) setOpenFile(undefined);
+  });
+  const openFileOf = (rowId: string) => (file: ChangedFile) =>
+    setOpenFile({ repositoryId: repositoryId(), rowId, file });
   const [sidebarOpen, setSidebarOpen] = createSignal(true);
   const [detailsOpen, setDetailsOpen] = createSignal(true);
   const sidebar = usePanelWidth("sidebar", SIDEBAR_BOUNDS);
@@ -79,13 +100,41 @@ function RouteComponent() {
       >
         <RefsSidebar repositoryId={repositoryId()} open={sidebarOpen()} />
 
-        <HistoryTable
-          repositoryId={repositoryId()}
-          search={search()}
-          selectedId={selectedId()}
-          detailsId={detailsId()}
-          onSelect={(id) => setSelection({ repositoryId: repositoryId(), id })}
-        />
+        {/* The history and a file's changes share the column; the history stays underneath, so
+            it's still scrolled to where it was when the changes are closed. */}
+        <div class="grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)]">
+          <div
+            // Isolated, so its sticky header stays under the changes.
+            class="isolate col-start-1 row-start-1 grid min-h-0 min-w-0"
+            inert={shownFile() ? true : undefined}
+          >
+            <HistoryTable
+              repositoryId={repositoryId()}
+              search={search()}
+              selectedId={selectedId()}
+              detailsId={detailsId()}
+              onSelect={(id) => setSelection({ repositoryId: repositoryId(), id })}
+            />
+          </div>
+          <Show when={shownFile()}>
+            {(open) => (
+              <div class="z-[1] col-start-1 row-start-1 min-h-0 min-w-0 bg-bg">
+                {/* Its own boundary: one around the page would take the page off it while the
+                    changes' queries start, even for a moment, and the history would lose its
+                    scroll position with it. */}
+                <Suspense>
+                  <FileDiffView
+                    repositoryId={open().repositoryId}
+                    sha={open().rowId}
+                    file={open().file}
+                    onOpen={openFileOf(open().rowId)}
+                    onClose={() => setOpenFile(undefined)}
+                  />
+                </Suspense>
+              </div>
+            )}
+          </Show>
+        </div>
 
         <aside
           class={cn(
@@ -93,7 +142,15 @@ function RouteComponent() {
             !detailsOpen() && "pointer-events-none opacity-0 max-lg:translate-x-full",
           )}
         >
-          <CommitDetails repositoryId={repositoryId()} selectedId={detailsId()} />
+          <CommitDetails
+            repositoryId={repositoryId()}
+            selectedId={detailsId()}
+            onOpenFile={(file) => {
+              const rowId = detailsId();
+              if (rowId) openFileOf(rowId)(file);
+            }}
+            openPath={shownFile()?.file.path}
+          />
         </aside>
 
         <Show when={sidebarOpen()}>

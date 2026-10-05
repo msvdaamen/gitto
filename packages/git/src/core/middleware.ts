@@ -2,6 +2,7 @@ import { ORPCError, os } from "@orpc/server";
 
 import {
   ChangesStashedError,
+  FileTooLargeError,
   FolderNotFoundError,
   GitError,
   HeadMovedError,
@@ -46,6 +47,9 @@ function toApiError(error: unknown): unknown {
     error instanceof NotARepositoryError
   ) {
     return new ORPCError("NOT_FOUND", { message: error.message, cause: error });
+  }
+  if (error instanceof FileTooLargeError) {
+    return new ORPCError("PAYLOAD_TOO_LARGE", { message: error.message, cause: error });
   }
   if (error instanceof NoUpstreamError || error instanceof UnsupportedGitError) {
     return new ORPCError("PRECONDITION_FAILED", { message: error.message, cause: error });

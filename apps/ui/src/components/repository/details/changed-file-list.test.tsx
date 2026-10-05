@@ -1,4 +1,5 @@
 import { render, screen } from "@solidjs/testing-library";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ChangedFileList } from "./changed-file-list";
@@ -35,5 +36,39 @@ describe("a file without line counts", () => {
     expect(await screen.findByText("image.png")).toBeInTheDocument();
     expect(screen.queryByText("binary")).not.toBeInTheDocument();
     expect(screen.getByText("new")).toBeInTheDocument();
+  });
+});
+
+describe("opening a file", () => {
+  beforeEach(() => {
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(500);
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(500);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("shows its changes when it's clicked, and marks the one on show", async () => {
+    const onOpen = vi.fn();
+    const scroller = document.createElement("div");
+    render(() => (
+      <ChangedFileList
+        files={[...FILES]}
+        scrollElement={scroller}
+        onOpen={onOpen}
+        openPath="new.txt"
+      />
+    ));
+
+    await userEvent.click(await screen.findByRole("button", { name: "Show changes in image.png" }));
+    expect(onOpen).toHaveBeenCalledWith(FILES[0]);
+    expect(screen.getByRole("button", { name: "Show changes in new.txt" })).toHaveAttribute(
+      "aria-current",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Show changes in image.png" })).not.toHaveAttribute(
+      "aria-current",
+    );
   });
 });

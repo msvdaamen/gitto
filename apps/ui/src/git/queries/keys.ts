@@ -20,6 +20,11 @@ export const gitKeys = {
     [...gitKeys.commit(repositoryId, sha), "files"] as const,
   commitMessage: (repositoryId: string, sha: string) =>
     [...gitKeys.commit(repositoryId, sha), "message"] as const,
+  /** The patch of one of a commit's files, by its path. */
+  commitFilePatch: (repositoryId: string, sha: string, path: string) =>
+    [...gitKeys.commit(repositoryId, sha), "patch", path] as const,
+  /** A file's contents by their object name, which never change. */
+  blob: (repositoryId: string, oid: string) => ["git-blob", repositoryId, oid] as const,
   /** A stash is a commit too, and never changes either. */
   stashFiles: (repositoryId: string, sha: string) =>
     [...gitKeys.commit(repositoryId, sha), "stash-files"] as const,

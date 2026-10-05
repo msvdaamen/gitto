@@ -63,14 +63,16 @@ export function IconButton(props: {
   label: string;
   icon: LucideIcon;
   active?: boolean;
+  disabled?: boolean;
   class?: string;
   onClick?: (event: MouseEvent) => void;
 }) {
   return (
     <button
       type="button"
+      disabled={props.disabled}
       class={cn(
-        "grid size-[30px] shrink-0 cursor-pointer place-items-center rounded-[7px] border border-transparent bg-transparent p-0 text-muted hover:bg-panel-hover hover:text-text focus-ring",
+        "grid size-[30px] shrink-0 cursor-pointer place-items-center rounded-[7px] border border-transparent bg-transparent p-0 text-muted enabled:hover:bg-panel-hover enabled:hover:text-text focus-ring disabled:cursor-default disabled:opacity-40",
         props.active && "bg-primary-soft text-primary-strong",
         props.class,
       )}
