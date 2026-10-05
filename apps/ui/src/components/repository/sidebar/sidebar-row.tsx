@@ -42,8 +42,8 @@ export function SidebarFolder(props: {
 }
 
 /**
- * An item in a section: a ref, or the working directory, a pull request or a stash. Other
- * attributes go to the button, e.g. one marking it for a menu (see `BranchMenu`).
+ * An item in a section: a ref or a stash. Other attributes go to the button, e.g. one marking it
+ * for a menu (see `BranchMenu`).
  */
 export function SidebarRow(
   props: Omit<JSX.ButtonHTMLAttributes<HTMLButtonElement>, "title" | "onDblClick"> & {

@@ -2,7 +2,6 @@ import type { Ref } from "@gitto/git/types";
 import Archive from "lucide-solid/icons/archive";
 import Cloud from "lucide-solid/icons/cloud";
 import GitBranch from "lucide-solid/icons/git-branch";
-import GitMerge from "lucide-solid/icons/git-merge";
 import Inbox from "lucide-solid/icons/inbox";
 import Tag from "lucide-solid/icons/tag";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
@@ -23,14 +22,8 @@ import { CreateBranchDialog } from "./create-branch-dialog";
 import { SidebarFolder, SidebarRow } from "./sidebar-row";
 import { SidebarSection } from "./sidebar-section";
 
-// Placeholders until pull requests are loaded from the repository.
-const PULL_REQUESTS = [
-  { label: "#24 Polish desktop shell", meta: "open" },
-  { label: "#18 Theme tokens", meta: "merged" },
-];
-
 /**
- * The sidebar's sections: branches, remotes, pull requests, tags, stashes.
+ * The sidebar's sections: branches, remotes, tags, stashes.
  * Double-clicking a branch switches to it; for a remote one, to the local branch tracking it.
  * Right-clicking one opens a menu of what can be done with it, like creating a branch from it.
  */
@@ -172,16 +165,6 @@ export function RefList(props: { repositoryId: string }) {
           items={remoteRows()}
         >
           {(row) => treeRow(row, branchRow)}
-        </SidebarSection>
-        <SidebarSection
-          title="Pull requests"
-          scrollId="sidebar-pull-requests"
-          icon={GitMerge}
-          count={PULL_REQUESTS.length}
-          {...collapsible("pullRequests")}
-          items={PULL_REQUESTS}
-        >
-          {(pr) => <SidebarRow icon={GitMerge} label={pr().label} meta={pr().meta} />}
         </SidebarSection>
         <SidebarSection
           title="Tags"
