@@ -9,12 +9,11 @@ import type { ForgeConfig } from "@electron-forge/shared-types";
 import { FuseV1Options, FuseVersion } from "@electron/fuses";
 
 import { copyDependencies, findDependencies } from "./src/native-deps";
-import { squirrelVersion } from "./src/squirrel-version";
 
 /** Native modules: left out of the bundle (see vite.main.config.ts), so they're copied in. */
 const NATIVE_DEPENDENCIES = ["@parcel/watcher"];
 
-/** Set by CI at build time (see .github/workflows/release.yml), e.g. 1.2.4-nightly.20261005134259. */
+/** Set by CI at build time (see .github/workflows/release.yml), e.g. 1.2.4-nightly29853462. */
 const { version } = JSON.parse(readFileSync(new URL("package.json", import.meta.url), "utf8")) as {
   version: string;
 };
@@ -55,13 +54,8 @@ const config: ForgeConfig = {
   },
   makers: [
     // The NuGet package's id, which names the folder it's installed in (src/squirrel.ts has it too).
-    // By default it's the scoped package name, which NuGet won't take. A nightly's version is made to
-    // fit NuGet's and Squirrel's (see src/squirrel-version.ts); the installer's name has it whole.
-    new MakerSquirrel({
-      name: "Gitto",
-      setupIcon: "assets/icon.ico",
-      version: squirrelVersion(version),
-    }),
+    // By default it's the scoped package name, which NuGet won't take.
+    new MakerSquirrel({ name: "Gitto", setupIcon: "assets/icon.ico" }),
     new MakerZIP({}, ["darwin"]),
     // Linux is packaged for Arch by arch/PKGBUILD instead (`pnpm make:arch`).
   ],

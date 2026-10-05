@@ -23,10 +23,10 @@ afterEach(() => {
 
 describe("the app's version", () => {
   it("names a nightly", async () => {
-    renderWith({ version: "1.2.4-nightly.20261005134259", channel: "nightly", update: null });
+    renderWith({ version: "1.2.4-nightly29853462", channel: "nightly", update: null });
 
     expect(await screen.findByText("Gitto Nightly")).toBeInTheDocument();
-    expect(screen.getByText("v1.2.4-nightly.20261005134259")).toBeInTheDocument();
+    expect(screen.getByText("v1.2.4-nightly29853462")).toBeInTheDocument();
   });
 
   it("says an update's downloading", async () => {

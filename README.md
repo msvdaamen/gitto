@@ -42,8 +42,9 @@ The version comes from git tags; `package.json`'s stays at `0.0.0` and is set at
 How to install each build is in [Installing Gitto](docs/install.md).
 
 - Every merge to `main` updates the **Gitto Nightly** pre-release. Its version follows the highest `v*`
-  tag: `1.2.4-nightly.20261005134259` after `v1.2.3` (when it was built, in UTC), and
-  `1.3.0-rc.1.nightly.20261005134259` after `v1.3.0-rc.1`.
+  tag, then says when it was built, in minutes from 1970: `1.2.4-nightly29853462` after `v1.2.3`,
+  and `1.3.0-nightly29853462` after `v1.3.0-rc.1`. Every build has the same version, the Windows
+  installer's package too.
 - Running the **Release** workflow on `main` (Actions → Release → Run workflow) releases it with the
   last release's version bumped: `patch` for fixes (1.2.3 to 1.2.4), `minor` for features (1.3.0)
   or `major` for breaking changes (2.0.0). Pre-releases are left out, so after `v1.3.0-rc.1` a

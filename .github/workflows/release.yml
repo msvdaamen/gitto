@@ -100,12 +100,14 @@ jobs:
             last=$(git -c versionsort.suffix=- tag --list 'v[0-9]*' --sort=-v:refname \
               | sed 's/^v//' | { grep -E "$semver" || true; } | head -n 1)
             [[ "${last:=0.0.0}" =~ $semver ]]
-            # When it was built, to the second. Windows' package has it as a shorter number (see
-            # apps/electron/src/squirrel-version.ts).
-            nightly="nightly.$(date -u +%Y%m%d%H%M%S)"
+            # The minutes from 1970 to when it was built, the same in every build's version. They have
+            # 8 digits until 2160, so nightlies sort as they were built as text too, as semver and
+            # pacman sort them. With no dots, Windows' installer keeps it whole, and NuGet takes it
+            # (at most 20 characters); Squirrel reads the number as an Int32, which it fits.
+            nightly="nightly$(( $(date -u +%s) / 60 ))"
             if [[ -n "${BASH_REMATCH[4]}" ]]; then
-              # After 1.3.0-rc.1, 1.3.0-rc.1.nightly…: after it, and before 1.3.0-rc.2 and 1.3.0.
-              version="$last.$nightly"
+              # After 1.3.0-rc.1, 1.3.0-nightly…: a pre-release's own part wouldn't fit as well.
+              version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}-$nightly"
             else
               # After 1.2.3, 1.2.4-nightly…
               version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))-$nightly"
