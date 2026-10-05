@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { MakerSquirrel } from "@electron-forge/maker-squirrel";
@@ -12,6 +13,11 @@ import { copyDependencies, findDependencies } from "./src/native-deps";
 /** Native modules: left out of the bundle (see vite.main.config.ts), so they're copied in. */
 const NATIVE_DEPENDENCIES = ["@parcel/watcher"];
 
+/** Set by CI at build time (see .github/workflows/release.yml), e.g. 1.2.4-nightly.20261005.42. */
+const { version } = JSON.parse(readFileSync(new URL("package.json", import.meta.url), "utf8")) as {
+  version: string;
+};
+
 const config: ForgeConfig = {
   packagerConfig: {
     // Native binaries can't be loaded from inside the archive.
@@ -21,6 +27,9 @@ const config: ForgeConfig = {
     executableName: process.platform === "linux" ? "gitto" : "Gitto",
     // Extension is picked per platform (icon.ico on Windows, icon.icns on macOS).
     icon: "assets/icon",
+    // The executable's version on Windows and the bundle's on macOS, which have to be numbers only,
+    // so a nightly's is its release's (1.2.4). The app's own, from package.json, is the full one.
+    appVersion: version.split("-")[0],
     // Copied to Resources/migrations; the main process applies them on startup.
     extraResource: ["migrations"],
   },

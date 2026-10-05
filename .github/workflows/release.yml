@@ -97,10 +97,11 @@ jobs:
         with:
           version: ${{ needs.version.outputs.version }}
       - run: pnpm package
-      # makepkg won't run as root. The package's dependencies only matter where it's installed.
+      # makepkg won't run as root, and the packaged app is only readable by its owner. The package's
+      # dependencies only matter where it's installed.
       - run: |
           useradd --create-home builder
-          chown -R builder .
+          chown -R builder . ../out
           runuser -u builder -- makepkg --nodeps
         working-directory: apps/electron/arch
       - uses: actions/upload-artifact@v7
