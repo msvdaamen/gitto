@@ -18,6 +18,7 @@ import { shownPathIn, type FileOpener, type UncommittedSource } from "@/git/diff
 import { useWorkingTreeChanges } from "@/git/queries/diff";
 import { useStage, useUnstage } from "@/git/queries/staging";
 import { useHeadSha, useStatus } from "@/git/queries/status";
+import { useUnsuspendedData } from "@/git/queries/unsuspended";
 import { headLabel } from "@/git/status";
 import { useDelayed } from "@/hooks/delayed";
 import type { ScrollId } from "@/lib/scroll";
@@ -33,14 +34,21 @@ import { CommitForm } from "./commit-form";
 export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOpener }) {
   const changes = useWorkingTreeChanges(() => props.repositoryId);
   const status = useStatus(() => props.repositoryId);
+  // Without Suspense, like the changes: the status is refetched whenever a file is saved, and the
+  // details would be taken off the page and put back meanwhile, their lists scrolled to the top.
+  const summary = useUnsuspendedData(status);
   const stage = useStage(() => props.repositoryId);
   const unstage = useUnstage(() => props.repositoryId);
   const busy = () => stage.isPending || unstage.isPending;
-  const lastCommit = useHeadSha(status);
-  // Read once: in JSX, `status.data && headLabel(status.data.head)` would check a memo of whether
+  const lastCommit = useHeadSha({
+    get data() {
+      return summary();
+    },
+  });
+  // Read once: in JSX, `summary() && headLabel(summary().head)` would check a memo of whether
   // there's data, which a transition (switching repositories) can leave behind the data itself.
   const branch = () => {
-    const head = status.data?.head;
+    const head = summary()?.head;
     return head && headLabel(head);
   };
   // The status is reloaded whenever a file changes, which takes a while in a big repository.
