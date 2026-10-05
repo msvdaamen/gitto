@@ -10,6 +10,7 @@ import {
   GitError,
   NotUtf8Error,
   OutsideRepositoryError,
+  WorkingTreeFileNotFoundError,
 } from "../../core/errors";
 import type { Repo } from "../../core/repo";
 import {
@@ -28,9 +29,9 @@ import {
   getCommitFiles,
   getStagedFilePatch,
   getUnstagedFilePatch,
-  MAX_BLOB_BYTES,
   MAX_PATCH_BYTES,
 } from "./commands";
+import { MAX_BLOB_BYTES } from "./limits";
 import { readWorkingTreeFile } from "./working-tree";
 
 describe("getCommitFiles", () => {
@@ -158,6 +159,27 @@ describe("getUnstagedFilePatch", () => {
     expect(patch).toContain("--- /dev/null\n+++ b/new file.txt\t\n@@ -0,0 +1 @@\n+new\n");
   });
 
+  it("won't compare a path outside the working tree, but shows a link out as one", async () => {
+    const repo = await createHistoryRepo("untracked-confined");
+    const path = paths.get("untracked-confined")!;
+    writeFileSync(join(path, "..", "outside.txt"), "secret\n");
+    symlinkSync(join(path, "..", "outside.txt"), join(path, "link"));
+    const outside = ["../outside.txt", "/etc/hosts", ".git/config", ".GIT/config"];
+    const errors = await Promise.all(
+      outside.map((name) =>
+        rejection(getUnstagedFilePatch(repo, { path: name, origPath: null, untracked: true })),
+      ),
+    );
+    for (const error of errors) expect(error).toBeInstanceOf(OutsideRepositoryError);
+    const link = await getUnstagedFilePatch(repo, {
+      path: "link",
+      origPath: null,
+      untracked: true,
+    });
+    expect(link).toContain("new file mode 120000\n");
+    expect(link).not.toContain("secret");
+  });
+
   it("says why an untracked path can't be compared, like another repository's folder", async () => {
     const repo = await createHistoryRepo("nested");
     mkdirSync(join(paths.get("nested")!, "inner"));
@@ -230,6 +252,26 @@ describe("readWorkingTreeFile", () => {
     );
     for (const error of errors) expect(error).toBeInstanceOf(OutsideRepositoryError);
     expect(await readWorkingTreeFile(repo, "inside")).toBe("b\n");
+  });
+
+  it("won't read the git directory through a link or in another case", async () => {
+    const repo = await createHistoryRepo("git-dir");
+    symlinkSync(".git", join(paths.get("git-dir")!, "meta"));
+    const errors = await Promise.all(
+      ["meta/config", ".GIT/config"].map((name) => rejection(readWorkingTreeFile(repo, name))),
+    );
+    for (const error of errors) expect(error).toBeInstanceOf(OutsideRepositoryError);
+  });
+
+  it("says when a file is gone, and won't wait on a named pipe", async () => {
+    const repo = await createHistoryRepo("not-files");
+    execFileSync("mkfifo", [join(paths.get("not-files")!, "pipe")]);
+    expect(await rejection(readWorkingTreeFile(repo, "gone.txt"))).toBeInstanceOf(
+      WorkingTreeFileNotFoundError,
+    );
+    expect(await rejection(readWorkingTreeFile(repo, "pipe"))).toBeInstanceOf(
+      OutsideRepositoryError,
+    );
   });
 
   it("won't read a file that's too large, or isn't UTF-8", async () => {

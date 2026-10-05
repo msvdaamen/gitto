@@ -110,10 +110,11 @@ const total = (counts: LineCounts) => counts.additions + counts.deletions;
 
 /**
  * Loads and highlights a file's changes ahead of opening them, e.g. when it's pointed at, so they
- * show at once; the first time, that starts the viewer too. Not for one that's binary, or large.
- * One without line counts (untracked, say) is loaded, but only highlighted if it turns out not to
- * be. An uncommitted file's are named by what's in them in the highlighting cache, and refetched
- * like the status once the working tree changes, so what's loaded ahead is never shown stale.
+ * show at once; the first time, that starts the viewer too. Not for one that's binary, or large,
+ * nor for one without line counts (untracked, say), which can be of any size: an untracked log
+ * that's being written to would be read whole again each time it's pointed at. An uncommitted
+ * file's are named by what's in them in the highlighting cache, and refetched like the status once
+ * the working tree changes, so what's loaded ahead is never shown stale.
  */
 export function prefetchFileDiff(
   client: QueryClient,
@@ -122,18 +123,12 @@ export function prefetchFileDiff(
   file: ChangedFile,
   uncounted = false,
 ): void {
-  if (!hasPatch(file, uncounted)) return;
   const counts = countsOf(file);
-  if (counts && total(counts) > PREFETCH_DIFF_LINES) return;
+  if (!hasPatch(file, uncounted) || !counts || total(counts) > PREFETCH_DIFF_LINES) return;
   void Promise.all([fetchFilePatch(client, repositoryId, source, file), loadViewer()])
-    .then(([data, viewer]) => {
-      if (!data.patch) return;
-      if (!counts) {
-        const summary = summarizePatch(data.patch);
-        if (summary.binary || total(summary) > PREFETCH_DIFF_LINES) return;
-      }
-      return viewer.preparePatch(data.patch, patchCacheKey(source, data));
-    })
+    .then(([data, viewer]) =>
+      data.patch ? viewer.preparePatch(data.patch, patchCacheKey(source, data)) : undefined,
+    )
     // Only ahead of time: opening it says what went wrong.
     .catch(() => undefined);
 }
@@ -160,7 +155,17 @@ export function FileDiffView(props: {
   const fileKey = () => diffFileKey(props.source, props.file.path);
   const found = createMemo(() => lists.files().findIndex((file) => file.path === props.file.path));
   // Where the file was in its list, after it's gone from it: the files around it stay a step away.
-  const place = createMemo((last: number) => (found() === -1 ? last : found()), -1);
+  // Only this file's place: another one opened that isn't in its list has none.
+  const lastPlace = createMemo(
+    (last: { key: string; index: number }) =>
+      found() !== -1
+        ? { key: fileKey(), index: found() }
+        : last.key === fileKey()
+          ? last
+          : { key: fileKey(), index: -1 },
+    { key: "", index: -1 },
+  );
+  const place = () => lastPlace().index;
   const previous = () => (place() > 0 ? lists.files()[place() - 1] : undefined);
   const next = () =>
     place() === -1 ? undefined : lists.files()[found() === -1 ? place() : place() + 1];

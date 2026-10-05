@@ -17,6 +17,7 @@ import {
   RepositoryNotFoundError,
   StashConflictError,
   UnsupportedGitError,
+  WorkingTreeFileNotFoundError,
 } from "./errors";
 import type { GitRepos } from "./repo";
 import type { GitVersion } from "./version";
@@ -47,6 +48,7 @@ function toApiError(error: unknown): unknown {
   if (
     error instanceof RepositoryNotFoundError ||
     error instanceof FolderNotFoundError ||
+    error instanceof WorkingTreeFileNotFoundError ||
     error instanceof NotARepositoryError
   ) {
     return new ORPCError("NOT_FOUND", { message: error.message, cause: error });

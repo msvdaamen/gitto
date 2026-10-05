@@ -1,11 +1,8 @@
 import { oc } from "@orpc/contract";
 import * as z from "zod";
 
-import { FullSha, RepositoryInput, Sha } from "../../input";
+import { FileInput, FullSha, RepositoryInput, Sha } from "../../input";
 import { ChangedFileSchema } from "./schema";
-
-/** A file, by its path in the repository and, for a rename, its previous one. */
-const FileInput = RepositoryInput.extend({ path: z.string(), origPath: z.string().nullable() });
 
 export const DiffContract = {
   /** Files changed by a commit, compared to its first parent. */

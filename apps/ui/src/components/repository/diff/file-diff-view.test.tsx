@@ -355,4 +355,52 @@ describe("an uncommitted file's changes", () => {
     observer.disconnect();
     expect(removed.filter((node) => node.contains(shown))).toEqual([]);
   });
+
+  it("doesn't step from where another file was, for one that isn't in its list", async () => {
+    setChanges({
+      unstaged: [file("a.txt"), file("b.txt"), file("c.txt")],
+      staged: [file("d.txt")],
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const [open, setOpen] = createSignal<{ source: DiffSource; file: ChangedFile }>({
+      source: UNSTAGED,
+      file: file("b.txt"),
+    });
+    render(() => (
+      <QueryClientProvider client={client}>
+        <FileDiffView
+          repositoryId="repo"
+          source={open().source}
+          file={open().file}
+          onOpen={() => {}}
+          onClose={() => {}}
+        />
+      </QueryClientProvider>
+    ));
+    expect(await screen.findByText(/\+new b\.txt/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Next file" })).toBeEnabled();
+
+    // Opened from the staged list as it was being unstaged.
+    setOpen({ source: { kind: "staged" }, file: file("a.txt") });
+    expect(await screen.findByText("No staged changes")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Previous file" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Next file" })).toBeDisabled();
+  });
+
+  it("doesn't load a file without line counts ahead, which can be of any size", async () => {
+    const untracked = (path: string) =>
+      ({ ...file(path, null, null), status: "untracked" }) as const;
+    setChanges({ unstaged: [file("a.txt"), untracked("b.log"), untracked("c.log")] });
+    renderView(untracked("b.log"), {}, UNSTAGED);
+
+    expect(await screen.findByText(/\+new b\.log/)).toBeInTheDocument();
+    await vi.waitFor(() =>
+      expect(rpc.git.diff.unstagedFilePatch.mock.calls.map(([input]) => input.path)).toContain(
+        "a.txt",
+      ),
+    );
+    expect(rpc.git.diff.unstagedFilePatch.mock.calls.map(([input]) => input.path)).not.toContain(
+      "c.log",
+    );
+  });
 });

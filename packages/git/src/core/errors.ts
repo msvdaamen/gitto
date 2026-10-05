@@ -91,6 +91,13 @@ export class OutsideRepositoryError extends MessageError {
   }
 }
 
+/** A file that's no longer in the working tree, e.g. deleted since its changes were read. */
+export class WorkingTreeFileNotFoundError extends MessageError {
+  constructor(path: string) {
+    super(`${path} is no longer in the working tree.`);
+  }
+}
+
 /** A file whose contents aren't UTF-8, which can't be shown or edited as text. */
 export class NotUtf8Error extends MessageError {
   constructor() {

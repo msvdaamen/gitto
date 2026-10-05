@@ -216,4 +216,25 @@ describe("getStashFilePatch", () => {
     const sha = await newest(repo);
     expect(await getStashFilePatch(repo, sha, { path: "b.txt", origPath: null })).toBe("");
   });
+
+  it("shows a deleted file paired with an untracked one as the rename it's listed as", async () => {
+    const path = createCommittedRepo("stash-untracked-rename");
+    const repo = await repos.open("stash-untracked-rename");
+    writeFileSync(join(path, "old.txt"), "one\ntwo\nthree\nfour\nfive\n");
+    git(path, "add", "old.txt");
+    git(path, "commit", "-qm", "old");
+    git(path, "config", "diff.noprefix", "true");
+    git(path, "rm", "-q", "old.txt");
+    writeFileSync(join(path, "new.txt"), "one\ntwo\nthree\nfour\nfive\nsix\n");
+    await pushStash(repo);
+    const sha = await newest(repo);
+
+    const renamed = (await getStashFiles(repo, sha)).find((file) => file.path === "new.txt");
+    expect(renamed).toMatchObject({ status: "renamed", origPath: "old.txt" });
+    const patch = await getStashFilePatch(repo, sha, renamed!);
+    expect(patch).toMatch(/^diff --git a\/old.txt b\/new.txt\n/);
+    expect(patch).toContain("rename from old.txt\nrename to new.txt\n");
+    expect(patch).toContain(" five\n+six\n");
+    expect(patch).not.toContain("diff --git a/a.txt");
+  });
 });

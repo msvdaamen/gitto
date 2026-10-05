@@ -125,7 +125,9 @@ export function runGit(cwd: string, args: string[], options: RunOptions = {}): P
       if (options.maxOutput && stdoutBytes > options.maxOutput.bytes) {
         tooLarge = true;
         stdout.length = 0;
-        child.kill();
+        // With what it started, like a textconv filter, as when it's cancelled.
+        if (group) stopGroup(group);
+        else child.kill();
         return;
       }
       stdout.push(chunk);

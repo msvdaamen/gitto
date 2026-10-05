@@ -1,6 +1,6 @@
 import { GitError, RepositoryChangedError, StashConflictError } from "../../core/errors";
 import { resolveRef, type GitCommand, type Repo } from "../../core/repo";
-import { getCommitFilePatch, readPatch } from "../diff/commands";
+import { getCommitFilePatch, PORCELAIN_DIFF, readPatch } from "../diff/commands";
 import { parseDiff } from "../diff/parse";
 import type { ChangedFile } from "../diff/schema";
 import type { Stash } from "./schema";
@@ -79,25 +79,48 @@ export async function getStashFilePatch(
   file: { path: string; origPath: string | null },
   signal?: AbortSignal,
 ): Promise<string> {
-  const patch = await getCommitFilePatch(repo, sha, file, signal);
-  if (patch || file.origPath) return patch;
-  const untracked = await resolveRef(repo.read, `${sha}^3`);
-  if (!untracked) return patch;
-  return readPatch(
+  const [tracked, untracked] = await Promise.all([
+    getCommitFilePatch(repo, sha, file, signal),
+    resolveRef(repo.read, `${sha}^3`),
+  ]);
+  if (!untracked) return tracked;
+  if (!tracked) {
+    const args = ["diff-tree", "-p", "-r", "--root", "--full-index", "--no-commit-id", untracked];
+    return readPatch(repo.read, [...args, "--", file.path], signal);
+  }
+  // In the stash's own diff, which its files are listed from, an untracked file can pair with a
+  // tracked one that was deleted, as a rename, or take the place of one deleted from the index.
+  // Only that diff has those, with both kinds of files in it.
+  const paired = file.origPath
+    ? !tracked.includes(`\nrename to ${file.path}\n`)
+    : /^deleted file mode /m.test(tracked);
+  if (!paired) return tracked;
+  return (await stashedFilePatch(repo, sha, file, signal)) ?? tracked;
+}
+
+/**
+ * `file`'s patch in all of the stash `sha`'s, untracked files included, as `git stash show` gives
+ * it, which takes no paths; `undefined` if it isn't there, or git quoted its name.
+ */
+async function stashedFilePatch(
+  repo: Repo,
+  sha: string,
+  file: { path: string; origPath: string | null },
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  const args = ["stash", "show", "-p", "--include-untracked", "-M", "--full-index"];
+  const patch = await readPatch(
     repo.read,
-    [
-      "diff-tree",
-      "-p",
-      "-r",
-      "--root",
-      "--full-index",
-      "--no-commit-id",
-      untracked,
-      "--",
-      file.path,
-    ],
+    [...args, ...PORCELAIN_DIFF.flags, sha],
     signal,
+    PORCELAIN_DIFF.config,
   );
+  const header = `diff --git a/${file.origPath ?? file.path} b/${file.path}\n`;
+  // Where the header is, from the newline before it, the patch's first line or not.
+  const start = `\n${patch}`.indexOf(`\n${header}`);
+  if (start === -1) return undefined;
+  const end = patch.indexOf("\ndiff --git ", start);
+  return end === -1 ? patch.slice(start) : patch.slice(start, end + 1);
 }
 
 /**

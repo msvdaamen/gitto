@@ -1,7 +1,9 @@
 import { ChangesTooLargeError, FileTooLargeError, GitError } from "../../core/errors";
 import type { GitCommand, Repo } from "../../core/repo";
+import { MAX_BLOB_BYTES } from "./limits";
 import { parseDiff } from "./parse";
 import type { ChangedFile } from "./schema";
+import { checkWorkingTreePath } from "./working-tree";
 
 export async function getCommitFiles(
   repo: Repo,
@@ -77,29 +79,26 @@ export function getUnstagedFilePatch(
 
 /**
  * An untracked file, compared to nothing. Git only compares files outside the index with porcelain
- * `diff --no-index`, which reads the user's diff settings: the flags undo the ones that would change
- * the patch, like other prefixes than `a/` and `b/`, an external diff tool, or a textconv filter.
+ * `diff --no-index`, which reads the user's diff settings (see `PORCELAIN_DIFF`). It reads any path
+ * it's given, so only one inside the working tree is: a link there is read as where it points.
  */
 async function getUntrackedFilePatch(
   repo: Repo,
   path: string,
   signal?: AbortSignal,
 ): Promise<string> {
+  await checkWorkingTreePath(repo, path);
   const args = [
     "diff",
     "--no-index",
     "--full-index",
-    "--no-color",
-    "--no-ext-diff",
-    "--no-textconv",
-    "--src-prefix=a/",
-    "--dst-prefix=b/",
+    ...PORCELAIN_DIFF.flags,
     "--",
     "/dev/null",
     path,
   ];
   try {
-    return await readPatch(repo.read, args, signal);
+    return await readPatch(repo.read, args, signal, PORCELAIN_DIFF.config);
   } catch (error) {
     // Exits with 1 when the files differ, which they always do, but also when it can't read one,
     // like a folder: the patch tells them apart.
@@ -150,20 +149,38 @@ function filePaths(file: { path: string; origPath: string | null }): string[] {
  */
 export const MAX_PATCH_BYTES = 10 * 1024 * 1024;
 
-/** Runs a diff command for one file's patch, through `run`; stopped past `MAX_PATCH_BYTES`. */
-export function readPatch(run: GitCommand, args: string[], signal?: AbortSignal): Promise<string> {
+/**
+ * Runs a diff command for one file's patch, through `run`, with settings `config` (as with
+ * `git -c`); stopped past `MAX_PATCH_BYTES`.
+ */
+export function readPatch(
+  run: GitCommand,
+  args: string[],
+  signal?: AbortSignal,
+  config?: string[],
+): Promise<string> {
   return run(args, {
     signal,
+    config,
     maxOutput: { bytes: MAX_PATCH_BYTES, error: () => new ChangesTooLargeError(MAX_PATCH_BYTES) },
   });
 }
 
 /**
- * The size of the largest file `getBlob` reads. A change of a line or two can be in a file of any
- * size, a generated one say, and the whole of it is sent to the renderer, kept there and
- * highlighted, which takes seconds for half a megabyte already.
+ * Undoes the user's diff settings that would change a patch from a porcelain command, which reads
+ * them (plumbing doesn't): other prefixes than `a/` and `b/`, an external diff tool, a textconv
+ * filter. The prefixes are settings rather than `--src-prefix` and `--dst-prefix`, which `git stash
+ * show` mangles, and `--default-prefix` is newer than the git Gitto needs.
  */
-export const MAX_BLOB_BYTES = 5 * 1024 * 1024;
+export const PORCELAIN_DIFF = {
+  config: [
+    "diff.noprefix=false",
+    "diff.mnemonicPrefix=false",
+    "diff.srcPrefix=a/",
+    "diff.dstPrefix=b/",
+  ],
+  flags: ["--no-color", "--no-ext-diff", "--no-textconv"],
+};
 
 /** The contents of a file, by its object name; rejects with `FileTooLargeError` above `MAX_BLOB_BYTES`. */
 export async function getBlob(repo: Repo, oid: string, signal?: AbortSignal): Promise<string> {

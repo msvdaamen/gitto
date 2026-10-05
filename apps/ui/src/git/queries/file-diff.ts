@@ -121,9 +121,10 @@ function filePatchQuery(repositoryId: string, source: DiffSource, file: ChangedF
       file,
       patch: await fetchPatch(signal),
     }),
-    // A commit's or a stash's never changes. An uncommitted one is under `gitKeys.uncommitted`, so
-    // it's refetched like the status whenever the working tree or the index changes, and only then.
-    ...(isUncommitted(source) ? {} : { staleTime: Infinity }),
+    // Only refetched once it's invalidated: never for a commit's or a stash's, which don't change,
+    // and for an uncommitted one (under `gitKeys.uncommitted`) like the status, whenever the working
+    // tree or the index changes.
+    staleTime: Infinity,
   };
 }
 
