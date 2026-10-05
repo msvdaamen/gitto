@@ -1,5 +1,4 @@
 import { cn } from "cn";
-import Bot from "lucide-solid/icons/bot";
 import ListTree from "lucide-solid/icons/list-tree";
 import LoaderCircle from "lucide-solid/icons/loader-circle";
 import Settings from "lucide-solid/icons/settings";
@@ -11,10 +10,8 @@ import { SegmentedControl } from "@/components/ui/segmented-control";
 import { AgentPlaceholder } from "./agent-placeholder";
 import { RefList } from "./ref-list";
 
-const MODES = [
-  { label: "List", icon: ListTree },
-  { label: "Agents", icon: Bot },
-];
+// The Agents view is hidden until agent sessions exist; adding it back here brings back the switch.
+const MODES: { label: string; icon: typeof ListTree }[] = [{ label: "List", icon: ListTree }];
 
 export function RefsSidebar(props: { repositoryId: string; open: boolean }) {
   const [mode, setMode] = createSignal("List");
@@ -26,14 +23,16 @@ export function RefsSidebar(props: { repositoryId: string; open: boolean }) {
         !props.open && "pointer-events-none opacity-0",
       )}
     >
-      <div class="px-2.5 pt-[9px] pb-2 max-md:hidden">
-        <SegmentedControl
-          value={mode()}
-          options={MODES.map((option) => option.label)}
-          onChange={setMode}
-        />
-      </div>
-      <RailModeSwitch value={mode()} onChange={setMode} />
+      <Show when={MODES.length > 1}>
+        <div class="px-2.5 pt-[9px] pb-2 max-md:hidden">
+          <SegmentedControl
+            value={mode()}
+            options={MODES.map((option) => option.label)}
+            onChange={setMode}
+          />
+        </div>
+        <RailModeSwitch value={mode()} onChange={setMode} />
+      </Show>
       <Show when={mode() === "List"} fallback={<AgentPlaceholder />}>
         <nav
           class="flex min-h-0 flex-1 flex-col overflow-hidden pb-[35px] max-md:items-center max-md:gap-1 max-md:pt-2"
