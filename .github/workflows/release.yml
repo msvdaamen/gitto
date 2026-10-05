@@ -1,17 +1,27 @@
 name: Release
 
-# Every merge to main updates the rolling "nightly" pre-release; pushing a `v1.2.3` tag publishes
-# Gitto 1.2.3. The version comes from the tags; package.json's stays at 0.0.0 and is set at build.
+# Every merge to main updates the rolling "nightly" pre-release. Running it on main by hand releases
+# main with the last release's version bumped (1.2.3 to 1.2.4, 1.3.0 or 2.0.0), and pushing a
+# `v1.2.3` tag publishes Gitto 1.2.3. The version comes from the tags; package.json's stays at 0.0.0
+# and is set at build.
 on:
   push:
     branches: [main]
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "What goes up: patch for fixes, minor for features, major for breaking changes"
+        type: choice
+        options: [patch, minor, major]
+        default: patch
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # A release run by hand waits for the one before, so it bumps the version that one released.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   # A newer merge makes the running nightly stale, and publishes its own after; a release always
   # runs to the end.
-  cancel-in-progress: ${{ github.ref_type == 'branch' }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref_type == 'branch' }}
 
 permissions:
   contents: read
@@ -22,6 +32,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      # The release's tag, or `nightly`.
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -29,18 +41,42 @@ jobs:
           fetch-depth: 0
       - id: version
         env:
+          EVENT: ${{ github.event_name }}
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
+          BUMP: ${{ inputs.bump }}
         run: |
           # A pre-release part has to start with a letter: Squirrel's NuGet won't take `1.0.0-1`.
           semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[A-Za-z][0-9A-Za-z-]*(\.[0-9A-Za-z-]+)*)?$'
-          if [[ "$REF_TYPE" == tag ]]; then
+          if [[ "$EVENT" == workflow_dispatch ]]; then
+            if [[ "$REF_TYPE" != branch || "$REF_NAME" != main ]]; then
+              echo "::error::Releases are made from main, not $REF_NAME."
+              exit 1
+            fi
+            # The highest release, leaving out pre-releases: after 1.2.3 and 1.3.0-rc.1, a minor
+            # release is 1.3.0.
+            last=$(git tag --list 'v[0-9]*' --sort=-v:refname | sed 's/^v//' \
+              | { grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' || true; } | head -n 1)
+            IFS=. read -r major minor patch <<< "${last:-0.0.0}"
+            case "$BUMP" in
+              major) version="$((major + 1)).0.0" ;;
+              minor) version="$major.$((minor + 1)).0" ;;
+              patch) version="$major.$minor.$((patch + 1))" ;;
+            esac
+            tag="v$version"
+            if git rev-parse -q --verify "refs/tags/$tag" > /dev/null; then
+              echo "::error::$tag is already tagged."
+              exit 1
+            fi
+          elif [[ "$REF_TYPE" == tag ]]; then
+            tag="$REF_NAME"
             version="${REF_NAME#v}"
             if [[ ! "$version" =~ $semver ]]; then
               echo "::error::$REF_NAME isn't v<major>.<minor>.<patch>, with an optional pre-release part starting with a letter."
               exit 1
             fi
           else
+            tag=nightly
             # The highest release, merged here or not, so a nightly sorts after every release that's
             # out. `versionsort.suffix` puts 1.3.0-rc.1 before 1.3.0.
             last=$(git -c versionsort.suffix=- tag --list 'v[0-9]*' --sort=-v:refname \
@@ -57,8 +93,9 @@ jobs:
               version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))-$nightly"
             fi
           fi
-          echo "Version $version"
+          echo "Version $version ($tag)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build (${{ matrix.name }})
@@ -123,7 +160,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       VERSION: ${{ needs.version.outputs.version }}
-      TAG: ${{ github.ref_type == 'tag' && github.ref_name || 'nightly' }}
+      TAG: ${{ needs.version.outputs.tag }}
     steps:
       - uses: actions/download-artifact@v8
         with:
@@ -147,7 +184,7 @@ jobs:
           jq -n --arg url "https://github.com/$GH_REPO/releases/download/$TAG/$zip" \
             --arg name "$VERSION" '{url: $url, name: $name}' > feeds/update-darwin-arm64.json
       - name: Publish nightly
-        if: github.ref_type == 'branch'
+        if: needs.version.outputs.tag == 'nightly'
         run: |
           # Updated in place, so there's always a nightly to download.
           gh api --method PATCH "repos/$GH_REPO/git/refs/tags/nightly" \
@@ -169,8 +206,13 @@ jobs:
               || gh release delete-asset nightly "$name" --yes
           done <<< "$old"
       - name: Publish release
-        if: github.ref_type == 'tag'
+        if: needs.version.outputs.tag != 'nightly'
         run: |
+          # A release run by hand is tagged only now that it's built, so a failed build leaves no
+          # tag. Made with this token, the tag doesn't start this workflow again.
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            gh api "repos/$GH_REPO/git/refs" -f ref="refs/tags/$TAG" -f sha="$GITHUB_SHA" --silent
+          fi
           # A tag like v1.0.0-beta.1 is published as a pre-release.
           prerelease=$([[ "$VERSION" == *-* ]] && echo --prerelease || true)
           # Its files are all up before it's published, so update.json never points to a missing one.

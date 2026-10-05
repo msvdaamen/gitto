@@ -42,11 +42,16 @@ Install the Arch package with `sudo pacman -U gitto-*.pkg.tar.zst`.
 - Every merge to `main` updates the **Gitto Nightly** pre-release. Its version follows the highest `v*`
   tag: `1.2.4-nightly.20261005134259` after `v1.2.3` (when it was built, in UTC), and
   `1.3.0-rc.1.nightly.20261005134259` after `v1.3.0-rc.1`.
-- Pushing a `v1.3.0` tag publishes **Gitto 1.3.0** with generated notes. A tag with a pre-release
-  part, like `v1.3.0-beta.1`, is published as a pre-release; that part has to start with a letter.
+- Running the **Release** workflow on `main` (Actions → Release → Run workflow) releases it with the
+  last release's version bumped: `patch` for fixes (1.2.3 to 1.2.4), `minor` for features (1.3.0)
+  or `major` for breaking changes (2.0.0). Pre-releases are left out, so after `v1.3.0-rc.1` a
+  `minor` release is still 1.3.0. Once it's built, it's tagged and published with generated notes.
+- Pushing a tag publishes that version, which is how to make a pre-release, like `v1.3.0-beta.1`;
+  its pre-release part has to start with a letter.
 
 ```sh
-git tag v1.3.0 && git push origin v1.3.0
+gh workflow run release.yml -f bump=minor   # or patch, or major
+git tag v1.3.0-beta.1 && git push origin v1.3.0-beta.1
 ```
 
 The builds aren't code-signed, so macOS and Windows warn before opening them.
