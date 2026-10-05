@@ -9,6 +9,8 @@ import FileWarning from "lucide-solid/icons/file-exclamation-point";
 import FolderGit from "lucide-solid/icons/folder-git-2";
 import GitMerge from "lucide-solid/icons/git-merge";
 import LoaderCircle from "lucide-solid/icons/loader-circle";
+import Minus from "lucide-solid/icons/minus";
+import Plus from "lucide-solid/icons/plus";
 import Rows2 from "lucide-solid/icons/rows-2";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
 import {
@@ -30,6 +32,7 @@ import { FileStatusBadge } from "@/components/repository/details/changed-file-li
 import { Button, IconButton } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LineStats } from "@/components/ui/line-stats";
+import { stagingPaths } from "@/git/changes";
 import { diffFileKey, isSameSource, isUncommitted, type DiffSource } from "@/git/diff-source";
 import { summarizePatch, patchVersion } from "@/git/patch";
 import { fetchBlob } from "@/git/queries/diff";
@@ -40,7 +43,7 @@ import {
   useFilePatch,
   type FilePatch,
 } from "@/git/queries/file-diff";
-import { hasHunks, useStageLines } from "@/git/queries/staging";
+import { hasHunks, useStage, useStageLines, useUnstage } from "@/git/queries/staging";
 import { useUnsuspendedData } from "@/git/queries/unsuspended";
 import { useDelayed } from "@/hooks/delayed";
 import { useDiffStyle } from "@/hooks/diff-style";
@@ -142,8 +145,9 @@ export function prefetchFileDiff(
  * are a step away. Uncommitted changes are kept up to date as they change on disk, in place; once
  * the file has none left on its side, that's said instead.
  *
- * An uncommitted file's lines can be staged, or unstaged, a hunk or a selection at a time (see
- * `PatchViewer`). Once that leaves it without changes on its side, the next file in its list opens.
+ * An uncommitted file can be staged, or unstaged, whole, or its lines a hunk or a selection at a
+ * time (see `PatchViewer`). Once that leaves it without changes on its side, the next file in its
+ * list opens.
  */
 export function FileDiffView(props: {
   repositoryId: string;
@@ -325,6 +329,38 @@ export function FileDiffView(props: {
     };
   };
 
+  // Staging and unstaging the whole file.
+  const stageFile = useStage(() => props.repositoryId);
+  const unstageFile = useUnstage(() => props.repositoryId);
+  /** Whether the file is staged, or unstaged, whole: if it's one of the uncommitted changes listed. */
+  const wholeFile = () =>
+    isUncommitted(props.source) && found() !== -1
+      ? props.source.kind === "staged"
+        ? "unstage"
+        : "stage"
+      : undefined;
+  const stagingFile = () => stageFile.isPending || unstageFile.isPending || stageLines.isPending;
+  /**
+   * Stages, or unstages, the whole file, its edits saved first so they're staged with it; then on
+   * to the next file in its list, as once its last lines are.
+   */
+  const stageWhole = async () => {
+    const action = wholeFile();
+    if (!action || stagingFile()) return;
+    const key = fileKey();
+    if (!(await fileEditing.leave()) || key !== fileKey()) return;
+    setStagingError(undefined);
+    try {
+      // Settles once the lists are refetched, without the file.
+      await (action === "stage" ? stageFile : unstageFile).mutateAsync(stagingPaths([liveFile()]));
+    } catch (error) {
+      setStagingError({ key, message: error instanceof Error ? error.message : String(error) });
+      return;
+    }
+    const target = next() ?? previous();
+    if (target && key === fileKey()) props.onOpen(props.source, target);
+  };
+
   let section: HTMLElement | undefined;
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key !== "Escape" || event.defaultPrevented || isEditable(event.target)) return;
@@ -415,6 +451,26 @@ export function FileDiffView(props: {
           />
         </Show>
         <span class="ml-auto flex shrink-0 items-center gap-0.5">
+          <Show when={wholeFile()}>
+            {(action) => (
+              <>
+                <button
+                  type="button"
+                  disabled={stagingFile()}
+                  class="inline-flex h-[26px] shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-border bg-panel-raised px-2 text-[11.5px] font-[600] text-text-soft enabled:hover:bg-panel-hover enabled:hover:text-text focus-ring disabled:cursor-default disabled:opacity-50"
+                  onClick={() => void stageWhole()}
+                >
+                  {action() === "stage" ? (
+                    <Plus size={13} strokeWidth={2.2} />
+                  ) : (
+                    <Minus size={13} strokeWidth={2.2} />
+                  )}
+                  {action() === "stage" ? "Stage file" : "Unstage file"}
+                </button>
+                <span class="mx-1.5 h-4 w-px bg-border" />
+              </>
+            )}
+          </Show>
           <Show when={props.source.kind === "unstaged"}>
             <fileEditing.Controls editable={editable()} />
             <span class="mx-1.5 h-4 w-px bg-border" />

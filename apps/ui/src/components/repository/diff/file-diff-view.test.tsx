@@ -21,6 +21,8 @@ const rpc = vi.hoisted(() => ({
     },
     status: { get: vi.fn(async () => uncommitted) },
     staging: {
+      stage: vi.fn<(input: unknown) => Promise<void>>(),
+      unstage: vi.fn<(input: unknown) => Promise<void>>(),
       stageLines: vi.fn<(input: unknown) => Promise<{ patch: string }>>(),
       unstageLines: vi.fn<(input: unknown) => Promise<{ patch: string }>>(),
     },
@@ -569,5 +571,83 @@ describe("staging lines", () => {
     const shown = viewer.props as ViewerProps | undefined;
     expect(shown).toBeDefined();
     expect(shown?.staging).toBeUndefined();
+  });
+});
+
+describe("staging the whole file", () => {
+  beforeEach(() => {
+    rpc.git.diff.unstagedFilePatch.mockReset();
+    rpc.git.diff.unstagedFilePatch.mockImplementation(async ({ path }) =>
+      changedLine(path, `new ${path}`),
+    );
+    rpc.git.diff.stagedFilePatch.mockReset();
+    rpc.git.diff.stagedFilePatch.mockImplementation(async ({ path }) =>
+      changedLine(path, `staged ${path}`),
+    );
+    rpc.git.staging.stage.mockReset();
+    rpc.git.staging.unstage.mockReset();
+  });
+
+  it("stages it, then opens the next file in the list", async () => {
+    setChanges({ unstaged: [file("a.txt"), file("b.txt")] });
+    const onOpen = vi.fn();
+    renderView(file("a.txt"), { onOpen }, UNSTAGED);
+    await screen.findByText(/\+new a\.txt/);
+    rpc.git.staging.stage.mockImplementation(async () =>
+      setChanges({ staged: [file("a.txt")], unstaged: [file("b.txt")] }),
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Stage file" }));
+    expect(rpc.git.staging.stage).toHaveBeenCalledWith({ repositoryId: "repo", paths: ["a.txt"] });
+    await vi.waitFor(() => expect(onOpen).toHaveBeenCalledWith(UNSTAGED, file("b.txt")));
+  });
+
+  it("stages a renamed file by both its paths", async () => {
+    const renamed = { ...file("new.txt"), status: "renamed", origPath: "old.txt" } as const;
+    setChanges({ unstaged: [renamed] });
+    renderView(renamed, {}, UNSTAGED);
+    await screen.findByText(/\+new new\.txt/);
+    rpc.git.staging.stage.mockResolvedValue(undefined);
+
+    await userEvent.click(screen.getByRole("button", { name: "Stage file" }));
+    expect(rpc.git.staging.stage).toHaveBeenCalledWith({
+      repositoryId: "repo",
+      paths: ["new.txt", "old.txt"],
+    });
+  });
+
+  it("unstages a staged file, then opens the one before the last", async () => {
+    setChanges({ staged: [file("a.txt"), file("b.txt")] });
+    const onOpen = vi.fn();
+    renderView(file("b.txt"), { onOpen }, { kind: "staged" });
+    await screen.findByText(/\+staged b\.txt/);
+    rpc.git.staging.unstage.mockImplementation(async () =>
+      setChanges({ staged: [file("a.txt")], unstaged: [file("b.txt")] }),
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Unstage file" }));
+    expect(rpc.git.staging.unstage).toHaveBeenCalledWith({
+      repositoryId: "repo",
+      paths: ["b.txt"],
+    });
+    await vi.waitFor(() => expect(onOpen).toHaveBeenCalledWith({ kind: "staged" }, file("a.txt")));
+  });
+
+  it("says why it couldn't be staged", async () => {
+    setChanges({ unstaged: [file("a.txt")] });
+    const onOpen = vi.fn();
+    renderView(file("a.txt"), { onOpen }, UNSTAGED);
+    await screen.findByText(/\+new a\.txt/);
+    rpc.git.staging.stage.mockRejectedValue(new Error("The index is locked."));
+
+    await userEvent.click(screen.getByRole("button", { name: "Stage file" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The index is locked.");
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("isn't offered for a commit's file", async () => {
+    renderView(FILES[0]!);
+    await screen.findByText("patch of a.txt");
+    expect(screen.queryByRole("button", { name: /stage file/i })).not.toBeInTheDocument();
   });
 });
