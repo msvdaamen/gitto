@@ -247,13 +247,13 @@ describe("the branch menu", () => {
     const user = userEvent.setup();
     renderSidebar();
 
-    await user.pointer({ keys: "[MouseRight]", target: await row("Working directory") });
+    await user.pointer({ keys: "[MouseRight]", target: await row("origin") });
     await user.pointer({ keys: "[MouseRight]", target: await row("feature") });
     expect(await screen.findByRole("menuitem", { name: "Create branch…" })).toBeInTheDocument();
     await user.keyboard("{Escape}");
     await vi.waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
 
-    await user.pointer({ keys: "[MouseRight]", target: await row("Working directory") });
+    await user.pointer({ keys: "[MouseRight]", target: await row("origin") });
     // oxlint-disable-next-line no-promise-executor-return -- a moment for it to open, if it did.
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();

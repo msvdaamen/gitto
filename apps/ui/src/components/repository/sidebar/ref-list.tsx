@@ -1,8 +1,6 @@
 import type { Ref } from "@gitto/git/types";
 import Archive from "lucide-solid/icons/archive";
 import Cloud from "lucide-solid/icons/cloud";
-import File from "lucide-solid/icons/file";
-import Folder from "lucide-solid/icons/folder";
 import GitBranch from "lucide-solid/icons/git-branch";
 import GitMerge from "lucide-solid/icons/git-merge";
 import Inbox from "lucide-solid/icons/inbox";
@@ -15,7 +13,6 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { useSwitchBranch } from "@/git/queries/branch";
 import { useRefs } from "@/git/queries/refs";
 import { useStashes } from "@/git/queries/stash";
-import { useStatus } from "@/git/queries/status";
 import { buildRefTree, flattenRefTree } from "@/git/ref-tree";
 import type { RefFolder, RefLeaf, RefTreeRow } from "@/git/ref-tree";
 import { useCollapsed } from "@/hooks/collapsed";
@@ -33,12 +30,11 @@ const PULL_REQUESTS = [
 ];
 
 /**
- * The sidebar's sections: the working directory, branches, remotes, pull requests, tags, stashes.
+ * The sidebar's sections: branches, remotes, pull requests, tags, stashes.
  * Double-clicking a branch switches to it; for a remote one, to the local branch tracking it.
  * Right-clicking one opens a menu of what can be done with it, like creating a branch from it.
  */
 export function RefList(props: { repositoryId: string }) {
-  const status = useStatus(() => props.repositoryId);
   const refs = useRefs(() => props.repositoryId);
   const stashes = useStashes(() => props.repositoryId);
   const switchBranch = useSwitchBranch(() => props.repositoryId);
@@ -157,24 +153,6 @@ export function RefList(props: { repositoryId: string }) {
         onOpenFor={setMenuFor}
         onCreateBranch={setBranchFrom}
       >
-        <SidebarSection
-          title="Workspace"
-          scrollId="sidebar-workspace"
-          icon={Folder}
-          count={1}
-          {...collapsible("workspace")}
-          items={["working-directory"]}
-        >
-          {() => (
-            <SidebarRow
-              icon={File}
-              label="Working directory"
-              active
-              count={status.data?.counts.files ?? 0}
-              tone="amber"
-            />
-          )}
-        </SidebarSection>
         <SidebarSection
           title="Local branches"
           scrollId="sidebar-local-branches"
