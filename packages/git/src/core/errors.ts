@@ -105,6 +105,16 @@ export class NotUtf8Error extends MessageError {
   }
 }
 
+/**
+ * A file in the working tree that changed on disk since it was read to be edited, which saving
+ * the edits over would lose.
+ */
+export class FileChangedOnDiskError extends MessageError {
+  constructor(path: string) {
+    super(`${path} changed on disk since you started editing it.`);
+  }
+}
+
 /** No repository with that id has been added to Gitto. */
 export class RepositoryNotFoundError extends MessageError {
   constructor(readonly repositoryId: string) {

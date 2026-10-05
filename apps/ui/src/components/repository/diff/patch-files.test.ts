@@ -1,7 +1,7 @@
 import { hydratePartialDiff, parsePatchFiles, type FileDiffMetadata } from "@pierre/diffs";
 import { describe, expect, it } from "vitest";
 
-import { carriedExpansion, fitToPatch, hasMatchingEnds } from "./patch-files";
+import { carriedExpansion, fitToLines, fitToPatch, hasMatchingEnds } from "./patch-files";
 
 /** A file of `count` numbered lines, with `changes` made to some of them. */
 function lines(count: number, changes: Record<number, string> = {}): string {
@@ -46,6 +46,14 @@ describe("fitToPatch", () => {
   it("takes a file with CRLF line ends for a patch with LF ones, as LF", () => {
     const crlf = lines(40, { 10: "ten" }).replaceAll("\n", "\r\n");
     expect(fitToPatch(changed10, "new", crlf)).toBe(lines(40, { 10: "ten" }));
+  });
+});
+
+describe("fitToLines", () => {
+  it("takes an added file that's all of the patch's lines, with LF line ends for CRLF ones", () => {
+    expect(fitToLines(["a\n", "b"], "a\nb")).toBe("a\nb");
+    expect(fitToLines(["a\n", "b\n"], "a\r\nb\r\n")).toBe("a\nb\n");
+    expect(() => fitToLines(["a\n"], "a\nmore\n")).toThrow(/has changed/);
   });
 });
 

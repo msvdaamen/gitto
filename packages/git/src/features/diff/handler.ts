@@ -9,7 +9,7 @@ import {
   getUnstagedFilePatch,
 } from "./commands";
 import { DiffContract } from "./contract";
-import { readWorkingTreeFile } from "./working-tree";
+import { readWorkingTreeFile, saveWorkingTreeFile } from "./working-tree";
 
 const os = implement(DiffContract).$context<GitContext>();
 
@@ -34,4 +34,7 @@ export const diffRouter = os.router({
   workingTreeFile: os.workingTreeFile
     .use(withRepo)
     .handler(({ context, input }) => readWorkingTreeFile(context.repo, input.path)),
+  saveWorkingTreeFile: os.saveWorkingTreeFile.use(withRepo).handler(async ({ context, input }) => ({
+    version: await saveWorkingTreeFile(context.repo, input.path, input.contents, input),
+  })),
 });

@@ -12,6 +12,8 @@ import {
   type HunkExpansionRegion,
   type PostRenderPhase,
 } from "@pierre/diffs";
+import type * as EditModule from "@pierre/diffs/edit";
+import type { Editor } from "@pierre/diffs/edit";
 import { getOrCreateWorkerPoolSingleton, type WorkerPoolManager } from "@pierre/diffs/worker";
 import { createEffect, createMemo, on, onCleanup, untrack } from "solid-js";
 
@@ -19,7 +21,32 @@ import { useConnected } from "@/components/ui/virtual-list";
 import type { DiffStyle } from "@/hooks/diff-style";
 import { useTheme } from "@/hooks/theme";
 
-import { carriedExpansion, fitToPatch, hasMatchingEnds, type Side } from "./patch-files";
+import {
+  carriedExpansion,
+  fitToLines,
+  fitToPatch,
+  hasMatchingEnds,
+  type Side,
+} from "./patch-files";
+
+/** One side of a file, read in full: with its version if it's the working tree's. */
+export type LoadedFile = string | { contents: string; version: string };
+
+/** Editing the file on show: what it started from, and what can be done with it meanwhile. */
+export interface EditSession {
+  /** The version of the file on disk the edits are of (see `readWorkingTreeFile`). */
+  version: string;
+  /** The file as the editing started. */
+  text: string;
+  /** Drops the edits made since the last save, and stops editing. */
+  discard: () => void;
+  /** Whether there's a selection for Esc to collapse, or several to make one, in the editor. */
+  hasSelection: () => boolean;
+}
+
+let editorModule: Promise<typeof EditModule> | undefined;
+/** The library's editor, loaded the first time a file's edited. */
+const loadEditor = () => (editorModule ??= import("@pierre/diffs/edit"));
 
 /** Highlighting runs in workers; one diff is on show at a time, so a couple is plenty. */
 const WORKERS = 2;
@@ -61,8 +88,15 @@ function workerPool(): WorkerPoolManager {
       poolSize: WORKERS,
     },
     // Oniguruma, as in VS Code, rather than Shiki's JavaScript engine: about twice as fast on a
-    // diff of thousands of lines (1.5s against 3s for 6,000), and no slower on small ones.
-    highlighterOptions: { theme: THEMES, preferredHighlighter: "shiki-wasm" },
+    // diff of thousands of lines (1.5s against 3s for 6,000), and no slower on small ones. With
+    // each token's place in its line, which editing a file needs: without, starting to edit one
+    // highlights it all again on the main thread (1.9s for 2,500 lines, the window frozen), for
+    // about 15% longer highlighting here (0.69s against 0.59s for 4,500 lines).
+    highlighterOptions: {
+      theme: THEMES,
+      preferredHighlighter: "shiki-wasm",
+      useTokenTransformer: true,
+    },
   });
   return pool;
 }
@@ -104,7 +138,19 @@ export default function PatchViewer(props: {
   cacheKey: string;
   diffStyle: DiffStyle;
   /** Reads one side of the file in full, by the object name the patch has for it. */
-  loadFile: (side: Side, oid: string) => Promise<string>;
+  loadFile: (side: Side, oid: string) => Promise<LoadedFile>;
+  /**
+   * Edits the new side of the file in place, once it's been read whole; changing to false keeps
+   * the edits as they are. Patches given meanwhile are held, as the editor would take them for its
+   * text, and the last one is shown once editing stops.
+   */
+  editing?: boolean;
+  /** Editing started (see `EditSession`), or stopped. */
+  onEditing?: (session: EditSession | undefined) => void;
+  /** The file was edited to `text`. */
+  onEdit?: (text: string) => void;
+  /** Why editing couldn't start, e.g. as the file changed again meanwhile. */
+  onEditFailed?: (message: string) => void;
   /** The last patch given is on show. */
   onShown: () => void;
   /** Whether the whole file is being loaded, to show more of it. */
@@ -120,7 +166,7 @@ export default function PatchViewer(props: {
   );
   let scroller: HTMLDivElement | undefined;
   let content: HTMLDivElement | undefined;
-  let instance: ExpandableFileDiff | undefined;
+  let instance: ViewerFileDiff | undefined;
   /** The diff on show, once there's one, and the file it's of. */
   let shown: FileDiffMetadata | undefined;
   let shownFileKey: string | undefined;
@@ -139,6 +185,10 @@ export default function PatchViewer(props: {
     onPostRender: focusableExpandButtons,
     // Without the buttons to show more, once the whole file couldn't be loaded.
     hunkSeparators: shown && failures.has(shown) ? "simple" : "line-info",
+    onEditChange: (event) => props.onEdit?.(event.file.contents),
+    // The diff the library leaves the edits in is highlighted on the main thread, so it's not
+    // kept: the viewer shows the edits in one of its own once editing stops (see `stopEditing`).
+    onEditComplete: () => "reject",
     loadDiffFiles: async (diff) => {
       loads.set(diff, (loads.get(diff) ?? 0) + 1);
       report();
@@ -181,7 +231,7 @@ export default function PatchViewer(props: {
   function setUp(root: HTMLDivElement, wrapper: HTMLDivElement) {
     const virtualizer = new Virtualizer();
     virtualizer.setup(root, wrapper);
-    const diffs = new ExpandableFileDiff(
+    const diffs = new ViewerFileDiff(
       options(props.diffStyle),
       virtualizer,
       undefined,
@@ -189,22 +239,35 @@ export default function PatchViewer(props: {
     );
     instance = diffs;
     let disposed = false;
+    /** The editor while editing, how to finish it, and the patch on show (to know when another is). */
+    let editor: Editor<"file-diff"> | undefined;
+    let finishEditing: (() => void) | undefined;
+    let editing = false;
+    /** The whole file's diff the edits started from. */
+    let editedFrom: FileDiffMetadata | undefined;
+    let shownPatch: ReturnType<typeof next> | undefined;
     onCleanup(() => {
       disposed = true;
       instance = undefined;
+      if (finishEditing) {
+        diffs.nameEditedDiff(`${shownFileKey}:edited:${++editedDiffs}`);
+        finishEditing();
+      }
       diffs.cleanUp();
       virtualizer.cleanUp();
     });
 
     const show = async (patch: { diff: FileDiffMetadata; fileKey: string }) => {
+      // Held while editing: the editor would take it for its text.
+      if (editing) return;
       const sameFile = shown !== undefined && shownFileKey === patch.fileKey;
       // The same file, with lines shown around its changes: the new patch is filled in with the
       // whole file too, to show the same ones.
       const kept = sameFile && !shown!.isPartial ? await keptExpansion(patch.diff) : undefined;
       const diff = kept?.diff ?? patch.diff;
       await highlighted(diff, HIGHLIGHT_WAIT_MS);
-      // Passed over for another patch meanwhile.
-      if (disposed || next() !== patch) return;
+      // Passed over for another patch meanwhile, or editing started.
+      if (disposed || next() !== patch || editing) return;
       // Another file starts at its top.
       if (shown && !sameFile) root.scrollTop = 0;
       // The lines shown around the last one's changes are by hunk, which another's don't match.
@@ -212,6 +275,7 @@ export default function PatchViewer(props: {
       if (sameFile && shown!.cacheKey !== diff.cacheKey) forget(shown!);
       shown = diff;
       shownFileKey = patch.fileKey;
+      shownPatch = patch;
       diffs.setOptions(options(props.diffStyle));
       diffs.render({ fileDiff: diff, containerWrapper: wrapper });
       report();
@@ -233,6 +297,141 @@ export default function PatchViewer(props: {
       }
     };
 
+    /**
+     * Starts editing the file on show, once it's whole: a patch's diff is filled in with both
+     * files, or for an added file, built from it. The lines shown around the changes stay, as the
+     * hunks are the same.
+     */
+    const startEditing = async () => {
+      const from = shown;
+      if (!from || editing) return;
+      editing = true;
+      try {
+        const [whole, { Editor }] = await Promise.all([
+          wholeFile(from).then(async (file) => {
+            // Highlighted in the workers first, which the editor starts from: it highlights the
+            // whole file again on the main thread otherwise (1.6s for 2,500 lines), e.g. right
+            // after editing stopped, while the edits are highlighted.
+            await highlighted(file.diff, EXPAND_HIGHLIGHT_WAIT_MS);
+            return file;
+          }),
+          loadEditor(),
+        ]);
+        if (disposed || !editing || shown !== from) return;
+        shown = whole.diff;
+        editedFrom = whole.diff;
+        diffs.render({ fileDiff: whole.diff, containerWrapper: wrapper, forceRender: true });
+        // Without an `editStateKey`, which would keep the undo history for when the file's edited
+        // again: picking it up has the library highlight the whole file again on the main thread
+        // (1.6s for 2,500 lines, the window frozen), rather than start from the workers'.
+        const opened = new Editor<"file-diff">("file-diff", {});
+        editor = opened;
+        finishEditing = opened.edit(diffs);
+        opened.focus();
+        props.onEditing?.({
+          version: whole.version,
+          text: opened.getText(),
+          discard: () => void stopEditing(true),
+          hasSelection: () => {
+            const selections = opened.getViewState().selections ?? [];
+            const [first] = selections;
+            if (selections.length !== 1 || !first) return selections.length > 1;
+            return (
+              first.start.line !== first.end.line || first.start.character !== first.end.character
+            );
+          },
+        });
+      } catch (error) {
+        if (disposed || !editing) return;
+        editing = false;
+        props.onEditFailed?.(error instanceof Error ? error.message : String(error));
+      }
+    };
+
+    /**
+     * Stops editing, keeping the edits on show unless they're dropped, then shows the last patch.
+     * The edits are shown in a diff of the viewer's own, highlighted in the workers first, in the
+     * editor's place: the library's would be highlighted on the main thread, once as editing stops
+     * and again as it starts over (1.6s each for 2,500 lines, the window frozen).
+     */
+    const stopEditing = async (discard: boolean) => {
+      if (!editing) return;
+      const opened = editor;
+      // No more typing: what's saved is what's left.
+      opened?.blur();
+      const left = !discard && opened ? await editedDiff(opened) : undefined;
+      if (!editing || editor !== opened) return;
+      editing = false;
+      editor = undefined;
+      // What the library highlights again once editing stops: in the workers, as it's named.
+      const session = diffs.editedDiff();
+      diffs.nameEditedDiff(`${shownFileKey}:session:${++editedDiffs}`);
+      if (discard) opened?.cleanUp("discard");
+      else finishEditing?.();
+      finishEditing = undefined;
+      if (left && session) {
+        diffs.expanded = carriedExpansion(session, diffs.expanded, left);
+        shown = left;
+        diffs.render({ fileDiff: left, containerWrapper: wrapper });
+      }
+      props.onEditing?.(undefined);
+      if (next() !== shownPatch) void show(next());
+    };
+
+    /** The edits as `opened` has them, in a whole file's diff, highlighted. */
+    const editedDiff = async (opened: Editor<"file-diff">) => {
+      const from = editedFrom!;
+      const oldFile =
+        from.type === "new"
+          ? null
+          : { name: from.prevName ?? from.name, contents: from.deletionLines.join("") };
+      // Typing can go on while it's highlighted: then it's the latest text's that's shown.
+      for (let tries = 0; ; tries++) {
+        const text = opened.getText();
+        const diff = parseDiffFromFile(oldFile, { name: from.name, contents: text });
+        diff.cacheKey = `${shownFileKey}:edited:${++editedDiffs}`;
+        // oxlint-disable-next-line no-await-in-loop -- the text it's of may have changed since.
+        await highlighted(diff, EXPAND_HIGHLIGHT_WAIT_MS);
+        if (opened.getText() === text || tries === 2) return diff;
+      }
+    };
+
+    /** `diff` with the whole file, and the version of the working tree's it's of. */
+    const wholeFile = async (diff: FileDiffMetadata) => {
+      if (diff.type === "new") {
+        const read = await readNewSide(diff);
+        const contents = fitToLines(diff.additionLines, read.contents);
+        const whole = parseDiffFromFile(null, {
+          name: diff.name,
+          contents,
+          cacheKey: diff.cacheKey && `${diff.cacheKey}:whole`,
+        });
+        return { diff: whole, version: read.version, text: contents };
+      }
+      if (diff.isPartial) {
+        const { hydrated, version } = await loadFiles(diff, props.loadFile);
+        if (!version) throw new Error("This file can't be edited.");
+        return { diff: hydrated, version, text: hydrated.additionLines.join("") };
+      }
+      // Whole already, as more of it was shown, or it was edited: still the file on disk?
+      const read = await readNewSide(diff);
+      return { diff, version: read.version, text: fitToLines(diff.additionLines, read.contents) };
+    };
+
+    /** The working tree's side of `diff`, with its version. */
+    const readNewSide = async (diff: FileDiffMetadata) => {
+      const read = await props.loadFile("new", diff.newObjectId ?? "");
+      if (typeof read === "string") throw new Error("This file can't be edited.");
+      return read;
+    };
+
+    createEffect(
+      on(
+        () => props.editing,
+        (edit) => void (edit ? startEditing() : stopEditing(false)),
+        { defer: true },
+      ),
+    );
     createEffect(on(next, (patch) => void show(patch)));
     createEffect(on(() => props.diffStyle, rerender, { defer: true }));
     createEffect(on(theme, (type) => diffs.setThemeType(type), { defer: true }));
@@ -251,11 +450,12 @@ export default function PatchViewer(props: {
   );
 }
 
-/**
- * The library's virtualized diff, with the lines shown around each hunk in reach: they're kept by
- * hunk across diffs, so another file's would show the last one's (see `show`).
- */
-class ExpandableFileDiff extends VirtualizedFileDiff<undefined, undefined> {
+/** The library's virtualized diff, with some of what it keeps to itself in reach. */
+class ViewerFileDiff extends VirtualizedFileDiff<undefined, undefined> {
+  /**
+   * The lines shown around each hunk: they're kept by hunk across diffs, so another file's would
+   * show the last one's (see `show`).
+   */
   get expanded(): ReadonlyMap<number, HunkExpansionRegion> {
     return this.hunksRenderer.getExpandedHunksMap();
   }
@@ -263,7 +463,25 @@ class ExpandableFileDiff extends VirtualizedFileDiff<undefined, undefined> {
   set expanded(expanded: Map<number, HunkExpansionRegion>) {
     this.hunksRenderer.setExpandedHunksMap(expanded);
   }
+
+  /**
+   * Names the diff being edited in the highlighting cache, which the library leaves unnamed: once
+   * editing stops, a diff with edits is highlighted again, in the workers only if it has a name,
+   * on the main thread otherwise (1.7s for 2,500 lines, the window frozen).
+   */
+  /** The diff being edited, while it is. */
+  editedDiff(): FileDiffMetadata | undefined {
+    return this.getLatestDiff();
+  }
+
+  nameEditedDiff(cacheKey: string) {
+    const diff = this.getLatestDiff();
+    if (diff && diff.cacheKey == null) diff.cacheKey = cacheKey;
+  }
 }
+
+/** Tells apart the diffs left by editing, in the highlighting cache. */
+let editedDiffs = 0;
 
 /**
  * Drops a patch of a file that's been replaced by a newer one from the highlighting cache, which
@@ -358,14 +576,16 @@ export function parsePatch(patch: string, cacheKey: string): FileDiffMetadata {
  */
 async function loadFiles(
   diff: FileDiffMetadata,
-  loadFile: (side: Side, oid: string) => Promise<string>,
-): Promise<{ files: FileDiffLoadedFiles; hydrated: FileDiffMetadata }> {
+  loadFile: (side: Side, oid: string) => Promise<LoadedFile>,
+): Promise<{ files: FileDiffLoadedFiles; hydrated: FileDiffMetadata; version?: string }> {
   const { prevObjectId, newObjectId } = diff;
   if (!prevObjectId || !newObjectId) throw new Error("The patch doesn't name its files.");
-  const [before, after] = await Promise.all([
+  const [old, read] = await Promise.all([
     loadFile("old", prevObjectId),
     loadFile("new", newObjectId),
   ]);
+  const before = typeof old === "string" ? old : old.contents;
+  const after = typeof read === "string" ? read : read.contents;
   // Named in the highlighting cache by the patch's object names: the working tree's side is by
   // what git would store it as, so another version of the file has another name too.
   const files = {
@@ -383,5 +603,5 @@ async function loadFiles(
   // Highlighted before they're handed over (see `EXPAND_HIGHLIGHT_WAIT_MS`): the copy, filled in
   // as the viewer will, has the same key in the highlighting cache.
   await highlighted(hydrated, EXPAND_HIGHLIGHT_WAIT_MS);
-  return { files, hydrated };
+  return { files, hydrated, version: typeof read === "string" ? undefined : read.version };
 }

@@ -1,6 +1,6 @@
 import type { ChangedFile } from "@gitto/git/types";
 import { useQueryClient } from "@tanstack/solid-query";
-import { createFileRoute } from "@tanstack/solid-router";
+import { createFileRoute, useBlocker } from "@tanstack/solid-router";
 import { cn } from "cn";
 import { createEffect, createMemo, createSignal, Show, Suspense } from "solid-js";
 
@@ -10,7 +10,7 @@ import { HistoryTable } from "@/components/repository/history/history-table";
 import { RefsSidebar } from "@/components/repository/sidebar/refs-sidebar";
 import { RepositoryToolbar } from "@/components/repository/toolbar";
 import { ResizeHandle } from "@/components/ui/resize-handle";
-import type { DiffSource, FileOpener } from "@/git/diff-source";
+import { isSameSource, type DiffSource, type FileOpener } from "@/git/diff-source";
 import { useRepositoryWatcher } from "@/git/queries/watch";
 import { usePanelWidth } from "@/hooks/panel-width";
 import { useSettled } from "@/hooks/settled";
@@ -66,13 +66,26 @@ function RouteComponent() {
   createEffect(() => {
     if (openFile() && !shownFile()) setOpenFile(undefined);
   });
-  const openFileOf = (rowId: string) => (source: DiffSource, file: ChangedFile) =>
+  // What closing the file, or opening another, waits for: its edits saved (see `FileDiffView`).
+  let leaveFile: (() => Promise<boolean>) | undefined;
+  const mayLeaveFile = () => leaveFile?.() ?? Promise.resolve(true);
+  const openFileOf = (rowId: string) => async (source: DiffSource, file: ChangedFile) => {
+    const open = shownFile();
+    const same =
+      open?.rowId === rowId && isSameSource(open.source, source) && open.file.path === file.path;
+    if (same || !(await mayLeaveFile())) return;
     setOpenFile({ repositoryId: repositoryId(), rowId, source, file });
+  };
+  const closeFile = async () => {
+    if (await mayLeaveFile()) setOpenFile(undefined);
+  };
+  // Nor is another repository opened, or the home page, before the file's edits are saved.
+  useBlocker({ shouldBlockFn: async () => !(await mayLeaveFile()) });
   // What the details' file lists open, from the row they're of.
   const detailsFiles: FileOpener = {
     open: (source, file) => {
       const rowId = detailsId();
-      if (rowId) openFileOf(rowId)(source, file);
+      if (rowId) void openFileOf(rowId)(source, file);
     },
     prefetch: (source, file, uncounted) =>
       prefetchFileDiff(queryClient, repositoryId(), source, file, uncounted),
@@ -144,8 +157,9 @@ function RouteComponent() {
                     repositoryId={open().repositoryId}
                     source={open().source}
                     file={open().file}
-                    onOpen={openFileOf(open().rowId)}
-                    onClose={() => setOpenFile(undefined)}
+                    onOpen={(source, file) => void openFileOf(open().rowId)(source, file)}
+                    onClose={() => void closeFile()}
+                    onGuard={(guard) => (leaveFile = guard)}
                   />
                 </Suspense>
               </div>

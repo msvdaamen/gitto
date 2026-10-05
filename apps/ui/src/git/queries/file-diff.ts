@@ -156,9 +156,34 @@ export function fetchFilePatch(
 }
 
 /**
- * A file's contents in the working tree, to show more of its unstaged changes. Not cached: they can
- * change at any time, and are read only to fill in a patch that's just been loaded.
+ * A file's contents in the working tree, with their version, to show more of its unstaged changes
+ * or edit them. Not cached: they can change at any time, and are read only to fill in a patch that's
+ * just been loaded.
  */
-export function fetchWorkingTreeFile(repositoryId: string, path: string): Promise<string> {
+export function fetchWorkingTreeFile(
+  repositoryId: string,
+  path: string,
+): Promise<{ contents: string; version: string }> {
   return rpc.git.diff.workingTreeFile({ repositoryId, path });
+}
+
+/**
+ * Saves a file's edits over it in the working tree, if it's still at `version` or to `overwrite`
+ * it; resolves to the saved file's version. The watcher refetches what changed with it.
+ */
+export async function saveWorkingTreeFile(
+  repositoryId: string,
+  path: string,
+  contents: string,
+  version: string,
+  overwrite: boolean,
+): Promise<string> {
+  const saved = await rpc.git.diff.saveWorkingTreeFile({
+    repositoryId,
+    path,
+    contents,
+    version,
+    overwrite,
+  });
+  return saved.version;
 }

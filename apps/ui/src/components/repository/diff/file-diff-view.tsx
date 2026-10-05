@@ -44,6 +44,7 @@ import { useUnsuspendedData } from "@/git/queries/unsuspended";
 import { useDelayed } from "@/hooks/delayed";
 import { useDiffStyle } from "@/hooks/diff-style";
 
+import { useFileEditing } from "./file-editing";
 import type * as ViewerModule from "./patch-viewer";
 
 let viewerModule: Promise<typeof ViewerModule> | undefined;
@@ -146,6 +147,11 @@ export function FileDiffView(props: {
   /** Shows another file's changes, e.g. the next one in the list. */
   onOpen: (source: DiffSource, file: ChangedFile) => void;
   onClose: () => void;
+  /**
+   * Gets what to wait for before the file is closed, or another opened: edits to it saved, or the
+   * user saying what to do with them. Resolves to whether to go on.
+   */
+  onGuard?: (guard: (() => Promise<boolean>) | undefined) => void;
 }) {
   const { diffStyle, setDiffStyle } = useDiffStyle();
   const queryClient = useQueryClient();
@@ -174,9 +180,21 @@ export function FileDiffView(props: {
    * The file as its list has it now: uncommitted changes change on disk, and are listed anew. As
    * it was opened if it's gone from the list.
    */
-  const file = () => (isUncommitted(props.source) && lists.files()[found()]) || props.file;
+  const liveFile = () => (isUncommitted(props.source) && lists.files()[found()]) || props.file;
+  const fileEditing = useFileEditing({
+    repositoryId: () => props.repositoryId,
+    path: () => props.file.path,
+  });
+  const editing = fileEditing.editing;
+  props.onGuard?.(fileEditing.leave);
+  onCleanup(() => props.onGuard?.(undefined));
+  // While it's edited, the file stays as it was when that started: saving the edits changes it,
+  // and could take it from its list, or leave it without changes, which isn't shown in the editor.
+  const file = createMemo((last: ChangedFile | undefined) =>
+    editing() && last ? last : liveFile(),
+  );
   // Whether the file has gone from its list: it's been staged in full, say.
-  const gone = () => isUncommitted(props.source) && lists.loaded() && found() === -1;
+  const gone = () => !editing() && isUncommitted(props.source) && lists.loaded() && found() === -1;
 
   // The large file the user asked to see anyway.
   const [shownLarge, setShownLarge] = createSignal<string>();
@@ -194,7 +212,10 @@ export function FileDiffView(props: {
   const patchEnabled = createMemo(() => !gone() && fetches());
   const patchQuery = useFilePatch(() => props.repositoryId, source, patchFile, patchEnabled);
   // Without Suspense: an uncommitted file's patch is refetched while it's on show.
-  const patch = useUnsuspendedData(patchQuery);
+  const livePatch = useUnsuspendedData(patchQuery);
+  const patch = createMemo((last: FilePatch | undefined) =>
+    editing() && last ? last : livePatch(),
+  );
   /** The patch of this file, rather than of the last one, still on show while it loads. */
   const current = () => (patch()?.key === fileKey() ? patch() : undefined);
   // What the patch says of the changes: an uncommitted file's line counts can be older than its
@@ -241,6 +262,16 @@ export function FileDiffView(props: {
   const [loadingFiles, setLoadingFiles] = createSignal(false);
   const [filesError, setFilesError] = createSignal<string>();
   const busy = useDelayed(() => shown().key !== fileKey() || loadingFiles());
+  /**
+   * Whether the file on show can be edited: an unstaged one's new side, the file on disk, if it's
+   * text that's there, and not a link.
+   */
+  const editable = () =>
+    props.source.kind === "unstaged" &&
+    showsPatch() &&
+    shown().key === fileKey() &&
+    file().status !== "deleted" &&
+    !isLink(current()?.patch ?? "");
 
   let section: HTMLElement | undefined;
   const onKeyDown = (event: KeyboardEvent) => {
@@ -332,6 +363,10 @@ export function FileDiffView(props: {
           />
         </Show>
         <span class="ml-auto flex shrink-0 items-center gap-0.5">
+          <Show when={props.source.kind === "unstaged"}>
+            <fileEditing.Controls editable={editable()} />
+            <span class="mx-1.5 h-4 w-px bg-border" />
+          </Show>
           <IconButton
             label="Previous file"
             icon={ChevronUp}
@@ -359,6 +394,7 @@ export function FileDiffView(props: {
           />
         </span>
       </header>
+      <fileEditing.Banner />
       <Show when={filesError()}>
         {(message) => (
           <p
@@ -442,13 +478,18 @@ export function FileDiffView(props: {
                             cacheKey={patchCacheKey(props.source, data())}
                             diffStyle={diffStyle()}
                             loadFile={loadFile(data().file.path)}
-                            onShown={() =>
+                            onShown={() => {
                               setShownPatch({
                                 key: data().key,
                                 file: data().file,
                                 counts: summaryOf(data()) ?? countsOf(data().file),
-                              })
-                            }
+                              });
+                              fileEditing.onShown();
+                            }}
+                            editing={editing()}
+                            onEditing={fileEditing.viewer.onEditing}
+                            onEdit={fileEditing.viewer.onEdit}
+                            onEditFailed={fileEditing.viewer.onEditFailed}
                             onLoadingFiles={setLoadingFiles}
                             onFilesError={setFilesError}
                           />
@@ -538,6 +579,12 @@ function Loading() {
       <EmptyState icon={LoaderCircle} loading title="Loading changes…" class="h-full" />
     </Show>
   );
+}
+
+/** Whether `patch` is of a symbolic link, whose contents are the path it points to. */
+function isLink(patch: string): boolean {
+  const body = patch.indexOf("\n@@ ");
+  return / 120000$/m.test(body === -1 ? patch : patch.slice(0, body));
 }
 
 /** Whether a key pressed in `target` is typing, e.g. in the commit message. */

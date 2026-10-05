@@ -3,6 +3,7 @@ import { ORPCError, os } from "@orpc/server";
 import {
   ChangesStashedError,
   ChangesTooLargeError,
+  FileChangedOnDiskError,
   FileTooLargeError,
   FolderNotFoundError,
   GitError,
@@ -71,7 +72,8 @@ function toApiError(error: unknown): unknown {
     error instanceof ChangesStashedError ||
     error instanceof PullInterruptedError ||
     error instanceof RepositoryChangedError ||
-    error instanceof StashConflictError
+    error instanceof StashConflictError ||
+    error instanceof FileChangedOnDiskError
   ) {
     return new ORPCError("CONFLICT", { message: error.message, cause: error });
   }

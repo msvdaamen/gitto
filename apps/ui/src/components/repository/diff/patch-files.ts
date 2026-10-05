@@ -19,6 +19,18 @@ export function fitToPatch(diff: FileDiffMetadata, side: Side, contents: string)
   throw new Error("The file has changed since its changes were loaded. Try again in a moment.");
 }
 
+/**
+ * `contents`, if they're all of `lines`, the new side of a patch that has the whole file (an added
+ * one), with LF line ends for CRLF ones as `fitToPatch` takes them. Throws if they aren't.
+ */
+export function fitToLines(lines: readonly string[], contents: string): string {
+  const whole = lines.join("");
+  if (contents === whole) return contents;
+  const lf = contents.replaceAll("\r\n", "\n");
+  if (lf === whole) return lf;
+  throw new Error("The file has changed since its changes were loaded. Try again in a moment.");
+}
+
 /** Whether `contents` have the lines of each of `diff`'s hunks on its `side`, where it has them. */
 function hasPatchLines(diff: FileDiffMetadata, side: Side, contents: string): boolean {
   const patchLines = side === "old" ? diff.deletionLines : diff.additionLines;
