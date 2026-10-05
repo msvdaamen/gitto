@@ -8,6 +8,7 @@ import { rpc } from "@/lib/rpc";
 import { gitKeys } from "./keys";
 import { Opaque } from "./opaque";
 import { useUncommittedFiles } from "./status";
+import { useUnsuspendedData } from "./unsuspended";
 
 /** Loads the files a commit or stash changed. */
 export type FilesFetcher = (
@@ -84,11 +85,13 @@ export function fetchBlob(client: QueryClient, repositoryId: string, oid: string
  */
 export function useWorkingTreeChanges(repositoryId: () => string) {
   const query = useUncommittedFiles(repositoryId);
+  // Without Suspense: they're refetched while they're on show (see `useUnsuspendedData`).
+  const changes = useUnsuspendedData(query);
 
-  const staged = createMemo(() => stagedFiles(query.data?.value.staged ?? []));
-  const unstaged = createMemo(() => query.data?.value.unstaged ?? []);
+  const staged = createMemo(() => stagedFiles(changes()?.value.staged ?? []));
+  const unstaged = createMemo(() => changes()?.value.unstaged ?? []);
   /** Whether there are too many files for their lines to have been counted. */
-  const uncounted = () => query.data?.value.uncounted ?? false;
+  const uncounted = () => changes()?.value.uncounted ?? false;
 
   return { query, staged, unstaged, uncounted };
 }
