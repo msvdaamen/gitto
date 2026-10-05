@@ -42,16 +42,38 @@ The version comes from git tags; `package.json`'s stays at `0.0.0` and is set at
 How to install each build is in [Installing Gitto](docs/install.md).
 
 - Every merge to `main` updates the **Gitto Nightly** pre-release. Its version follows the highest `v*`
-  tag: `1.2.4-nightly.20261005.42` after `v1.2.3` (the date, then the workflow's run number), and
-  `1.3.0-rc.1.nightly.20261005.42` after `v1.3.0-rc.1`.
-- Pushing a `v1.3.0` tag publishes **Gitto 1.3.0** with generated notes. A tag with a pre-release
-  part, like `v1.3.0-beta.1`, is published as a pre-release; that part has to start with a letter.
+  tag: `1.2.4-nightly.20261005134259` after `v1.2.3` (when it was built, in UTC), and
+  `1.3.0-rc.1.nightly.20261005134259` after `v1.3.0-rc.1`.
+- Running the **Release** workflow on `main` (Actions → Release → Run workflow) releases it with the
+  last release's version bumped: `patch` for fixes (1.2.3 to 1.2.4), `minor` for features (1.3.0)
+  or `major` for breaking changes (2.0.0). Pre-releases are left out, so after `v1.3.0-rc.1` a
+  `minor` release is still 1.3.0. Once it's built, it's tagged and published with generated notes.
+- Pushing a tag publishes that version, which is how to make a pre-release, like `v1.3.0-beta.1`;
+  its pre-release part has to start with a letter.
 
 ```sh
-git tag v1.3.0 && git push origin v1.3.0
+gh workflow run release.yml -f bump=minor   # or patch, or major
+git tag v1.3.0-beta.1 && git push origin v1.3.0-beta.1
 ```
 
 The builds aren't code-signed, so macOS and Windows warn before opening them.
+
+### Updates
+
+Gitto updates itself on Windows and macOS (`apps/electron/src/updater.ts`), from its own channel: a
+nightly only to the next nightly, a release only to the next release. It checks when it starts and
+every hour, downloads a newer version in the background, and offers to restart into it in the footer;
+otherwise it's installed the next time Gitto starts.
+
+Each release has the files it checks:
+
+- `update.json`, with the release's version. A nightly reads the `nightly` release's, a release the
+  latest release's, which GitHub never takes a pre-release for (so a `v1.3.0-beta.1` isn't offered).
+- `RELEASES` and the `.nupkg`, which Squirrel updates from on Windows.
+- `update-darwin-arm64.json`, which points Squirrel.Mac to the zip. Squirrel.Mac only installs a
+  code-signed app, so updates on macOS need the builds to be signed.
+
+On Linux, Gitto doesn't update itself: pacman does, once it's on the AUR.
 
 ## Adding routes
 

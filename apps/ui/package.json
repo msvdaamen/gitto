@@ -13,6 +13,7 @@
   "dependencies": {
     "@gitto/git": "workspace:*",
     "@gitto/rpc": "workspace:*",
+    "@gitto/system": "workspace:*",
     "@kobalte/core": "^0.13.14",
     "@pierre/diffs": "^1.5.1",
     "@tanstack/solid-query": "^5.104.0",

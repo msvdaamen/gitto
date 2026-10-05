@@ -6,6 +6,7 @@ import { Show, Suspense } from "solid-js";
 import { useStatus } from "@/git/queries/status";
 import { headLabel, syncLabel } from "@/git/status";
 
+import { AppVersion } from "./app-version";
 import { Divider } from "./ui/divider";
 import { GittoIcon } from "./ui/gitto-icon";
 import { StatusDot } from "./ui/status-dot";
@@ -28,8 +29,7 @@ export function Footer() {
         </Show>
       </div>
       <div class="flex items-center gap-1.25 whitespace-nowrap [&>span]:flex [&>span]:items-center [&>span]:gap-1.25">
-        <span>Gitto Preview</span>
-        <span class="font-mono text-faint">v0.1.0</span>
+        <AppVersion />
       </div>
     </footer>
   );

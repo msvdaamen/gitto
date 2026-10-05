@@ -9,7 +9,16 @@ Gitto runs on Windows (x64), macOS (Apple Silicon) and Arch Linux (x86_64). Down
   It's at [releases/tag/nightly](https://github.com/msvdaamen/gitto/releases/tag/nightly), and
   replaced with each build.
 
-Gitto doesn't update itself: to update, install the newer version the same way.
+Gitto stays on what you installed: a release only updates to a newer release, and Gitto Nightly to
+the next nightly. To switch, install the other one.
+
+- **Windows:** Gitto updates itself. It checks when it starts and every hour, downloads a newer
+  version in the background, and offers **Restart to update** at the bottom of the window; otherwise
+  it's installed the next time Gitto starts.
+- **macOS:** Gitto will update itself the same way once its builds are signed by Apple. Until then,
+  install the newer version the same way.
+- **Arch Linux:** pacman updates Gitto, once it's on the AUR. Until then, install the newer package
+  the same way.
 
 ## Git
 

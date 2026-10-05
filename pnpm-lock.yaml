@@ -240,6 +240,9 @@ importers:
       '@gitto/rpc':
         specifier: workspace:*
         version: link:../../packages/rpc
+      '@gitto/system':
+        specifier: workspace:*
+        version: link:../../packages/system
       '@types/node':
         specifier: ^26.6.3
         version: 26.6.3
@@ -267,6 +270,9 @@ importers:
       '@gitto/rpc':
         specifier: workspace:*
         version: link:../../packages/rpc
+      '@gitto/system':
+        specifier: workspace:*
+        version: link:../../packages/system
       '@kobalte/core':
         specifier: ^0.13.14
         version: 0.13.14(solid-js@1.9.15)
