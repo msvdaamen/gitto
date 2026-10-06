@@ -62,7 +62,8 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
   const discardFile = (side: UncommittedSide): FileMenuAction => ({
     label: "Discard changes…",
     icon: Trash,
-    disabled: (file) => busy() || !canDiscard(file),
+    // Not a file's staged changes while an operation is under way, which would go on without them.
+    disabled: (file) => busy() || !canDiscard(file) || (side === "staged" && operation() !== null),
     run: (file) => setDiscarding({ file, side }),
   });
   // Why the changes can't all be discarded, if they can't: also while what that depends on loads.

@@ -1,6 +1,4 @@
-import { lstat } from "node:fs/promises";
-import { join } from "node:path";
-
+import { entryAt } from "../../core/entry";
 import {
   DiscardBlockedError,
   GitError,
@@ -11,7 +9,7 @@ import { gitDirs } from "../../core/git-dirs";
 import type { Repo } from "../../core/repo";
 import { refuseConflictMarkers } from "../conflicts/commands";
 import { getStagedFilePatch, getUnstagedFilePatch } from "../diff/commands";
-import { underWayBlocker } from "../operation/commands";
+import { operationBlocker, underWayBlocker } from "../operation/commands";
 import { linesPatch, type LineAction } from "./lines";
 import type { LineSelection, UncommittedSide } from "./schema";
 
@@ -178,67 +176,106 @@ function applyLines(
 }
 
 /**
+ * `paths` as pathspecs that name them alone, not what's in a folder of the same name, which is
+ * another file's; for a command run with `globPathspecs`, which reads their magic.
+ */
+function exactly(paths: string[]): string[] {
+  return paths.flatMap((path) => [`:(literal)${path}`, `:(exclude,literal)${path}/`]);
+}
+
+/** For a command given `exactly` those `paths`, from its stdin. */
+function exactlyFromStdin(paths: string[]) {
+  return { stdin: nulSeparated(exactly(paths)), globPathspecs: true, ...REWRITES };
+}
+
+/**
  * Discards a file's changes on `side`, the side of the uncommitted changes it's listed on; a
- * renamed one's at both its paths. A copy's source is another file, and left as it is. From its unstaged changes, those: a tracked file goes back to how the index has
- * it, and an untracked one, or one added with `--intent-to-add`, is deleted. From its staged
- * changes, all of them: it goes back to how HEAD has it, in the index and the working tree, and one
- * HEAD doesn't have is deleted. Rejects with `DiscardBlockedError`, discarding nothing, for a
- * conflicted file, whose conflicts are resolved instead.
+ * renamed one's at both its paths. A copy's source is another file, and left as it is. From its
+ * unstaged changes, those: a tracked file goes back to how the index has it, and an untracked one,
+ * or one added with `--intent-to-add`, is deleted. From its staged changes, all of them: it goes
+ * back to how HEAD has it, in the index and the working tree, and one HEAD doesn't have is deleted.
+ *
+ * Rejects with `DiscardBlockedError`, discarding nothing: for a conflicted file, whose conflicts are
+ * resolved instead; for a file's staged changes while an operation like a merge is under way, which
+ * would go on without them; and where putting a file back would write over something that isn't
+ * it: a folder that has taken its place, or a new file at a rename's previous path.
  */
 export async function discard(repo: Repo, file: LinesFile, side: UncommittedSide): Promise<void> {
   const { path, origPath } = file;
   const paths = origPath ? [path, origPath] : [path];
-  // On the command line, which holds them: there are two at most. A path also names what's in a
-  // folder of that name, which is another file's, so only the paths themselves are kept.
   const named = new Set(paths);
+  const gitDir = side === "staged" ? (await gitDirs(repo)).gitDir : undefined;
   await repo.exclusive(async (run) => {
+    // On the command line, which holds them: there are two at most.
     const listed = async (args: string[]) =>
       (await run([...args, "-z", "--", ...paths])).split("\0").filter(Boolean);
-    const [entries, added, hasHead, origThere] = await Promise.all([
+    const [entries, added, hasHead, blocker, there] = await Promise.all([
       // The paths in the index, with their stage: a conflict's are 1-3.
       listed(["ls-files", "--format=%(stage) %(path)"]),
       // Added with `--intent-to-add`: in the index with no contents yet, which `restore` would put
       // back, emptying the file, so it's deleted instead. Without renames: one paired with a
       // deleted file would be listed as its rename, not as added.
-      side === "unstaged" ? listed(["diff", "--name-only", "--no-renames", "--diff-filter=A"]) : [],
+      side === "unstaged"
+        ? listed(["diff", "--name-only", "--no-renames", "--diff-filter=A"])
+        : ([] as string[]),
       side === "staged" && repo.hasHead(),
-      origPath !== null && exists(repo, origPath),
+      gitDir && operationBlocker(gitDir, "discard its staged changes"),
+      Promise.all(paths.map((each) => entryAt(repo.path, each))),
     ]);
+    if (blocker) throw new DiscardBlockedError(blocker);
+    // Only the paths themselves, not what's in a folder of the same name, which is another file's.
     const tracked = new Set<string>();
     for (const entry of entries) {
-      const entryPath = entry.slice(2);
-      if (!named.has(entryPath)) continue;
+      if (!named.has(entry.slice(2))) continue;
       if (!entry.startsWith("0 ")) {
         throw new DiscardBlockedError(
           `${path} is conflicted. Resolve its conflicts rather than discarding its changes.`,
         );
       }
-      tracked.add(entryPath);
+      tracked.add(entry.slice(2));
     }
-    // A copy's source is still there on this side, unlike a rename's: in the index, or the working
-    // tree.
-    const copied = origPath !== null && (side === "staged" ? tracked.has(origPath) : origThere);
+    const intended = new Set(added.filter((each) => named.has(each)));
+    const at = (each: string) => there[paths.indexOf(each)];
+    // A copy's source is still there on this side, unlike a rename's: in the index, or in the
+    // working tree.
+    const copied =
+      origPath !== null && (side === "staged" ? tracked.has(origPath) : at(origPath) !== undefined);
     const discarded = copied ? [path] : paths;
+    // Put back as HEAD or the index has them, over what's in the working tree.
+    const written =
+      side === "staged"
+        ? discarded
+        : discarded.filter((each) => tracked.has(each) && !intended.has(each));
+    for (const each of written) {
+      const entry = at(each);
+      // The file itself is fine to write over, but not a folder, nor another file.
+      if (entry === "folder" || entry === "blocked" || (entry && !tracked.has(each))) {
+        throw new DiscardBlockedError(
+          `${entry === "folder" ? "A folder" : "Something else"} is at ${each} now. Move or delete it, then discard the changes.`,
+        );
+      }
+    }
     if (side === "staged") {
       // `restore` from HEAD can't run before the first commit, when everything staged is new.
       const args = hasHead
         ? ["restore", "--source=HEAD", "--staged", "--worktree"]
         : ["rm", "-r", "-f", "-q"];
-      await run([...args, ...PATHS_FROM_STDIN], { stdin: nulSeparated(discarded), ...REWRITES });
+      await run([...args, ...PATHS_FROM_STDIN], exactlyFromStdin(discarded));
       return;
     }
-    const intended = new Set(added.filter((each) => named.has(each)));
     const untracked = discarded.filter((each) => !tracked.has(each));
-    const restored = discarded.filter((each) => tracked.has(each) && !intended.has(each));
     // `clean` takes no paths from stdin. It leaves ignored files, which aren't listed as untracked,
     // and a repository inside this one, which is: it deletes files, not folders.
-    if (untracked.length) await run(["clean", "-f", "-q", "--", ...untracked], REWRITES);
-    if (intended.size) await run(["rm", "-f", "-q", "--", ...intended], REWRITES);
-    if (restored.length) {
-      await run(["restore", "--worktree", ...PATHS_FROM_STDIN], {
-        stdin: nulSeparated(restored),
+    if (untracked.length) {
+      await run(["clean", "-f", "-q", "--", ...exactly(untracked)], {
+        globPathspecs: true,
         ...REWRITES,
       });
+    }
+    if (intended.size)
+      await run(["rm", "-f", "-q", ...PATHS_FROM_STDIN], exactlyFromStdin([...intended]));
+    if (written.length) {
+      await run(["restore", "--worktree", ...PATHS_FROM_STDIN], exactlyFromStdin(written));
     }
   });
 }
@@ -246,13 +283,12 @@ export async function discard(repo: Repo, file: LinesFile, side: UncommittedSide
 /**
  * Discards every uncommitted change: tracked files go back to how HEAD has them, in the index and
  * the working tree, and the ones HEAD doesn't have are deleted, staged ones too, ignored or not, as
- * are untracked files. Ignored files that aren't staged stay, as do repositories inside this one.
- * A deleted file whose place a folder has taken stays deleted, and the folder as it is: putting the
- * file back would delete it, and what's in it, which `clean` leaves. Rejects with
- * `DiscardBlockedError`, discarding nothing, while files are conflicted, which are resolved
- * instead, or while a merge, rebase, cherry-pick, revert or `git am` is under way: its changes are
- * discarded by aborting it. Kept under way, it would go on without them, and a merge be committed
- * with none of the branch's.
+ * are untracked files. Ignored files that aren't staged stay, as do repositories inside this one. A
+ * deleted file stays deleted where putting it back would delete what's taken its place: a folder,
+ * or a file where one of its folders was. Rejects with `DiscardBlockedError`, discarding nothing,
+ * while files are conflicted, which are resolved instead, or while a merge, rebase, cherry-pick,
+ * revert or `git am` is under way: its changes are discarded by aborting it. Kept under way, it
+ * would go on without them, and a merge be committed with none of the branch's.
  */
 export async function discardAll(repo: Repo): Promise<void> {
   const { gitDir } = await gitDirs(repo);
@@ -262,56 +298,39 @@ export async function discardAll(repo: Repo): Promise<void> {
       repo.hasHead(),
     ]);
     if (blocker) throw new DiscardBlockedError(blocker);
-    if (hasHead) {
-      // Every tracked file, but the deleted ones a folder has taken the place of. As pathspecs,
-      // with their magic, and as bytes: a path goes back to git as it came, also one that isn't
-      // UTF-8.
-      const bytes = { binary: true };
-      const deleted = await run(
-        ["diff", "HEAD", "--name-only", "-z", "--no-renames", "--diff-filter=D"],
-        bytes,
-      );
-      const folders = await foldersAt(repo, deleted.split("\0").filter(Boolean));
-      const pathspecs = [":/", ...folders.map((folder) => `:(exclude,literal)${folder}`)];
-      try {
-        await run(["restore", "--source=HEAD", "--staged", "--worktree", ...PATHS_FROM_STDIN], {
-          stdin: nulSeparated(pathspecs),
-          globPathspecs: true,
-          ...bytes,
-          ...REWRITES,
-        });
-      } catch (error) {
-        // Nothing's tracked, in HEAD nor in the index: there's nothing to restore.
-        if (!(error instanceof GitError && /did not match any file/.test(error.stderr))) {
-          throw error;
-        }
-      }
-    } else {
+    // First, so what's in the way of a deleted file is only what it leaves.
+    await run(["clean", "-f", "-d", "-q"], REWRITES);
+    if (!hasHead) {
       // Before the first commit, everything staged is new.
       await run(["rm", "-r", "-f", "-q", "--ignore-unmatch", "--", "."], REWRITES);
+      return;
     }
-    await run(["clean", "-f", "-d", "-q"], REWRITES);
+    // Every tracked file, but the deleted ones something has taken the place of. As pathspecs,
+    // with their magic, and as bytes: a path goes back to git as it came, also one that isn't
+    // UTF-8.
+    const bytes = { binary: true };
+    const deleted = (
+      await run(["diff", "HEAD", "--name-only", "-z", "--no-renames", "--diff-filter=D"], bytes)
+    )
+      .split("\0")
+      .filter(Boolean);
+    const entries = await Promise.all(
+      deleted.map((path) => entryAt(repo.path, Buffer.from(path, "latin1"))),
+    );
+    const kept = deleted.filter((_, i) => entries[i] !== undefined);
+    const pathspecs = [":/", ...kept.map((path) => `:(exclude,literal)${path}`)];
+    try {
+      await run(["restore", "--source=HEAD", "--staged", "--worktree", ...PATHS_FROM_STDIN], {
+        stdin: nulSeparated(pathspecs),
+        globPathspecs: true,
+        ...bytes,
+        ...REWRITES,
+      });
+    } catch (error) {
+      // Nothing's tracked, in HEAD nor in the index: there's nothing to restore.
+      if (!(error instanceof GitError && /did not match any file/.test(error.stderr))) {
+        throw error;
+      }
+    }
   });
-}
-
-/** Whether there's anything at `path` in the working tree, a link that leads nowhere too. */
-function exists(repo: Repo, path: string): Promise<boolean> {
-  return lstat(join(repo.path, path)).then(
-    () => true,
-    () => false,
-  );
-}
-
-/** Those of `paths` (as bytes, see `binary`) where there's a folder in the working tree. */
-async function foldersAt(repo: Repo, paths: string[]): Promise<string[]> {
-  const root = Buffer.from(`${repo.path}/`);
-  const folders = await Promise.all(
-    paths.map((path) =>
-      lstat(Buffer.concat([root, Buffer.from(path, "latin1")])).then(
-        (stats) => stats.isDirectory(),
-        () => false,
-      ),
-    ),
-  );
-  return paths.filter((_, i) => folders[i]);
 }

@@ -855,6 +855,76 @@ describe("discarding a file's changes", () => {
     ]);
   });
 
+  it("doesn't put back a deleted file where a folder has taken its place", async () => {
+    const path = createRepo("discard-folder-unstaged");
+    writeFileSync(join(path, "a"), "a\n");
+    git(path, "add", ".");
+    git(path, "commit", "-q", "-m", "first");
+    rmSync(join(path, "a"));
+    mkdirSync(join(path, "a"));
+    writeFileSync(join(path, "a", "x"), "precious\n");
+    const repo = await repos.open("discard-folder-unstaged");
+
+    const error = await rejection(discard(repo, { path: "a", origPath: null }, "unstaged"));
+    expect(error).toBeInstanceOf(DiscardBlockedError);
+    expect((error as Error).message).toBe(
+      "A folder is at a now. Move or delete it, then discard the changes.",
+    );
+    expect(contents(path, "a/x")).toBe("precious\n");
+  });
+
+  it("doesn't put back a staged deletion over a folder with staged files in it", async () => {
+    const path = createRepo("discard-folder-staged");
+    writeFileSync(join(path, "a"), "a\n");
+    git(path, "add", ".");
+    git(path, "commit", "-q", "-m", "first");
+    git(path, "rm", "-q", "a");
+    mkdirSync(join(path, "a"));
+    writeFileSync(join(path, "a", "x"), "precious\n");
+    git(path, "add", "a/x");
+    const repo = await repos.open("discard-folder-staged");
+
+    expect(await rejection(discard(repo, { path: "a", origPath: null }, "staged"))).toBeInstanceOf(
+      DiscardBlockedError,
+    );
+    expect(contents(path, "a/x")).toBe("precious\n");
+    expect(await statusFiles(repo)).toEqual([
+      { path: "a", origPath: null, staged: "deleted", unstaged: null },
+      { path: "a/x", origPath: null, staged: "added", unstaged: null },
+    ]);
+  });
+
+  it("doesn't put back a rename's previous path over a new file there", async () => {
+    const repo = await createHistoryRepo("discard-rename-taken");
+    const path = repo.path;
+    git(path, "mv", "c.txt", "d.txt");
+    writeFileSync(join(path, "c.txt"), "new work\n");
+
+    const error = await rejection(discard(repo, { path: "d.txt", origPath: "c.txt" }, "staged"));
+    expect((error as Error).message).toBe(
+      "Something else is at c.txt now. Move or delete it, then discard the changes.",
+    );
+    expect(contents(path, "c.txt")).toBe("new work\n");
+    expect(contents(path, "d.txt")).toBe("b\n");
+  });
+
+  it("discards no staged changes while a merge is under way, which would go on without them", async () => {
+    const path = createMergeConflict("discard-merge");
+    writeFileSync(join(path, "f.txt"), "one\nresolved\nthree\n");
+    git(path, "add", "f.txt");
+    writeFileSync(join(path, "README"), "changed\n");
+    const repo = await repos.open("discard-merge");
+
+    const error = await rejection(discard(repo, { path: "f.txt", origPath: null }, "staged"));
+    expect((error as Error).message).toBe(
+      "A merge is under way. Finish or abort it, then discard its staged changes.",
+    );
+    expect(contents(path, "f.txt")).toBe("one\nresolved\nthree\n");
+    // Unstaged changes aren't the merge's.
+    await discard(repo, { path: "README", origPath: null }, "unstaged");
+    expect(contents(path, "README")).toBe("readme\n");
+  });
+
   it("leaves a conflicted file to be resolved, on either side", async () => {
     const path = createMergeConflict("discard-conflict");
     const repo = await repos.open("discard-conflict");
@@ -918,6 +988,24 @@ describe("discarding all changes", () => {
     expect(await statusFiles(repo)).toEqual([
       { path: "c.txt", origPath: null, staged: null, unstaged: "deleted" },
     ]);
+  });
+
+  it("leaves a deleted folder's files deleted where an ignored file has taken its place", async () => {
+    const path = createRepo("discard-all-file-for-folder");
+    mkdirSync(join(path, "d"));
+    writeFileSync(join(path, "d", "x"), "x\n");
+    writeFileSync(join(path, "other.txt"), "other\n");
+    git(path, "add", ".");
+    git(path, "commit", "-q", "-m", "first");
+    writeFileSync(join(path, ".git", "info", "exclude"), "/d\n");
+    rmSync(join(path, "d"), { recursive: true });
+    writeFileSync(join(path, "d"), "stuff\n");
+    writeFileSync(join(path, "other.txt"), "changed\n");
+    const repo = await repos.open("discard-all-file-for-folder");
+
+    await discardAll(repo);
+    expect(contents(path, "d")).toBe("stuff\n");
+    expect(contents(path, "other.txt")).toBe("other\n");
   });
 
   it("puts back a file whose name isn't UTF-8", async () => {

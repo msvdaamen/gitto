@@ -1,6 +1,4 @@
-import { lstat } from "node:fs/promises";
-import { join } from "node:path";
-
+import { entryAt } from "../../core/entry";
 import { ChangesStashedError, GitError } from "../../core/errors";
 import { currentBranch, resolveRef, succeeds, type GitCommand, type Repo } from "../../core/repo";
 import type { RunOptions } from "../../core/runner";
@@ -203,19 +201,10 @@ async function popsCleanly(run: GitCommand, root: string, sha: string): Promise<
   // In batches, stopping at the first that's in the way: there can be thousands.
   for (let i = 0; i < untracked.length; i += 100) {
     const batch = untracked.slice(i, i + 100);
+    // Something there, or a file where one of its folders would go.
     // oxlint-disable-next-line no-await-in-loop -- one batch at a time, on purpose.
-    if ((await Promise.all(batch.map((file) => exists(join(root, file))))).includes(true)) {
-      return false;
-    }
+    const entries = await Promise.all(batch.map((file) => entryAt(root, file)));
+    if (entries.some((entry) => entry !== undefined)) return false;
   }
   return true;
-}
-
-/** Whether something is at `path`, or a file is where one of its folders would go. */
-function exists(path: string): Promise<boolean> {
-  return lstat(path).then(
-    () => true,
-    // ENOTDIR when one of its folders is a file; anything else may be in the way too.
-    (error: NodeJS.ErrnoException) => error.code !== "ENOENT",
-  );
 }

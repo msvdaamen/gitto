@@ -24,8 +24,10 @@ export function discardDescription(file: ChangedFile, side: UncommittedSide): st
       : `${file.path} goes back to how the last commit has it: its staged and unstaged changes are lost.`;
   }
   if (file.status === "untracked") return `${file.path} isn't tracked, so it's deleted for good.`;
-  // Only a file added with `--intent-to-add` is added on the unstaged side.
-  if (file.status === "added") return `${file.path} is new, so it's deleted for good.`;
+  // Only a file added with `--intent-to-add` is new on the unstaged side.
+  if (file.status === "added" || file.status === "copied") {
+    return `${file.path} is new, so it's deleted for good.`;
+  }
   return `The changes to ${file.path} that aren't staged are lost; its staged ones stay.`;
 }
 

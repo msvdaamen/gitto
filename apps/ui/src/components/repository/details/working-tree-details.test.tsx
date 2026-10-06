@@ -198,6 +198,30 @@ describe("discarding changes", () => {
     expect(button).toBeDisabled();
   });
 
+  it("doesn't discard a file's staged changes while a merge is under way, but its unstaged ones", async () => {
+    const user = userEvent.setup();
+    rpc.git.operation.get.mockResolvedValue({ kind: "merge", merging: "side", into: "main" });
+    setChanges([file("a.txt")], [file("b.txt")]);
+    renderDetails();
+    // Once the operation's loaded.
+    await vi.waitFor(() => expect(rpc.git.operation.get).toHaveBeenCalled());
+
+    await openMenu(user, "b.txt");
+    await vi.waitFor(() =>
+      expect(screen.getByRole("menuitem", { name: "Discard changes…" })).toHaveAttribute(
+        "aria-disabled",
+        "true",
+      ),
+    );
+    await user.keyboard("{Escape}");
+    await vi.waitFor(() => expect(screen.queryByRole("menuitem")).not.toBeInTheDocument());
+    await openMenu(user, "a.txt");
+    expect(await screen.findByRole("menuitem", { name: "Discard changes…" })).not.toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+
   it("doesn't discard all changes while a merge is under way, which would go on without them", async () => {
     rpc.git.operation.get.mockResolvedValue({ kind: "merge", merging: "side", into: "main" });
     setChanges([file("a.txt")]);

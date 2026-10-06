@@ -176,15 +176,23 @@ export async function underWayBlocker(
   run: GitCommand,
   action: string,
 ): Promise<string | undefined> {
-  const [{ kind: operation }, conflicted] = await Promise.all([
-    operationState(gitDir),
+  const [operation, conflicted] = await Promise.all([
+    operationBlocker(gitDir, action),
     hasConflicts(run),
   ]);
-  if (operation) {
-    return `A ${OPERATION_NAMES[operation]} is under way. Finish or abort it, then ${action}.`;
-  }
-  if (conflicted) return `Some files have conflicts. Resolve them, then ${action}.`;
-  return undefined;
+  return (
+    operation ??
+    (conflicted ? `Some files have conflicts. Resolve them, then ${action}.` : undefined)
+  );
+}
+
+/** Why `action` can't be done now, if it can't: an operation is under way (see `underWayBlocker`). */
+export async function operationBlocker(
+  gitDir: string,
+  action: string,
+): Promise<string | undefined> {
+  const { kind } = await operationState(gitDir);
+  return kind && `A ${OPERATION_NAMES[kind]} is under way. Finish or abort it, then ${action}.`;
 }
 
 /**

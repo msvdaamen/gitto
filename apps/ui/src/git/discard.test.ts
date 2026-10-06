@@ -32,9 +32,12 @@ describe("discarding a file's changes", () => {
     expect(discardDescription(file("new.txt", "added"), "staged")).toBe(
       "new.txt is new since the last commit, so it's deleted, along with its unstaged changes.",
     );
-    // Added with --intent-to-add.
+    // Added with --intent-to-add, and listed as a copy too.
     expect(discardDescription(file("new.txt", "added"), "unstaged")).toBe(
       "new.txt is new, so it's deleted for good.",
+    );
+    expect(discardDescription({ ...file("b.txt", "copied"), origPath: "a.txt" }, "unstaged")).toBe(
+      "b.txt is new, so it's deleted for good.",
     );
   });
 
