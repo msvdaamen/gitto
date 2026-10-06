@@ -79,6 +79,23 @@ const loadEditor = () => (editorModule ??= import("@pierre/diffs/edit"));
 /** Highlighting runs in workers; one diff is on show at a time, so a couple is plenty. */
 const WORKERS = 2;
 
+/**
+ * How many diffs the workers' manager keeps highlighted, in the main thread, for a quick return
+ * to one shown lately, or prepared ahead (see `preparePatch`): the files a step away. The
+ * library's default is a hundred, whatever their size, and a highlighted line takes 1-5KB: 40MB
+ * for a file of 30,000 lines read in full to show more of it, 200MB for a change of 25,000 lines.
+ * So the long ones are dropped once their view closes too (see `KEPT_LINES`).
+ */
+const CACHED_DIFFS = 16;
+
+/**
+ * Lines (of both sides) from which a diff's highlighting is dropped once the view that showed it
+ * closes, rather than kept among the `CACHED_DIFFS`: a whole file read to show more lines, edits,
+ * or a long patch. Shorter ones highlight again in well under the time the view waits for that
+ * (see `HIGHLIGHT_WAIT_MS`), so they're kept for a quick return.
+ */
+const KEPT_LINES = 1000;
+
 const THEMES = { dark: "pierre-dark", light: "pierre-light" } as const;
 
 /**
@@ -114,6 +131,7 @@ function workerPool(): WorkerPoolManager {
       workerFactory: () =>
         new Worker(new URL("@pierre/diffs/worker/worker.js", import.meta.url), { type: "module" }),
       poolSize: WORKERS,
+      totalASTLRUCacheSize: CACHED_DIFFS,
     },
     // Oniguruma, as in VS Code, rather than Shiki's JavaScript engine: about twice as fast on a
     // diff of thousands of lines (1.5s against 3s for 6,000), and no slower on small ones. With
@@ -218,6 +236,32 @@ export default function PatchViewer(props: {
   let picking: (() => FileDiffOptions<HunkButton, undefined>) | undefined;
   /** Whether lines can be picked to stage: only of a patch that isn't being edited. */
   const pickable = () => props.staging !== undefined && !props.editing;
+  /** The diffs this view had highlighted, by their cache key (see `dropLongHighlighting`). */
+  const highlightedHere = new Map<string, FileDiffMetadata>();
+  /** `highlighted`, remembering the diff as one this view had highlighted. */
+  const highlight = (diff: FileDiffMetadata, ms: number) => {
+    if (diff.cacheKey) highlightedHere.set(diff.cacheKey, diff);
+    return highlighted(diff, ms);
+  };
+  /** `loadFiles`, remembering the diff filled in with the files as one this view highlighted. */
+  const loadWhole = async (diff: FileDiffMetadata) => {
+    const loaded = await loadFiles(diff, props.loadFile);
+    if (loaded.hydrated.cacheKey) highlightedHere.set(loaded.hydrated.cacheKey, loaded.hydrated);
+    return loaded;
+  };
+  /**
+   * Drops the long diffs this view had highlighted from the workers' manager's cache, once the
+   * view closes: the whole files read to show more lines or to edit them, the edits, and long
+   * patches, which it would otherwise keep for as long as the app runs (see `CACHED_DIFFS`).
+   */
+  function dropLongHighlighting() {
+    for (const [key, diff] of highlightedHere) {
+      if (diff.additionLines.length + diff.deletionLines.length >= KEPT_LINES) {
+        workerPool().evictDiffFromCache(key);
+      }
+    }
+    highlightedHere.clear();
+  }
 
   const options = (diffStyle: DiffStyle): FileDiffOptions<HunkButton, undefined> => ({
     theme: THEMES,
@@ -237,7 +281,7 @@ export default function PatchViewer(props: {
       loads.set(diff, (loads.get(diff) ?? 0) + 1);
       report();
       try {
-        return (await loadFiles(diff, props.loadFile)).files;
+        return (await loadWhole(diff)).files;
       } catch (error) {
         failures.set(diff, error instanceof Error ? error.message : String(error));
         if (diff === shown) rerender();
@@ -435,13 +479,15 @@ export default function PatchViewer(props: {
       disposed = true;
       instance = undefined;
       if (finishEditing) {
-        diffs.nameEditedDiff(`${shownFileKey}:edited:${++editedDiffs}`);
+        const edited = diffs.nameEditedDiff(`${shownFileKey}:edited:${++editedDiffs}`);
+        if (edited) highlightedHere.set(edited.cacheKey!, edited);
         finishEditing();
         // Taken off the page while editing: that's over.
         props.onEditing?.(undefined);
       }
       diffs.cleanUp();
       virtualizer.cleanUp();
+      dropLongHighlighting();
     });
 
     const show = async (patch: ReturnType<typeof next>) => {
@@ -452,7 +498,7 @@ export default function PatchViewer(props: {
       // whole file too, to show the same ones.
       const kept = sameFile && !shown!.isPartial ? await keptExpansion(patch.diff) : undefined;
       const diff = kept?.diff ?? patch.diff;
-      await highlighted(diff, HIGHLIGHT_WAIT_MS);
+      await highlight(diff, HIGHLIGHT_WAIT_MS);
       // Passed over for another patch meanwhile, or editing started.
       if (disposed || next() !== patch || editing) return;
       // Another file starts at its top.
@@ -506,7 +552,7 @@ export default function PatchViewer(props: {
       const from = shown!;
       const expanded = diffs.expanded;
       try {
-        const { hydrated } = await loadFiles(diff, props.loadFile);
+        const { hydrated } = await loadWhole(diff);
         return { diff: hydrated, expanded: carriedExpansion(from, expanded, hydrated) };
       } catch {
         return undefined;
@@ -529,7 +575,7 @@ export default function PatchViewer(props: {
             // Highlighted in the workers first, which the editor starts from: it highlights the
             // whole file again on the main thread otherwise (1.6s for 2,500 lines), e.g. right
             // after editing stopped, while the edits are highlighted.
-            await highlighted(file.diff, EXPAND_HIGHLIGHT_WAIT_MS);
+            await highlight(file.diff, EXPAND_HIGHLIGHT_WAIT_MS);
             return file;
           }),
           loadEditor(),
@@ -581,8 +627,8 @@ export default function PatchViewer(props: {
       editing = false;
       editor = undefined;
       // What the library highlights again once editing stops: in the workers, as it's named.
-      const session = diffs.editedDiff();
-      diffs.nameEditedDiff(`${shownFileKey}:session:${++editedDiffs}`);
+      const session = diffs.nameEditedDiff(`${shownFileKey}:session:${++editedDiffs}`);
+      if (session) highlightedHere.set(session.cacheKey!, session);
       if (discard) opened?.cleanUp("discard");
       else finishEditing?.();
       finishEditing = undefined;
@@ -608,7 +654,7 @@ export default function PatchViewer(props: {
         const diff = parseDiffFromFile(oldFile, { name: from.name, contents: text });
         diff.cacheKey = `${shownFileKey}:edited:${++editedDiffs}`;
         // oxlint-disable-next-line no-await-in-loop -- the text it's of may have changed since.
-        await highlighted(diff, EXPAND_HIGHLIGHT_WAIT_MS);
+        await highlight(diff, EXPAND_HIGHLIGHT_WAIT_MS);
         if (opened.getText() === text || tries === 2) return diff;
       }
     };
@@ -626,7 +672,7 @@ export default function PatchViewer(props: {
         return { diff: whole, version: read.version, text: contents };
       }
       if (diff.isPartial) {
-        const { hydrated, version } = await loadFiles(diff, props.loadFile);
+        const { hydrated, version } = await loadWhole(diff);
         if (!version) throw new Error("This file can't be edited.");
         return { diff: hydrated, version, text: hydrated.additionLines.join("") };
       }
@@ -813,16 +859,13 @@ class ViewerFileDiff extends VirtualizedFileDiff<HunkButton, undefined> {
   /**
    * Names the diff being edited in the highlighting cache, which the library leaves unnamed: once
    * editing stops, a diff with edits is highlighted again, in the workers only if it has a name,
-   * on the main thread otherwise (1.7s for 2,500 lines, the window frozen).
+   * on the main thread otherwise (1.7s for 2,500 lines, the window frozen). Returns the diff, if
+   * one's being edited, named as it was if it already had a name.
    */
-  /** The diff being edited, while it is. */
-  editedDiff(): FileDiffMetadata | undefined {
-    return this.getLatestDiff();
-  }
-
-  nameEditedDiff(cacheKey: string) {
+  nameEditedDiff(cacheKey: string): FileDiffMetadata | undefined {
     const diff = this.getLatestDiff();
     if (diff && diff.cacheKey == null) diff.cacheKey = cacheKey;
+    return diff;
   }
 }
 
@@ -831,7 +874,7 @@ let editedDiffs = 0;
 
 /**
  * Drops a patch of a file that's been replaced by a newer one from the highlighting cache, which
- * has room for a hundred diffs: an uncommitted file can be saved many times while it's on show.
+ * has room for `CACHED_DIFFS`: an uncommitted file can be saved many times while it's on show.
  */
 function forget(diff: FileDiffMetadata) {
   if (!diff.cacheKey) return;
