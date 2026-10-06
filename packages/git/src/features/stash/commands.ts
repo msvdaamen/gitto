@@ -1,5 +1,5 @@
 import { GitError, RepositoryChangedError, StashConflictError } from "../../core/errors";
-import { hasConflicts, resolveRef, type GitCommand, type Repo } from "../../core/repo";
+import { hasConflicts, resolveRef, succeeds, type GitCommand, type Repo } from "../../core/repo";
 import { getCommitFilePatch, PORCELAIN_DIFF, readPatch } from "../diff/commands";
 import { parseDiff } from "../diff/parse";
 import type { ChangedFile } from "../diff/schema";
@@ -7,11 +7,10 @@ import { parseStashList, STASH_LIST_FORMAT } from "./parse";
 import type { Stash } from "./schema";
 
 /**
- * For the stash commands, which take no paths: with literal pathspecs (see `ENV` in the runner),
- * `stash push --include-untracked` leaves the untracked files it stashed behind, as it removes them
- * with a glob.
+ * For the stash commands, which take no paths: with literal pathspecs, `stash push
+ * --include-untracked` leaves the untracked files it stashed behind, as it removes them with a glob.
  */
-const STASH_ENV = { env: { GIT_LITERAL_PATHSPECS: "0" } };
+const STASH_ENV = { globPathspecs: true };
 /** For a stash or a pop, which put the changed files back as they are in HEAD or in the stash. */
 const STASH_WRITE = { ...STASH_ENV, rewritesFiles: true };
 
@@ -163,13 +162,7 @@ function popIndex(run: GitCommand): Promise<boolean> {
 }
 
 /** Whether anything is staged; rejects if git couldn't tell. */
-function hasStagedChanges(run: GitCommand): Promise<boolean> {
+async function hasStagedChanges(run: GitCommand): Promise<boolean> {
   // Exits with 1 when something is.
-  return run(["diff", "--cached", "--quiet"]).then(
-    () => false,
-    (error: unknown) => {
-      if (error instanceof GitError && error.exitCode === 1) return true;
-      throw error;
-    },
-  );
+  return !(await succeeds(run, ["diff", "--cached", "--quiet"]));
 }

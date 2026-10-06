@@ -1,5 +1,5 @@
-import { GitError, HeadMovedError } from "../../core/errors";
-import { resolveRef, type Repo } from "../../core/repo";
+import { HeadMovedError } from "../../core/errors";
+import { currentBranch, resolveRef, type Repo } from "../../core/repo";
 
 /**
  * Commits what's staged, with `message` as it's written. With `amend`, HEAD's SHA, replaces that
@@ -28,15 +28,6 @@ export async function createCommit(
   });
 }
 
-/**
- * For a lookup that exits 1 without a word when there's nothing to find, e.g. `symbolic-ref --quiet`
- * with HEAD detached: `""` then, and any other failure rethrown.
- */
-function nothingFound(error: unknown): string {
-  if (error instanceof GitError && error.exitCode === 1 && !error.stderr.trim()) return "";
-  throw error;
-}
-
 /** A commit's message exactly as it was written; the log's subject joins its first lines. */
 export async function getCommitMessage(
   repo: Repo,
@@ -58,11 +49,8 @@ export async function getPushedTo(
   sha: string,
   signal?: AbortSignal,
 ): Promise<string | null> {
-  const [head, push] = await Promise.all([
-    // In full: `--short` can say `heads/<name>` when a tag has the same name.
-    repo
-      .read(["symbolic-ref", "--quiet", "HEAD"], { signal })
-      .then((ref) => ref.trim(), nothingFound),
+  const [branch, push] = await Promise.all([
+    currentBranch(repo.read, { signal }),
     // Where the repository's config pushes the branch. It fails when the config can't say, as
     // `git push` would; a broken repository fails the lookups around it too.
     repo.read(["rev-parse", "--symbolic-full-name", "@{push}"], { signal }).then(
@@ -71,8 +59,7 @@ export async function getPushedTo(
     ),
   ]);
   // Pushing to a branch of this repository (its remote is `.`) rewrites nothing published.
-  if (!head || (push && !push.startsWith("refs/remotes/"))) return null;
-  const branch = head.replace(/^refs\/heads\//, "");
+  if (!branch || (push && !push.startsWith("refs/remotes/"))) return null;
   // When the config can't say, e.g. because the upstream has another name, a guess: the branch of
   // the same name on any remote, which `git push <remote>` updates.
   const pushedTo = await repo.read(

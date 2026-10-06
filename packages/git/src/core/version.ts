@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 
-import type { GitInstall } from "../features/version/schema";
+import type { GitInstall } from "../schema";
 import { UnsupportedGitError } from "./errors";
 
 /** The oldest git Gitto works with: it uses options and output that older ones don't have. */

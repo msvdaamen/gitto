@@ -126,9 +126,27 @@ export class GitReposImpl implements GitRepos {
   }
 }
 
+/**
+ * Whether the command `args` exits with 0 rather than 1, for one that answers a yes-or-no question
+ * that way (`merge-base --is-ancestor`, say); rejects if it failed otherwise.
+ */
+export function succeeds(run: GitCommand, args: string[], options?: RunOptions): Promise<boolean> {
+  return run(args, options).then(
+    () => true,
+    (error: unknown) => {
+      if (error instanceof GitError && error.exitCode === 1) return false;
+      throw error;
+    },
+  );
+}
+
 /** The commit `rev` (e.g. `HEAD`, a branch) points at; `null` if none. Rejects if git couldn't tell. */
-export function resolveRef(run: GitCommand, rev: string): Promise<string | null> {
-  return run(["rev-parse", "--verify", "--quiet", `${rev}^{commit}`]).then(
+export function resolveRef(
+  run: GitCommand,
+  rev: string,
+  options?: RunOptions,
+): Promise<string | null> {
+  return run(["rev-parse", "--verify", "--quiet", `${rev}^{commit}`], options).then(
     (sha) => sha.trim(),
     (error: unknown) => {
       // Exits with 1, saying nothing, when there's no such commit.
@@ -139,8 +157,12 @@ export function resolveRef(run: GitCommand, rev: string): Promise<string | null>
 }
 
 /** Whether `ref` (e.g. `HEAD`, `MERGE_HEAD`) points at a commit; rejects if git couldn't tell. */
-export async function refExists(run: GitCommand, ref: string): Promise<boolean> {
-  return (await resolveRef(run, ref)) !== null;
+export async function refExists(
+  run: GitCommand,
+  ref: string,
+  options?: RunOptions,
+): Promise<boolean> {
+  return (await resolveRef(run, ref, options)) !== null;
 }
 
 /** Whether the index has unmerged files, as after a merge or pop that conflicted. */
@@ -149,11 +171,11 @@ export async function hasConflicts(run: GitCommand): Promise<boolean> {
 }
 
 /** The checked-out branch's name; `null` when HEAD is detached. */
-export async function currentBranch(run: GitCommand): Promise<string | null> {
+export async function currentBranch(run: GitCommand, options?: RunOptions): Promise<string | null> {
   let ref: string;
   try {
     // The full name: `--short` would make it `heads/main` if there's also a tag called `main`.
-    ref = (await run(["symbolic-ref", "--quiet", "HEAD"])).trim();
+    ref = (await run(["symbolic-ref", "--quiet", "HEAD"], options)).trim();
   } catch (error) {
     if (error instanceof GitError && error.exitCode === 1) return null;
     throw error;

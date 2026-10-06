@@ -20,6 +20,16 @@ export class GitError extends Error {
     const Class = this.constructor as typeof GitError;
     return new Class(message, this.args, this.exitCode, this.stderr, this.stdout);
   }
+
+  /** This failure without git's hints, which suggest commands to type and so don't help in the app. */
+  withoutHints(): GitError {
+    const message = this.message
+      .split("\n")
+      .filter((line) => !line.startsWith("hint:"))
+      .join("\n")
+      .trim();
+    return !message || message === this.message ? this : this.withMessage(message);
+  }
 }
 
 /** An error that's only a message for the user; `name` is its class's, as for `GitError`. */
