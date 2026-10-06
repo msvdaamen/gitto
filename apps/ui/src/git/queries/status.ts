@@ -49,10 +49,17 @@ export interface ConflictedFiles {
   markerFree: string[];
 }
 
-const selectConflicted = ({ changes }: Uncommitted): ConflictedFiles => ({
+/** The conflicted files in a status (see `ConflictedFiles`). */
+export const selectConflicted = ({ changes }: Uncommitted): ConflictedFiles => ({
   files: changes.unstaged.filter((file) => file.status === "conflicted"),
   markerFree: changes.markerFree,
 });
+
+/** The conflicted file to open first: one with conflict markers left, if any is. */
+export function firstToResolve({ files, markerFree }: ConflictedFiles): ChangedFile | undefined {
+  const free = new Set(markerFree);
+  return files.find((file) => !free.has(file.path)) ?? files[0];
+}
 
 /** The conflicted files (see `ConflictedFiles`), for what's shown of them outside the lists. */
 export function useConflictedFiles(repositoryId: () => string) {

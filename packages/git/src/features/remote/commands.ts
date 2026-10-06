@@ -257,8 +257,11 @@ const FETCHED_KINDS: [prefix: string, kind: string][] = [
   ["refs/remotes/", "remote-tracking branch"],
 ];
 
-/** How `git fetch` names `ref` in FETCH_HEAD, before " of <URL>": e.g. "branch 'main'". */
-function fetchedName(ref: string): string {
+/**
+ * How `git fetch` names `ref` in FETCH_HEAD, before " of <URL>": e.g. "branch 'main'". Also how
+ * `git merge` names what it merges, for the message `git fmt-merge-msg` words from it.
+ */
+export function fetchedName(ref: string): string {
   for (const [prefix, kind] of FETCHED_KINDS) {
     if (ref.startsWith(prefix)) return `${kind} '${ref.slice(prefix.length)}'`;
   }

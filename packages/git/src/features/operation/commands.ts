@@ -167,6 +167,14 @@ function operationArgs(kind: OperationKind, action: "continue" | "abort"): strin
 }
 
 /**
+ * The operation under way in the worktree whose git directory is `gitDir`, if any (see
+ * `operationState`).
+ */
+export async function operationUnderWay(gitDir: string): Promise<OperationKind | undefined> {
+  return (await operationState(gitDir)).kind;
+}
+
+/**
  * Checks that the operation under way is `kind`, the one the user saw; rejects with
  * `NoOperationError` if it isn't, e.g. as it was finished in a terminal meanwhile.
  */
@@ -181,7 +189,8 @@ async function checkOperation(gitDir: string, kind: OperationKind): Promise<void
   }
 }
 
-const OPERATION_NAMES: Record<OperationKind, string> = {
+/** What each operation is called in a sentence, e.g. "a merge" without its article. */
+export const OPERATION_NAMES: Record<OperationKind, string> = {
   merge: "merge",
   rebase: "rebase",
   "cherry-pick": "cherry-pick",

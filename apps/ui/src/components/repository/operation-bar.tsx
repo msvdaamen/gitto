@@ -10,7 +10,7 @@ import { DIALOG_BOX, DialogPortal } from "@/components/ui/dialog";
 import { FailurePopover } from "@/components/ui/failure-popover";
 import { operationName, operationProgress, operationTitle } from "@/git/conflicts";
 import { useOperationActions, useOperationInProgress } from "@/git/queries/progress";
-import { useConflictedFiles } from "@/git/queries/status";
+import { firstToResolve, useConflictedFiles } from "@/git/queries/status";
 import { useUnsuspendedData } from "@/git/queries/unsuspended";
 
 /**
@@ -37,10 +37,9 @@ export function OperationBar(props: {
 
   const files = () => conflicted()?.files ?? [];
   const ready = () => conflicted()?.markerFree.length ?? 0;
-  /** The conflicted file to open first: one with markers left, if any is. */
   const first = () => {
-    const free = new Set(conflicted()?.markerFree);
-    return files().find((file) => !free.has(file.path)) ?? files()[0];
+    const current = conflicted();
+    return current && firstToResolve(current);
   };
   const pending = () => actions.continue.isPending() || actions.abort.isPending();
   /** Continues `current` once the edits to a file on show are saved: it rewrites files. */

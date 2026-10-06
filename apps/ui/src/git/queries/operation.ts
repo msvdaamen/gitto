@@ -23,10 +23,10 @@ function operationsOf(client: QueryClient) {
  * failed. One runs at a time per repository. `run` is passed the repository's id rather than reading
  * it when it ends, so the one it ran on is updated and refreshed even if another is on show by then.
  */
-export function useRepositoryOperation<T = void>(
+export function useRepositoryOperation<T = void, R = unknown>(
   name: string,
   repositoryId: () => string,
-  run: (repositoryId: string, input: T) => Promise<unknown>,
+  run: (repositoryId: string, input: T) => Promise<R>,
 ) {
   const [, setOperations] = operationsOf(useQueryClient());
   const key = (id: string) => `${name}:${id}`;
@@ -40,10 +40,16 @@ export function useRepositoryOperation<T = void>(
 
   const state = useRepositoryOperationState(name, repositoryId);
   return {
-    /** Runs it, unless it's running; `onSuccess` runs once it's done, if this is still on show. */
-    run(input: T, options?: { onSuccess?: () => void }) {
+    /**
+     * Runs it, unless it's running; `onSuccess` runs once it's done, with what it resolved to, if
+     * this is still on show.
+     */
+    run(input: T, options?: { onSuccess?: (result: R) => void }) {
       if (state.isPending()) return;
-      mutation.mutate({ id: repositoryId(), input }, { onSuccess: () => options?.onSuccess?.() });
+      mutation.mutate(
+        { id: repositoryId(), input },
+        { onSuccess: (result) => options?.onSuccess?.(result) },
+      );
     },
     ...state,
   };

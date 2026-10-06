@@ -13,6 +13,8 @@ import {
   HeadMovedError,
   IndexLockedError,
   LinesNotStageableError,
+  MergeBlockedError,
+  MergeStoppedError,
   NoOperationError,
   NoUpstreamError,
   NotARepositoryError,
@@ -77,7 +79,8 @@ function toApiError(error: unknown): unknown {
     error instanceof UnsupportedGitError ||
     error instanceof ConflictMarkersError ||
     error instanceof NoOperationError ||
-    error instanceof EditorNeededError
+    error instanceof EditorNeededError ||
+    error instanceof MergeBlockedError
   ) {
     return new ORPCError("PRECONDITION_FAILED", { message: error.message, cause: error });
   }
@@ -86,6 +89,7 @@ function toApiError(error: unknown): unknown {
     error instanceof HeadMovedError ||
     error instanceof ChangesStashedError ||
     error instanceof PullInterruptedError ||
+    error instanceof MergeStoppedError ||
     error instanceof RepositoryChangedError ||
     error instanceof StashConflictError ||
     error instanceof FileChangedOnDiskError ||
