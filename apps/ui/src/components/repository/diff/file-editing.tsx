@@ -1,6 +1,8 @@
+import type { LucideIcon } from "lucide-solid";
 import FileWarning from "lucide-solid/icons/file-exclamation-point";
 import Pencil from "lucide-solid/icons/pencil";
 import { createSignal, onCleanup, onMount, Show, type JSX } from "solid-js";
+import { Dynamic } from "solid-js/web";
 
 import { Button, IconButton } from "@/components/ui/button";
 import { saveWorkingTreeFile } from "@/git/queries/file-diff";
@@ -232,14 +234,23 @@ export function useFileEditing(props: {
   };
 }
 
-/** A line under the header about the edits. */
-function EditNotice(props: { message: string; children?: JSX.Element }) {
+/**
+ * A line under the header about the edits, or something else that went wrong with the file. A
+ * status, as the edits' are: the user is told, but not interrupted; an alert for what they asked
+ * for and didn't get, like lines that couldn't be staged.
+ */
+export function EditNotice(props: {
+  message: string;
+  role?: "status" | "alert";
+  icon?: LucideIcon;
+  children?: JSX.Element;
+}) {
   return (
     <p
-      role="status"
+      role={props.role ?? "status"}
       class="m-0 flex shrink-0 items-center gap-1.5 border-b border-border px-3 py-1 text-[11.5px] text-muted"
     >
-      <FileWarning size={13} class="shrink-0 text-amber" />
+      <Dynamic component={props.icon ?? FileWarning} size={13} class="shrink-0 text-amber" />
       <span class="mr-auto">{props.message}</span>
       {props.children}
     </p>

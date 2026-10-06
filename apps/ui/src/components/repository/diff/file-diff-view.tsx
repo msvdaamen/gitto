@@ -26,14 +26,25 @@ import {
   Show,
   Suspense,
   Switch,
+  type JSX,
 } from "solid-js";
 
 import { Button, IconButton } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { FileStatusBadge } from "@/components/ui/file-status-badge";
 import { LineStats } from "@/components/ui/line-stats";
+import {
+  countsOf,
+  hasPatch,
+  isKnownBinary,
+  isNestedRepository,
+  sourceLabel,
+  totalLines,
+  unchangedReason,
+  type LineCounts,
+} from "@/git/changes";
 import { diffFileKey, isSameSource, isUncommitted, type DiffSource } from "@/git/diff-source";
-import { hasHunks, isLink, patchVersion, stagedWhole, summarizePatch } from "@/git/patch";
+import { isLink, patchVersion, summarizePatch } from "@/git/patch";
 import { fetchBlob } from "@/git/queries/diff";
 import {
   fetchFilePatch,
@@ -42,14 +53,13 @@ import {
   useFilePatch,
   type FilePatch,
 } from "@/git/queries/file-diff";
-import { useStageFile, useStageLines } from "@/git/queries/staging";
 import { useUnsuspendedData } from "@/git/queries/unsuspended";
 import { useDelayed } from "@/hooks/delayed";
 import { useDiffStyle } from "@/hooks/diff-style";
 
-import { useFileEditing } from "./file-editing";
+import { EditNotice, useFileEditing } from "./file-editing";
+import { useFileStaging } from "./file-staging";
 import type * as ViewerModule from "./patch-viewer";
-import type { LineStaging } from "./patch-viewer";
 
 let viewerModule: Promise<typeof ViewerModule> | undefined;
 /** The viewer's module, loaded once, the first time it's needed: it brings Shiki. */
@@ -76,43 +86,6 @@ function patchCacheKey(source: DiffSource, data: FilePatch): string {
   return isUncommitted(source) ? `${data.key}:${patchVersion(data.patch)}` : data.key;
 }
 
-/** Lines added and removed. */
-interface LineCounts {
-  additions: number;
-  deletions: number;
-}
-
-/** A file's line counts, as its list has them; `undefined` if they weren't counted. */
-function countsOf(file: ChangedFile): LineCounts | undefined {
-  return file.additions === null
-    ? undefined
-    : { additions: file.additions, deletions: file.deletions ?? 0 };
-}
-
-/** Whether `file`'s list says it's binary: it has no line counts, though its list does. */
-function isKnownBinary(file: ChangedFile, uncounted: boolean): boolean {
-  return file.additions === null && !uncounted && file.status !== "untracked";
-}
-
-/**
- * Whether `file` has changes to show as a patch, as far as its list can tell: not for one that's
- * conflicted, binary, or without changed lines, nor for a folder git lists as untracked, which is
- * a repository of its own.
- */
-function hasPatch(file: ChangedFile, uncounted: boolean): boolean {
-  if (file.status === "conflicted" || isNestedRepository(file)) return false;
-  if (isKnownBinary(file, uncounted)) return false;
-  const counts = countsOf(file);
-  return !counts || total(counts) > 0;
-}
-
-/** Whether `file` is a repository inside this one: git lists one as an untracked folder. */
-function isNestedRepository(file: ChangedFile): boolean {
-  return file.status === "untracked" && file.path.endsWith("/");
-}
-
-const total = (counts: LineCounts) => counts.additions + counts.deletions;
-
 /**
  * Loads and highlights a file's changes ahead of opening them, e.g. when it's pointed at, so they
  * show at once; the first time, that starts the viewer too. Not for one that's binary, or large,
@@ -129,7 +102,7 @@ export function prefetchFileDiff(
   uncounted = false,
 ): void {
   const counts = countsOf(file);
-  if (!hasPatch(file, uncounted) || !counts || total(counts) > PREFETCH_DIFF_LINES) return;
+  if (!hasPatch(file, uncounted) || !counts || totalLines(counts) > PREFETCH_DIFF_LINES) return;
   void Promise.all([fetchFilePatch(client, repositoryId, source, file), loadViewer()])
     .then(([data, viewer]) =>
       data.patch ? viewer.preparePatch(data.patch, patchCacheKey(source, data)) : undefined,
@@ -145,8 +118,9 @@ export function prefetchFileDiff(
  * the file has none left on its side, that's said instead.
  *
  * An uncommitted file can be staged, or unstaged, whole, or its lines a hunk or a selection at a
- * time (see `PatchViewer`), one at a time. Once that leaves it without changes on its side, the next
- * file in its list opens.
+ * time (see `useFileStaging`), one at a time; an unstaged one can be edited (see
+ * `useFileEditing`). Once that leaves it without changes on its side, the next file in its list
+ * opens.
  */
 export function FileDiffView(props: {
   repositoryId: string;
@@ -161,7 +135,7 @@ export function FileDiffView(props: {
    */
   onGuard?: (guard: (() => Promise<boolean>) | undefined) => void;
 }) {
-  const { diffStyle, setDiffStyle } = useDiffStyle();
+  const { diffStyle } = useDiffStyle();
   const queryClient = useQueryClient();
   // The same source, as one object, for as long as it is: a list's is made anew whenever it's read.
   const source = createMemo(() => props.source, undefined, { equals: isSameSource });
@@ -209,7 +183,7 @@ export function FileDiffView(props: {
   const fetches = () => {
     const counts = countsOf(file());
     if (!hasPatch(file(), lists.uncounted())) return false;
-    return !counts || total(counts) <= LARGE_DIFF_LINES || shownLarge() === fileKey();
+    return !counts || totalLines(counts) <= LARGE_DIFF_LINES || shownLarge() === fileKey();
   };
   // What the patch's query is of, changing only when that does: an uncommitted file's list is
   // replaced whenever anything in the working tree changes, and the query's options are set again
@@ -242,7 +216,7 @@ export function FileDiffView(props: {
   const binary = () => isKnownBinary(file(), lists.uncounted()) || summary()?.binary === true;
   /** How many lines changed; `undefined` until the patch says, for a file without counts. */
   const counts = () => (summary() && !summary()!.binary ? summary() : countsOf(file()));
-  const lines = () => (counts() ? total(counts()!) : undefined);
+  const lines = () => (counts() ? totalLines(counts()!) : undefined);
   const large = () => (lines() ?? 0) > LARGE_DIFF_LINES && shownLarge() !== fileKey();
   const showsPatch = () =>
     !gone() &&
@@ -284,99 +258,24 @@ export function FileDiffView(props: {
     file().status !== "deleted" &&
     !isLink(current()?.patch ?? "");
 
-  // Staging and unstaging lines, or the whole file.
-  /** What's done with the file's changes: staged, or unstaged, by the side they're on. */
-  const stagingAction = () => (props.source.kind === "staged" ? "unstage" : "stage");
-  const stageLines = useStageLines();
-  const stageFile = useStageFile();
-  /** The whole file is being staged, from saving its edits on. */
-  const [stagingWhole, setStagingWhole] = createSignal(false);
-  /** Lines, or the whole file, are being staged: nothing else is until they are. */
-  const staging = () => stageLines.isPending || stagingWhole();
-  /** The patch lines were last staged from: none are again while it's on show and another's in. */
-  const [stagedFrom, setStagedFrom] = createSignal<string>();
-  /** Why the last lines, or the whole file, couldn't be staged, and of which file. */
-  const [stagingError, setStagingError] = createSignal<{ key: string; message: string }>();
-  const failed = (key: string, error: unknown) =>
-    setStagingError({ key, message: error instanceof Error ? error.message : String(error) });
-  /**
-   * Once the file `key` names has no changes left on its side, on to `target`: the next file in
-   * its list, or the one before the last, as one would stage them one after the other. Not if
-   * another file was opened meanwhile.
-   */
-  const moveOn = (key: string, target: ChangedFile | undefined) => {
-    if (target && key === fileKey()) props.onOpen(props.source, target);
-  };
-
-  const lineStaging = (): LineStaging | undefined => {
-    const data = current();
-    if (!isUncommitted(props.source) || editing() || !showsPatch() || !data) return undefined;
-    if (stagedWhole(data.patch)) return undefined;
-    const action = stagingAction();
-    const last = stagedFrom();
-    return {
-      action,
-      busy:
-        staging() || (last !== undefined && shownPatch()?.patch === last && data.patch !== last),
-      onStage: async (from, picked) => {
-        const key = fileKey();
-        setStagingError(undefined);
-        let left: string;
-        try {
-          left = await stageLines.mutateAsync({
-            repositoryId: props.repositoryId,
-            action,
-            file: file(),
-            patch: from,
-            lines: picked,
-          });
-        } catch (error) {
-          failed(key, error);
-          throw error;
-        }
-        // The patch staged from stays on show until the one they leave is highlighted; once there
-        // are none left, so does this file's until the next one's is in.
-        setStagedFrom(from);
-        if (!hasHunks(left)) moveOn(key, next() ?? previous());
-      },
-    };
-  };
-
-  /**
-   * Whether the file can be staged, or unstaged, whole: one of the uncommitted changes in its list,
-   * but not a repository inside this one, which would be added as a submodule without its URL.
-   */
-  const wholeFile = () =>
-    isUncommitted(props.source) && found() !== -1 && !isNestedRepository(file())
-      ? stagingAction()
-      : undefined;
   /** Whether the file in the header is another one, still on show while this one's changes load. */
   const showsOther = () => shown().key !== fileKey();
-  /**
-   * Stages, or unstages, the whole file, its edits saved first so they're staged with it; then on
-   * to the next file, as once its last lines are.
-   */
-  const stageWhole = async () => {
-    const action = wholeFile();
-    if (!action || staging() || showsOther()) return;
-    const key = fileKey();
-    setStagingWhole(true);
-    try {
-      if (!(await fileEditing.leave()) || key !== fileKey()) return;
-      // Picked while the file's still in its list: it's staged before the list is refetched.
-      const target = next() ?? previous();
-      setStagingError(undefined);
-      try {
-        await stageFile.mutateAsync({ repositoryId: props.repositoryId, action, file: liveFile() });
-      } catch (error) {
-        failed(key, error);
-        return;
-      }
-      moveOn(key, target);
-    } finally {
-      setStagingWhole(false);
-    }
-  };
+  const fileStaging = useFileStaging({
+    repositoryId: () => props.repositoryId,
+    source: () => props.source,
+    fileKey,
+    file,
+    liveFile,
+    listed: () => found() !== -1,
+    current,
+    shownPatch: () => shownPatch()?.patch,
+    showsOther,
+    editing,
+    showsPatch,
+    target: () => next() ?? previous(),
+    leave: fileEditing.leave,
+    onOpen: (target, opened) => props.onOpen(target, opened),
+  });
 
   let section: HTMLElement | undefined;
   const onKeyDown = (event: KeyboardEvent) => {
@@ -422,121 +321,30 @@ export function FileDiffView(props: {
       ? fetchWorkingTreeFile(props.repositoryId, path)
       : fetchBlob(queryClient, props.repositoryId, oid);
 
-  const name = () => shown().file.path.slice(shown().file.path.lastIndexOf("/") + 1);
-  const folder = () => shown().file.path.slice(0, shown().file.path.lastIndexOf("/") + 1);
-
   return (
     <section
       ref={(el) => (section = el)}
       class="flex h-full min-h-0 min-w-0 flex-col bg-bg"
       aria-label={`Changes in ${shown().file.path}`}
     >
-      <header class="flex h-[42px] shrink-0 items-center gap-2 border-b border-border pr-2 pl-1.5">
-        <IconButton label="Back to the history (Esc)" icon={ArrowLeft} onClick={props.onClose} />
-        <FileStatusBadge status={shown().file.status} />
-        <span class="flex min-w-0 items-baseline gap-2">
-          <span class="truncate text-[12.5px]" title={shown().file.path}>
-            <span class="text-faint">{folder()}</span>
-            <strong class="font-[600]">{name()}</strong>
-          </span>
-          <Show when={shown().file.origPath}>
-            {(origPath) => (
-              <span class="shrink-[2] truncate text-[11px] text-faint" title={origPath()}>
-                from {origPath()}
-              </span>
-            )}
-          </Show>
-          <Show when={sourceLabel(props.source)}>
-            {(label) => <span class="shrink-0 text-[11px] text-faint">{label()}</span>}
-          </Show>
-        </span>
-        <Show when={shown().counts}>
-          {(shownCounts) => (
-            <LineStats
-              additions={shownCounts().additions}
-              deletions={shownCounts().deletions}
-              class="shrink-0 text-[11px]"
-            />
-          )}
-        </Show>
-        <Show when={busy()}>
-          <LoaderCircle
-            role="status"
-            aria-label="Loading changes"
-            size={13}
-            class="shrink-0 animate-spin text-faint motion-reduce:animate-none"
-          />
-        </Show>
-        <span class="ml-auto flex shrink-0 items-center gap-0.5">
-          <Show when={wholeFile()}>
-            {(action) => (
-              <>
-                <Button
-                  icon={action() === "stage" ? Plus : Minus}
-                  disabled={staging() || showsOther()}
-                  class="h-[26px] gap-1.5 rounded-md px-2 text-[11.5px] font-[600] enabled:hover:translate-y-0"
-                  onClick={() => void stageWhole()}
-                >
-                  {action() === "stage" ? "Stage file" : "Unstage file"}
-                </Button>
-                <span class="mx-1.5 h-4 w-px bg-border" />
-              </>
-            )}
-          </Show>
-          <Show when={props.source.kind === "unstaged"}>
-            <fileEditing.Controls editable={editable()} />
-            <span class="mx-1.5 h-4 w-px bg-border" />
-          </Show>
-          <IconButton
-            label="Previous file"
-            icon={ChevronUp}
-            disabled={!previous()}
-            onClick={() => previous() && props.onOpen(props.source, previous()!)}
-          />
-          <IconButton
-            label="Next file"
-            icon={ChevronDown}
-            disabled={!next()}
-            onClick={() => next() && props.onOpen(props.source, next()!)}
-          />
-          <span class="mx-1.5 h-4 w-px bg-border" />
-          <IconButton
-            label="Unified"
-            icon={Rows2}
-            active={diffStyle() === "unified"}
-            onClick={() => setDiffStyle("unified")}
-          />
-          <IconButton
-            label="Side by side"
-            icon={Columns2}
-            active={diffStyle() === "split"}
-            onClick={() => setDiffStyle("split")}
-          />
-        </span>
-      </header>
+      <FileDiffHeader
+        file={shown().file}
+        counts={shown().counts}
+        source={props.source}
+        busy={busy()}
+        wholeFile={fileStaging.wholeFile()}
+        stagingDisabled={fileStaging.staging() || showsOther()}
+        onStageWhole={() => void fileStaging.stageWhole()}
+        previous={previous()}
+        next={next()}
+        onOpen={props.onOpen}
+        onClose={props.onClose}
+      >
+        <fileEditing.Controls editable={editable()} />
+      </FileDiffHeader>
       <fileEditing.Banner />
-      <Show when={stagingError()?.key === fileKey() && stagingError()}>
-        {(error) => (
-          <p
-            role="alert"
-            class="m-0 flex shrink-0 items-center gap-1.5 border-b border-border px-3 py-1.5 text-[11.5px] text-muted"
-          >
-            <TriangleAlert size={13} class="shrink-0 text-amber" />
-            {error().message}
-          </p>
-        )}
-      </Show>
-      <Show when={filesError()}>
-        {(message) => (
-          <p
-            role="status"
-            class="m-0 flex shrink-0 items-center gap-1.5 border-b border-border px-3 py-1.5 text-[11.5px] text-muted"
-          >
-            <FileWarning size={13} class="shrink-0 text-amber" />
-            {message()}
-          </p>
-        )}
-      </Show>
+      <fileStaging.Banner />
+      <Show when={filesError()}>{(message) => <EditNotice message={message()} />}</Show>
 
       <div class="min-h-0 flex-1">
         <Switch>
@@ -627,7 +435,7 @@ export function FileDiffView(props: {
                             onEditFailed={fileEditing.viewer.onEditFailed}
                             onLoadingFiles={setLoadingFiles}
                             onFilesError={setFilesError}
-                            staging={lineStaging()}
+                            staging={fileStaging.lineStaging()}
                           />
                         );
                       }}
@@ -645,11 +453,121 @@ export function FileDiffView(props: {
   );
 }
 
-/** Which side of the uncommitted changes the file's are, in the header. */
-function sourceLabel(source: DiffSource): string | undefined {
-  if (source.kind === "unstaged") return "Unstaged";
-  if (source.kind === "staged") return "Staged";
-  return undefined;
+/**
+ * The bar over the changes: the file on show, its line counts, and what can be done with it, from
+ * staging it whole to stepping to the files next to it. Its name stays while the next file's
+ * changes load (see `FileDiffView`'s `shown`).
+ */
+function FileDiffHeader(props: {
+  /** The file on show. */
+  file: ChangedFile;
+  /** How many lines changed in it, if that's known. */
+  counts: LineCounts | undefined;
+  source: DiffSource;
+  /** Whether changes are being loaded, for long enough to say so. */
+  busy: boolean;
+  /** Whether the file can be staged, or unstaged, whole, and which (see `useFileStaging`). */
+  wholeFile: "stage" | "unstage" | undefined;
+  /** Whether it can't be right now: something's being staged, or another file's on show. */
+  stagingDisabled: boolean;
+  onStageWhole: () => void;
+  /** The files a step away in the list, if there are any. */
+  previous: ChangedFile | undefined;
+  next: ChangedFile | undefined;
+  onOpen: (source: DiffSource, file: ChangedFile) => void;
+  onClose: () => void;
+  /** The edit mode's controls, shown for an unstaged file. */
+  children?: JSX.Element;
+}) {
+  const { diffStyle, setDiffStyle } = useDiffStyle();
+  const name = () => props.file.path.slice(props.file.path.lastIndexOf("/") + 1);
+  const folder = () => props.file.path.slice(0, props.file.path.lastIndexOf("/") + 1);
+
+  return (
+    <header class="flex h-[42px] shrink-0 items-center gap-2 border-b border-border pr-2 pl-1.5">
+      <IconButton label="Back to the history (Esc)" icon={ArrowLeft} onClick={props.onClose} />
+      <FileStatusBadge status={props.file.status} />
+      <span class="flex min-w-0 items-baseline gap-2">
+        <span class="truncate text-[12.5px]" title={props.file.path}>
+          <span class="text-faint">{folder()}</span>
+          <strong class="font-[600]">{name()}</strong>
+        </span>
+        <Show when={props.file.origPath}>
+          {(origPath) => (
+            <span class="shrink-[2] truncate text-[11px] text-faint" title={origPath()}>
+              from {origPath()}
+            </span>
+          )}
+        </Show>
+        <Show when={sourceLabel(props.source)}>
+          {(label) => <span class="shrink-0 text-[11px] text-faint">{label()}</span>}
+        </Show>
+      </span>
+      <Show when={props.counts}>
+        {(counts) => (
+          <LineStats
+            additions={counts().additions}
+            deletions={counts().deletions}
+            class="shrink-0 text-[11px]"
+          />
+        )}
+      </Show>
+      <Show when={props.busy}>
+        <LoaderCircle
+          role="status"
+          aria-label="Loading changes"
+          size={13}
+          class="shrink-0 animate-spin text-faint motion-reduce:animate-none"
+        />
+      </Show>
+      <span class="ml-auto flex shrink-0 items-center gap-0.5">
+        <Show when={props.wholeFile}>
+          {(action) => (
+            <>
+              <Button
+                icon={action() === "stage" ? Plus : Minus}
+                disabled={props.stagingDisabled}
+                class="h-[26px] gap-1.5 rounded-md px-2 text-[11.5px] font-[600] enabled:hover:translate-y-0"
+                onClick={props.onStageWhole}
+              >
+                {action() === "stage" ? "Stage file" : "Unstage file"}
+              </Button>
+              <span class="mx-1.5 h-4 w-px bg-border" />
+            </>
+          )}
+        </Show>
+        <Show when={props.source.kind === "unstaged"}>
+          {props.children}
+          <span class="mx-1.5 h-4 w-px bg-border" />
+        </Show>
+        <IconButton
+          label="Previous file"
+          icon={ChevronUp}
+          disabled={!props.previous}
+          onClick={() => props.previous && props.onOpen(props.source, props.previous)}
+        />
+        <IconButton
+          label="Next file"
+          icon={ChevronDown}
+          disabled={!props.next}
+          onClick={() => props.next && props.onOpen(props.source, props.next)}
+        />
+        <span class="mx-1.5 h-4 w-px bg-border" />
+        <IconButton
+          label="Unified"
+          icon={Rows2}
+          active={diffStyle() === "unified"}
+          onClick={() => setDiffStyle("unified")}
+        />
+        <IconButton
+          label="Side by side"
+          icon={Columns2}
+          active={diffStyle() === "split"}
+          onClick={() => setDiffStyle("split")}
+        />
+      </span>
+    </header>
+  );
 }
 
 /**
@@ -689,14 +607,6 @@ function NoLongerChanged(props: {
       </span>
     </EmptyState>
   );
-}
-
-/** Why a file without binary contents has no changed lines. */
-function unchangedReason(file: ChangedFile): string {
-  if (file.origPath) return `Renamed from ${file.origPath}, with the same contents.`;
-  if (file.status === "added" || file.status === "untracked") return "An empty file was added.";
-  if (file.status === "deleted") return "An empty file was deleted.";
-  return "Only the file's mode changed.";
 }
 
 function DiffError(props: { error: Error }) {
