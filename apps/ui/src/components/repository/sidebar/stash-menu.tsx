@@ -3,6 +3,7 @@ import ArchiveRestore from "lucide-solid/icons/archive-restore";
 import Trash from "lucide-solid/icons/trash";
 import { createEffect, createSignal, on, type JSX } from "solid-js";
 
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ContextMenuItem } from "@/components/ui/context-menu";
 import { FailurePopover } from "@/components/ui/failure-popover";
 import { useStashActions, useStashes } from "@/git/queries/stash";
@@ -10,7 +11,6 @@ import { useStatus } from "@/git/queries/status";
 import { canPop } from "@/git/stash";
 
 import { RowMenu } from "../row-menu";
-import { DropStashDialog } from "./drop-stash-dialog";
 
 /** What the stashes' section is given by their menu (see `StashMenu`). */
 export interface StashSectionFeedback {
@@ -89,10 +89,14 @@ export function StashMenu(props: {
         anchor={section}
         placement="right-start"
       />
-      <DropStashDialog
-        stash={dropping()}
+      <ConfirmDialog
+        item={dropping()}
+        icon={Trash}
+        title={() => "Delete stash?"}
+        description={(stash) => `"${stash.message}" is deleted, and the changes in it are lost.`}
+        confirmLabel="Delete"
         onCancel={() => setDropping(undefined)}
-        onDrop={(stash) => {
+        onConfirm={(stash) => {
           setDropping(undefined);
           // Doesn't run while another stash action is.
           drop.run(stash.sha);

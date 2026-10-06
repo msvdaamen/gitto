@@ -1,7 +1,7 @@
 import { AlertDialog } from "@kobalte/core/alert-dialog";
 import { cn } from "cn";
 import type { LucideIcon } from "lucide-solid";
-import { createMemo, type JSX } from "solid-js";
+import { createMemo, Show, type JSX } from "solid-js";
 
 import { Button } from "./button";
 import { DIALOG_BOX, DialogPortal } from "./dialog";
@@ -13,8 +13,8 @@ import { DIALOG_BOX, DialogPortal } from "./dialog";
 export function ConfirmDialog<T>(props: {
   item: T | undefined;
   icon: LucideIcon;
-  /** What it asks, e.g. "Delete stash?"; also by the item. */
-  title: string | ((item: T) => string);
+  /** What it asks of the item, e.g. "Delete stash?". */
+  title: (item: T) => string;
   /** What's done to the item, and what's lost with it. */
   description: (item: T) => JSX.Element;
   /** The button that does it, e.g. "Delete". */
@@ -39,16 +39,18 @@ export function ConfirmDialog<T>(props: {
             <span class="grid size-9 shrink-0 place-items-center rounded-[9px] bg-coral-soft text-coral">
               <props.icon size={18} strokeWidth={1.9} />
             </span>
-            <div class="min-w-0">
-              <AlertDialog.Title class="m-0 text-[15px] font-[680]">
-                {typeof props.title === "string"
-                  ? props.title
-                  : item() !== undefined && props.title(item()!)}
-              </AlertDialog.Title>
-              <AlertDialog.Description class="m-0 mt-2 text-[12.5px] leading-[1.55] break-words text-text-soft">
-                {item() !== undefined && props.description(item()!)}
-              </AlertDialog.Description>
-            </div>
+            <Show when={item()}>
+              {(shown) => (
+                <div class="min-w-0">
+                  <AlertDialog.Title class="m-0 text-[15px] font-[680]">
+                    {props.title(shown())}
+                  </AlertDialog.Title>
+                  <AlertDialog.Description class="m-0 mt-2 text-[12.5px] leading-[1.55] break-words text-text-soft">
+                    {props.description(shown())}
+                  </AlertDialog.Description>
+                </div>
+              )}
+            </Show>
           </div>
           <div class="mt-5 flex justify-end gap-2">
             <Button variant="ghost" onClick={props.onCancel}>

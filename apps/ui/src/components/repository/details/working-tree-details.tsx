@@ -1,4 +1,4 @@
-import type { ChangedFile } from "@gitto/git/types";
+import type { ChangedFile, UncommittedSide } from "@gitto/git/types";
 import type { LucideIcon } from "lucide-solid";
 import CircleCheck from "lucide-solid/icons/circle-check";
 import FilePen from "lucide-solid/icons/file-pen";
@@ -59,7 +59,7 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
       { defer: true },
     ),
   );
-  const discardFile = (side: UncommittedSource["kind"]): FileMenuAction => ({
+  const discardFile = (side: UncommittedSide): FileMenuAction => ({
     label: "Discard changes…",
     icon: Trash,
     disabled: (file) => busy() || !canDiscard(file),

@@ -2,7 +2,6 @@ import type { ChangedFile, LineSelection, UncommittedSide } from "@gitto/git/typ
 import { hashKey, useMutation, useQueryClient } from "@tanstack/solid-query";
 
 import { stagingPaths } from "@/git/changes";
-import { discardedOrigPath } from "@/git/discard";
 import { hasHunks } from "@/git/patch";
 import { rpc } from "@/lib/rpc";
 
@@ -42,7 +41,7 @@ export function useDiscard(repositoryId: () => string) {
       : rpc.git.staging.discard({
           repositoryId: id,
           path: target.file.path,
-          origPath: discardedOrigPath(target.file),
+          origPath: target.file.origPath,
           side: target.side,
         }),
   );

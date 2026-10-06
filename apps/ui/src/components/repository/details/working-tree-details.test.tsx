@@ -138,7 +138,7 @@ describe("discarding changes", () => {
     });
   });
 
-  it("discards a copy without its source, which is another file", async () => {
+  it("discards a copy as it's listed, leaving its source to the git side", async () => {
     const user = userEvent.setup();
     setChanges([], [{ ...file("copy.txt", "copied"), origPath: "a.txt" }]);
     renderDetails();
@@ -149,7 +149,7 @@ describe("discarding changes", () => {
     expect(rpc.git.staging.discard).toHaveBeenCalledWith({
       repositoryId: "repo",
       path: "copy.txt",
-      origPath: null,
+      origPath: "a.txt",
       side: "staged",
     });
   });

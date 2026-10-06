@@ -1,7 +1,7 @@
 import type { ChangedFile, StatusCounts } from "@gitto/git/types";
 import { describe, expect, it } from "vitest";
 
-import { canDiscard, discardAllBlocker, discardDescription, discardedOrigPath } from "./discard";
+import { canDiscard, discardAllBlocker, discardDescription } from "./discard";
 
 function file(path: string, status: ChangedFile["status"]): ChangedFile {
   return { path, status, origPath: null, additions: null, deletions: null };
@@ -38,11 +38,9 @@ describe("discarding a file's changes", () => {
     );
   });
 
-  it("puts back a rename's previous path, but not a copy's source, which is another file", () => {
+  it("says a rename's previous path is put back, but not a copy's source, which is another file", () => {
     const renamed = { ...file("d.txt", "renamed"), origPath: "c.txt" };
     const copied = { ...file("copy.txt", "copied"), origPath: "a.txt" };
-    expect(discardedOrigPath(renamed)).toBe("c.txt");
-    expect(discardedOrigPath(copied)).toBeNull();
     expect(discardDescription(renamed, "staged")).toBe(
       "d.txt is deleted, and c.txt, which it was renamed from, is put back as the last commit has it. Its changes are lost.",
     );

@@ -784,6 +784,21 @@ describe("discarding a file's changes", () => {
     ]);
   });
 
+  it("leaves a copy's source as it is, which is another file", async () => {
+    const repo = await createHistoryRepo("discard-copy");
+    const path = repo.path;
+    writeFileSync(join(path, "copy.txt"), "a\nmore\n");
+    git(path, "add", "copy.txt");
+    writeFileSync(join(path, "untracked copy.txt"), "a\nmore\n");
+
+    // As `git status` lists them with `status.renames=copies`.
+    await discard(repo, { path: "copy.txt", origPath: "a file.txt" }, "staged");
+    await discard(repo, { path: "untracked copy.txt", origPath: "a file.txt" }, "unstaged");
+    expect(contents(path, "copy.txt")).toBeNull();
+    expect(contents(path, "untracked copy.txt")).toBeNull();
+    expect(contents(path, "a file.txt")).toBe("changed\n");
+  });
+
   it("deletes a staged file before the first commit", async () => {
     const path = createRepo("discard-unborn");
     writeFileSync(join(path, "x y.txt"), "hi\n");

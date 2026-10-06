@@ -167,14 +167,6 @@ function operationArgs(kind: OperationKind, action: "continue" | "abort"): strin
 }
 
 /**
- * The operation under way in the worktree whose git directory is `gitDir`, if any (see
- * `operationState`).
- */
-export async function operationUnderWay(gitDir: string): Promise<OperationKind | undefined> {
-  return (await operationState(gitDir)).kind;
-}
-
-/**
  * Why `action` can't be done now, if it can't: an operation is under way, or files are conflicted,
  * which `run` (a command of `repo.exclusive`) checks. `action` ends what it says, e.g. "merge":
  * "Finish or abort it, then merge."
@@ -184,7 +176,10 @@ export async function underWayBlocker(
   run: GitCommand,
   action: string,
 ): Promise<string | undefined> {
-  const [operation, conflicted] = await Promise.all([operationUnderWay(gitDir), hasConflicts(run)]);
+  const [{ kind: operation }, conflicted] = await Promise.all([
+    operationState(gitDir),
+    hasConflicts(run),
+  ]);
   if (operation) {
     return `A ${OPERATION_NAMES[operation]} is under way. Finish or abort it, then ${action}.`;
   }
@@ -208,7 +203,7 @@ async function checkOperation(gitDir: string, kind: OperationKind): Promise<void
 }
 
 /** What each operation is called in a sentence, e.g. "a merge" without its article. */
-export const OPERATION_NAMES: Record<OperationKind, string> = {
+const OPERATION_NAMES: Record<OperationKind, string> = {
   merge: "merge",
   rebase: "rebase",
   "cherry-pick": "cherry-pick",

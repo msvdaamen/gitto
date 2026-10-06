@@ -1,12 +1,11 @@
 import type { ChangedFile, Operation } from "@gitto/git/types";
-import { AlertDialog } from "@kobalte/core/alert-dialog";
 import { cn } from "cn";
 import GitMergeConflict from "lucide-solid/icons/git-merge-conflict";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
-import { createMemo, createSignal, Show } from "solid-js";
+import { createSignal, Show } from "solid-js";
 
 import { Button } from "@/components/ui/button";
-import { DIALOG_BOX, DialogPortal } from "@/components/ui/dialog";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { FailurePopover } from "@/components/ui/failure-popover";
 import { operationName, operationProgress, operationTitle } from "@/git/conflicts";
 import { useOperationActions, useOperationInProgress } from "@/git/queries/progress";
@@ -127,10 +126,18 @@ export function OperationBar(props: {
           </Show>
         </span>
       </div>
-      <AbortDialog
-        operation={confirming()}
+      {/* Aborting puts the repository back as it was before the operation: what's been resolved
+          so far is lost. */}
+      <ConfirmDialog
+        item={confirming()}
+        icon={TriangleAlert}
+        title={(current) => `Abort ${operationName(current)}?`}
+        description={(current) =>
+          `This puts the repository back as it was before ${operationName(current)} started. The conflicts you've resolved so far are lost.`
+        }
+        confirmLabel="Abort"
         onCancel={() => setConfirming(undefined)}
-        onAbort={(current) => {
+        onConfirm={(current) => {
           setConfirming(undefined);
           void abort(current);
         }}
@@ -142,56 +149,4 @@ export function OperationBar(props: {
 /** What continuing does, on its button: commits a merge, goes on with the rest. */
 function continueLabel(operation: Operation): string {
   return operation.kind === "merge" ? "Commit merge" : "Continue";
-}
-
-/**
- * Asks before aborting an operation, which puts the repository back as it was before it: what's
- * been resolved so far is lost. Esc, or clicking outside, cancels.
- */
-function AbortDialog(props: {
-  operation: Operation | undefined;
-  onCancel: () => void;
-  onAbort: (operation: Operation) => void;
-}) {
-  // The last one asked about, still named while the dialog closes.
-  const operation = createMemo((last: Operation | undefined) => props.operation ?? last);
-  return (
-    <AlertDialog
-      open={props.operation !== undefined}
-      onOpenChange={(open) => !open && props.onCancel()}
-      modal
-      preventScroll
-    >
-      <DialogPortal>
-        <AlertDialog.Content class={cn(DIALOG_BOX, "max-w-[440px] p-5")}>
-          <div class="flex items-start gap-3">
-            <span class="grid size-9 shrink-0 place-items-center rounded-[9px] bg-coral-soft text-coral">
-              <TriangleAlert size={18} strokeWidth={1.9} />
-            </span>
-            <div class="min-w-0">
-              <AlertDialog.Title class="m-0 text-[15px] font-[680]">
-                Abort {operation() && operationName(operation()!)}?
-              </AlertDialog.Title>
-              <AlertDialog.Description class="m-0 mt-2 text-[12.5px] leading-[1.55] text-text-soft">
-                This puts the repository back as it was before{" "}
-                {operation() && operationName(operation()!)} started. The conflicts you've resolved
-                so far are lost.
-              </AlertDialog.Description>
-            </div>
-          </div>
-          <div class="mt-5 flex justify-end gap-2">
-            <Button variant="ghost" onClick={props.onCancel}>
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              onClick={() => props.operation && props.onAbort(props.operation)}
-            >
-              Abort
-            </Button>
-          </div>
-        </AlertDialog.Content>
-      </DialogPortal>
-    </AlertDialog>
-  );
 }

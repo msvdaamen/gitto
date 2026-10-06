@@ -11,17 +11,10 @@ export function canDiscard(file: ChangedFile): boolean {
   return file.status !== "conflicted" && !isNestedRepository(file);
 }
 
-/**
- * The file's previous path, which its changes are discarded at too: a rename's. A copy's source is
- * another file, with changes of its own.
- */
-export function discardedOrigPath(file: ChangedFile): string | null {
-  return file.status === "renamed" ? file.origPath : null;
-}
-
 /** What discarding a file's changes from its list on `side` loses, to ask before doing it. */
 export function discardDescription(file: ChangedFile, side: UncommittedSide): string {
-  const from = discardedOrigPath(file);
+  // A copy's source is another file, which is left as it is.
+  const from = file.status === "renamed" && file.origPath;
   if (from) {
     return `${file.path} is deleted, and ${from}, which it was renamed from, is put back${side === "staged" ? " as the last commit has it" : ""}. Its changes are lost.`;
   }
