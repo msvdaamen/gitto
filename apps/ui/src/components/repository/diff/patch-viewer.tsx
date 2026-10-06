@@ -15,11 +15,10 @@ import {
   focusableExpandButtons,
   forget,
   HIGHLIGHT_WAIT_MS,
-  highlighted,
-  loadFiles,
   parsed,
   THEMES,
   ViewerFileDiff,
+  ViewHighlights,
   workerPool,
   type LoadedFile,
 } from "./viewer-runtime";
@@ -104,6 +103,8 @@ export default function PatchViewer(props: {
   let picker: LinePicker | undefined;
   /** Whether lines can be picked to stage: only of a patch that isn't being edited. */
   const pickable = () => props.staging !== undefined && !props.editing;
+  /** The diffs this view had highlighted, to drop the long ones once it closes. */
+  const highlights = new ViewHighlights();
 
   const options = (diffStyle: DiffStyle): FileDiffOptions<HunkButton, undefined> => ({
     theme: THEMES,
@@ -124,7 +125,7 @@ export default function PatchViewer(props: {
       loads.set(diff, (loads.get(diff) ?? 0) + 1);
       report();
       try {
-        return (await loadFiles(diff, props.loadFile)).files;
+        return (await highlights.loadWhole(diff, props.loadFile)).files;
       } catch (error) {
         failures.set(diff, error instanceof Error ? error.message : String(error));
         if (diff === shownDiff) rerender();
@@ -199,6 +200,7 @@ export default function PatchViewer(props: {
     const editing = createViewerEditing({
       diffs,
       wrapper,
+      highlights,
       shownDiff: () => shownDiff,
       setShownDiff: (diff) => (shownDiff = diff),
       shownFileKey: () => shownFileKey,
@@ -217,6 +219,7 @@ export default function PatchViewer(props: {
       editing.dispose();
       diffs.cleanUp();
       virtualizer.cleanUp();
+      highlights.drop();
     });
 
     const show = async (patch: ReturnType<typeof nextPatch>) => {
@@ -227,7 +230,7 @@ export default function PatchViewer(props: {
       // whole file too, to show the same ones.
       const kept = sameFile && !shownDiff!.isPartial ? await keptExpansion(patch.diff) : undefined;
       const diff = kept?.diff ?? patch.diff;
-      await highlighted(diff, HIGHLIGHT_WAIT_MS);
+      await highlights.highlight(diff, HIGHLIGHT_WAIT_MS);
       // Passed over for another patch meanwhile, or editing started.
       if (disposed || nextPatch() !== patch || editing.active()) return;
       // Another file starts at its top.
@@ -263,7 +266,7 @@ export default function PatchViewer(props: {
       const from = shownDiff!;
       const expanded = diffs.expanded;
       try {
-        const { hydrated } = await loadFiles(diff, props.loadFile);
+        const { hydrated } = await highlights.loadWhole(diff, props.loadFile);
         return { diff: hydrated, expanded: carriedExpansion(from, expanded, hydrated) };
       } catch {
         return undefined;

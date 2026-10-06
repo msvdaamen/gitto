@@ -76,12 +76,20 @@ export function useCommitFiles(repositoryId: () => string, sha: () => string) {
   return useChangedFiles(repositoryId, sha, gitKeys.commitFiles, fetchCommitFiles);
 }
 
+/**
+ * How long a blob is kept once nothing's shown from it, rather than the five minutes queries are
+ * kept by default: it can be megabytes, it's only read to fill in a patch, which keeps what it
+ * needs of it, and git reads it again in milliseconds.
+ */
+const BLOB_GC_MS = 60_000;
+
 /** A file's contents by their object name, e.g. to show more of it around a patch's changes. */
 export function fetchBlob(client: QueryClient, repositoryId: string, oid: string): Promise<string> {
   return client.fetchQuery({
     queryKey: gitKeys.blob(repositoryId, oid),
     queryFn: ({ signal }) => rpc.git.diff.blob({ repositoryId, oid }, { signal }),
     staleTime: Infinity,
+    gcTime: BLOB_GC_MS,
   });
 }
 

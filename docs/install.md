@@ -10,15 +10,7 @@ Gitto runs on Windows (x64), macOS (Apple Silicon) and Arch Linux (x86_64). Down
   replaced with each build.
 
 Gitto stays on what you installed: a release only updates to a newer release, and Gitto Nightly to
-the next nightly. To switch, install the other one.
-
-- **Windows:** Gitto updates itself. It checks when it starts and every hour, downloads a newer
-  version in the background, and offers **Restart to update** at the bottom of the window; otherwise
-  it's installed the next time Gitto starts.
-- **macOS:** Gitto will update itself the same way once its builds are signed by Apple. Until then,
-  install the newer version the same way.
-- **Arch Linux:** pacman updates Gitto, once it's on the AUR. Until then, install the newer package
-  the same way.
+the next nightly. How to update it is in [Updating](#updating).
 
 ## Git
 
@@ -71,6 +63,54 @@ Start Gitto from your app launcher, or with `gitto` in a terminal. To uninstall 
 `sudo pacman -R gitto`.
 
 The package also works on Arch-based distributions, such as CachyOS, EndeavourOS and Manjaro.
+
+## Updating
+
+The bottom of Gitto's window says which one you have and its version, like **Gitto v1.3.0** or
+**Gitto Nightly v1.3.1-nightly29853462**. Compare it with the newest on the
+[releases page](https://github.com/msvdaamen/gitto/releases). Updating keeps your data, such as the
+repositories you've added.
+
+### Windows
+
+Gitto updates itself. It checks for a newer version when it starts and every hour, and downloads it
+in the background, saying **Downloading update…** at the bottom of the window. Once it's downloaded,
+choose **Restart to update to …** there to restart into it now; otherwise it's installed the next
+time Gitto starts.
+
+Gitto doesn't check the first time it runs after being installed, only an hour later or when it next
+starts. To update it by hand, download the newer `Gitto-<version>.Setup.exe` and run it, as when
+installing it.
+
+### macOS
+
+Gitto will update itself as on Windows once its builds are signed by Apple. Until then, update it by
+hand:
+
+1. Quit Gitto.
+2. Download the newer `Gitto-darwin-arm64-<version>.zip`, and open it to unpack it.
+3. Drag **Gitto** into your **Applications** folder, and choose **Replace**.
+4. Open Gitto. macOS won't open the new version the first time either, so allow it again as in
+   step 3 of [installing it](#macos).
+
+### Arch Linux
+
+pacman will update Gitto once it's on the AUR. Until then, download the newer
+`gitto-<version>-1-x86_64.pkg.tar.zst` and install it the same way, which replaces the one you have:
+
+```sh
+sudo pacman -U ./gitto-*.pkg.tar.zst
+```
+
+Then quit Gitto and start it again.
+
+### Switching between a release and Gitto Nightly
+
+Gitto doesn't update from one to the other. To switch, install the other one as above, over the one
+you have: they're the same app, so it replaces it and keeps your data.
+
+On Windows, uninstall Gitto Nightly first when switching to a release. A nightly's version is newer
+than the release before it, and the installer won't replace a newer version with an older one.
 
 ## Your data
 

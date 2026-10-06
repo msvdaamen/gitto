@@ -23,6 +23,23 @@ export type LoadedFile = string | { contents: string; version: string };
 /** Highlighting runs in workers; one diff is on show at a time, so a couple is plenty. */
 const WORKERS = 2;
 
+/**
+ * How many diffs the workers' manager keeps highlighted, in the main thread, for a quick return
+ * to one shown lately, or prepared ahead (see `preparePatch`): the files a step away. The
+ * library's default is a hundred, whatever their size, and a highlighted line takes 1-5KB: 40MB
+ * for a file of 30,000 lines read in full to show more of it, 200MB for a change of 25,000 lines.
+ * So the long ones are dropped once their view closes too (see `KEPT_LINES`).
+ */
+const CACHED_DIFFS = 16;
+
+/**
+ * Lines (of both sides) from which a diff's highlighting is dropped once the view that showed it
+ * closes, rather than kept among the `CACHED_DIFFS`: a whole file read to show more lines, edits,
+ * or a long patch. Shorter ones highlight again in well under the time the view waits for that
+ * (see `HIGHLIGHT_WAIT_MS`), so they're kept for a quick return.
+ */
+const KEPT_LINES = 1000;
+
 /** The library's themes, dark and light, which the viewer draws with. */
 export const THEMES = { dark: "pierre-dark", light: "pierre-light" } as const;
 
@@ -59,6 +76,7 @@ export function workerPool(): WorkerPoolManager {
       workerFactory: () =>
         new Worker(new URL("@pierre/diffs/worker/worker.js", import.meta.url), { type: "module" }),
       poolSize: WORKERS,
+      totalASTLRUCacheSize: CACHED_DIFFS,
     },
     // Oniguruma, as in VS Code, rather than Shiki's JavaScript engine: about twice as fast on a
     // diff of thousands of lines (1.5s against 3s for 6,000), and no slower on small ones. With
@@ -102,19 +120,16 @@ export class ViewerFileDiff extends VirtualizedFileDiff<HunkButton, undefined> {
     this.hunksRenderer.setExpandedHunksMap(expanded);
   }
 
-  /** The diff being edited, while it is. */
-  editedDiff(): FileDiffMetadata | undefined {
-    return this.getLatestDiff();
-  }
-
   /**
    * Names the diff being edited in the highlighting cache, which the library leaves unnamed: once
    * editing stops, a diff with edits is highlighted again, in the workers only if it has a name,
-   * on the main thread otherwise (1.7s for 2,500 lines, the window frozen).
+   * on the main thread otherwise (1.7s for 2,500 lines, the window frozen). Returns the diff, if
+   * one's being edited, named as it was if it already had a name.
    */
-  nameEditedDiff(cacheKey: string) {
+  nameEditedDiff(cacheKey: string): FileDiffMetadata | undefined {
     const diff = this.getLatestDiff();
     if (diff && diff.cacheKey == null) diff.cacheKey = cacheKey;
+    return diff;
   }
 }
 
@@ -128,7 +143,7 @@ export function nextEditedDiff(): number {
 
 /**
  * Drops a patch of a file that's been replaced by a newer one from the highlighting cache, which
- * has room for a hundred diffs: an uncommitted file can be saved many times while it's on show.
+ * has room for `CACHED_DIFFS`: an uncommitted file can be saved many times while it's on show.
  */
 export function forget(diff: FileDiffMetadata) {
   if (!diff.cacheKey) return;
@@ -168,6 +183,46 @@ export function highlighted(diff: FileDiffMetadata, ms: number): Promise<void> {
       .catch(() => undefined),
     new Promise<void>((resolve) => setTimeout(resolve, ms)),
   ]);
+}
+
+/**
+ * The diffs one view had highlighted, to drop the long ones from the workers' manager's cache once
+ * the view closes (see `CACHED_DIFFS`, `KEPT_LINES`): the whole files read to show more lines or to
+ * edit them, the edits, and long patches, which it would otherwise keep for as long as the app runs.
+ */
+export class ViewHighlights {
+  private readonly diffs = new Map<string, FileDiffMetadata>();
+
+  /** Remembers `diff` as one the view had highlighted, if it's named in the cache. */
+  remember(diff: FileDiffMetadata | undefined): void {
+    if (diff?.cacheKey) this.diffs.set(diff.cacheKey, diff);
+  }
+
+  /** `highlighted`, remembering the diff. */
+  highlight(diff: FileDiffMetadata, ms: number): Promise<void> {
+    this.remember(diff);
+    return highlighted(diff, ms);
+  }
+
+  /** `loadFiles`, remembering the diff filled in with the files. */
+  async loadWhole(
+    diff: FileDiffMetadata,
+    loadFile: (side: Side, oid: string) => Promise<LoadedFile>,
+  ): ReturnType<typeof loadFiles> {
+    const loaded = await loadFiles(diff, loadFile);
+    this.remember(loaded.hydrated);
+    return loaded;
+  }
+
+  /** Drops the long diffs from the cache, as the view closes; the shorter ones stay. */
+  drop(): void {
+    for (const [key, diff] of this.diffs) {
+      if (diff.additionLines.length + diff.deletionLines.length >= KEPT_LINES) {
+        workerPool().evictDiffFromCache(key);
+      }
+    }
+    this.diffs.clear();
+  }
 }
 
 /** Patches parsed lately, by their cache key, so one prepared ahead isn't parsed again. */

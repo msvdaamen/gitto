@@ -8,11 +8,10 @@ import type { HunkButton } from "./line-staging";
 import { carriedExpansion, fitToLines, type Side } from "./patch-files";
 import {
   EXPAND_HIGHLIGHT_WAIT_MS,
-  highlighted,
-  loadFiles,
   nextEditedDiff,
   type LoadedFile,
   type ViewerFileDiff,
+  type ViewHighlights,
 } from "./viewer-runtime";
 
 /** Editing the file on show: what it started from, and what can be done with it meanwhile. */
@@ -34,6 +33,8 @@ export interface ViewerEditingDeps {
   diffs: ViewerFileDiff;
   /** The element the diff is rendered in. */
   wrapper: HTMLDivElement;
+  /** What the view had highlighted, which the whole files and the edits are added to. */
+  highlights: ViewHighlights;
   /** The diff on show, once there's one. */
   shownDiff: () => FileDiffMetadata | undefined;
   /** Puts `diff` on show in the last one's place: the whole file to edit, or the edits left. */
@@ -77,7 +78,7 @@ export interface ViewerEditing {
 
 /** Edits the file on show in `deps.diffs` (see `PatchViewer`'s `editing`). */
 export function createViewerEditing(deps: ViewerEditingDeps): ViewerEditing {
-  const { diffs, wrapper } = deps;
+  const { diffs, wrapper, highlights } = deps;
   /** The editor while editing, and how to finish it. */
   let editor: Editor<"file-diff", HunkButton> | undefined;
   let finishEditing: (() => void) | undefined;
@@ -96,7 +97,7 @@ export function createViewerEditing(deps: ViewerEditingDeps): ViewerEditing {
           // Highlighted in the workers first, which the editor starts from: it highlights the
           // whole file again on the main thread otherwise (1.6s for 2,500 lines), e.g. right
           // after editing stopped, while the edits are highlighted.
-          await highlighted(file.diff, EXPAND_HIGHLIGHT_WAIT_MS);
+          await highlights.highlight(file.diff, EXPAND_HIGHLIGHT_WAIT_MS);
           return file;
         }),
         loadEditor(),
@@ -141,8 +142,8 @@ export function createViewerEditing(deps: ViewerEditingDeps): ViewerEditing {
     editing = false;
     editor = undefined;
     // What the library highlights again once editing stops: in the workers, as it's named.
-    const session = diffs.editedDiff();
-    diffs.nameEditedDiff(`${deps.shownFileKey()}:session:${nextEditedDiff()}`);
+    const session = diffs.nameEditedDiff(`${deps.shownFileKey()}:session:${nextEditedDiff()}`);
+    highlights.remember(session);
     if (discard) opened?.cleanUp("discard");
     else finishEditing?.();
     finishEditing = undefined;
@@ -168,7 +169,7 @@ export function createViewerEditing(deps: ViewerEditingDeps): ViewerEditing {
       const diff = parseDiffFromFile(oldFile, { name: from.name, contents: text });
       diff.cacheKey = `${deps.shownFileKey()}:edited:${nextEditedDiff()}`;
       // oxlint-disable-next-line no-await-in-loop -- the text it's of may have changed since.
-      await highlighted(diff, EXPAND_HIGHLIGHT_WAIT_MS);
+      await highlights.highlight(diff, EXPAND_HIGHLIGHT_WAIT_MS);
       if (opened.getText() === text || tries === 2) return diff;
     }
   };
@@ -186,7 +187,7 @@ export function createViewerEditing(deps: ViewerEditingDeps): ViewerEditing {
       return { diff: whole, version: read.version, text: contents };
     }
     if (diff.isPartial) {
-      const { hydrated, version } = await loadFiles(diff, deps.loadFile);
+      const { hydrated, version } = await highlights.loadWhole(diff, deps.loadFile);
       if (!version) throw new Error("This file can't be edited.");
       return { diff: hydrated, version, text: hydrated.additionLines.join("") };
     }
@@ -204,7 +205,7 @@ export function createViewerEditing(deps: ViewerEditingDeps): ViewerEditing {
 
   const dispose = () => {
     if (!finishEditing) return;
-    diffs.nameEditedDiff(`${deps.shownFileKey()}:edited:${nextEditedDiff()}`);
+    highlights.remember(diffs.nameEditedDiff(`${deps.shownFileKey()}:edited:${nextEditedDiff()}`));
     finishEditing();
     // Taken off the page while editing: that's over.
     deps.onEditing(undefined);
