@@ -15,7 +15,7 @@ import { useStashes } from "@/git/queries/stash";
 import { buildRefTree, flattenRefTree } from "@/git/ref-tree";
 import type { RefFolder, RefLeaf, RefTreeRow } from "@/git/ref-tree";
 import { useCollapsed } from "@/hooks/collapsed";
-import { relativeTime } from "@/lib/format";
+import { useRelativeTime } from "@/hooks/relative-time";
 
 import { BranchMenu } from "./branch-menu";
 import { CreateBranchDialog } from "./create-branch-dialog";
@@ -31,6 +31,7 @@ export function RefList(props: { repositoryId: string }) {
   const refs = useRefs(() => props.repositoryId);
   const stashes = useStashes(() => props.repositoryId);
   const switchBranch = useSwitchBranch(() => props.repositoryId);
+  const ago = useRelativeTime();
   // The branch whose menu is open, and the one a new one is being named to be created from.
   const [menuFor, setMenuFor] = createSignal<string>();
   const [branchFrom, setBranchFrom] = createSignal<Ref>();
@@ -188,7 +189,7 @@ export function RefList(props: { repositoryId: string }) {
             <SidebarRow
               icon={Archive}
               label={stash().message}
-              title={`${stash().message}\nStashed ${relativeTime(stash().createdAt).toLowerCase()}`}
+              title={`${stash().message}\nStashed ${ago(stash().createdAt).toLowerCase()}`}
             />
           )}
         </SidebarSection>

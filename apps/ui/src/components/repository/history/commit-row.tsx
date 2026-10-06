@@ -1,7 +1,6 @@
 import { cn } from "cn";
 import { Show, Suspense } from "solid-js";
 
-import { useCommitFiles } from "@/git/queries/diff";
 import type { CommitRow } from "@/git/rows";
 import { useRelativeTime } from "@/hooks/relative-time";
 
@@ -63,7 +62,7 @@ export function HistoryCommitRow(
             <RowTotals
               repositoryId={props.commit.repositoryId}
               sha={props.commit.id}
-              useFiles={useCommitFiles}
+              kind="commit"
             />
           </Suspense>
         </Show>

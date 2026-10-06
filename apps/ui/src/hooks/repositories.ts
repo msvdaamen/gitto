@@ -43,17 +43,24 @@ export function useAddRepository() {
   }));
 }
 
-/** Asks for a folder, adds the repository in it (see `useAddRepository`), and opens it. */
+/**
+ * Asks for a folder, adds the repository in it (see `useAddRepository`), and opens it; with why
+ * that last failed (the folder isn't a repository, say), until it's dismissed or tried again.
+ */
 export function useOpenRepository() {
   const navigate = useNavigate();
   const addRepository = useAddRepository();
-  return () =>
-    addRepository.mutate(undefined, {
-      onSuccess: (repository) => {
-        if (repository) void navigate({ to: "/$repoId", params: { repoId: repository.id } });
-      },
-      onError: (error) => console.error("Failed to add repository", error),
-    });
+  return {
+    open: () =>
+      addRepository.mutate(undefined, {
+        onSuccess: (repository) => {
+          if (repository) void navigate({ to: "/$repoId", params: { repoId: repository.id } });
+        },
+      }),
+    error: () => addRepository.error,
+    /** Forgets why it last failed. */
+    dismiss: () => addRepository.reset(),
+  };
 }
 
 /** Removes a repository from Gitto; the folder on disk is left untouched. */

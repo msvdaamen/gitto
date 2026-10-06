@@ -46,7 +46,7 @@ export function useHistory(repositoryId: () => string, selectedId: () => string 
   // rest of the status, which is refetched whenever a file changes. The log and the stashes are
   // reconciled when they're refetched, so they only change when there's something new.
   const hasChanges = createMemo(() => hasUncommittedChanges(status.data));
-  const head = useHeadSha(status);
+  const head = useHeadSha(() => status.data);
   // Without the stashes until they've loaded, rather than holding up the history for them (reading
   // `data` before then would suspend it), and if they couldn't be: the Pop button says why.
   const entries = createMemo(() =>

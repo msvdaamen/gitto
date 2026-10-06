@@ -54,11 +54,14 @@ export function useUnwatchedStatus(repositoryId: () => string) {
 }
 
 /**
- * The commit HEAD points at, from a `useStatus` query; `undefined` before the first commit, or until
- * the status loads. Only changes when HEAD moves, not with every status refetch.
+ * The commit HEAD points at, from a `useStatus` query's data; `undefined` before the first commit,
+ * or until the status loads. Only changes when HEAD moves, not with every status refetch.
  */
-export function useHeadSha(status: { data: StatusSummary | undefined }) {
-  return createMemo(() => status.data && headSha(status.data.head));
+export function useHeadSha(status: () => StatusSummary | undefined) {
+  return createMemo(() => {
+    const data = status();
+    return data && headSha(data.head);
+  });
 }
 
 /**

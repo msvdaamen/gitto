@@ -40,11 +40,7 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
   const stage = useStage(() => props.repositoryId);
   const unstage = useUnstage(() => props.repositoryId);
   const busy = () => stage.isPending || unstage.isPending;
-  const lastCommit = useHeadSha({
-    get data() {
-      return summary();
-    },
-  });
+  const lastCommit = useHeadSha(summary);
   // Read once: in JSX, `summary() && headLabel(summary().head)` would check a memo of whether
   // there's data, which a transition (switching repositories) can leave behind the data itself.
   const branch = () => {
