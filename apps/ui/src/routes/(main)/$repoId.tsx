@@ -161,7 +161,7 @@ function RouteComponent() {
           <OperationBar
             repositoryId={repositoryId()}
             onResolve={(file) => void resolveConflicts(file)}
-            beforeAbort={mayLeaveFile}
+            beforeChange={mayLeaveFile}
           />
           <div
             // Isolated, so its sticky header stays under the changes.

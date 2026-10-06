@@ -327,6 +327,19 @@ describe("a file with text conflicts", () => {
     expect(onOpen).toHaveBeenCalledWith(UNSTAGED, conflicted("b.txt"));
   });
 
+  it("isn't resolved whole while it's edited, as the edits aren't known yet", async () => {
+    viewer.left = 0;
+    renderView(conflicted("a.txt"));
+    await screen.findByText("No conflicts left");
+
+    await userEvent.click(screen.getByRole("button", { name: "Edit file" }));
+    await vi.waitFor(() => expect(viewer.props!.editing).toBe(true));
+    expect(screen.getByRole("button", { name: "Mark resolved" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Keep all of ours" })).toBeDisabled();
+    fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+    expect(rpc.git.conflicts.markResolved).not.toHaveBeenCalled();
+  });
+
   it("is edited by hand, and read again once that stops, before it's shown", async () => {
     const { client } = renderView(conflicted("a.txt"));
     await screen.findByText("2 conflicts left");

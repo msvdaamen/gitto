@@ -90,16 +90,62 @@ export async function readWorkingTreeBytes(
   path: string,
   maxBytes = MAX_BLOB_BYTES,
 ): Promise<{ bytes: Buffer; version: string } | undefined> {
-  let resolved: string;
+  const resolved = await resolveFile(repo, path);
+  if (!resolved) return undefined;
+  const { bytes } = await readFile(resolved, path, maxBytes);
+  return { bytes, version: versionOf(bytes) };
+}
+
+/** How much of a file `scanWorkingTreeFile` reads at a time. */
+const SCAN_CHUNK_BYTES = 1024 * 1024;
+
+/**
+ * Reads the file at `path` in the working tree a piece at a time, handing each to `onChunk`, which
+ * mustn't keep it: the buffer's used again for the next. Resolves to the file's version (see
+ * `readWorkingTreeFile`), never having all of it in memory, whatever its size up to `maxBytes`
+ * (`FileTooLargeError` past that); `undefined` if there's no file there.
+ */
+export async function scanWorkingTreeFile(
+  repo: Repo,
+  path: string,
+  onChunk: (chunk: Buffer) => void = () => undefined,
+  maxBytes = Infinity,
+): Promise<string | undefined> {
+  const resolved = await resolveFile(repo, path);
+  if (!resolved) return undefined;
+  const file = await open(
+    resolved,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  );
   try {
-    resolved = await resolveWorkingTreePath(repo, path);
-    if (!(await stat(resolved)).isFile()) return undefined;
+    const stats = await file.stat();
+    if (!stats.isFile()) throw new OutsideRepositoryError(path);
+    if (stats.size > maxBytes) throw new FileTooLargeError(stats.size);
+    const hash = createHash("sha1");
+    const buffer = Buffer.alloc(Math.min(SCAN_CHUNK_BYTES, Math.max(stats.size, 1)));
+    for (;;) {
+      // oxlint-disable-next-line no-await-in-loop -- a piece at a time, in order.
+      const { bytesRead } = await file.read(buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      const chunk = buffer.subarray(0, bytesRead);
+      hash.update(chunk);
+      onChunk(chunk);
+    }
+    return hash.digest("hex");
+  } finally {
+    await file.close();
+  }
+}
+
+/** Where the file at `path` is on disk (see `resolveWorkingTreePath`); `undefined` if none is. */
+async function resolveFile(repo: Repo, path: string): Promise<string | undefined> {
+  try {
+    const resolved = await resolveWorkingTreePath(repo, path);
+    return (await stat(resolved)).isFile() ? resolved : undefined;
   } catch (error) {
     if (error instanceof WorkingTreeFileNotFoundError) return undefined;
     throw error;
   }
-  const { bytes } = await readFile(resolved, path, maxBytes);
-  return { bytes, version: versionOf(bytes) };
 }
 
 /**

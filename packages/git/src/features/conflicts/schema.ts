@@ -28,7 +28,11 @@ export const ConflictSchema = ConflictSidesSchema.extend({
    * `readWorkingTreeFile`); `null` if it isn't text that can be shown (see `unreadable`).
    */
   text: z.object({ contents: z.string(), version: z.string() }).nullable(),
-  /** The version of the file in the working tree, text or not; `null` if there's none there. */
+  /**
+   * The version of the file in the working tree, text or not, which resolving it whole checks it
+   * still has; `null` if there's no file there, or it's a symbolic link, or leads out of the
+   * repository, none of which can be read.
+   */
   version: z.string().nullable(),
   /** Whether the file in the working tree is binary, which git leaves as ours without markers. */
   binary: z.boolean(),

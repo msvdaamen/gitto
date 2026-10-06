@@ -285,6 +285,33 @@ describe("a binary file", () => {
   });
 });
 
+describe("a file too large to show", () => {
+  it("is still checked for markers, and for changes before a side is kept", async () => {
+    // Past `MAX_BLOB_BYTES`: its conflict at the top, a megabyte of lines after it.
+    const tail = "line\n".repeat(1_300_000);
+    const path = createMergeConflict("too-large", undefined, {
+      base: { "f.txt": `two\n${tail}` },
+      ours: { "f.txt": `ours\n${tail}` },
+      theirs: { "f.txt": `theirs\n${tail}` },
+    });
+    const repo = await repos.open("too-large");
+    const conflict = await getConflict(repo, "f.txt");
+    expect(conflict).toMatchObject({
+      text: null,
+      version: expect.stringMatching(/^stamp:/),
+      unreadable: "This file is too large to show.",
+    });
+    await expect(stage(repo, ["f.txt"])).rejects.toBeInstanceOf(ConflictMarkersError);
+
+    writeFileSync(join(path, "f.txt"), `edited\n${tail}`);
+    await expect(keepSide(repo, "f.txt", "ours", shown(conflict))).rejects.toBeInstanceOf(
+      FileChangedOnDiskError,
+    );
+    await keepSide(repo, "f.txt", "ours", shown(await getConflict(repo, "f.txt")));
+    expect(await statusFiles(repo)).toEqual([]);
+  });
+});
+
 describe("a symbolic link", () => {
   it("isn't followed, even out of the repository, and is resolved by keeping a side", async () => {
     const path = createRepo("link-conflict");

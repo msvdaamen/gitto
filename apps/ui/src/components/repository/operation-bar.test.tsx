@@ -39,13 +39,13 @@ function setConflicts(paths: string[], markerFree: string[] = []) {
   };
 }
 
-function renderBar(beforeAbort = async () => true) {
+function renderBar(beforeChange = async () => true) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   client.setQueryDefaults(gitKeys.all, { staleTime: Infinity });
   const onResolve = vi.fn();
   render(() => (
     <QueryClientProvider client={client}>
-      <OperationBar repositoryId="repo" onResolve={onResolve} beforeAbort={beforeAbort} />
+      <OperationBar repositoryId="repo" onResolve={onResolve} beforeChange={beforeChange} />
     </QueryClientProvider>
   ));
   return { onResolve };
@@ -97,8 +97,8 @@ describe("the operation bar", () => {
 
   it("asks before aborting, which throws away what's resolved", async () => {
     setConflicts(["a.txt"]);
-    const beforeAbort = vi.fn(async () => true);
-    renderBar(beforeAbort);
+    const beforeChange = vi.fn(async () => true);
+    renderBar(beforeChange);
 
     await userEvent.click(await screen.findByRole("button", { name: "Abort" }));
     expect(await screen.findByRole("alertdialog")).toHaveTextContent("Abort the merge?");
@@ -112,7 +112,20 @@ describe("the operation bar", () => {
     await vi.waitFor(() =>
       expect(rpc.git.operation.abort).toHaveBeenCalledWith({ repositoryId: "repo", kind: "merge" }),
     );
-    expect(beforeAbort).toHaveBeenCalled();
+    expect(beforeChange).toHaveBeenCalled();
+  });
+
+  it("continues once a file's edits are saved, and not while they can't be", async () => {
+    operation = { kind: "rebase", branch: "feature", onto: "main", steps: { step: 3, total: 7 } };
+    setConflicts([]);
+    let saved = false;
+    renderBar(async () => saved);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Continue" }));
+    expect(rpc.git.operation.continue).not.toHaveBeenCalled();
+    saved = true;
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await vi.waitFor(() => expect(rpc.git.operation.continue).toHaveBeenCalled());
   });
 
   it("doesn't abort while a file's edits can't be saved", async () => {

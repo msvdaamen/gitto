@@ -13,6 +13,7 @@ import Plus from "lucide-solid/icons/plus";
 import Rows2 from "lucide-solid/icons/rows-2";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
 import {
+  children,
   createEffect,
   createMemo,
   createSignal,
@@ -56,6 +57,7 @@ import {
 import { useUnsuspendedData } from "@/git/queries/unsuspended";
 import { useDelayed } from "@/hooks/delayed";
 import { useDiffStyle } from "@/hooks/diff-style";
+import { isTyping } from "@/lib/typing";
 
 import { prefetchConflict, useConflictResolution } from "./conflict-resolution";
 import { useFileEditing } from "./file-editing";
@@ -289,7 +291,6 @@ export function FileDiffView(props: {
     fileKey,
     files: lists.files,
     editing,
-    leave: fileEditing.leave,
     viewer: fileEditing.viewer,
     onShown: () => fileEditing.onShown(),
     open: (side, target) => props.onOpen(side, target),
@@ -297,7 +298,7 @@ export function FileDiffView(props: {
 
   let section: HTMLElement | undefined;
   const onKeyDown = (event: KeyboardEvent) => {
-    if (event.key !== "Escape" || event.defaultPrevented || isEditable(event.target)) return;
+    if (event.key !== "Escape" || event.defaultPrevented || isTyping(event)) return;
     event.preventDefault();
     props.onClose();
   };
@@ -507,6 +508,8 @@ function FileDiffHeader(props: {
   children?: JSX.Element;
 }) {
   const { diffStyle, setDiffStyle } = useDiffStyle();
+  // Made once: a prop that's JSX is made again whenever it's read.
+  const conflict = children(() => props.conflict);
   const name = () => props.file.path.slice(props.file.path.lastIndexOf("/") + 1);
   const folder = () => props.file.path.slice(0, props.file.path.lastIndexOf("/") + 1);
 
@@ -563,8 +566,8 @@ function FileDiffHeader(props: {
             </>
           )}
         </Show>
-        <Show when={props.conflict}>
-          {props.conflict}
+        <Show when={conflict()}>
+          {conflict()}
           <span class="mx-1.5 h-4 w-px bg-border" />
         </Show>
         <Show when={props.source.kind === "unstaged"}>
@@ -584,7 +587,7 @@ function FileDiffHeader(props: {
           onClick={() => props.next && props.onOpen(props.source, props.next)}
         />
         {/* Conflicts are shown one way only, ours above theirs. */}
-        <Show when={!props.conflict}>
+        <Show when={!conflict()}>
           <span class="mx-1.5 h-4 w-px bg-border" />
           <IconButton
             label="Unified"
@@ -658,13 +661,5 @@ function Loading() {
     <Show when={shown()}>
       <EmptyState icon={LoaderCircle} loading title="Loading changes…" class="h-full" />
     </Show>
-  );
-}
-
-/** Whether a key pressed in `target` is typing, e.g. in the commit message. */
-function isEditable(target: EventTarget | null) {
-  return (
-    target instanceof HTMLElement &&
-    (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))
   );
 }

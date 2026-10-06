@@ -24,7 +24,6 @@ import {
   parseConflicts,
   readConflicts,
   wholeSides,
-  type ConflictAction,
   type ConflictState,
 } from "./conflict-diff";
 import { createWholeFile } from "./conflict-whole-file";
@@ -193,13 +192,13 @@ export default function ConflictViewer(props: {
         renderConflictRow(
           action,
           { current: action.conflictIndex === current, enabled: resolvable() },
-          (resolution) => request(action, resolution),
+          // By its index, on the text on show when it's clicked: the library keeps a row drawn
+          // for an earlier text, with this closure, if its conflict is laid out the same.
+          (resolution) => request(action.conflictIndex, resolution),
         ),
       // Told what the user chose, rather than resolving by itself: it's written to disk first.
-      onMergeConflictAction: ({ conflict, resolution }) => {
-        const action = shown?.state?.actions[conflict.conflictIndex];
-        if (action) request(action, resolution);
-      },
+      onMergeConflictAction: ({ conflict, resolution }) =>
+        request(conflict.conflictIndex, resolution),
       // The whole of both sides, from the text the diff is of: to show more lines around the
       // conflicts, highlighted first, as `loadFiles` does for a patch.
       loadDiffFiles: async (diff) => {
@@ -258,7 +257,8 @@ export default function ConflictViewer(props: {
     // What's to be done, one thing at a time: the file as it was read again, and the conflicts
     // the user resolved, in turn. Editing holds the rest until it stops.
     let wanted: { fileKey: string; disk: DiskFile } | undefined;
-    const requests: { action: ConflictAction; resolution: Resolution }[] = [];
+    /** Conflicts to resolve, each by its index in the text that was on show when asked. */
+    const requests: { state: ConflictState; index: number; resolution: Resolution }[] = [];
     let running = false;
     /** The work under way, which editing waits for. */
     let active: Promise<void> = Promise.resolve();
@@ -280,7 +280,7 @@ export default function ConflictViewer(props: {
           await sync(disk.fileKey, disk.disk);
         } else if (next) {
           // oxlint-disable-next-line no-await-in-loop -- each from the text the last one left.
-          await resolveConflict(next.action, next.resolution);
+          await resolveConflict(next.state, next.index, next.resolution);
         } else {
           return;
         }
@@ -309,19 +309,22 @@ export default function ConflictViewer(props: {
       await showText(fileKey, disk.contents, disk.version);
     };
 
-    const request = (action: ConflictAction, resolution: Resolution) => {
-      requests.push({ action, resolution });
+    /** Resolves the conflict `index` of the text on show, once what's asked before is done. */
+    const request = (index: number, resolution: Resolution) => {
+      const state = shown?.state;
+      if (!state?.actions[index]) return;
+      requests.push({ state, index, resolution });
       void run();
     };
 
     /**
-     * Resolves the conflict `action` is of, if it's still on show: writes the text that leaves to
-     * disk, and shows it once it's written and highlighted, in the last one's place.
+     * Resolves the conflict `index` of `asked`, the text that was on show when it was asked, if
+     * that's still the one on show: writes the text that leaves to disk, and shows it once it's
+     * written and highlighted, in the last one's place.
      */
-    const resolveConflict = async (action: ConflictAction, resolution: Resolution) => {
+    const resolveConflict = async (asked: ConflictState, index: number, resolution: Resolution) => {
       const from = shown;
-      const index = action.conflictIndex;
-      if (!from?.state || from.state.actions[index] !== action || from.version === null) return;
+      if (!from?.state || from.state !== asked || from.version === null) return;
       const resolved = conflicts.resolveConflict(index, resolution, from.state.diff);
       if (!resolved) return;
       const state: ConflictState = {
@@ -349,6 +352,8 @@ export default function ConflictViewer(props: {
         current = left.find((other) => other > index) ?? left.at(-1);
         props.onError(undefined);
       } catch (error) {
+        // Not shown after all: its highlighting isn't kept either.
+        highlights.forget(state.diff);
         props.onError(error instanceof Error ? error.message : String(error));
       } finally {
         saving = false;
@@ -375,8 +380,7 @@ export default function ConflictViewer(props: {
       next: () => step(1),
       previous: () => step(-1),
       resolve: (resolution) => {
-        const action = current === undefined ? undefined : shown?.state?.actions[current];
-        if (action) request(action, resolution);
+        if (current !== undefined) request(current, resolution);
       },
     });
 

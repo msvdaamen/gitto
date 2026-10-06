@@ -35,6 +35,7 @@ import { saveWorkingTreeFile } from "@/git/queries/file-diff";
 import { gitKeys } from "@/git/queries/keys";
 import { useUnsuspendedData } from "@/git/queries/unsuspended";
 import { useDelayed } from "@/hooks/delayed";
+import { isTyping } from "@/lib/typing";
 
 import { ConflictSides } from "./conflict-sides";
 import type * as ViewerModule from "./conflict-viewer";
@@ -87,8 +88,6 @@ export function useConflictResolution(props: {
   files: () => ChangedFile[];
   /** Whether it's being edited by hand (see `useFileEditing`). */
   editing: () => boolean;
-  /** Saves the edits and stops editing; resolves to whether it did. */
-  leave: () => Promise<boolean>;
   /** What the viewer tells of editing (see `useFileEditing`'s `viewer`). */
   viewer: {
     onEditing: (session: EditSession | undefined) => void;
@@ -152,9 +151,11 @@ export function useConflictResolution(props: {
   const resolveFile = useResolveFile();
   const [resolving, setResolving] = createSignal(false);
   // Nor while the last file's still on show, as this one's loads, nor before this one's version
-  // on disk is known, which a write is checked against: just after editing, say.
+  // on disk is known, which a write is checked against: just after editing, say. Nor while it's
+  // edited: it's resolved as the edits leave it, which is only known once editing stops.
   const busy = () =>
     resolving() ||
+    props.editing() ||
     query.isPlaceholderData ||
     (kind()?.kind === "text" &&
       (!shownProgress() || shownProgress()!.saving || !shownProgress()!.version));
@@ -179,8 +180,8 @@ export function useConflictResolution(props: {
   const [confirming, setConfirming] = createSignal(false);
 
   /**
-   * Resolves the file whole: marks it resolved, or keeps a side, its edits saved first; then on to
-   * the next conflicted file, or to its staged changes if it was the last.
+   * Resolves the file whole: marks it resolved, or keeps a side; then on to the next conflicted
+   * file, or to its staged changes if it was the last. Not while it's edited (see `busy`).
    */
   const resolveWhole = async (resolution: ConflictResolution) => {
     if (busy()) return;
@@ -188,7 +189,6 @@ export function useConflictResolution(props: {
     const file = props.file();
     setResolving(true);
     try {
-      if (!(await props.leave()) || key !== props.fileKey()) return;
       // Picked while the file's still in its list: it goes once it's resolved.
       const target = nextConflicted();
       setError(undefined);
@@ -447,13 +447,4 @@ function inOverlay(event: KeyboardEvent) {
   const overlay = '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]';
   if (target instanceof Element && target.closest(overlay)) return true;
   return document.querySelector('[aria-modal="true"], [role="menu"]') !== null;
-}
-
-/** Whether a key pressed in `event`'s target is typing, e.g. in the commit message. */
-function isTyping(event: KeyboardEvent) {
-  const target = event.composedPath()[0];
-  return (
-    target instanceof HTMLElement &&
-    (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))
-  );
 }

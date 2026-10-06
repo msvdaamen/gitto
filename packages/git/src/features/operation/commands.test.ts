@@ -138,6 +138,29 @@ describe("a rebase", () => {
     expect(await getOperation(repo)).toMatchObject({ kind: "rebase", steps: { step: 1 } });
   });
 
+  it("isn't continued at a fixup that ends a squash, whose message needs an editor", async () => {
+    const path = createDivergedRepo("op-rebase-squash", {
+      base: { "f.txt": "one\ntwo\nthree\n" },
+      ours: { "f.txt": "one\nours\nthree\n" },
+      theirs: { "g.txt": "g\n" },
+    });
+    git(path, "checkout", "-q", "side");
+    commitFiles(path, { "h.txt": "h\n" }, "squashed");
+    commitFiles(path, { "f.txt": "one\ntheirs\nthree\n" }, "fixed up");
+    // Picks the first, squashes the second into it, and fixes it up with the third, which conflicts.
+    spawnSync("git", ["rebase", "-i", "main"], {
+      cwd: path,
+      env: {
+        ...process.env,
+        GIT_SEQUENCE_EDITOR: "perl -pi -e 's/^pick/squash/ if $. == 2; s/^pick/fixup/ if $. == 3'",
+      },
+    });
+    const repo = await repos.open("op-rebase-squash");
+    await resolve(repo, "one\nresolved\nthree\n");
+
+    await expect(continueOperation(repo, "rebase")).rejects.toBeInstanceOf(EditorNeededError);
+  });
+
   it("is aborted, back on the branch as it was", async () => {
     const path = createRebase("op-rebase-abort");
     const before = git(path, "rev-parse", "ORIG_HEAD");

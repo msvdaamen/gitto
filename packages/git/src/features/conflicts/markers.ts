@@ -2,7 +2,7 @@
 // lines after `||||||| base` with the diff3 and zdiff3 styles, then `=======`, then `>>>>>>> theirs`.
 
 /** How many bytes from its start git looks at to tell whether a file is binary: for a NUL. */
-const BINARY_CHECK_BYTES = 8000;
+export const BINARY_CHECK_BYTES = 8000;
 
 /** Whether git takes `bytes` for a binary file's, as it does when it merges: not text to mark. */
 export function isBinary(bytes: Uint8Array): boolean {
@@ -17,23 +17,65 @@ export function isBinary(bytes: Uint8Array): boolean {
  * leave, count once each.
  */
 export function countConflicts(text: string): number {
-  let count = 0;
-  // Whether each open conflict, innermost last, has had its separator.
-  const open: boolean[] = [];
-  for (let start = 0; start < text.length;) {
-    let end = text.indexOf("\n", start);
-    if (end === -1) end = text.length;
-    // Only a line that starts with a marker's character is looked at closer.
-    const first = text.charCodeAt(start);
-    if (first === LT || first === EQ || first === GT) {
-      const kind = markerKind(text, start, end);
-      if (kind === "start") open.push(false);
-      else if (kind === "separator" && open.length > 0) open[open.length - 1] = true;
-      else if (kind === "end" && open.length > 0 && open.pop()) count++;
+  const counter = new ConflictCounter();
+  counter.push(text);
+  return counter.end();
+}
+
+/**
+ * Past this many characters, a line's rest isn't kept while the next piece of it comes: a marker is
+ * told by its start, and a separator line this long isn't one.
+ */
+const KEPT_LINE = 4096;
+
+/**
+ * Counts conflicts (see `countConflicts`) in text given a piece at a time, as a file is read: one of
+ * hundreds of megabytes is never all in memory, nor one string, which V8 can't make that long.
+ */
+export class ConflictCounter {
+  private count = 0;
+  /** Whether each open conflict, innermost last, has had its separator. */
+  private readonly open: boolean[] = [];
+  /** The start of a line whose end hasn't come yet. */
+  private rest = "";
+
+  /** Counts the conflicts in the next piece of the text. */
+  push(piece: string): void {
+    const text = this.rest + piece;
+    const last = text.lastIndexOf("\n");
+    if (last === -1) {
+      // Too long to be a marker's line but for its start; and no separator, with this after it.
+      this.rest = text.length > KEPT_LINE ? `${text.slice(0, KEPT_LINE)}x` : text;
+      return;
     }
-    start = end + 1;
+    this.scan(text, last);
+    this.rest = text.slice(last + 1, last + 1 + KEPT_LINE + 1);
   }
-  return count;
+
+  /** The conflicts in all of the text given, which has ended. */
+  end(): number {
+    if (this.rest) this.scan(this.rest, this.rest.length);
+    this.rest = "";
+    return this.count;
+  }
+
+  /** Reads the lines of `text` up to `to`, the newline of its last whole one, or its end. */
+  private scan(text: string, to: number): void {
+    for (let start = 0; start <= to && start < text.length;) {
+      let end = text.indexOf("\n", start);
+      if (end === -1 || end > to) end = to;
+      // Only a line that starts with a marker's character is looked at closer.
+      const first = text.charCodeAt(start);
+      if (first === LT || first === EQ || first === GT) {
+        const kind = markerKind(text, start, end);
+        if (kind === "start") this.open.push(false);
+        else if (kind === "separator" && this.open.length > 0) {
+          this.open[this.open.length - 1] = true;
+        } else if (kind === "end" && this.open.length > 0 && this.open.pop()) this.count++;
+      }
+      start = end + 1;
+    }
+  }
 }
 
 const LT = "<".charCodeAt(0);

@@ -24,8 +24,11 @@ export function OperationBar(props: {
   repositoryId: string;
   /** Opens a conflicted file's conflicts. */
   onResolve: (file: ChangedFile) => void;
-  /** What aborting waits for: the edits to a file on show saved. Resolves to whether to go on. */
-  beforeAbort: () => Promise<boolean>;
+  /**
+   * What continuing or aborting waits for, as either rewrites files in the working tree: the
+   * edits to a file on show saved. Resolves to whether to go on.
+   */
+  beforeChange: () => Promise<boolean>;
 }) {
   const operation = useUnsuspendedData(useOperationInProgress(() => props.repositoryId));
   const conflicted = useUnsuspendedData(useConflictedFiles(() => props.repositoryId));
@@ -40,6 +43,14 @@ export function OperationBar(props: {
     return files().find((file) => !free.has(file.path)) ?? files()[0];
   };
   const pending = () => actions.continue.isPending() || actions.abort.isPending();
+  /** Continues `current` once the edits to a file on show are saved: it rewrites files. */
+  const goOn = async (current: Operation) => {
+    if (await props.beforeChange()) actions.continue.run(current.kind);
+  };
+  /** Aborts `current` once the edits to a file on show are saved, as continuing does. */
+  const abort = async (current: Operation) => {
+    if (await props.beforeChange()) actions.abort.run(current.kind);
+  };
 
   const summary = () => {
     const count = files().length;
@@ -107,7 +118,7 @@ export function OperationBar(props: {
                     variant="primary"
                     disabled={pending() || files().length > 0}
                     class="h-[26px] rounded-md px-2 text-[11.5px] font-[600] shadow-none enabled:hover:translate-y-0"
-                    onClick={() => actions.continue.run(current().kind)}
+                    onClick={() => void goOn(current())}
                   >
                     {actions.continue.isPending() ? "Continuing…" : continueLabel(current())}
                   </Button>
@@ -120,9 +131,9 @@ export function OperationBar(props: {
       <AbortDialog
         operation={confirming()}
         onCancel={() => setConfirming(undefined)}
-        onAbort={async (current) => {
+        onAbort={(current) => {
           setConfirming(undefined);
-          if (await props.beforeAbort()) actions.abort.run(current.kind);
+          void abort(current);
         }}
       />
     </Show>

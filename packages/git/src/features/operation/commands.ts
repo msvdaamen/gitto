@@ -29,23 +29,34 @@ function readState(file: string): Promise<string | undefined> {
  * list is there, also once the commit it stopped at was committed by hand, which takes
  * CHERRY_PICK_HEAD away: the rest are still to be picked.
  */
-async function operationKind(gitDir: string): Promise<OperationKind | undefined> {
+async function operationState(gitDir: string): Promise<OperationState> {
   const [state, merge, cherryPick, revert, todo] = await Promise.all([
     rebaseState(gitDir),
     ...["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", join("sequencer", "todo")].map((name) =>
       readState(join(gitDir, name)),
     ),
   ]);
-  if (state.applying) return "am";
-  if (state.rebasing) return "rebase";
-  if (merge) return "merge";
-  if (cherryPick) return "cherry-pick";
-  if (revert) return "revert";
-  // The todo list's commands say which: `pick` or `revert`.
-  const [command] = todoLines(todo)[0]?.split(/\s/) ?? [];
-  if (command === "pick" || command === "p") return "cherry-pick";
-  if (command === "revert") return "revert";
-  return undefined;
+  const files = { merge, cherryPick, revert, todo: todoLines(todo) };
+  // The todo list's commands say which a series is: `pick` or `revert`.
+  const [command] = files.todo[0]?.split(/\s/) ?? [];
+  let kind: OperationKind | undefined;
+  if (state.applying) kind = "am";
+  else if (state.rebasing) kind = "rebase";
+  else if (merge) kind = "merge";
+  else if (cherryPick || command === "pick" || command === "p") kind = "cherry-pick";
+  else if (revert || command === "revert") kind = "revert";
+  return { kind, ...files };
+}
+
+/** What `operationState` reads: the operation under way, and the files it's told by. */
+interface OperationState {
+  kind: OperationKind | undefined;
+  /** MERGE_HEAD, CHERRY_PICK_HEAD and REVERT_HEAD, if they're there. */
+  merge: string | undefined;
+  cherryPick: string | undefined;
+  revert: string | undefined;
+  /** The commands left in a series of cherry-picks or reverts, the one it stopped at first. */
+  todo: string[];
 }
 
 /** The commands in a todo list (the sequencer's, or a rebase's), its comments and blanks aside. */
@@ -57,14 +68,16 @@ function todoLines(todo: string | undefined): string[] {
 export async function getOperation(repo: Repo): Promise<Operation | null> {
   const { gitDir } = await gitDirs(repo);
   const state = (name: string) => readState(join(gitDir, name));
-  switch (await operationKind(gitDir)) {
+  const operation = await operationState(gitDir);
+  switch (operation.kind) {
     case "merge": {
       // An octopus merge has a line for each of them; the first is said.
-      const [merging = "", into] = await Promise.all([
-        state("MERGE_HEAD").then((heads) => heads?.split("\n")[0]),
+      const merging = operation.merge?.split("\n")[0] ?? "";
+      const [name, into] = await Promise.all([
+        refName(repo.read, merging),
         currentBranch(repo.read),
       ]);
-      return { kind: "merge", merging: await refName(repo.read, merging), into };
+      return { kind: "merge", merging: name, into };
     }
     case "rebase": {
       // `rebase-merge` for the merge backend, git's default; `rebase-apply` for the apply one.
@@ -86,18 +99,12 @@ export async function getOperation(repo: Repo): Promise<Operation | null> {
     }
     case "cherry-pick":
     case "revert": {
-      const [cherryPick, revert, todo] = await Promise.all([
-        state("CHERRY_PICK_HEAD"),
-        state("REVERT_HEAD"),
-        state(join("sequencer", "todo")),
-      ]);
-      const head = cherryPick ?? revert;
-      const kind = cherryPick ? "cherry-pick" : revert ? "revert" : await operationKind(gitDir);
+      const head = operation.cherryPick ?? operation.revert;
       // None between the commits of a series, once the one it stopped at was committed by hand.
       const commit = head ? await commitName(repo.read, head) : null;
       // A line for the one it stopped at and each one after it.
-      const remaining = Math.max(todoLines(todo).length - 1, 0);
-      return { kind: kind === "revert" ? "revert" : "cherry-pick", commit, remaining };
+      const remaining = Math.max(operation.todo.length - 1, 0);
+      return { kind: operation.kind, commit, remaining };
     }
     case "am": {
       const [step, total] = await Promise.all(
@@ -163,9 +170,8 @@ function operationArgs(kind: OperationKind, action: "continue" | "abort"): strin
  * Checks that the operation under way is `kind`, the one the user saw; rejects with
  * `NoOperationError` if it isn't, e.g. as it was finished in a terminal meanwhile.
  */
-async function checkOperation(repo: Repo, kind: OperationKind): Promise<void> {
-  const { gitDir } = await gitDirs(repo);
-  const current = await operationKind(gitDir);
+async function checkOperation(gitDir: string, kind: OperationKind): Promise<void> {
+  const current = (await operationState(gitDir)).kind;
   if (current !== kind) {
     throw new NoOperationError(
       current
@@ -200,7 +206,7 @@ export async function continueOperation(repo: Repo, kind: OperationKind): Promis
     const [conflicted, before] = await Promise.all([
       hasConflicts(run),
       stoppedAt(run, gitDir),
-      checkOperation(repo, kind),
+      checkOperation(gitDir, kind),
     ]);
     if (kind === "rebase" && (await rewordsOrSquashes(gitDir))) {
       throw new EditorNeededError(
@@ -262,18 +268,34 @@ async function stoppedAt(run: GitCommand, gitDir: string): Promise<string | unde
 }
 
 /**
- * Whether the rebase stopped in the worktree whose git directory is `gitDir` rewords or squashes
- * a commit from here on, the one it stopped at included: git asks for their messages in an editor.
- * `fixup -C` takes the fixup's message as it is; `fixup -c` asks.
+ * Whether the rebase stopped in the worktree whose git directory is `gitDir` asks for a commit
+ * message in an editor from here on: for a commit it rewords or squashes, the one it stopped at
+ * included, or one a squash it's in the middle of ends with, the squash itself done already.
  */
 async function rewordsOrSquashes(gitDir: string): Promise<boolean> {
   const [todo, done] = await Promise.all([
     readState(join(gitDir, "rebase-merge", "git-rebase-todo")),
     readState(join(gitDir, "rebase-merge", "done")),
   ]);
-  const current = todoLines(done).at(-1);
-  const left = [...(current ? [current] : []), ...todoLines(todo)];
-  return left.some((line) => /^(r|reword|s|squash)\s|^(f|fixup)\s+-c\s/.test(line));
+  const doneLines = todoLines(done);
+  // The one it stopped at, and the squashes and fixups that run up to it, if it's one of them.
+  let from = doneLines.length - 1;
+  while (from > 0 && SQUASHING.test(doneLines[from]!)) from--;
+  return [...doneLines.slice(Math.max(from, 0)), ...todoLines(todo)].some(asksForMessage);
+}
+
+/** A squash, or a fixup, which a squash before it in a row of them is asked for with. */
+const SQUASHING = /^(s|squash|f|fixup)\s/;
+
+/**
+ * Whether git asks for the message of the commit a line of a rebase's todo list makes, in an
+ * editor: a reword, a squash, `fixup -c` (not `-C`, which takes the fixup's message as it is), and
+ * a merge but with `-C`, which takes the merge's message as it is.
+ */
+function asksForMessage(line: string): boolean {
+  if (/^(r|reword|s|squash)\s/.test(line)) return true;
+  if (/^(f|fixup)\s+-c\s/.test(line)) return true;
+  return /^(m|merge)\s/.test(line) && !/^(m|merge)\s+-C\s/.test(line);
 }
 
 /**
@@ -282,7 +304,7 @@ async function rewordsOrSquashes(gitDir: string): Promise<boolean> {
  */
 export async function abortOperation(repo: Repo, kind: OperationKind): Promise<void> {
   await repo.exclusive(async (run) => {
-    await checkOperation(repo, kind);
+    await checkOperation((await gitDirs(repo)).gitDir, kind);
     try {
       await run(operationArgs(kind, "abort"), { rewritesFiles: true });
     } catch (error) {

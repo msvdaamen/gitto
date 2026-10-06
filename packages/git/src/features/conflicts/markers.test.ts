@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { countConflicts, isBinary } from "./markers";
+import { ConflictCounter, countConflicts, isBinary } from "./markers";
 
 describe("countConflicts", () => {
   it("counts the conflicts git leaves, in each conflict style", () => {
@@ -41,6 +41,28 @@ describe("countConflicts", () => {
     expect(countConflicts("<<<<<< short\n=======\n>>>>>> short\n")).toBe(0);
     expect(countConflicts("<<<<<<<HEAD\n=======\n>>>>>>>side\n")).toBe(0);
     expect(countConflicts("<<<<<<< HEAD\nno separator\n>>>>>>> side\n")).toBe(0);
+  });
+});
+
+describe("ConflictCounter", () => {
+  it("counts the same however the text comes in pieces", () => {
+    const text =
+      "a\n<<<<<<< HEAD\nours\n||||||| base\nbase\n=======\ntheirs\n>>>>>>> side\nb\n<<<<<<< x\n=======\n>>>>>>> y";
+    for (let at = 0; at <= text.length; at++) {
+      const counter = new ConflictCounter();
+      counter.push(text.slice(0, at));
+      counter.push(text.slice(at));
+      expect(counter.end()).toBe(2);
+    }
+  });
+
+  it("keeps only the start of a line too long to be a marker's", () => {
+    const counter = new ConflictCounter();
+    counter.push("<<<<<<< HEAD\nours\n");
+    // A separator's run of = signs, longer than any marker line is kept: not a separator.
+    counter.push("=".repeat(10_000));
+    counter.push("\ntheirs\n>>>>>>> side\n");
+    expect(counter.end()).toBe(0);
   });
 });
 

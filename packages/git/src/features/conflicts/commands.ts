@@ -11,8 +11,8 @@ import {
 } from "../../core/errors";
 import type { GitCommand, Repo } from "../../core/repo";
 import { MAX_BLOB_BYTES } from "../diff/limits";
-import { decodeUtf8, readWorkingTreeBytes } from "../diff/working-tree";
-import { countConflicts, isBinary } from "./markers";
+import { decodeUtf8, readWorkingTreeBytes, scanWorkingTreeFile } from "../diff/working-tree";
+import { BINARY_CHECK_BYTES, ConflictCounter, isBinary } from "./markers";
 import type { Conflict, ConflictSide, ConflictSides } from "./schema";
 
 /** A submodule's mode in the index: its commit, rather than a file. */
@@ -73,7 +73,11 @@ async function readText(
     file = await readWorkingTreeBytes(repo, path);
   } catch (error) {
     if (error instanceof FileTooLargeError) {
-      return { ...none, unreadable: "This file is too large to show." };
+      // Still with a version, which keeping a side checks first: when it last changed, rather
+      // than its bytes, which this is read again for whenever the working tree changes.
+      const stamp = await stampOf(repo, path);
+      const version = stamp === undefined ? null : `${STAMPED}${stamp}`;
+      return { ...none, version, unreadable: "This file is too large to show." };
     }
     // In a folder that's a link out of the repository, say.
     if (error instanceof OutsideRepositoryError) return { ...none, unreadable: error.message };
@@ -120,13 +124,7 @@ export async function keepSide(
   await repo.exclusive(async (run) => {
     const sides = await readSides(run, path);
     if (!sameSides(sides, shown.sides)) throw new ConflictChangedError(path);
-    if (shown.version !== null) {
-      // The whole file, however large: only its version matters.
-      const file = await readWorkingTreeBytes(repo, path, Infinity);
-      if (file?.version !== shown.version) {
-        throw new FileChangedOnDiskError(path, file ? "changed" : "deleted");
-      }
-    }
+    if (shown.version !== null) await checkVersion(repo, path, shown.version);
     const kept = sides[side];
     if (!kept) {
       await run(["rm", "--quiet", "--", path], { rewritesFiles: true });
@@ -137,6 +135,24 @@ export async function keepSide(
       await run(["add", "--", path]);
     }
   });
+}
+
+/** Starts a version that's when a file last changed (see `stampOf`), not what's in it. */
+const STAMPED = "stamp:";
+
+/**
+ * Rejects with `FileChangedOnDiskError` if the file at `path` in the working tree isn't at
+ * `version` any more, or is gone. Read a piece at a time, however large it is.
+ */
+async function checkVersion(repo: Repo, path: string, version: string): Promise<void> {
+  let now: string | undefined;
+  if (version.startsWith(STAMPED)) {
+    const stamp = await stampOf(repo, path);
+    now = stamp && `${STAMPED}${stamp}`;
+  } else {
+    now = await scanWorkingTreeFile(repo, path);
+  }
+  if (now !== version) throw new FileChangedOnDiskError(path, now ? "changed" : "deleted");
 }
 
 function sameSides(a: ConflictSides, b: ConflictSides): boolean {
@@ -163,12 +179,7 @@ export async function markResolved(
   await repo.exclusive(async (run) => {
     const sides = await readSides(run, path);
     if (!sides.base && !sides.ours && !sides.theirs) return;
-    if (version !== null) {
-      const file = await readWorkingTreeBytes(repo, path, Infinity);
-      if (file?.version !== version) {
-        throw new FileChangedOnDiskError(path, file ? "changed" : "deleted");
-      }
-    }
+    if (version !== null) await checkVersion(repo, path, version);
     if (!withMarkers) await refuseConflictMarkers(repo, run, [path]);
     await run(["add", "--all", "--", path]);
   });
@@ -213,18 +224,32 @@ async function conflictsIn(
   maxBytes: number,
 ): Promise<number | undefined> {
   if (await isLink(repo, path)) return undefined;
-  let file: Awaited<ReturnType<typeof readWorkingTreeBytes>>;
+  const counter = new ConflictCounter();
+  let read = 0;
+  let binary = false;
+  let version: string | undefined;
   try {
-    file = await readWorkingTreeBytes(repo, path, maxBytes);
+    // A piece at a time: a conflicted file can be of any size.
+    version = await scanWorkingTreeFile(
+      repo,
+      path,
+      (chunk) => {
+        if (read < BINARY_CHECK_BYTES && isBinary(chunk.subarray(0, BINARY_CHECK_BYTES - read))) {
+          binary = true;
+        }
+        read += chunk.length;
+        // Markers are ASCII, which reads the same in any of the encodings git merges as text.
+        if (!binary) counter.push(chunk.toString("latin1"));
+      },
+      maxBytes,
+    );
   } catch (error) {
     if (error instanceof FileTooLargeError || error instanceof OutsideRepositoryError) {
       return undefined;
     }
     throw error;
   }
-  if (!file || isBinary(file.bytes)) return undefined;
-  // Markers are ASCII, which reads the same in any of the encodings git merges as text.
-  return countConflicts(file.bytes.toString("latin1"));
+  return version === undefined || binary ? undefined : counter.end();
 }
 
 /** Whether `path` in the working tree is a symbolic link; not if there's nothing there. */
