@@ -5,7 +5,7 @@ import GitBranch from "lucide-solid/icons/git-branch";
 import Inbox from "lucide-solid/icons/inbox";
 import Tag from "lucide-solid/icons/tag";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
-import { createEffect, createMemo, createSignal, Match, on, Show, Switch } from "solid-js";
+import { createMemo, createSignal, Match, Show, Switch } from "solid-js";
 import type { JSX } from "solid-js";
 
 import { EmptyState } from "@/components/ui/empty-state";
@@ -17,8 +17,7 @@ import type { RefFolder, RefLeaf, RefTreeRow } from "@/git/ref-tree";
 import { useCollapsed } from "@/hooks/collapsed";
 import { useRelativeTime } from "@/hooks/relative-time";
 
-import { BranchMenu } from "./branch-menu";
-import { CreateBranchDialog } from "./create-branch-dialog";
+import { BranchMenu, useBranchMenuOpenFor } from "../branch-menu";
 import { SidebarFolder, SidebarRow } from "./sidebar-row";
 import { SidebarSection } from "./sidebar-section";
 import { StashMenu } from "./stash-menu";
@@ -34,17 +33,8 @@ export function RefList(props: { repositoryId: string }) {
   const stashes = useStashes(() => props.repositoryId);
   const switchBranch = useSwitchBranch(() => props.repositoryId);
   const ago = useRelativeTime();
-  // The branch or stash whose menu is open, and the branch a new one is being named to be created
-  // from. A full ref name and a SHA can't clash.
+  // The stash whose menu is open.
   const [menuFor, setMenuFor] = createSignal<string>();
-  const [branchFrom, setBranchFrom] = createSignal<Ref>();
-  createEffect(
-    on(
-      () => props.repositoryId,
-      () => setBranchFrom(undefined),
-      { defer: true },
-    ),
-  );
 
   const ofKind = (kind: Ref["kind"]) => (refs.data ?? []).filter((ref) => ref.kind === kind);
   const localBranches = createMemo(() => ofKind("local"));
@@ -105,22 +95,29 @@ export function RefList(props: { repositoryId: string }) {
   };
 
   /** A local or remote branch's line in its tree, with its menu (see `BranchMenu`). */
-  const branchRow = (branch: () => Ref, label: () => string, depth: () => number) => (
-    <SidebarRow
-      data-branch={branch().fullName}
-      icon={GitBranch}
-      label={label()}
-      title={branch().name}
-      depth={depth()}
-      active={branch().current}
-      highlighted={menuFor() === branch().fullName}
-      meta={
-        branch().ahead ? `↑${branch().ahead}` : branch().behind ? `↓${branch().behind}` : undefined
-      }
-      // The toolbar shows it running, and why it failed.
-      onDblClick={() => switchBranch.run(branch().fullName)}
-    />
-  );
+  const branchRow = (branch: () => Ref, label: () => string, depth: () => number) => {
+    const openFor = useBranchMenuOpenFor();
+    return (
+      <SidebarRow
+        data-branch={branch().fullName}
+        icon={GitBranch}
+        label={label()}
+        title={branch().name}
+        depth={depth()}
+        active={branch().current}
+        highlighted={openFor() === branch().fullName}
+        meta={
+          branch().ahead
+            ? `↑${branch().ahead}`
+            : branch().behind
+              ? `↓${branch().behind}`
+              : undefined
+        }
+        // The toolbar shows it running, and why it failed.
+        onDblClick={() => switchBranch.run(branch().fullName)}
+      />
+    );
+  };
 
   /** The props a section needs to collapse, saved under `id`. */
   const collapsible = (id: string) => ({
@@ -144,12 +141,7 @@ export function RefList(props: { repositoryId: string }) {
           </EmptyState>
         )}
       </Show>
-      <BranchMenu
-        branch={(fullName) => refs.data?.find((ref) => ref.fullName === fullName)}
-        switching={switchBranch.isPending()}
-        onOpenFor={setMenuFor}
-        onCreateBranch={setBranchFrom}
-      >
+      <BranchMenu repositoryId={props.repositoryId}>
         <SidebarSection
           title="Local branches"
           scrollId="sidebar-local-branches"
@@ -205,11 +197,6 @@ export function RefList(props: { repositoryId: string }) {
           </SidebarSection>
         )}
       </StashMenu>
-      <CreateBranchDialog
-        repositoryId={props.repositoryId}
-        from={branchFrom()}
-        onClose={() => setBranchFrom(undefined)}
-      />
     </>
   );
 }

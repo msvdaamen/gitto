@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { BranchMenuProvider } from "../branch-menu";
 import { HistoryTable } from "./history-table";
 
 const SHAS = ["e5", "d4", "c3", "b2", "a1"];
@@ -57,13 +58,15 @@ async function renderHistory(search = "") {
   const [detailsId, setDetailsId] = createSignal<string>();
   render(() => (
     <QueryClientProvider client={client}>
-      <HistoryTable
-        repositoryId="repo"
-        search={search}
-        selectedId={selectedId()}
-        detailsId={detailsId()}
-        onSelect={setSelectedId}
-      />
+      <BranchMenuProvider repositoryId="repo">
+        <HistoryTable
+          repositoryId="repo"
+          search={search}
+          selectedId={selectedId()}
+          detailsId={detailsId()}
+          onSelect={setSelectedId}
+        />
+      </BranchMenuProvider>
     </QueryClientProvider>
   ));
   const list = await screen.findByRole("listbox", { name: "Commit history" });

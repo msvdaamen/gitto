@@ -11,6 +11,11 @@ export function headSha(head: Head): string | undefined {
   return head.kind === "unborn" ? undefined : head.sha;
 }
 
+/** Whether HEAD is on the branch `ref`, by its full ref name, e.g. `refs/heads/main`. */
+export function isCheckedOut(head: Head, ref: string): boolean {
+  return head.kind !== "detached" && ref === `refs/heads/${head.name}`;
+}
+
 export function hasUncommittedChanges(status: StatusSummary | undefined): boolean {
   return !!status && status.counts.files > 0;
 }

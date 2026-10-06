@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { queryClient } from "@/lib/query-client";
 
+import { BranchMenuProvider } from "../branch-menu";
 import { RepositoryToolbar } from "../toolbar";
 import { RefList } from "./ref-list";
 
@@ -53,16 +54,18 @@ function renderSidebar(repositoryId: () => string = () => "a") {
   const client = new QueryClient({ defaultOptions: queryClient.getDefaultOptions() });
   render(() => (
     <QueryClientProvider client={client}>
-      <RepositoryToolbar
-        repositoryId={repositoryId()}
-        search=""
-        onSearch={() => undefined}
-        sidebarOpen
-        onToggleSidebar={() => undefined}
-        detailsOpen
-        onToggleDetails={() => undefined}
-      />
-      <RefList repositoryId={repositoryId()} />
+      <BranchMenuProvider repositoryId={repositoryId()}>
+        <RepositoryToolbar
+          repositoryId={repositoryId()}
+          search=""
+          onSearch={() => undefined}
+          sidebarOpen
+          onToggleSidebar={() => undefined}
+          detailsOpen
+          onToggleDetails={() => undefined}
+        />
+        <RefList repositoryId={repositoryId()} />
+      </BranchMenuProvider>
     </QueryClientProvider>
   ));
 }

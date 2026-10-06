@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { gitKeys } from "@/git/queries/keys";
 
+import { BranchMenuProvider } from "./branch-menu";
 import { CommitDetails } from "./details/commit-details";
 import { HistoryTable } from "./history/history-table";
 
@@ -110,13 +111,15 @@ describe("selecting a commit", () => {
     const [selectedId, setSelectedId] = createSignal<string>();
     render(() => (
       <QueryClientProvider client={client}>
-        <HistoryTable
-          repositoryId="repo"
-          search=""
-          selectedId={selectedId()}
-          detailsId={selectedId()}
-          onSelect={setSelectedId}
-        />
+        <BranchMenuProvider repositoryId="repo">
+          <HistoryTable
+            repositoryId="repo"
+            search=""
+            selectedId={selectedId()}
+            detailsId={selectedId()}
+            onSelect={setSelectedId}
+          />
+        </BranchMenuProvider>
         <CommitDetails repositoryId="repo" selectedId={selectedId()} />
       </QueryClientProvider>
     ));
@@ -179,13 +182,15 @@ describe("selecting a commit", () => {
       const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
       render(() => (
         <QueryClientProvider client={client}>
-          <HistoryTable
-            repositoryId="repo"
-            search=""
-            selectedId={undefined}
-            detailsId={undefined}
-            onSelect={() => {}}
-          />
+          <BranchMenuProvider repositoryId="repo">
+            <HistoryTable
+              repositoryId="repo"
+              search=""
+              selectedId={undefined}
+              detailsId={undefined}
+              onSelect={() => {}}
+            />
+          </BranchMenuProvider>
         </QueryClientProvider>
       ));
 
@@ -201,13 +206,15 @@ describe("selecting a commit", () => {
     const [selectedId, setSelectedId] = createSignal<string>();
     render(() => (
       <QueryClientProvider client={client}>
-        <HistoryTable
-          repositoryId="repo"
-          search=""
-          selectedId={selectedId()}
-          detailsId={selectedId()}
-          onSelect={setSelectedId}
-        />
+        <BranchMenuProvider repositoryId="repo">
+          <HistoryTable
+            repositoryId="repo"
+            search=""
+            selectedId={selectedId()}
+            detailsId={selectedId()}
+            onSelect={setSelectedId}
+          />
+        </BranchMenuProvider>
         <CommitDetails repositoryId="repo" selectedId={selectedId()} />
       </QueryClientProvider>
     ));

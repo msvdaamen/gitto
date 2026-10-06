@@ -9,8 +9,8 @@ import { useStashActions, useStashes } from "@/git/queries/stash";
 import { useStatus } from "@/git/queries/status";
 import { canPop } from "@/git/stash";
 
+import { RowMenu } from "../row-menu";
 import { DropStashDialog } from "./drop-stash-dialog";
-import { RowMenu } from "./row-menu";
 
 /** What the stashes' section is given by their menu (see `StashMenu`). */
 export interface StashSectionFeedback {
@@ -56,6 +56,7 @@ export function StashMenu(props: {
   return (
     <>
       <RowMenu
+        repositoryId={props.repositoryId}
         attribute="stash"
         item={(sha) => stashes.data?.find((stash) => stash.sha === sha)}
         onOpenFor={(sha) => props.onOpenFor(sha)}
