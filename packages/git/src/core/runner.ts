@@ -13,6 +13,11 @@ export interface RunOptions {
   /** Settings for this command, e.g. `gc.auto=0`, as with `git -c`. */
   config?: string[];
   /**
+   * Takes paths as globs, as git does by default, rather than literally (see `ENV`): for a command
+   * that takes no paths from the UI but uses pathspecs of its own, like `stash push`.
+   */
+  globPathspecs?: boolean;
+  /**
    * Git's output, and `stdin`, as bytes, one per character, rather than as UTF-8: for paths that
    * are handed back to git as it gave them. A file's name needn't be UTF-8, and one that isn't
    * doesn't survive being read as it.
@@ -98,7 +103,12 @@ export function runGit(cwd: string, args: string[], options: RunOptions = {}): P
     const config = (options.config ?? []).flatMap((setting) => ["-c", setting]);
     const child = spawn("git", [...CONFIG, ...config, ...args], {
       cwd,
-      env: { ...process.env, ...ENV, ...options.env },
+      env: {
+        ...process.env,
+        ...ENV,
+        ...(options.globPathspecs ? { GIT_LITERAL_PATHSPECS: "0" } : {}),
+        ...options.env,
+      },
       signal: options.signal,
       stdio: ["pipe", "pipe", "pipe"],
       detached: process.platform !== "win32",

@@ -1,5 +1,5 @@
 import type { StatusSummary, Uncommitted, WorkingTreeFiles } from "@gitto/git/types";
-import { useQuery, type QueryFunctionContext } from "@tanstack/solid-query";
+import { queryOptions, useQuery } from "@tanstack/solid-query";
 import { createMemo } from "solid-js";
 
 import { headSha } from "@/git/status";
@@ -16,10 +16,10 @@ import { UNWATCHED } from "./watch";
  */
 function uncommittedQuery<T>(id: string, select: (data: Uncommitted) => T, enabled = true) {
   const queryKey = gitKeys.status(id);
-  return {
+  return queryOptions({
     queryKey,
     enabled,
-    queryFn: async ({ signal, client }: QueryFunctionContext) => {
+    queryFn: async ({ signal, client }): Promise<Uncommitted> => {
       const previous = client.getQueryData<Uncommitted>(queryKey);
       const result = await rpc.git.status.get(
         { repositoryId: id, since: previous?.version },
@@ -30,7 +30,7 @@ function uncommittedQuery<T>(id: string, select: (data: Uncommitted) => T, enabl
       return "unchanged" in result ? previous! : result;
     },
     select,
-  };
+  });
 }
 
 // Defined once, so a refetch that returns the same data doesn't select it again.
@@ -54,11 +54,14 @@ export function useUnwatchedStatus(repositoryId: () => string) {
 }
 
 /**
- * The commit HEAD points at, from a `useStatus` query; `undefined` before the first commit, or until
- * the status loads. Only changes when HEAD moves, not with every status refetch.
+ * The commit HEAD points at, from a `useStatus` query's data; `undefined` before the first commit,
+ * or until the status loads. Only changes when HEAD moves, not with every status refetch.
  */
-export function useHeadSha(status: { data: StatusSummary | undefined }) {
-  return createMemo(() => status.data && headSha(status.data.head));
+export function useHeadSha(status: () => StatusSummary | undefined) {
+  return createMemo(() => {
+    const data = status();
+    return data && headSha(data.head);
+  });
 }
 
 /**

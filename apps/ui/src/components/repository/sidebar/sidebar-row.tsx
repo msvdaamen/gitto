@@ -56,7 +56,6 @@ export function SidebarRow(
     highlighted?: boolean;
     count?: number;
     meta?: string;
-    tone?: "amber";
     onDblClick?: () => void;
   },
 ) {
@@ -69,7 +68,6 @@ export function SidebarRow(
     "highlighted",
     "count",
     "meta",
-    "tone",
     "onDblClick",
   ]);
   return (
@@ -97,7 +95,7 @@ export function SidebarRow(
         <em
           class={cn(
             "min-w-[17px] rounded-lg px-1 py-0.5 text-center text-[10.5px] not-italic",
-            toneClasses[local.tone ?? "neutral"],
+            toneClasses.neutral,
           )}
         >
           {local.count}

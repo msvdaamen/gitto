@@ -25,14 +25,16 @@ function HomeComponent() {
       <WelcomeHero
         userName={userName()}
         summaries={summaries()}
-        onOpenRepository={openRepository}
+        onOpenRepository={openRepository.open}
+        openError={openRepository.error()}
+        onDismissOpenError={openRepository.dismiss}
       />
 
       <div class="mx-auto grid max-w-322.5 grid-cols-[minmax(0,1fr)_320px] gap-4.5 max-lg:grid-cols-[minmax(0,1fr)_280px] max-md:grid-cols-1 max-sm:block">
         <RepositoryList
           summaries={summaries()}
           loaded={repositories() !== undefined}
-          onOpenRepository={openRepository}
+          onOpenRepository={openRepository.open}
         />
 
         <aside class="flex flex-col gap-3 max-sm:mt-3.5">

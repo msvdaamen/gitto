@@ -7,6 +7,7 @@ import Sparkles from "lucide-solid/icons/sparkles";
 import { createMemo, Show } from "solid-js";
 
 import { Button } from "@/components/ui/button";
+import { FailurePopover } from "@/components/ui/failure-popover";
 import { useRelativeTime } from "@/hooks/relative-time";
 
 import { demoAction } from "./demo-action";
@@ -18,6 +19,9 @@ export function WelcomeHero(props: {
   userName: string | null | undefined;
   summaries: RepositorySummary[];
   onOpenRepository: () => void;
+  /** Why the last repository couldn't be opened, under the button, until it's dismissed. */
+  openError: Error | null;
+  onDismissOpenError: () => void;
 }) {
   // The first of their names, the way people are greeted.
   const firstName = () => props.userName?.trim().split(/\s+/)[0];
@@ -41,9 +45,15 @@ export function WelcomeHero(props: {
             : "Open a git repository to get started, or shape something new."}
         </p>
         <div class="flex items-center gap-2 max-sm:flex-wrap">
-          <Button variant="primary" icon={Folder} onClick={props.onOpenRepository}>
-            Open repository
-          </Button>
+          <FailurePopover
+            title="Open repository"
+            error={props.openError}
+            onDismiss={props.onDismissOpenError}
+          >
+            <Button variant="primary" icon={Folder} onClick={props.onOpenRepository}>
+              Open repository
+            </Button>
+          </FailurePopover>
           <Button
             icon={Copy}
             onClick={demoAction("Clone repository is ready for Git integration.")}

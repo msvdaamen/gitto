@@ -40,20 +40,29 @@ export function useAddRepository() {
       return path ? rpc.repository.add({ path }) : null;
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: REPOSITORIES_KEY }),
+    // The UI shows only the message; the stack and cause are for whoever looks into it.
+    onError: (error) => console.error("Couldn't add the repository", error),
   }));
 }
 
-/** Asks for a folder, adds the repository in it (see `useAddRepository`), and opens it. */
+/**
+ * Asks for a folder, adds the repository in it (see `useAddRepository`), and opens it; with why
+ * that last failed (the folder isn't a repository, say), until it's dismissed or tried again.
+ */
 export function useOpenRepository() {
   const navigate = useNavigate();
   const addRepository = useAddRepository();
-  return () =>
-    addRepository.mutate(undefined, {
-      onSuccess: (repository) => {
-        if (repository) void navigate({ to: "/$repoId", params: { repoId: repository.id } });
-      },
-      onError: (error) => console.error("Failed to add repository", error),
-    });
+  return {
+    open: () =>
+      addRepository.mutate(undefined, {
+        onSuccess: (repository) => {
+          if (repository) void navigate({ to: "/$repoId", params: { repoId: repository.id } });
+        },
+      }),
+    error: () => addRepository.error,
+    /** Forgets why it last failed. */
+    dismiss: () => addRepository.reset(),
+  };
 }
 
 /** Removes a repository from Gitto; the folder on disk is left untouched. */
@@ -62,5 +71,6 @@ export function useRemoveRepository() {
   return useMutation(() => ({
     mutationFn: (id: string) => rpc.repository.remove({ id }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: REPOSITORIES_KEY }),
+    onError: (error) => console.error("Couldn't remove the repository", error),
   }));
 }

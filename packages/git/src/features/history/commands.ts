@@ -3,6 +3,7 @@ import type { Repo } from "../../core/repo";
 import { LOG_FORMAT, parseLog } from "./parse";
 import type { Commit } from "./schema";
 
+/** A page of the history over every branch, remote and tag, newest first. */
 export async function getLog(
   repo: Repo,
   page: { limit: number; skip: number },
@@ -61,6 +62,7 @@ function childrenFirst(commits: Commit[]): boolean {
   return true;
 }
 
+/** The commit `sha`, as the history lists it. */
 export async function getCommit(repo: Repo, sha: string, signal?: AbortSignal): Promise<Commit> {
   const args = ["log", "-z", LOG_FORMAT, "--decorate=full", "--max-count=1", sha, "--"];
   const [commit] = parseLog(await repo.read(args, { signal }));

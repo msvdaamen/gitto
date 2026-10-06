@@ -1,16 +1,8 @@
 import { createVirtualizer, defaultRangeExtractor, type Range } from "@tanstack/solid-virtual";
 import { cn } from "cn";
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  For,
-  onCleanup,
-  onMount,
-  Show,
-  type JSX,
-} from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, Show, type JSX } from "solid-js";
 
+import { useConnected } from "@/hooks/connected";
 import type { ScrollId } from "@/lib/scroll";
 
 /** Rows rendered past each edge of the viewport, so scrolling doesn't reveal blank space. */
@@ -182,23 +174,4 @@ export function VirtualRows<T>(props: {
       </For>
     </div>
   );
-}
-
-/**
- * Whether `element` is on the page. The virtualizer takes the window to observe from the scroll
- * container's document when it first gets one, so it's only handed over once it's on the page: on
- * mount it can still be detached, being rendered inside a `Suspense` boundary.
- */
-export function useConnected(element: () => HTMLElement | undefined) {
-  const [connected, setConnected] = createSignal(false);
-  onMount(() => {
-    let frame = 0;
-    const check = () => {
-      if (element()?.isConnected) setConnected(true);
-      else frame = requestAnimationFrame(check);
-    };
-    check();
-    onCleanup(() => cancelAnimationFrame(frame));
-  });
-  return connected;
 }

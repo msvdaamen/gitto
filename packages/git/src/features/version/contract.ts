@@ -1,6 +1,6 @@
 import { oc } from "@orpc/contract";
 
-import { GitInstallSchema } from "./schema";
+import { GitInstallSchema } from "../../schema";
 
 export const VersionContract = {
   /**

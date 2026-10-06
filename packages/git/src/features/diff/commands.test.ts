@@ -39,9 +39,8 @@ import {
   getCommitFiles,
   getStagedFilePatch,
   getUnstagedFilePatch,
-  MAX_PATCH_BYTES,
 } from "./commands";
-import { MAX_BLOB_BYTES } from "./limits";
+import { MAX_BLOB_BYTES, MAX_PATCH_BYTES } from "./limits";
 import { readWorkingTreeFile, saveWorkingTreeFile } from "./working-tree";
 
 describe("getCommitFiles", () => {

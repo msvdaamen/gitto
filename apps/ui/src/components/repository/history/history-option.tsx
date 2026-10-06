@@ -4,7 +4,8 @@ import type { JSX } from "solid-js";
 
 import { LineStats } from "@/components/ui/line-stats";
 import { toneClasses } from "@/components/ui/tone";
-import type { useCommitFiles } from "@/git/queries/diff";
+import { useCommitFiles } from "@/git/queries/diff";
+import { useStashFiles } from "@/git/queries/stash";
 
 import { COLUMNS } from "./columns";
 
@@ -82,17 +83,19 @@ export function RowKindBadge(props: { icon: LucideIcon; label: string }) {
 }
 
 /**
- * The lines a commit or stash added and removed, as `useFiles` loads its files. Only shown for the
- * selected row once the details show it (`HistoryRowProps.detailed`), whose files are loaded
- * anyway: for every row an arrow key held down passes, it would run git once per row.
+ * The lines a commit or stash added and removed, as its files load. Only shown for the selected
+ * row once the details show it (`HistoryRowProps.detailed`), whose files are loaded anyway: for
+ * every row an arrow key held down passes, it would run git once per row.
  */
 export function RowTotals(props: {
   repositoryId: string;
   sha: string;
-  useFiles: typeof useCommitFiles;
+  /** What the row is, which says how its files load. */
+  kind: "commit" | "stash";
 }) {
   // Read once: a row's kind, and so how its files load, doesn't change.
-  const { totals } = props.useFiles(
+  const useFiles = props.kind === "stash" ? useStashFiles : useCommitFiles;
+  const { totals } = useFiles(
     () => props.repositoryId,
     () => props.sha,
   );

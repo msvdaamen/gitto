@@ -8,10 +8,12 @@ import type { LineSelection } from "./schema";
 // many (32k characters on Windows).
 const PATHS_FROM_STDIN = ["--pathspec-from-file=-", "--pathspec-file-nul"];
 
+/** Stages the files at `paths`, whole. */
 export async function stage(repo: Repo, paths: string[]): Promise<void> {
   await repo.write(["add", ...PATHS_FROM_STDIN], { stdin: nulSeparated(paths) });
 }
 
+/** Unstages the files at `paths`, whole; their changes stay in the working tree. */
 export async function unstage(repo: Repo, paths: string[]): Promise<void> {
   // `restore --staged` resets to HEAD, so it can't run before the first commit.
   const args = (await repo.hasHead())
@@ -24,6 +26,7 @@ function nulSeparated(paths: string[]): string {
   return paths.map((path) => `${path}\0`).join("");
 }
 
+/** Stages every change, untracked files included. */
 export async function stageAll(repo: Repo): Promise<void> {
   await repo.write(["add", "-A"]);
 }

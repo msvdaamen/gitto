@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createRepo, repos } from "../../test/fixtures";
-import { Turns, watchGitDir } from "./commands";
+import { watchGitDir } from "./commands";
+import { Turns } from "./turns";
 
 /** A watcher whose unsubscribes take a while, like removing a big repository's watches does. */
 const watcher = vi.hoisted(() => ({

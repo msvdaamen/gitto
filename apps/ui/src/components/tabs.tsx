@@ -8,6 +8,7 @@ import { createEffect, createSignal, For, onCleanup, Show, Suspense, type JSX } 
 import { useOpenRepository, useRemoveRepository, useRepositories } from "@/hooks/repositories";
 
 import { IconButton } from "./ui/button";
+import { FailurePopover } from "./ui/failure-popover";
 import { GittoIcon } from "./ui/gitto-icon";
 
 const HOME_TAB = "home";
@@ -50,9 +51,11 @@ export function Tabs() {
       onSuccess: () => {
         if (selectedTab() === id) void navigate({ to: "/" });
       },
-      onError: (error) => console.error("Failed to remove repository", error),
     });
   }
+  /** Why the repository `id` couldn't be removed, if it's the last one that was tried. */
+  const removeError = (id: string) =>
+    removeRepository.variables === id ? removeRepository.error : null;
 
   return (
     <div class="relative flex">
@@ -61,22 +64,30 @@ export function Tabs() {
       <Suspense>
         <For each={repositories.data}>
           {(repository) => (
-            <RepositoryTab
-              ref={(el) => registerTab(repository.id, el)}
-              id={repository.id}
-              name={repository.name}
-              active={selectedTab() === repository.id}
-              onRemove={() => remove(repository.id)}
-            />
+            <FailurePopover
+              title={`Remove ${repository.name}`}
+              error={removeError(repository.id)}
+              onDismiss={() => removeRepository.reset()}
+            >
+              <RepositoryTab
+                ref={(el) => registerTab(repository.id, el)}
+                id={repository.id}
+                name={repository.name}
+                active={selectedTab() === repository.id}
+                onRemove={() => remove(repository.id)}
+              />
+            </FailurePopover>
           )}
         </For>
       </Suspense>
-      <IconButton
-        label="Open new repository"
-        icon={Plus}
+      <FailurePopover
+        title="Open repository"
+        error={openRepository.error()}
+        onDismiss={openRepository.dismiss}
         class="ml-1.25 shrink-0 self-center"
-        onClick={openRepository}
-      />
+      >
+        <IconButton label="Open new repository" icon={Plus} onClick={openRepository.open} />
+      </FailurePopover>
 
       {/* Only mounted once measured, so it doesn't slide in from the left on first render. */}
       <Show when={underline()}>

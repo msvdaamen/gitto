@@ -1,11 +1,10 @@
 import type { ChangedFile } from "@gitto/git/types";
-import { keepPreviousData, useQuery, type QueryClient } from "@tanstack/solid-query";
-import { createMemo } from "solid-js";
+import { keepPreviousData, queryOptions, useQuery, type QueryClient } from "@tanstack/solid-query";
 
 import { diffFileKey, isUncommitted, type DiffSource } from "@/git/diff-source";
 import { rpc } from "@/lib/rpc";
 
-import { changedFilesQuery, fetchCommitFiles, stagedFiles } from "./diff";
+import { changedFilesQuery, fetchCommitFiles, useWorkingTreeLists } from "./diff";
 import { gitKeys } from "./keys";
 import { fetchStashFiles } from "./stash";
 import { useUncommittedFiles } from "./status";
@@ -44,11 +43,9 @@ export function useDiffSourceFiles(repositoryId: () => string, source: () => Dif
       ),
     ),
   );
-  const workingTree = useUnsuspendedData(
+  const workingTree = useWorkingTreeLists(
     useUncommittedFiles(repositoryId, () => isUncommitted(source())),
   );
-  const staged = createMemo(() => stagedFiles(workingTree()?.value.staged ?? []));
-  const unstaged = () => workingTree()?.value.unstaged ?? [];
 
   const files = (): ChangedFile[] => {
     switch (kind()) {
@@ -57,9 +54,9 @@ export function useDiffSourceFiles(repositoryId: () => string, source: () => Dif
       case "stash":
         return stash()?.files.value ?? [];
       case "unstaged":
-        return unstaged();
+        return workingTree.unstaged();
       case "staged":
-        return staged();
+        return workingTree.staged();
     }
   };
   /** Whether `files` are `source`'s, rather than none yet or another commit's still on show. */
@@ -70,13 +67,19 @@ export function useDiffSourceFiles(repositoryId: () => string, source: () => Dif
       case "stash":
         return stash()?.sha === sha();
       default:
-        return workingTree() !== undefined;
+        return workingTree.loaded();
     }
   };
   /** The files' lines weren't counted, so one without line counts isn't known to be binary. */
-  const uncounted = () => isUncommitted(source()) && (workingTree()?.value.uncounted ?? false);
+  const uncounted = () => isUncommitted(source()) && workingTree.uncounted();
 
-  return { files, loaded, uncounted, staged, unstaged };
+  return {
+    files,
+    loaded,
+    uncounted,
+    staged: workingTree.staged,
+    unstaged: workingTree.unstaged,
+  };
 }
 
 /** One file's patch in a source, with the file and its `diffFileKey`, so what's shown can match. */
@@ -110,13 +113,13 @@ function filePatchQuery(repositoryId: string, source: DiffSource, file: ChangedF
         return rpc.git.diff.stagedFilePatch({ repositoryId, path, origPath }, { signal });
     }
   };
-  return {
+  return queryOptions({
     queryKey: isUncommitted(source)
       ? gitKeys.uncommittedFilePatch(repositoryId, source.kind, path)
       : source.kind === "commit"
         ? gitKeys.commitFilePatch(repositoryId, source.sha, path)
         : gitKeys.stashFilePatch(repositoryId, source.sha, path),
-    queryFn: async ({ signal }: { signal: AbortSignal }): Promise<FilePatch> => ({
+    queryFn: async ({ signal }): Promise<FilePatch> => ({
       key: diffFileKey(source, path),
       file,
       patch: await fetchPatch(signal),
@@ -125,7 +128,7 @@ function filePatchQuery(repositoryId: string, source: DiffSource, file: ChangedF
     // and for an uncommitted one (under `gitKeys.uncommitted`) like the status, whenever the working
     // tree or the index changes.
     staleTime: Infinity,
-  };
+  });
 }
 
 /**

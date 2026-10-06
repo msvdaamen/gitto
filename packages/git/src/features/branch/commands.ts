@@ -2,7 +2,7 @@ import { lstat } from "node:fs/promises";
 import { join } from "node:path";
 
 import { ChangesStashedError, GitError } from "../../core/errors";
-import { currentBranch, resolveRef, type GitCommand, type Repo } from "../../core/repo";
+import { currentBranch, resolveRef, succeeds, type GitCommand, type Repo } from "../../core/repo";
 import type { RunOptions } from "../../core/runner";
 import { parseRefName } from "../refs/parse";
 import type { RefKind } from "../refs/schema";
@@ -36,15 +36,9 @@ export async function createBranch(repo: Repo, name: string, from?: string): Pro
 }
 
 /** Whether `ref` is the full name of a ref that's there. */
-async function isRef(run: GitCommand, ref: string): Promise<boolean> {
-  return run(["show-ref", "--verify", "--quiet", ref]).then(
-    () => true,
-    (error: unknown) => {
-      // Exits with 1, saying nothing, when there's no such ref.
-      if (error instanceof GitError && error.exitCode === 1) return false;
-      throw error;
-    },
-  );
+function isRef(run: GitCommand, ref: string): Promise<boolean> {
+  // Exits with 1, saying nothing, when there's no such ref.
+  return succeeds(run, ["show-ref", "--verify", "--quiet", ref]);
 }
 
 /**
@@ -192,19 +186,13 @@ async function headPosition(run: GitCommand): Promise<string | null> {
  */
 async function popsCleanly(run: GitCommand, root: string, sha: string): Promise<boolean> {
   // The merge a pop makes, without touching the working tree; exits with 1 at conflicts.
-  const merges = await run([
+  const merges = await succeeds(run, [
     "merge-tree",
     "--write-tree",
     `--merge-base=${sha}^1`,
     "HEAD",
     sha,
-  ]).then(
-    () => true,
-    (error: unknown) => {
-      if (error instanceof GitError && error.exitCode === 1) return false;
-      throw error;
-    },
-  );
+  ]);
   if (!merges) return false;
 
   // The untracked files are in a third parent, if it stashed any.

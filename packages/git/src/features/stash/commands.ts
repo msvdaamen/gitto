@@ -1,38 +1,22 @@
 import { GitError, RepositoryChangedError, StashConflictError } from "../../core/errors";
-import { resolveRef, type GitCommand, type Repo } from "../../core/repo";
+import { hasConflicts, resolveRef, succeeds, type GitCommand, type Repo } from "../../core/repo";
 import { getCommitFilePatch, PORCELAIN_DIFF, readPatch } from "../diff/commands";
 import { parseDiff } from "../diff/parse";
 import type { ChangedFile } from "../diff/schema";
+import { parseStashList, STASH_LIST_FORMAT } from "./parse";
 import type { Stash } from "./schema";
 
-const FIELDS = ["%H", "%P", "%ct", "%gs"];
-
 /**
- * For the stash commands, which take no paths: with literal pathspecs (see `ENV` in the runner),
- * `stash push --include-untracked` leaves the untracked files it stashed behind, as it removes them
- * with a glob.
+ * For the stash commands, which take no paths: with literal pathspecs, `stash push
+ * --include-untracked` leaves the untracked files it stashed behind, as it removes them with a glob.
  */
-const STASH_ENV = { env: { GIT_LITERAL_PATHSPECS: "0" } };
+const STASH_ENV = { globPathspecs: true };
 /** For a stash or a pop, which put the changed files back as they are in HEAD or in the stash. */
 const STASH_WRITE = { ...STASH_ENV, rewritesFiles: true };
 
 /** The stashes, newest first. */
 export async function listStashes(repo: Repo, signal?: AbortSignal): Promise<Stash[]> {
-  // With -z, every field and entry ends in a NUL; none of the fields can contain one.
-  const output = await repo.read(["stash", "list", "-z", `--format=${FIELDS.join("%x00")}`], {
-    signal,
-  });
-  const fields = output.split("\0");
-  const stashes: Stash[] = [];
-  for (let i = 0; i + FIELDS.length <= fields.length; i += FIELDS.length) {
-    const [sha = "", parents = "", createdAt = "", message = ""] = fields.slice(
-      i,
-      i + FIELDS.length,
-    );
-    const base = parents.split(" ")[0]!;
-    stashes.push({ sha, base, message, createdAt: Number(createdAt) * 1000 });
-  }
-  return stashes;
+  return parseStashList(await repo.read(["stash", "list", "-z", STASH_LIST_FORMAT], { signal }));
 }
 
 /**
@@ -172,25 +156,13 @@ function popIndex(run: GitCommand): Promise<boolean> {
       // Said when the pop was refused, e.g. as it'd overwrite local changes: a plain pop wouldn't
       // have restaged anything either, so that's not news.
       const message = error.message.replace(/^Index was not unstashed\.\n?/m, "").trim();
-      if (!message || message === error.message) throw error;
-      const Class = error.constructor as typeof GitError;
-      throw new Class(message, error.args, error.exitCode, error.stderr);
+      throw !message || message === error.message ? error : error.withMessage(message);
     },
   );
-}
-
-async function hasConflicts(run: GitCommand): Promise<boolean> {
-  return (await run(["ls-files", "--unmerged"])) !== "";
 }
 
 /** Whether anything is staged; rejects if git couldn't tell. */
-function hasStagedChanges(run: GitCommand): Promise<boolean> {
+async function hasStagedChanges(run: GitCommand): Promise<boolean> {
   // Exits with 1 when something is.
-  return run(["diff", "--cached", "--quiet"]).then(
-    () => false,
-    (error: unknown) => {
-      if (error instanceof GitError && error.exitCode === 1) return true;
-      throw error;
-    },
-  );
+  return !(await succeeds(run, ["diff", "--cached", "--quiet"]));
 }

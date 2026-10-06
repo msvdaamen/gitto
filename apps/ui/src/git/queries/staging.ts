@@ -2,6 +2,7 @@ import type { ChangedFile, LineSelection } from "@gitto/git/types";
 import { hashKey, useMutation, useQueryClient } from "@tanstack/solid-query";
 
 import { stagingPaths } from "@/git/changes";
+import { hasHunks } from "@/git/patch";
 import { rpc } from "@/lib/rpc";
 
 import type { FilePatch } from "./file-diff";
@@ -106,9 +107,4 @@ export function useStageLines() {
     onError: (_error, { repositoryId }) =>
       queryClient.invalidateQueries({ queryKey: gitKeys.uncommitted(repositoryId) }),
   }));
-}
-
-/** Whether `patch` has lines to stage or unstage left, rather than none, or a mode change. */
-export function hasHunks(patch: string): boolean {
-  return patch.includes("\n@@ ");
 }

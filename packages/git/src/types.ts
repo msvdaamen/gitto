@@ -7,5 +7,4 @@ export * from "./features/refs/schema";
 export * from "./features/staging/schema";
 export * from "./features/stash/schema";
 export * from "./features/status/schema";
-export * from "./features/version/schema";
 export * from "./features/watch/schema";

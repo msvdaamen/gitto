@@ -50,6 +50,29 @@ function isBinary(header: string): boolean {
  * length.
  */
 export function patchVersion(patch: string): string {
+  return `${patch.length}:${patchHeader(patch)}`;
+}
+
+/** Whether `patch` has lines to stage or unstage left, rather than none, or a mode change. */
+export function hasHunks(patch: string): boolean {
+  return patch.includes("\n@@ ");
+}
+
+/**
+ * Whether `patch`'s lines can only be staged all at once: a link's, whose contents are the path it
+ * points to, a submodule's, or a file's that changed type, which git has as two files.
+ */
+export function stagedWhole(patch: string): boolean {
+  return / 1[26]0000$/m.test(patchHeader(patch)) || patch.includes("\ndiff --git ");
+}
+
+/** Whether `patch` is of a symbolic link, whose contents are the path it points to. */
+export function isLink(patch: string): boolean {
+  return / 120000$/m.test(patchHeader(patch));
+}
+
+/** `patch` up to its first hunk: the whole of it when it has none. */
+function patchHeader(patch: string): string {
   const body = patch.indexOf("\n@@ ");
-  return `${patch.length}:${body === -1 ? patch : patch.slice(0, body)}`;
+  return body === -1 ? patch : patch.slice(0, body);
 }

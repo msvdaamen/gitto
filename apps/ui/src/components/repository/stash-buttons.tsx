@@ -2,11 +2,11 @@ import Archive from "lucide-solid/icons/archive";
 import ArchiveRestore from "lucide-solid/icons/archive-restore";
 import { Suspense } from "solid-js";
 
+import { FailurePopover } from "@/components/ui/failure-popover";
 import { useStashActions, useStashes } from "@/git/queries/stash";
 import { useStatus } from "@/git/queries/status";
 import { popBlocker, popTitle, stashBlocker, stashTitle } from "@/git/stash";
 
-import { FailurePopover } from "./failure-popover";
 import { ToolbarButton } from "./toolbar-button";
 
 /**

@@ -23,7 +23,7 @@ export function Footer() {
         <Show when={params().repoId} keyed>
           {(repositoryId) => (
             <Suspense>
-              <RepositoryStatus repositoryId={repositoryId} />
+              <OpenRepositoryStatus repositoryId={repositoryId} />
             </Suspense>
           )}
         </Show>
@@ -36,7 +36,7 @@ export function Footer() {
 }
 
 /** The open repository's branch, and how it compares to its upstream. */
-function RepositoryStatus(props: { repositoryId: string }) {
+function OpenRepositoryStatus(props: { repositoryId: string }) {
   const status = useStatus(() => props.repositoryId);
 
   return (

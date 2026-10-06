@@ -12,6 +12,7 @@ import { Suspense } from "solid-js";
 
 import { IconButton } from "@/components/ui/button";
 import { Divider } from "@/components/ui/divider";
+import { FailurePopover } from "@/components/ui/failure-popover";
 import { TextInput } from "@/components/ui/text-input";
 import { useSwitchBranchState } from "@/git/queries/branch";
 import { useFetch } from "@/git/queries/remote";
@@ -20,7 +21,6 @@ import { headLabel } from "@/git/status";
 import { useRepository } from "@/hooks/repositories";
 
 import { BranchButton } from "./branch-button";
-import { FailurePopover } from "./failure-popover";
 import { PullButton } from "./pull-button";
 import { StashButtons } from "./stash-buttons";
 import { ToolbarButton } from "./toolbar-button";

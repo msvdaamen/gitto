@@ -1,7 +1,7 @@
 import { implement, ORPCError, os as base } from "@orpc/server";
 
 import { RepositoryContract } from "../contract";
-import { NotAGitRepositoryError } from "./errors";
+import { NotAGitRepositoryError, RepositoryListError } from "./errors";
 import type { RepositoryService } from "./service";
 
 export interface RepositoryContext {
@@ -20,6 +20,9 @@ const withApiErrors = base.middleware(async ({ next }) => {
 function toApiError(error: unknown): unknown {
   if (error instanceof NotAGitRepositoryError) {
     return new ORPCError("BAD_REQUEST", { message: error.message, cause: error });
+  }
+  if (error instanceof RepositoryListError) {
+    return new ORPCError("INTERNAL_SERVER_ERROR", { message: error.message, cause: error });
   }
   return error;
 }

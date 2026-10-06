@@ -1,5 +1,8 @@
 import { cn } from "cn";
 
+/** Height of a history row, including its 1px bottom border. */
+export const ROW_HEIGHT = 38;
+
 /** The table's minimum width: its other columns', plus the graph's (see `graphWidth`). */
 export const MIN_WIDTH = "min-w-[calc(445px+var(--graph-width))]";
 

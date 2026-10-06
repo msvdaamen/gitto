@@ -23,6 +23,7 @@ export async function getOverview(repo: Repo, signal?: AbortSignal): Promise<Ove
   return { remote, fetchedAt, committedAt, activity };
 }
 
+/** The remote the home page names (see `pickRemote`); `null` when there are none. */
 async function readRemote(repo: Repo, signal?: AbortSignal): Promise<Overview["remote"]> {
   try {
     return pickRemote(
@@ -50,10 +51,12 @@ async function readFetchedAt(repo: Repo, signal?: AbortSignal): Promise<number |
   );
 }
 
+/** When HEAD's commit was made. */
 async function readCommittedAt(repo: Repo, signal?: AbortSignal): Promise<number> {
   return Number(await repo.read(["log", "-1", "--format=%ct", "HEAD"], { signal })) * 1000;
 }
 
+/** HEAD's latest activity, from its reflog: at most `MAX_ACTIVITY` entries. */
 async function readActivity(repo: Repo, signal?: AbortSignal): Promise<Activity[]> {
   const output = await repo.read(
     ["log", "-g", "-z", "--date=unix", REFLOG_FORMAT, `--max-count=${REFLOG_ENTRIES}`, "HEAD"],

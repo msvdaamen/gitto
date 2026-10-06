@@ -44,9 +44,7 @@ vi.mock("./patch-viewer", () => ({
         (editing) => {
           viewer.onEdit = editing ? props.onEdit : undefined;
           props.onEditing?.(
-            editing
-              ? { version: "v0", text: "old\n", discard, hasSelection: () => false }
-              : undefined,
+            editing ? { version: "v0", discard, hasSelection: () => false } : undefined,
           );
         },
         { defer: true },

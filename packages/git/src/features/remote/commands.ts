@@ -1,14 +1,19 @@
-import { readFile, stat } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import {
-  GitError,
-  NoUpstreamError,
-  PullInterruptedError,
-  RepositoryChangedError,
-} from "../../core/errors";
+import { GitError, NoUpstreamError, RepositoryChangedError } from "../../core/errors";
+import { gitDirs, type GitDirs } from "../../core/git-dirs";
 import { currentBranch, refExists, resolveRef, type GitCommand, type Repo } from "../../core/repo";
-import { gitDirs, type GitDirs } from "../watch/git-dirs";
+import {
+  FALSE,
+  makesMergeCommit,
+  readConfig,
+  rebases,
+  rebaseSetting,
+  remotesToFetch,
+  type PullConfig,
+} from "./config";
+import { inProgress, interruption, progress, rebaseState } from "./progress";
 import { NO_BRANCH, noUpstream, REBASING } from "./pull-blocker";
 
 /**
@@ -32,21 +37,6 @@ function fetchAfterPull(repo: Repo, remotes: string[]): void {
   );
 }
 
-/**
- * The remotes `git fetch --all` fetches (those not set to be skipped), going by `config`, but for
- * `except`, which a pull already fetched.
- */
-function remotesToFetch(config: Map<string, string>, except: string): string[] {
-  const remotes: string[] = [];
-  for (const key of config.keys()) {
-    const name = /^remote\.(.+)\.url$/.exec(key)?.[1];
-    if (name === undefined || name === except) continue;
-    const skip = config.get(`remote.${name}.skipfetchall`)?.toLowerCase();
-    if (skip === undefined || FALSE.has(skip)) remotes.push(name);
-  }
-  return remotes;
-}
-
 /** `git fetch` with `args`, through `run` (`repo.fetch`, or a command of `repo.fetching`). */
 async function gitFetch(run: GitCommand, args: string[], settings: string[] = []): Promise<void> {
   try {
@@ -56,7 +46,7 @@ async function gitFetch(run: GitCommand, args: string[], settings: string[] = []
       config: ["gc.auto=0", "maintenance.auto=false", "fetch.writeCommitGraph=false", ...settings],
     });
   } catch (error) {
-    throw error instanceof GitError ? withoutHints(error) : error;
+    throw error instanceof GitError ? error.withoutHints() : error;
   }
 }
 
@@ -71,9 +61,10 @@ async function gitFetch(run: GitCommand, args: string[], settings: string[] = []
  * for (and holds up) the other writes to the repository: the fetch takes as long as the network.
  */
 export async function pull(repo: Repo): Promise<void> {
-  // Where git keeps FETCH_HEAD and the state of a rebase; asked for once.
+  // Where git keeps FETCH_HEAD and the state of a rebase; asked for once, alongside the branch.
+  // Awaited only once the branch is read, which can fail first: that's the error to report, so
+  // this one mustn't go unhandled meanwhile.
   const dirs = gitDirs(repo);
-  // Awaited only once the branch is read, which can fail first; that's the error to report.
   dirs.catch(() => undefined);
   const { branch, upstream, config: settings } = await readBranch(repo.read, dirs);
   const { gitDir } = await dirs;
@@ -134,24 +125,11 @@ async function integrate(
     }
     // Git won't merge or rebase over a merge, rebase or conflicts that were already there, and
     // says so; those aren't the pull's to explain.
-    if (!before.conflicts && !before.merging && !before.rebasing && !before.applying) {
-      // Even one that went through: putting back local changes it stashed can conflict, and
-      // `branch.<name>.mergeOptions` can stop a merge before committing, or squash it: then
-      // what was merged isn't in HEAD.
-      const after = await progress(run, gitDir);
-      // A merge that went through, or stopped at conflicts, without a merge to commit: squashed,
-      // if what it merged isn't in HEAD.
-      const squashing =
-        args[0] === "merge" &&
-        !after.merging &&
-        (!failure || after.conflicts) &&
-        !(await isAncestor(run, args.at(-1)!, "HEAD"));
-      if (after.conflicts || after.merging || after.rebasing || squashing) {
-        const name = tracking.replace(/^refs\/(remotes|heads)\//, "");
-        throw interruptedError(name, { ...after, squashing }, failure);
-      }
+    if (!inProgress(before)) {
+      const interrupted = await interruption(run, gitDir, args, tracking, failure);
+      if (interrupted) throw interrupted;
     }
-    if (failure) throw withoutHints(failure);
+    if (failure) throw failure.withoutHints();
   });
 }
 
@@ -171,7 +149,7 @@ interface Upstream {
 async function readBranch(
   run: GitCommand,
   dirs: Promise<GitDirs>,
-): Promise<{ branch: string; upstream: Upstream; config: Map<string, string> }> {
+): Promise<{ branch: string; upstream: Upstream; config: PullConfig }> {
   const [branch, config] = await Promise.all([currentBranch(run), readConfig(run)]);
   if (branch === null) {
     // HEAD is detached while a rebase stops: it's that to finish, not a branch to check out.
@@ -187,7 +165,7 @@ async function readBranch(
     throw new NoUpstreamError(noUpstream(branch));
   }
   // `git pull` merges them all at once; only one is merged here.
-  if (merge.includes("\n")) {
+  if (config.all(`branch.${branch}.merge`).length > 1) {
     throw new NoUpstreamError(
       `${branch} tracks several branches, which only git pull, in a terminal, merges at once.`,
     );
@@ -228,14 +206,17 @@ async function fetchUpstream(
   { remote, merge, tracking }: Upstream,
   word: boolean,
 ): Promise<Fetched | null> {
+  // The upstream's commit, and its line of FETCH_HEAD: the one to merge, and the only one.
+  let sha: string;
   let fetchHead: string;
   if (remote === ".") {
     if (!tracking) return null;
-    // As `git pull` words FETCH_HEAD for a local branch.
-    const sha = await resolveRef(repo.read, tracking);
-    if (!sha) {
+    const local = await resolveRef(repo.read, tracking);
+    if (!local) {
       throw new NoUpstreamError(`${tracking.replace(/^refs\/heads\//, "")} no longer exists.`);
     }
+    sha = local;
+    // As `git pull` words FETCH_HEAD for a local branch.
     fetchHead = `${sha}\t\t${fetchedName(merge)} of .\n`;
   } else {
     const written = await repo.fetching(async (run) => {
@@ -253,13 +234,11 @@ async function fetchUpstream(
         `${merge.replace(/^refs\/heads\//, "")} no longer exists on ${remote}.`,
       );
     }
-    const [sha, , description] = line.split("\t");
-    // Marked as the one to merge, and the only one.
+    const [fetchedSha = "", , description = ""] = line.split("\t");
+    sha = fetchedSha;
+    // Marked as the one to merge.
     fetchHead = `${sha}\t\t${description}\n`;
   }
-  // The line of what's to be merged, the one that isn't marked not-for-merge.
-  const line = fetchHead.split("\n").find((entry) => /^[0-9a-f]+\t\t/.test(entry));
-  const sha = line?.slice(0, line.indexOf("\t"));
   if (!sha || !word) return null;
   // Worded from FETCH_HEAD, as `git pull` has it: e.g. "Merge branch 'main' of <URL>", the URL
   // as the fetch wrote it there (without credentials). Nothing to word for a branch already up
@@ -310,64 +289,13 @@ function trackingBranch(run: GitCommand, branch: string): Promise<string | null>
 }
 
 /**
- * The settings a pull depends on, in one read, by key. Git lowercases the section and name, but
- * not a branch's name or a URL: e.g. `branch.Feature.merge`. The last value of a key wins, as in
- * git, but for a branch's `merge`, whose values are all kept.
- */
-async function readConfig(run: GitCommand): Promise<Map<string, string>> {
-  const pattern = String.raw`^(pull\.(rebase|ff)|branch\..+\.(remote|merge|rebase)|remote\..+\.(url|skipfetchall))$`;
-  let output = "";
-  try {
-    output = await run(["config", "-z", "--get-regexp", pattern]);
-  } catch (error) {
-    // None of them is set.
-    if (!(error instanceof GitError && error.exitCode === 1)) throw error;
-  }
-  const config = new Map<string, string>();
-  for (const entry of output.split("\0")) {
-    if (!entry) continue;
-    const newline = entry.indexOf("\n");
-    // A boolean set without a value (`[pull] rebase`) has no newline: it's true.
-    if (newline === -1) config.set(entry, "true");
-    else {
-      const key = entry.slice(0, newline);
-      const value = entry.slice(newline + 1);
-      // The branches a branch merges are every value of its `merge`, kept on lines of their own.
-      const previous = /^branch\..+\.merge$/.test(key) ? config.get(key) : undefined;
-      config.set(key, previous === undefined ? value : `${previous}\n${value}`);
-    }
-  }
-  return config;
-}
-
-const FALSE = new Set(["false", "no", "off", "0", ""]);
-
-/** How `branch` is set to be rebased when pulled, lowercased; `undefined` when it isn't set. */
-function rebaseSetting(config: Map<string, string>, branch: string): string | undefined {
-  return (config.get(`branch.${branch}.rebase`) ?? config.get("pull.rebase"))?.toLowerCase();
-}
-
-/** Whether a pull of `branch` can make a merge commit, going by `config`. */
-function makesMergeCommit(config: Map<string, string>, branch: string): boolean {
-  return !rebases(config, branch) && config.get("pull.ff")?.toLowerCase() !== "only";
-}
-
-/** Whether a pull of `branch` rebases, going by `config`: as in `git pull`, `pull.ff=only` wins. */
-function rebases(config: Map<string, string>, branch: string): boolean {
-  const rebase = rebaseSetting(config, branch);
-  return (
-    config.get("pull.ff")?.toLowerCase() !== "only" && rebase !== undefined && !FALSE.has(rebase)
-  );
-}
-
-/**
  * The merge or rebase `git pull` would do after fetching, going by the same settings. Unlike
  * `git pull`, which refuses to pull a branch that diverged from its upstream until told whether
  * to merge or rebase, this merges then, like git did by default before 2.27. And it never rebases
  * interactively, which would open an editor with no one to use it.
  */
 function integrateArgs(
-  config: Map<string, string>,
+  config: PullConfig,
   branch: string,
   tracking: string,
   fetched: Fetched | null,
@@ -400,113 +328,4 @@ function integrateArgs(
   // Its log, if `merge.log` wants one, is already in the message, and its comments are git's own.
   const wording = fetched ? ["--no-log", "--cleanup=strip"] : [];
   return ["merge", "--quiet", "--no-edit", ...wording, ...ffArgs, ...target];
-}
-
-/** What a merge, rebase or `git am` left unfinished in a repository. */
-interface Progress {
-  conflicts: boolean;
-  merging: boolean;
-  rebasing: boolean;
-  /** Applying patches with `git am`, which keeps its state where some rebases do. */
-  applying: boolean;
-}
-
-async function hasConflicts(run: GitCommand): Promise<boolean> {
-  return (await run(["ls-files", "--unmerged"])) !== "";
-}
-
-function exists(file: string): Promise<boolean> {
-  return stat(file).then(
-    () => true,
-    () => false,
-  );
-}
-
-/**
- * Whether a rebase, or `git am`, is stopped in the worktree whose git directory is `gitDir`: they
- * keep their state there meanwhile, `am` where some rebases do, with a file saying it's `am`'s.
- */
-async function rebaseState(gitDir: string): Promise<{ rebasing: boolean; applying: boolean }> {
-  const [rebaseMerge, rebaseApply, applying] = await Promise.all(
-    ["rebase-merge", "rebase-apply", "rebase-apply/applying"].map((name) =>
-      exists(join(gitDir, name)),
-    ),
-  );
-  return { rebasing: !!rebaseMerge || (!!rebaseApply && !applying), applying: !!applying };
-}
-
-async function progress(run: GitCommand, gitDir: string): Promise<Progress> {
-  const [conflicts, merging, state] = await Promise.all([
-    hasConflicts(run),
-    refExists(run, "MERGE_HEAD"),
-    rebaseState(gitDir),
-  ]);
-  return { conflicts, merging, ...state };
-}
-
-/** Whether `ancestor` is in `rev`'s history; rejects if git couldn't tell. */
-function isAncestor(run: GitCommand, ancestor: string, rev: string): Promise<boolean> {
-  return run(["merge-base", "--is-ancestor", ancestor, rev]).then(
-    () => true,
-    (error: unknown) => {
-      if (error instanceof GitError && error.exitCode === 1) return false;
-      throw error;
-    },
-  );
-}
-
-/** Says where the pull stopped, and what to do to finish it. */
-function interruptedError(
-  upstream: string,
-  { conflicts, merging, rebasing, squashing }: Progress & { squashing: boolean },
-  failure: GitError | undefined,
-): PullInterruptedError {
-  // Why git stopped, when it wasn't at conflicts: e.g. an untracked file in the way of a commit
-  // a rebase replays, or a hook that turned a merge commit down.
-  const reason = failure && withoutHints(failure).message;
-  const stopped = (what: string, next: string) =>
-    reason ? `${what}:\n${reason}\nFix that, then ${next}.` : `${what}. ${capitalize(next)}.`;
-  let message: string;
-  if (rebasing && !conflicts) {
-    message = stopped(
-      `Rebasing onto ${upstream} stopped partway`,
-      "continue the rebase, or abort it",
-    );
-  } else if (rebasing) {
-    message = `Pulling ${upstream} caused conflicts. Resolve them, then continue the rebase.`;
-  } else if (merging && !conflicts) {
-    message = stopped(
-      `Merging ${upstream} stopped before committing`,
-      "commit the merge, or abort it",
-    );
-  } else if (merging) {
-    message = `Pulling ${upstream} caused conflicts. Resolve them, then commit the merge.`;
-  } else if (squashing && !conflicts) {
-    message = `Squashed ${upstream} into the staged changes, without committing. Commit them to finish pulling.`;
-  } else if (squashing) {
-    message = `Pulling ${upstream} caused conflicts. Resolve them, then commit the squashed changes.`;
-  } else {
-    // The pull stashed local changes (rebase.autoStash, merge.autoStash) and they conflict.
-    message = `Pulled ${upstream}, but your local changes conflict with it. Resolve the conflicts; your changes are also kept in the stash.`;
-  }
-  return new PullInterruptedError(message);
-}
-
-function capitalize(text: string): string {
-  return text.charAt(0).toUpperCase() + text.slice(1);
-}
-
-/**
- * `error` without git's hints, which suggest commands to type and so don't help in the app; of the
- * same class, so it reaches the renderer the same way.
- */
-function withoutHints(error: GitError): GitError {
-  const message = error.message
-    .split("\n")
-    .filter((line) => !line.startsWith("hint:"))
-    .join("\n")
-    .trim();
-  if (!message || message === error.message) return error;
-  const Class = error.constructor as typeof GitError;
-  return new Class(message, error.args, error.exitCode, error.stderr);
 }
