@@ -6,15 +6,15 @@ import type {
   UncommittedSide,
 } from "@gitto/git/types";
 
-import { isNestedRepository } from "./changes";
+import { isOwnChange } from "./changes";
 import { operationName } from "./conflicts";
 
 /**
  * Whether a file's changes can be discarded from its list: not a conflicted one's, which are
- * resolved instead, nor a repository inside this one, which git won't delete.
+ * resolved instead, nor a repository inside this one, whose are discarded in it.
  */
 export function canDiscard(file: ChangedFile): boolean {
-  return file.status !== "conflicted" && !isNestedRepository(file);
+  return isOwnChange(file);
 }
 
 /** What discarding a file's changes from its list on `side` loses, to ask before doing it. */

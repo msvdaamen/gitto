@@ -299,6 +299,20 @@ describe("discarding changes", () => {
     expect(button).toBeDisabled();
   });
 
+  it("offers to discard a file's staged changes when what's under way couldn't be read", async () => {
+    const user = userEvent.setup();
+    rpc.git.operation.get.mockRejectedValue(new Error("MERGE_HEAD is unreadable."));
+    setChanges([], [file("b.txt")]);
+    renderDetails();
+    await vi.waitFor(() => expect(rpc.git.operation.get).toHaveBeenCalled());
+
+    await openMenu(user, "b.txt");
+    expect(await screen.findByRole("menuitem", { name: "Discard changes…" })).not.toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+
   it("doesn't discard all changes while a merge is under way, which would go on without them", async () => {
     rpc.git.operation.get.mockResolvedValue({ kind: "merge", merging: "side", into: "main" });
     setChanges([file("a.txt")]);

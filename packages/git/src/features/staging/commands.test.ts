@@ -1259,6 +1259,14 @@ describe("discarding all changes", () => {
     expect(await discardAll(repo)).toEqual([{ path: "c.txt", reason: "in-the-way" }]);
   });
 
+  it("says it kept a submodule's changes, whatever diff.ignoreSubmodules says", async () => {
+    const path = createSubmoduleRepo("discard-all-ignore-submodules");
+    git(path, "config", "diff.ignoreSubmodules", "all");
+    const repo = await repos.open("discard-all-ignore-submodules");
+
+    expect(await discardAll(repo)).toEqual([{ path: "mod", reason: "submodule" }]);
+  });
+
   it("keeps the changes in a submodule, whatever submodule.recurse says", async () => {
     const origin = createRepo("discard-all-recurse-origin");
     writeFileSync(join(origin, "m.txt"), "base\n");

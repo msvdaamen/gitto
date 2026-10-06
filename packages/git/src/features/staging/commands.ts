@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { readlink } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, readlink } from "node:fs/promises";
 
 import { deleteFiles, entriesAt, entryAt, fullPath, inBatches, type Entry } from "../../core/entry";
 import {
@@ -11,7 +12,7 @@ import {
 import { gitDirs } from "../../core/git-dirs";
 import { resolveRef, type GitCommand, type Repo } from "../../core/repo";
 import { refuseConflictMarkers } from "../conflicts/commands";
-import { getStagedFilePatch, getUnstagedFilePatch } from "../diff/commands";
+import { emptyTree, getStagedFilePatch, getUnstagedFilePatch } from "../diff/commands";
 import { checkWorkingTreePath } from "../diff/working-tree";
 import { operationBlocker, underWayBlocker } from "../operation/commands";
 import { linesPatch, type LineAction } from "./lines";
@@ -236,10 +237,7 @@ function inTheWayOf(path: string, entry: Entry): string {
 
 /** The tree changes are discarded back to: HEAD's, or before the first commit, the empty tree. */
 async function sourceTree(run: GitCommand): Promise<string> {
-  return (
-    (await resolveRef(run, "HEAD")) ??
-    (await run(["hash-object", "-t", "tree", "--stdin"], { stdin: "" })).trim()
-  );
+  return (await resolveRef(run, "HEAD")) ?? emptyTree(run);
 }
 
 /**
@@ -253,12 +251,21 @@ async function unchangedSince(
   paths: { path: string; entry: Entry }[],
   options: { binary?: boolean } = {},
 ): Promise<Set<string>> {
-  const files = paths.filter(({ entry }) => entry === "file").map(({ path }) => path);
+  const bytes = (path: string) => Buffer.from(path, options.binary ? "latin1" : "utf8");
+  const candidates = paths.filter(({ entry }) => entry === "file").map(({ path }) => path);
+  // Not one that can't be read, which `hash-object` would fail at, and all the rest with it: taken
+  // for changed, and kept.
+  const readable = await inBatches(candidates, (path) =>
+    access(fullPath(repo.path, bytes(path)), constants.R_OK).then(
+      () => true,
+      () => false,
+    ),
+  );
+  const files = candidates.filter((_, i) => readable[i]);
   const links = paths.filter(({ entry }) => entry === "link").map(({ path }) => path);
   const compared = [...files, ...links];
   if (!compared.length) return new Set();
-  const bytes = (path: string) => Buffer.from(path, options.binary ? "latin1" : "utf8");
-  const [sources, hashes, targets, format] = await Promise.all([
+  const [sources, hashes, targets] = await Promise.all([
     run(["cat-file", "--batch-check=%(objectname)", "-z"], {
       ...options,
       stdin: nulSeparated(compared.map((path) => `${source}:${path}`)),
@@ -274,7 +281,6 @@ async function unchangedSince(
         }).then((output) => output.split("\n").slice(0, files.length))
       : [],
     inBatches(links, (path) => readlink(fullPath(repo.path, bytes(path)), { encoding: "buffer" })),
-    links.length ? run(["rev-parse", "--show-object-format"]) : "",
   ]);
   // What the source has at each, a line each: its object's name, or for one it doesn't have, what
   // was asked for and "missing", which can be lines of its own.
@@ -291,8 +297,9 @@ async function unchangedSince(
       at = end + 1;
     }
   }
-  // A link's blob is where it leads, which `hash-object` would follow instead: hashed as git does.
-  const algorithm = format.trim() === "sha256" ? "sha256" : "sha1";
+  // A link's blob is where it leads, which `hash-object` would follow instead: hashed as git does,
+  // with the repository's hash, which the source's name is as long as.
+  const algorithm = source.length === 64 ? "sha256" : "sha1";
   const ours = [
     ...hashes,
     ...targets.map((target) =>
@@ -534,7 +541,8 @@ async function restoreAll(repo: Repo, run: GitCommand, source: string): Promise<
   if (freed.length) await restore(exactly(freed));
   // Submodules, whose commits differ: `:<mode> <mode> <object> <object> <status>`, then the path,
   // a submodule's mode on either side, not its objects, which could read the same.
-  const changed = await list(["diff", "--raw", "--no-renames"]);
+  // Whatever `diff.ignoreSubmodules` says.
+  const changed = await list(["diff", "--raw", "--no-renames", "--ignore-submodules=none"]);
   const submodules = changed.filter(
     (_, i) => i % 2 === 1 && /^:(160000 |\d{6} 160000 )/.test(changed[i - 1]!),
   );

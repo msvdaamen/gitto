@@ -126,7 +126,7 @@ export async function getStagedFilePatch(
 }
 
 /** The object name of a tree without files, in the repository's hash. */
-async function emptyTree(run: GitCommand): Promise<string> {
+export async function emptyTree(run: GitCommand): Promise<string> {
   return (await run(["hash-object", "-t", "tree", "--stdin"], { stdin: "" })).trim();
 }
 

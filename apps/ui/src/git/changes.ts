@@ -45,12 +45,19 @@ export function isKnownBinary(file: ChangedFile, uncounted: boolean): boolean {
 }
 
 /**
- * Whether `file` has changes to show as a patch, as far as its list can tell: not for one that's
- * conflicted, binary, or without changed lines, nor for a folder git lists as untracked, which is
- * a repository of its own.
+ * Whether `file` is a change of this repository's own files: not a conflict, which is resolved
+ * instead, nor a folder git lists as untracked, which is a repository of its own.
+ */
+export function isOwnChange(file: ChangedFile): boolean {
+  return file.status !== "conflicted" && !isNestedRepository(file);
+}
+
+/**
+ * Whether `file` has changes to show as a patch, as far as its list can tell: not for one that
+ * isn't this repository's own (see `isOwnChange`), nor one that's binary or without changed lines.
  */
 export function hasPatch(file: ChangedFile, uncounted: boolean): boolean {
-  if (file.status === "conflicted" || isNestedRepository(file)) return false;
+  if (!isOwnChange(file)) return false;
   if (isKnownBinary(file, uncounted)) return false;
   const counts = countsOf(file);
   return !counts || totalLines(counts) > 0;

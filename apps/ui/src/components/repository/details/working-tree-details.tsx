@@ -81,7 +81,8 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
     label: "Discard changes…",
     icon: Trash,
     // Not a file's staged changes while an operation is under way, which would go on without them.
-    disabled: (file) => busy() || !canDiscard(file) || (side === "staged" && operation() !== null),
+    // Not known to be while that loads, or couldn't be read: the git side refuses if one is.
+    disabled: (file) => busy() || !canDiscard(file) || (side === "staged" && !!operation()),
     run: (file) => setDiscarding({ file, side }),
   });
   // Why the changes can't all be discarded, if they can't: also while what that depends on loads.
