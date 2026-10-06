@@ -19,6 +19,19 @@ const CODES: Record<string, FileStatus> = {
  * - numstat: `<added>\t<deleted>\t<path>\0`, or for renames and copies
  *   `<added>\t<deleted>\t\0<origPath>\0<path>\0`. Binary files report `-` for both counts.
  */
+/** A `--raw` record's fields, `:<mode> <mode> <object> <object> <status>`: the source's first. */
+export function rawFields(record: string) {
+  const [srcMode = "", dstMode = "", srcObject = "", dstObject = "", status = ""] = record
+    .slice(1)
+    .split(" ");
+  return { srcMode, dstMode, srcObject, dstObject, status };
+}
+
+/** Whether a `--raw` record is a submodule's: its mode on either side. */
+export function isSubmodule({ srcMode, dstMode }: ReturnType<typeof rawFields>): boolean {
+  return srcMode === "160000" || dstMode === "160000";
+}
+
 export function parseDiff(output: string): ChangedFile[] {
   const records = output.split("\0");
   const files = new Map<string, ChangedFile>();
@@ -36,9 +49,7 @@ export function parseDiff(output: string): ChangedFile[] {
       // stays conflicted, as the status has it.
       if (files.get(path)?.status !== "conflicted") {
         files.set(path, { path, status, origPath, additions: null, deletions: null });
-        // `:<mode> <mode> …`, a submodule's on either side.
-        const [before, after] = record.slice(1).split(" ");
-        if (before === "160000" || after === "160000") files.get(path)!.submodule = true;
+        if (isSubmodule(rawFields(record))) files.get(path)!.submodule = true;
       }
       continue;
     }

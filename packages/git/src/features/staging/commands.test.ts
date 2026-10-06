@@ -22,7 +22,7 @@ import {
 } from "../../core/errors";
 import type { Repo } from "../../core/repo";
 import { createMergeConflict } from "../../test/conflicts";
-import { createHistoryRepo, createRepo, git, rejection, repos } from "../../test/fixtures";
+import { createHistoryRepo, createRepo, git, rejection, repos, root } from "../../test/fixtures";
 import { getStagedFilePatch, getUnstagedFilePatch } from "../diff/commands";
 import { getStatus } from "../status/commands";
 import { parseStatus, STATUS_ARGS } from "../status/parse";
@@ -1014,7 +1014,7 @@ describe("discarding a file's changes", () => {
       discard(repo, { path: "d/x", origPath: null, status: "deleted" }, "unstaged"),
     );
     expect((error as Error).message).toBe(
-      "A file is where a folder of d/x goes. Move or delete it, then discard the changes.",
+      "A file or a link is where a folder of d/x goes. Move or delete it, then discard the changes.",
     );
     expect(contents(path, "d")).toBe("stuff\n");
   });
@@ -1103,6 +1103,34 @@ describe("discarding a file's changes", () => {
     expect((error as Error).message).toBe(
       "A folder is at new file.txt now. Move or delete it, then discard the changes.",
     );
+  });
+
+  it("doesn't put back a file through a link that took its folder's place", async () => {
+    const path = createRepo("discard-linked-folder");
+    mkdirSync(join(path, "dir"));
+    writeFileSync(join(path, "dir", "file"), "tracked\n");
+    git(path, "add", ".");
+    git(path, "commit", "-q", "-m", "first");
+    rmSync(join(path, "dir"), { recursive: true });
+    const elsewhere = join(root, "discard-linked-folder-elsewhere");
+    mkdirSync(elsewhere);
+    writeFileSync(join(elsewhere, "file"), "elsewhere\n");
+    symlinkSync(elsewhere, join(path, "dir"));
+    const repo = await repos.open("discard-linked-folder");
+
+    const error = await rejection(
+      discard(repo, { path: "dir/file", origPath: null, status: "deleted" }, "unstaged"),
+    );
+    expect((error as Error).message).toBe(
+      "A file or a link is where a folder of dir/file goes. Move or delete it, then discard the changes.",
+    );
+    expect(readlinkSync(join(path, "dir"))).toBe(elsewhere);
+
+    // Discarding all deletes the link, an untracked file, not what it leads to, then puts the
+    // file back.
+    expect(await discardAll(repo)).toEqual([]);
+    expect(contents(path, "dir/file")).toBe("tracked\n");
+    expect(readFileSync(join(elsewhere, "file"), "utf8")).toBe("elsewhere\n");
   });
 
   it("leaves a submodule's changes to be discarded in it", async () => {

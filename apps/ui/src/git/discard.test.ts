@@ -24,6 +24,9 @@ describe("discarding a file's changes", () => {
     expect(discardDescription(file("a.txt", "modified"), "unstaged")).toBe(
       "The changes to a.txt that aren't staged are lost; its staged ones stay.",
     );
+    expect(discardDescription(file("gone.txt", "deleted"), "unstaged")).toBe(
+      "gone.txt is put back as it's staged, or, if it was only marked to be added, taken out of the index.",
+    );
     expect(discardDescription(file("new.txt", "untracked"), "unstaged")).toBe(
       "new.txt isn't tracked, so it's deleted for good.",
     );

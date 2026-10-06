@@ -3,8 +3,8 @@ import { join } from "node:path";
 
 /**
  * What's at a path in the working tree: a folder, a file, a link, something else (like a pipe),
- * nothing (`undefined`), `blocked` (a file is where one of its folders would go), or `unreadable`
- * (it couldn't be looked at, like in a folder the user can't read).
+ * nothing (`undefined`), `blocked` (a file or a link is where one of its folders would go), or
+ * `unreadable` (it couldn't be looked at, like in a folder the user can't read).
  */
 export type Entry = "folder" | "file" | "link" | "other" | "blocked" | "unreadable" | undefined;
 
@@ -34,46 +34,62 @@ export async function inBatches<T, R>(
   return results;
 }
 
-/** What's at `path` in the working tree whose root is `root` (see `fullPath`). */
-export async function entryAt(root: string, path: string | Buffer): Promise<Entry> {
+/** What a path's folder is: a folder, nothing, something else, or what couldn't be looked at. */
+type FolderEntry = "folder" | "missing" | "other" | "unreadable";
+
+/**
+ * What's at `path` in the working tree whose root is `root` (see `fullPath`). Its folders are looked
+ * at first, from the top, each once for all the paths `folders` is shared by: a link to a folder,
+ * which `lstat` would go through, is no folder of the working tree's.
+ */
+export async function entryAt(
+  root: string,
+  path: string | Buffer,
+  folders = new Map<string, Promise<FolderEntry>>(),
+): Promise<Entry> {
+  const asBytes = typeof path !== "string";
+  const parts = (asBytes ? path.toString("latin1") : path).split("/");
+  for (let depth = 1; depth < parts.length; depth++) {
+    const folder = parts.slice(0, depth).join("/");
+    let entry = folders.get(folder);
+    if (!entry) {
+      entry = lstat(fullPath(root, asBytes ? Buffer.from(folder, "latin1") : folder)).then(
+        (stats) => (stats.isDirectory() ? "folder" : "other"),
+        (error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return "missing";
+          return error.code === "ENOTDIR" ? "other" : "unreadable";
+        },
+      );
+      folders.set(folder, entry);
+    }
+    // oxlint-disable-next-line no-await-in-loop -- a folder at a time, from the top.
+    const kind = await entry;
+    if (kind === "missing") return undefined;
+    if (kind === "unreadable") return "unreadable";
+    if (kind === "other") return "blocked";
+  }
   return lstat(fullPath(root, path)).then(
     (stats) => {
       if (stats.isDirectory()) return "folder";
       if (stats.isFile()) return "file";
       return stats.isSymbolicLink() ? "link" : "other";
     },
-    async (error: NodeJS.ErrnoException) => {
-      // On Windows, a file where one of its folders goes is ENOENT too, rather than ENOTDIR.
-      if (error.code === "ENOENT") return (await fileAbove(root, path)) ? "blocked" : undefined;
-      return error.code === "ENOTDIR" ? "blocked" : "unreadable";
-    },
-  );
-}
-
-/** Whether something other than a folder is where one of `path`'s folders goes. */
-async function fileAbove(root: string, path: string | Buffer): Promise<boolean> {
-  const name = typeof path === "string" ? path : path.toString("latin1");
-  const slash = name.lastIndexOf("/");
-  if (slash === -1) return false;
-  const parent = name.slice(0, slash);
-  const folder = typeof path === "string" ? parent : Buffer.from(parent, "latin1");
-  return lstat(fullPath(root, folder)).then(
-    (stats) => !stats.isDirectory(),
-    (error: NodeJS.ErrnoException) =>
-      error.code === "ENOENT" ? fileAbove(root, folder) : error.code === "ENOTDIR",
+    (error: NodeJS.ErrnoException) => (error.code === "ENOENT" ? undefined : "unreadable"),
   );
 }
 
 /**
- * What's at each of `paths`, as `entryAt` says, a batch at a time. Stops after the batch with one
- * that `until` is true of, if it's given, with only the entries read so far.
+ * What's at each of `paths`, as `entryAt` says, a batch at a time, their folders looked at once.
+ * Stops after the batch with one that `until` is true of, if it's given, with only the entries read
+ * so far.
  */
 export function entriesAt(
   root: string,
   paths: (string | Buffer)[],
   until?: (entry: Entry) => boolean,
 ): Promise<Entry[]> {
-  return inBatches(paths, (path) => entryAt(root, path), until);
+  const folders = new Map<string, Promise<FolderEntry>>();
+  return inBatches(paths, (path) => entryAt(root, path, folders), until);
 }
 
 /**

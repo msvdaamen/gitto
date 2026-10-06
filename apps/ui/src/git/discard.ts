@@ -34,6 +34,9 @@ export function discardDescription(file: ChangedFile, side: UncommittedSide): st
   if (file.status === "added" || file.status === "copied") {
     return `${file.path} is new, so it's deleted for good.`;
   }
+  if (file.status === "deleted") {
+    return `${file.path} is put back as it's staged, or, if it was only marked to be added, taken out of the index.`;
+  }
   return `The changes to ${file.path} that aren't staged are lost; its staged ones stay.`;
 }
 
