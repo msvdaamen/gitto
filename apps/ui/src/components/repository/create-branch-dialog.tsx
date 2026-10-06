@@ -5,20 +5,15 @@ import { createEffect, createMemo, createSignal, on } from "solid-js";
 import { DIALOG_BOX, DialogPortal } from "@/components/ui/dialog";
 import { useCreateBranchFrom } from "@/git/queries/branch";
 import { useStatus } from "@/git/queries/status";
-import { hasUncommittedChanges, isCheckedOut } from "@/git/status";
+import { branchName, hasUncommittedChanges, isCheckedOut } from "@/git/status";
 
 import { BranchForm } from "./branch-form";
-
-/** A branch's name from its full ref name, e.g. `main` or `origin/feature`. */
-function branchName(fullName: string): string {
-  return fullName.replace(/^refs\/(heads|remotes)\//, "");
-}
 
 /**
  * Names a branch to create from the branch `from`, by its full ref name, and switches to it, taking the uncommitted
  * changes along; open while there's a `from`. That's a switch of branches: the current branch, in
- * the toolbar, shows it running, and why it failed. It can't be created while another switch is
- * running.
+ * the toolbar, shows it running, and why it failed. It can't be created while another switch, or a
+ * merge, is running.
  */
 export function CreateBranchDialog(props: {
   repositoryId: string;
@@ -73,8 +68,8 @@ export function CreateBranchDialog(props: {
             title={Dialog.Title}
             description={Dialog.Description}
             summary={`From ${branchName(from() ?? "")}${changes()}`}
-            // `run` does nothing while a switch is running.
-            disabled={create.isPending()}
+            // `run` does nothing while a switch or a merge is running.
+            disabled={create.isBlocked()}
             name={name()}
             onNameChange={setName}
             onSubmit={submit}

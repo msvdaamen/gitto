@@ -16,6 +16,8 @@ describe("the router", () => {
     missing: "01920000-0000-7000-8000-000000000003",
   };
   const context = { gitRepos: repos, gitVersion: new GitVersion() };
+  const merge = (ref: string, into: string) =>
+    call(gitRouter.branch.merge, { repositoryId: ids.history, ref, into }, { context });
 
   beforeAll(async () => {
     await createHistoryRepo();
@@ -112,6 +114,25 @@ describe("the router", () => {
     expect(
       await call(gitRouter.status.get, { repositoryId: ids.history }, { context: outdated }),
     ).toMatchObject({ head: { kind: "branch", name: "main" } });
+  });
+
+  it("merges a branch, saying what it did, or why it didn't", async () => {
+    // `side` is merged into `main` already.
+    expect(await merge("refs/heads/side", "main")).toBe("up-to-date");
+    expect(await apiError(merge("refs/heads/main", "main"))).toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: "Can't merge main into itself.",
+    });
+    expect(await apiError(merge("refs/heads/side", "other"))).toMatchObject({
+      code: "CONFLICT",
+      message: "Switched from other to main meanwhile, so nothing was merged.",
+    });
+    expect(await apiError(merge("refs/tags/v1", "main"))).toMatchObject({ code: "BAD_REQUEST" });
+    // Past the input's check, but not a branch: a link to the remote's default one.
+    expect(await apiError(merge("refs/remotes/origin/HEAD", "main"))).toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: "refs/remotes/origin/HEAD isn't a branch.",
+    });
   });
 
   it("skips a status the caller already has", async () => {

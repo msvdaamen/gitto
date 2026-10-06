@@ -125,7 +125,11 @@ function RouteComponent() {
   const details = usePanelWidth("details", DETAILS_BOUNDS);
 
   return (
-    <BranchMenuProvider repositoryId={repositoryId()}>
+    <BranchMenuProvider
+      repositoryId={repositoryId()}
+      onResolve={(file) => void resolveConflicts(file)}
+      beforeChange={mayLeaveFile}
+    >
       <div class="grid h-full grid-rows-[49px_minmax(0,1fr)] overflow-hidden">
         <RepositoryToolbar
           repositoryId={repositoryId()}

@@ -1,7 +1,14 @@
 import type { StatusSummary } from "@gitto/git/types";
 import { describe, expect, it } from "vitest";
 
-import { hasUncommittedChanges, headLabel, headSha, pullTitle, syncLabel } from "./status";
+import {
+  branchName,
+  hasUncommittedChanges,
+  headLabel,
+  headSha,
+  pullTitle,
+  syncLabel,
+} from "./status";
 
 const status: StatusSummary = {
   head: { kind: "branch", name: "main", sha: "abc" },
@@ -20,6 +27,13 @@ describe("HEAD", () => {
   it("has no commit on an unborn branch", () => {
     expect(headSha(status.head)).toBe("abc");
     expect(headSha({ kind: "unborn", name: "main" })).toBeUndefined();
+  });
+});
+
+describe("branchName", () => {
+  it("is a local or remote branch's name without its prefix, slashes and all", () => {
+    expect(branchName("refs/heads/feature/x")).toBe("feature/x");
+    expect(branchName("refs/remotes/origin/main")).toBe("origin/main");
   });
 });
 

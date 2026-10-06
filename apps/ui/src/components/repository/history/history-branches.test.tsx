@@ -37,7 +37,8 @@ const rpc = vi.hoisted(() => ({
     diff: { commitFiles: async () => [] },
     stash: { list: async () => [] },
     refs: { list: vi.fn() },
-    branch: { switch: vi.fn(), create: vi.fn() },
+    branch: { switch: vi.fn(), create: vi.fn(), merge: vi.fn() },
+    operation: { get: vi.fn() },
   },
 }));
 
@@ -78,6 +79,8 @@ beforeEach(() => {
   ]);
   rpc.git.branch.switch.mockResolvedValue(undefined);
   rpc.git.branch.create.mockResolvedValue(undefined);
+  rpc.git.branch.merge.mockResolvedValue("merged");
+  rpc.git.operation.get.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -173,6 +176,33 @@ describe("branches in the history", () => {
       name: "topic",
       from: "refs/heads/feature",
     });
+  });
+
+  it("merges a branch right-clicked among the rest of a row's labels into the checked-out one", async () => {
+    const user = userEvent.setup();
+    await renderHistory();
+
+    await user.pointer({
+      keys: "[MouseRight]",
+      target: await fromTheRest(user, "origin/release"),
+    });
+    const item = await screen.findByRole("menuitem", { name: "Merge origin/release into main" });
+    await vi.waitFor(() => expect(item).toHaveAttribute("aria-disabled", "false"));
+    await user.click(item);
+    expect(rpc.git.branch.merge).toHaveBeenCalledWith({
+      repositoryId: "repo",
+      ref: "refs/remotes/origin/release",
+      into: "main",
+    });
+  });
+
+  it("doesn't offer merging the checked-out branch's label into itself", async () => {
+    const user = userEvent.setup();
+    await renderHistory();
+
+    await user.pointer({ keys: "[MouseRight]", target: await screen.findByText("main") });
+    await screen.findByRole("menuitem", { name: "Create branch…" });
+    expect(screen.queryByRole("menuitem", { name: /^Merge/ })).not.toBeInTheDocument();
   });
 
   it("opens no menu for a tag", async () => {

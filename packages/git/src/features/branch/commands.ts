@@ -36,7 +36,7 @@ export async function createBranch(repo: Repo, name: string, from?: string): Pro
 }
 
 /** Whether `ref` is the full name of a ref that's there. */
-function isRef(run: GitCommand, ref: string): Promise<boolean> {
+export function isRef(run: GitCommand, ref: string): Promise<boolean> {
   // Exits with 1, saying nothing, when there's no such ref.
   return succeeds(run, ["show-ref", "--verify", "--quiet", ref]);
 }

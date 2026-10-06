@@ -8,13 +8,13 @@ import RefreshCw from "lucide-solid/icons/refresh-cw";
 import Settings from "lucide-solid/icons/settings";
 import Undo2 from "lucide-solid/icons/undo-2";
 import Upload from "lucide-solid/icons/upload";
-import { Suspense } from "solid-js";
+import { createEffect, createSignal, on, Suspense } from "solid-js";
 
 import { IconButton } from "@/components/ui/button";
 import { Divider } from "@/components/ui/divider";
 import { FailurePopover } from "@/components/ui/failure-popover";
 import { TextInput } from "@/components/ui/text-input";
-import { useSwitchBranchState } from "@/git/queries/branch";
+import { useMergeBranchState, useSwitchBranchState } from "@/git/queries/branch";
 import { useFetch } from "@/git/queries/remote";
 import { useStatus } from "@/git/queries/status";
 import { headLabel } from "@/git/status";
@@ -98,21 +98,38 @@ function FetchButton(props: { repositoryId: string }) {
 
 /**
  * The repository's name and current branch. A spinner takes the branch icon's place while switching
- * branches (from the sidebar), and a popover under it says why that failed.
+ * branches or merging one into it (from a branch's menu), and a popover under it says why that
+ * failed.
  */
 function CurrentBranch(props: { repositoryId: string }) {
   const switching = useSwitchBranchState(() => props.repositoryId);
+  const merging = useMergeBranchState(() => props.repositoryId);
+  const busy = () => switching.isPending() || merging.isPending();
+  const failures = {
+    merge: { title: "Merge", error: merging.error, dismiss: () => merging.dismiss() },
+    switch: { title: "Switch branch", error: switching.error, dismiss: () => switching.dismiss() },
+  };
+  // Which failed last: both can have failed, one after the other, and are shown one at a time.
+  const [latest, setLatest] = createSignal<keyof typeof failures>("merge");
+  createEffect(on(merging.error, (error) => error && setLatest("merge")));
+  createEffect(on(switching.error, (error) => error && setLatest("switch")));
+  const failure = () => {
+    const last = failures[latest()];
+    const other = failures[latest() === "merge" ? "switch" : "merge"];
+    const shown = last.error() ? last : other;
+    return { title: shown.title, error: shown.error(), dismiss: shown.dismiss };
+  };
 
   return (
     <FailurePopover
-      title="Switch branch"
-      error={switching.error()}
-      onDismiss={() => switching.dismiss()}
+      title={failure().title}
+      error={failure().error}
+      onDismiss={() => failure().dismiss()}
       class="min-w-0"
     >
-      <div class="flex min-w-0 items-center gap-2" aria-busy={switching.isPending()}>
+      <div class="flex min-w-0 items-center gap-2" aria-busy={busy()}>
         <span class="grid size-[27px] shrink-0 place-items-center rounded-[7px] bg-primary-soft text-primary-strong">
-          {switching.isPending() ? (
+          {busy() ? (
             <LoaderCircle size={15} class="animate-spin motion-reduce:animate-none" />
           ) : (
             <GitBranch size={15} />

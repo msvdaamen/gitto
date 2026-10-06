@@ -11,6 +11,11 @@ export function headSha(head: Head): string | undefined {
   return head.kind === "unborn" ? undefined : head.sha;
 }
 
+/** A branch's short name, from its full ref name: `main`, `origin/feature`. */
+export function branchName(ref: string): string {
+  return ref.replace(/^refs\/(heads|remotes)\//, "");
+}
+
 /** Whether HEAD is on the branch `ref`, by its full ref name, e.g. `refs/heads/main`. */
 export function isCheckedOut(head: Head, ref: string): boolean {
   return head.kind !== "detached" && ref === `refs/heads/${head.name}`;

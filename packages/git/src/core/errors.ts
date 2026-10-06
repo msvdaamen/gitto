@@ -170,6 +170,18 @@ export class ConflictChangedError extends MessageError {
 /** No merge, rebase, cherry-pick, revert or `git am` is under way, or another one than shown. */
 export class NoOperationError extends MessageError {}
 
+/**
+ * A merge that can't start: HEAD isn't on a branch, an operation or conflicts are under way, or
+ * the branch to merge is gone. Nothing was done.
+ */
+export class MergeBlockedError extends MessageError {}
+
+/**
+ * A merge that stopped before committing, without conflicts, e.g. as a hook turned the merge commit
+ * down: it's under way, to commit or abort.
+ */
+export class MergeStoppedError extends MessageError {}
+
 /** What's asked of git needs an editor for a message, which Gitto can't open: a rebase's reword. */
 export class EditorNeededError extends MessageError {}
 

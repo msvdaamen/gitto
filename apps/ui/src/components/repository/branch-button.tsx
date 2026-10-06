@@ -67,7 +67,7 @@ function Branch(props: { repositoryId: string }) {
           label="Branch"
           hideBelow="sm"
           title={`Create a branch from ${source()}`}
-          disabled={!status.data || create.isPending()}
+          disabled={!status.data || create.isBlocked()}
           busy={create.isPending()}
         />
         <Popover.Portal>

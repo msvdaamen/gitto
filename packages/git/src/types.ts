@@ -1,5 +1,6 @@
 // Every feature's schemas and types, for the renderer (type-only) and other packages.
 export * from "./schema";
+export * from "./features/branch/schema";
 export * from "./features/conflicts/schema";
 export * from "./features/diff/schema";
 export * from "./features/history/schema";
