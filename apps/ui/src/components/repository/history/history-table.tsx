@@ -14,6 +14,7 @@ import { matchesSearch, searchNeedle } from "@/git/search";
 import { useDelayed } from "@/hooks/delayed";
 import type { ScrollId } from "@/lib/scroll";
 
+import { BranchMenu } from "../branch-menu";
 import { AuthorTooltipProvider } from "./author-tooltip";
 import { COLUMNS, MIN_WIDTH, ROW_HEIGHT } from "./columns";
 import { HistoryCommitRow } from "./commit-row";
@@ -160,96 +161,98 @@ function HistoryRows(props: {
   }
 
   return (
-    <div class={MIN_WIDTH} style={{ "--graph-width": `${graphWidth(lanes())}px` }}>
-      <HistoryHeader ref={(el) => (header = el)} updating={updating()} />
-      <div
-        ref={(el) => (list = el)}
-        role="listbox"
-        aria-label="Commit history"
-        aria-activedescendant={selectedIndex() === -1 ? undefined : optionId(selectedIndex())}
-        tabIndex={0}
-        class="group/history outline-none"
-        onKeyDown={onKeyDown}
-        // A clicked row hands the focus to the list, which is what the keyboard moves through:
-        // the rows come and go as the list scrolls, and would take the focus with them.
-        onFocusIn={(event) => event.target !== list && list?.focus({ preventScroll: true })}
-      >
-        <Show
-          when={!history.log.error}
-          fallback={
-            <EmptyState icon={TriangleAlert} title="Couldn't load history" tone="error">
-              {history.log.error?.message}
-            </EmptyState>
-          }
+    <BranchMenu repositoryId={props.repositoryId}>
+      <div class={MIN_WIDTH} style={{ "--graph-width": `${graphWidth(lanes())}px` }}>
+        <HistoryHeader ref={(el) => (header = el)} updating={updating()} />
+        <div
+          ref={(el) => (list = el)}
+          role="listbox"
+          aria-label="Commit history"
+          aria-activedescendant={selectedIndex() === -1 ? undefined : optionId(selectedIndex())}
+          tabIndex={0}
+          class="group/history outline-none"
+          onKeyDown={onKeyDown}
+          // A clicked row hands the focus to the list, which is what the keyboard moves through:
+          // the rows come and go as the list scrolls, and would take the focus with them.
+          onFocusIn={(event) => event.target !== list && list?.focus({ preventScroll: true })}
         >
           <Show
-            when={visibleRows().length}
+            when={!history.log.error}
             fallback={
-              <EmptyState icon={Search} title="No commits found">
-                Try a different message, author, or SHA.
+              <EmptyState icon={TriangleAlert} title="Couldn't load history" tone="error">
+                {history.log.error?.message}
               </EmptyState>
             }
           >
-            {/* By position rather than object identity: the rows are rebuilt whenever the log or
-            the uncommitted changes change, and re-creating them would restart their queries. */}
-            <VirtualRows
-              items={visibleRows()}
-              rowHeight={ROW_HEIGHT}
-              scrollElement={props.scrollElement}
+            <Show
+              when={visibleRows().length}
+              fallback={
+                <EmptyState icon={Search} title="No commits found">
+                  Try a different message, author, or SHA.
+                </EmptyState>
+              }
             >
-              {(row, index) => {
-                // The row as each kind; the last one of that kind while the row turns into
-                // another, rather than a <Match>'s narrowed value. Switching repositories happens
-                // in a transition, which removes what was rendered for the row only once it's
-                // over, and its effects can still run in between: reading the narrowed value there
-                // would throw.
-                const wip = createMemo<WipRow | undefined>((last) => {
-                  const current = row();
-                  return current.kind === "wip" ? current : last;
-                });
-                const stash = createMemo<StashRow | undefined>((last) => {
-                  const current = row();
-                  return current.kind === "stash" ? current : last;
-                });
-                const commit = createMemo<CommitRow | undefined>((last) => {
-                  const current = row();
-                  return current.kind === "commit" ? current : last;
-                });
-                const rowProps = {
-                  get selected() {
-                    return history.selected()?.id === row().id;
-                  },
-                  get detailed() {
-                    return props.detailsId === row().id;
-                  },
-                  get position() {
-                    return { index, count: visibleRows().length };
-                  },
-                  onSelect: () => props.onSelect(row().id),
-                };
-                return (
-                  <Switch>
-                    <Match when={row().kind === "wip"}>
-                      <HistoryWipRow {...rowProps} row={wip()!} searching={!!needle()} />
-                    </Match>
-                    <Match when={row().kind === "stash"}>
-                      <HistoryStashRow {...rowProps} stash={stash()!} searching={!!needle()} />
-                    </Match>
-                    <Match when={row().kind === "commit"}>
-                      <HistoryCommitRow
-                        {...rowProps}
-                        commit={commit()!}
-                        search={needle()}
-                        onSwitchBranch={switchBranch.run}
-                      />
-                    </Match>
-                  </Switch>
-                );
-              }}
-            </VirtualRows>
+              {/* By position rather than object identity: the rows are rebuilt whenever the log or
+            the uncommitted changes change, and re-creating them would restart their queries. */}
+              <VirtualRows
+                items={visibleRows()}
+                rowHeight={ROW_HEIGHT}
+                scrollElement={props.scrollElement}
+              >
+                {(row, index) => {
+                  // The row as each kind; the last one of that kind while the row turns into
+                  // another, rather than a <Match>'s narrowed value. Switching repositories happens
+                  // in a transition, which removes what was rendered for the row only once it's
+                  // over, and its effects can still run in between: reading the narrowed value there
+                  // would throw.
+                  const wip = createMemo<WipRow | undefined>((last) => {
+                    const current = row();
+                    return current.kind === "wip" ? current : last;
+                  });
+                  const stash = createMemo<StashRow | undefined>((last) => {
+                    const current = row();
+                    return current.kind === "stash" ? current : last;
+                  });
+                  const commit = createMemo<CommitRow | undefined>((last) => {
+                    const current = row();
+                    return current.kind === "commit" ? current : last;
+                  });
+                  const rowProps = {
+                    get selected() {
+                      return history.selected()?.id === row().id;
+                    },
+                    get detailed() {
+                      return props.detailsId === row().id;
+                    },
+                    get position() {
+                      return { index, count: visibleRows().length };
+                    },
+                    onSelect: () => props.onSelect(row().id),
+                  };
+                  return (
+                    <Switch>
+                      <Match when={row().kind === "wip"}>
+                        <HistoryWipRow {...rowProps} row={wip()!} searching={!!needle()} />
+                      </Match>
+                      <Match when={row().kind === "stash"}>
+                        <HistoryStashRow {...rowProps} stash={stash()!} searching={!!needle()} />
+                      </Match>
+                      <Match when={row().kind === "commit"}>
+                        <HistoryCommitRow
+                          {...rowProps}
+                          commit={commit()!}
+                          search={needle()}
+                          onSwitchBranch={switchBranch.run}
+                        />
+                      </Match>
+                    </Switch>
+                  );
+                }}
+              </VirtualRows>
+            </Show>
           </Show>
-        </Show>
+        </div>
       </div>
-    </div>
+    </BranchMenu>
   );
 }

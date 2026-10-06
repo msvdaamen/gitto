@@ -4,6 +4,7 @@ import { createFileRoute, useBlocker } from "@tanstack/solid-router";
 import { cn } from "cn";
 import { createEffect, createMemo, createSignal, Show, Suspense } from "solid-js";
 
+import { BranchMenuProvider } from "@/components/repository/branch-menu";
 import { CommitDetails } from "@/components/repository/details/commit-details";
 import { FileDiffView, prefetchFileDiff } from "@/components/repository/diff/file-diff-view";
 import { HistoryTable } from "@/components/repository/history/history-table";
@@ -124,115 +125,117 @@ function RouteComponent() {
   const details = usePanelWidth("details", DETAILS_BOUNDS);
 
   return (
-    <div class="grid h-full grid-rows-[49px_minmax(0,1fr)] overflow-hidden">
-      <RepositoryToolbar
-        repositoryId={repositoryId()}
-        search={search()}
-        onSearch={setSearch}
-        sidebarOpen={sidebarOpen()}
-        onToggleSidebar={() => setSidebarOpen((value) => !value)}
-        detailsOpen={detailsOpen()}
-        onToggleDetails={() => setDetailsOpen((value) => !value)}
-      />
+    <BranchMenuProvider repositoryId={repositoryId()}>
+      <div class="grid h-full grid-rows-[49px_minmax(0,1fr)] overflow-hidden">
+        <RepositoryToolbar
+          repositoryId={repositoryId()}
+          search={search()}
+          onSearch={setSearch}
+          sidebarOpen={sidebarOpen()}
+          onToggleSidebar={() => setSidebarOpen((value) => !value)}
+          detailsOpen={detailsOpen()}
+          onToggleDetails={() => setDetailsOpen((value) => !value)}
+        />
 
-      <div
-        class={cn(
-          "relative grid min-h-0 min-w-0 grid-cols-[var(--sidebar-width)_minmax(0,1fr)_var(--details-width)] overflow-hidden",
-          // Below `md` the open sidebar is a rail of icons.
-          sidebarOpen()
-            ? "[--sidebar-width:min(var(--sidebar-size),30vw)] max-md:[--sidebar-width:52px]"
-            : "[--sidebar-width:0px]",
-          // Below `lg` the details slide over the history instead of taking a column.
-          detailsOpen()
-            ? "[--details-width:min(var(--details-size),40vw)] max-lg:[--details-width:0px]"
-            : "[--details-width:0px]",
-        )}
-        style={{
-          "--sidebar-size": `${sidebar.width()}px`,
-          "--details-size": `${details.width()}px`,
-        }}
-      >
-        <RefsSidebar repositoryId={repositoryId()} open={sidebarOpen()} />
+        <div
+          class={cn(
+            "relative grid min-h-0 min-w-0 grid-cols-[var(--sidebar-width)_minmax(0,1fr)_var(--details-width)] overflow-hidden",
+            // Below `md` the open sidebar is a rail of icons.
+            sidebarOpen()
+              ? "[--sidebar-width:min(var(--sidebar-size),30vw)] max-md:[--sidebar-width:52px]"
+              : "[--sidebar-width:0px]",
+            // Below `lg` the details slide over the history instead of taking a column.
+            detailsOpen()
+              ? "[--details-width:min(var(--details-size),40vw)] max-lg:[--details-width:0px]"
+              : "[--details-width:0px]",
+          )}
+          style={{
+            "--sidebar-size": `${sidebar.width()}px`,
+            "--details-size": `${details.width()}px`,
+          }}
+        >
+          <RefsSidebar repositoryId={repositoryId()} open={sidebarOpen()} />
 
-        {/* The history and a file's changes share the column; the history stays underneath, so
+          {/* The history and a file's changes share the column; the history stays underneath, so
             it's still scrolled to where it was when the changes are closed. What's under way, a
             merge say, is above both. */}
-        <div class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)]">
-          <OperationBar
-            repositoryId={repositoryId()}
-            onResolve={(file) => void resolveConflicts(file)}
-            beforeChange={mayLeaveFile}
-          />
-          <div
-            // Isolated, so its sticky header stays under the changes.
-            class="isolate col-start-1 row-start-2 grid min-h-0 min-w-0"
-            inert={shownFile() ? true : undefined}
-          >
-            <HistoryTable
+          <div class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)]">
+            <OperationBar
               repositoryId={repositoryId()}
-              search={search()}
-              selectedId={selectedId()}
-              detailsId={detailsId()}
-              onSelect={(id) => setSelection({ repositoryId: repositoryId(), id })}
+              onResolve={(file) => void resolveConflicts(file)}
+              beforeChange={mayLeaveFile}
             />
-          </div>
-          <Show when={shownFile()}>
-            {(open) => (
-              <div class="z-[1] col-start-1 row-start-2 min-h-0 min-w-0 bg-bg">
-                {/* Its own boundary: one around the page would take the page off it while the
+            <div
+              // Isolated, so its sticky header stays under the changes.
+              class="isolate col-start-1 row-start-2 grid min-h-0 min-w-0"
+              inert={shownFile() ? true : undefined}
+            >
+              <HistoryTable
+                repositoryId={repositoryId()}
+                search={search()}
+                selectedId={selectedId()}
+                detailsId={detailsId()}
+                onSelect={(id) => setSelection({ repositoryId: repositoryId(), id })}
+              />
+            </div>
+            <Show when={shownFile()}>
+              {(open) => (
+                <div class="z-[1] col-start-1 row-start-2 min-h-0 min-w-0 bg-bg">
+                  {/* Its own boundary: one around the page would take the page off it while the
                     changes' queries start, even for a moment, and the history would lose its
                     scroll position with it. */}
-                <Suspense>
-                  <FileDiffView
-                    repositoryId={open().repositoryId}
-                    source={open().source}
-                    file={open().file}
-                    onOpen={(source, file) => void openFileOf(open().rowId)(source, file)}
-                    onClose={() => void closeFile()}
-                    onGuard={(guard) => (leaveFile = guard)}
-                  />
-                </Suspense>
-              </div>
+                  <Suspense>
+                    <FileDiffView
+                      repositoryId={open().repositoryId}
+                      source={open().source}
+                      file={open().file}
+                      onOpen={(source, file) => void openFileOf(open().rowId)(source, file)}
+                      onClose={() => void closeFile()}
+                      onGuard={(guard) => (leaveFile = guard)}
+                    />
+                  </Suspense>
+                </div>
+              )}
+            </Show>
+          </div>
+
+          <aside
+            class={cn(
+              "min-h-0 min-w-0 overflow-hidden border-l border-border bg-panel transition-[opacity,transform] duration-150 motion-reduce:transition-none max-lg:absolute max-lg:top-0 max-lg:right-0 max-lg:bottom-0 max-lg:z-[5] max-lg:w-[340px] max-lg:shadow-[-18px_0_40px_rgba(5,3,7,.25)] max-sm:w-[min(340px,calc(100%_-_52px))]",
+              !detailsOpen() && "pointer-events-none opacity-0 max-lg:translate-x-full",
             )}
+          >
+            <CommitDetails
+              repositoryId={repositoryId()}
+              selectedId={detailsId()}
+              files={detailsFiles}
+            />
+          </aside>
+
+          <Show when={sidebarOpen()}>
+            <ResizeHandle
+              edge="start"
+              label="Resize sidebar"
+              width={sidebar.width()}
+              bounds={sidebar.bounds}
+              onResize={sidebar.setWidth}
+              onReset={sidebar.reset}
+              class="left-(--sidebar-width) max-md:hidden"
+            />
+          </Show>
+          <Show when={detailsOpen()}>
+            <ResizeHandle
+              edge="end"
+              label="Resize details"
+              width={details.width()}
+              bounds={details.bounds}
+              onResize={details.setWidth}
+              onReset={details.reset}
+              class="right-(--details-width) max-lg:hidden"
+            />
           </Show>
         </div>
-
-        <aside
-          class={cn(
-            "min-h-0 min-w-0 overflow-hidden border-l border-border bg-panel transition-[opacity,transform] duration-150 motion-reduce:transition-none max-lg:absolute max-lg:top-0 max-lg:right-0 max-lg:bottom-0 max-lg:z-[5] max-lg:w-[340px] max-lg:shadow-[-18px_0_40px_rgba(5,3,7,.25)] max-sm:w-[min(340px,calc(100%_-_52px))]",
-            !detailsOpen() && "pointer-events-none opacity-0 max-lg:translate-x-full",
-          )}
-        >
-          <CommitDetails
-            repositoryId={repositoryId()}
-            selectedId={detailsId()}
-            files={detailsFiles}
-          />
-        </aside>
-
-        <Show when={sidebarOpen()}>
-          <ResizeHandle
-            edge="start"
-            label="Resize sidebar"
-            width={sidebar.width()}
-            bounds={sidebar.bounds}
-            onResize={sidebar.setWidth}
-            onReset={sidebar.reset}
-            class="left-(--sidebar-width) max-md:hidden"
-          />
-        </Show>
-        <Show when={detailsOpen()}>
-          <ResizeHandle
-            edge="end"
-            label="Resize details"
-            width={details.width()}
-            bounds={details.bounds}
-            onResize={details.setWidth}
-            onReset={details.reset}
-            class="right-(--details-width) max-lg:hidden"
-          />
-        </Show>
       </div>
-    </div>
+    </BranchMenuProvider>
   );
 }

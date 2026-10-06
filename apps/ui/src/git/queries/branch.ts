@@ -1,6 +1,7 @@
 import type { Uncommitted } from "@gitto/git/types";
 import { useQueryClient } from "@tanstack/solid-query";
 
+import { isCheckedOut } from "@/git/status";
 import { rpc } from "@/lib/rpc";
 
 import { gitKeys } from "./keys";
@@ -32,7 +33,7 @@ export function useSwitchBranch(repositoryId: () => string) {
   const queryClient = useQueryClient();
   return useRepositoryOperation(SWITCH, repositoryId, async (id, ref: string) => {
     const head = queryClient.getQueryData<Uncommitted>(gitKeys.status(id))?.head;
-    if (head?.kind === "branch" && ref === `refs/heads/${head.name}`) return;
+    if (head && isCheckedOut(head, ref)) return;
     try {
       await rpc.git.branch.switch({ repositoryId: id, ref });
     } finally {

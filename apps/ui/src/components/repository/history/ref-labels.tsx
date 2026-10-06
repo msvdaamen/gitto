@@ -8,6 +8,8 @@ import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 
 import { describeRefLabel, refLabelMatches, type RefLabel } from "@/git/ref-labels";
 
+import { useBranchMenuOpenFor } from "../branch-menu";
+
 /** A ref pill's shape, border and text, in its lane's colour (`--lane`). */
 const PILL =
   "rounded-sm border border-[color-mix(in_srgb,var(--lane)_45%,var(--border))] py-[3px] text-[10.5px] text-text-soft";
@@ -16,8 +18,8 @@ const PILL =
  * The commit's branches and tags, tinted in its lane's colour like GitKraken: the first one, with
  * a count of the rest, which hovering it lists. A branch shows whether it's local (laptop), on a
  * remote (cloud) or both. While searching (`search`, lowercase), a label the search matches comes
- * first, so the row shows why it matched. Double-clicking a branch switches to it, like in the
- * sidebar (see `onSwitch`).
+ * first, so the row shows why it matched. Double-clicking a branch switches to it, and
+ * right-clicking one opens its menu (see `BranchMenu`), like in the sidebar.
  */
 export function HistoryRefLabels(props: {
   labels: RefLabel[];
@@ -77,9 +79,12 @@ function MoreLabels(props: { labels: RefLabel[]; color: string; onSwitch: (ref: 
       </Popover.Anchor>
       <Popover.Portal>
         <Popover.Content
-          // Neither takes the focus from the history, nor hands it back: it's only hovered.
+          // Neither takes the focus from the history, nor hands it back: it's only hovered. Nor
+          // closes as the history takes the focus back from it once it's clicked, which would be
+          // before a double-click lands.
           onOpenAutoFocus={(event) => event.preventDefault()}
           onCloseAutoFocus={(event) => event.preventDefault()}
+          onFocusOutside={(event) => event.preventDefault()}
           onPointerEnter={() => clearTimeout(timer)}
           onPointerLeave={closeSoon}
           class="z-50 flex max-w-[320px] flex-col items-start gap-1 rounded-md border border-border bg-panel-raised p-1.5 shadow-app outline-none"
@@ -96,6 +101,7 @@ function MoreLabels(props: { labels: RefLabel[]; color: string; onSwitch: (ref: 
 
 function RefPill(props: { label: RefLabel; onSwitch: (ref: string) => void }) {
   const branch = () => (props.label.kind === "branch" ? props.label : undefined);
+  const menuFor = useBranchMenuOpenFor();
   // Only a branch that isn't checked out says it can be switched to; `onSwitch` skips the other.
   const title = () =>
     branch() && !branch()!.current
@@ -113,7 +119,12 @@ function RefPill(props: { label: RefLabel; onSwitch: (ref: string) => void }) {
         PILL,
         "flex min-w-0 items-center gap-[3px] bg-[color-mix(in_srgb,var(--lane)_16%,transparent)] px-[5px] [&>svg]:shrink-0",
         branch()?.current && "font-[720] text-text",
+        // Its menu is open.
+        branch() &&
+          menuFor() === branch()!.ref &&
+          "bg-[color-mix(in_srgb,var(--lane)_34%,transparent)] text-text",
       )}
+      data-branch={branch()?.ref}
       title={title()}
       onDblClick={onDblClick}
     >
