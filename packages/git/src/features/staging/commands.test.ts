@@ -808,12 +808,14 @@ describe("discarding a file's changes", () => {
     writeFileSync(join(path, "copy.txt"), "a\nmore\n");
     git(path, "add", "copy.txt");
     writeFileSync(join(path, "untracked copy.txt"), "a\nmore\n");
+    // Listed as a copy on the unstaged side, added with --intent-to-add.
+    git(path, "add", "-N", "untracked copy.txt");
 
     // As `git status` lists them with `status.renames=copies`.
     await discard(repo, { path: "copy.txt", origPath: "a file.txt", status: "copied" }, "staged");
     await discard(
       repo,
-      { path: "untracked copy.txt", origPath: "a file.txt", status: "untracked" },
+      { path: "untracked copy.txt", origPath: "a file.txt", status: "copied" },
       "unstaged",
     );
     expect(contents(path, "copy.txt")).toBeNull();
@@ -1229,6 +1231,39 @@ describe("discarding a file's changes", () => {
     expect(contents(repo.path, "a\\..\\b")).toBeNull();
   });
 
+  it("doesn't put back a rename out of a folder over another file above it", async () => {
+    const path = createRepo("discard-rename-out-blocked");
+    mkdirSync(join(path, "a", "b"), { recursive: true });
+    writeFileSync(join(path, "a", "b", "c"), "c\n");
+    git(path, "add", ".");
+    git(path, "commit", "-q", "-m", "first");
+    git(path, "mv", "a/b/c", "tmp");
+    rmSync(join(path, "a"), { recursive: true });
+    mkdirSync(join(path, "a"));
+    git(path, "mv", "tmp", "a/b");
+    rmSync(join(path, "a"), { recursive: true });
+    writeFileSync(join(path, "a"), "precious\n");
+    const repo = await repos.open("discard-rename-out-blocked");
+
+    const error = await rejection(
+      discard(repo, { path: "a/b", origPath: "a/b/c", status: "renamed" }, "staged"),
+    );
+    expect(error).toBeInstanceOf(DiscardBlockedError);
+    expect(contents(path, "a")).toBe("precious\n");
+  });
+
+  it("discards nothing of a copy whose source was taken out of the index since", async () => {
+    const repo = await createHistoryRepo("discard-copy-since");
+    writeFileSync(join(repo.path, "copy.txt"), "a\nmore\n");
+    git(repo.path, "add", "copy.txt");
+    git(repo.path, "rm", "-q", "--cached", "a file.txt");
+
+    const error = await rejection(
+      discard(repo, { path: "copy.txt", origPath: "a file.txt", status: "copied" }, "staged"),
+    );
+    expect((error as Error).message).toMatch(/changed since its changes were shown/);
+  });
+
   it("leaves a submodule's changes to be discarded in it", async () => {
     createSubmoduleRepo("discard-submodule");
     const repo = await repos.open("discard-submodule");
@@ -1568,6 +1603,42 @@ describe("discarding all changes", () => {
 
     expect(await discardAll(repo)).toEqual([]);
     expect(git(path, "ls-files", "l")).toBe("l");
+  });
+
+  it("discards a file named like a glob next to one something took the place of", async () => {
+    const path = createRepo("discard-all-glob-twin");
+    writeFileSync(join(path, "foo"), "foo\n");
+    writeFileSync(join(path, "fo[o]"), "twin\n");
+    git(path, "add", ".");
+    git(path, "commit", "-q", "-m", "first");
+    writeFileSync(join(path, ".git", "info", "exclude"), "*.log\n");
+    rmSync(join(path, "foo"));
+    mkdirSync(join(path, "foo"));
+    writeFileSync(join(path, "foo", "kept.log"), "kept\n");
+    writeFileSync(join(path, "fo[o]"), "changed\n");
+    git(path, "add", "fo[o]");
+    const repo = await repos.open("discard-all-glob-twin");
+
+    expect(await discardAll(repo)).toEqual([{ path: "foo", reason: "in-the-way" }]);
+    expect(contents(path, "fo[o]")).toBe("twin\n");
+  });
+
+  it("keeps what can't be hashed, a clean filter failing say, rather than failing", async () => {
+    const path = createRepo("discard-all-filter");
+    writeFileSync(join(path, "f.dat"), "f\n");
+    writeFileSync(join(path, "other.txt"), "other\n");
+    git(path, "add", ".");
+    git(path, "commit", "-q", "-m", "first");
+    git(path, "rm", "-q", "--cached", "f.dat");
+    writeFileSync(join(path, ".git", "info", "exclude"), "f.dat\n");
+    writeFileSync(join(path, ".git", "info", "attributes"), "*.dat filter=broken\n");
+    git(path, "config", "filter.broken.clean", "false");
+    git(path, "config", "filter.broken.required", "true");
+    writeFileSync(join(path, "other.txt"), "changed\n");
+    const repo = await repos.open("discard-all-filter");
+
+    expect(await discardAll(repo)).toEqual([{ path: "f.dat", reason: "in-the-way" }]);
+    expect(contents(path, "other.txt")).toBe("other\n");
   });
 
   it("deletes nothing untracked when it can't discard the rest", async () => {

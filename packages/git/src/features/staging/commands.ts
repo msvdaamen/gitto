@@ -3,12 +3,18 @@ import { constants } from "node:fs";
 import { access, lstat, readdir, readlink } from "node:fs/promises";
 import { join } from "node:path";
 
-import { deleteFiles, entriesAt, fullPath, inBatches, type Entry } from "../../core/entry";
+import {
+  deleteFiles,
+  entriesAt,
+  fullPath,
+  inBatches,
+  removeEmptyFolders,
+  type Entry,
+} from "../../core/entry";
 import {
   DiscardBlockedError,
   GitError,
   LinesNotStageableError,
-  OutsideRepositoryError,
   PatchChangedError,
 } from "../../core/errors";
 import { gitDirs } from "../../core/git-dirs";
@@ -201,25 +207,6 @@ function exactlyFromStdin(paths: string[]) {
 }
 
 /**
- * A pathspec leaving out `path` alone, not what's in a folder of the same name: a glob that matches
- * only it, as one with a wildcard does. Its glob characters, and one other, are each put in a
- * bracket of their own, rather than escaped with a backslash, which git on Windows reads as a
- * slash. A name with nothing a bracket can hold is left out with what's in it.
- */
-function excludingExactly(path: string): string {
-  const chars = [...path];
-  // Not `!` or `^`, which would negate the bracket, nor a slash.
-  const last = chars.findLastIndex((char) => !"/!^\\".includes(char));
-  if (last === -1) return `:(exclude,literal)${path}`;
-  const glob = chars.map((char, i) => {
-    if (i === last || "*?[".includes(char)) return `[${char}]`;
-    // Only in a name outside Windows, where it's no slash.
-    return char === "\\" ? "\\\\" : char;
-  });
-  return `:(exclude,glob)${glob.join("")}`;
-}
-
-/**
  * Whether what's at a rename's previous path, `entry`, is only the rename's own `path`: the file
  * itself, where only its name's case changed on a file system that doesn't tell cases apart; a
  * folder that holds nothing else, where it was renamed into a folder of its previous name; or the
@@ -230,6 +217,8 @@ async function ownRenameInTheWay(
   path: string,
   origPath: string,
   entry: Entry,
+  /** What's at `path`. */
+  own: Entry,
 ): Promise<boolean> {
   if (sameButCase(path, origPath)) {
     const [file, previous] = await Promise.all(
@@ -237,7 +226,10 @@ async function ownRenameInTheWay(
     );
     return !!file && !!previous && file.ino === previous.ino && file.dev === previous.dev;
   }
-  if (entry === "blocked") return origPath.startsWith(`${path}/`);
+  // The file at `path` itself, not one at a folder above it.
+  if (entry === "blocked") {
+    return origPath.startsWith(`${path}/`) && (own === "file" || own === "link");
+  }
   if (entry !== "folder" || !path.startsWith(`${origPath}/`)) return false;
   // Each folder down to it holding only the next, a level at a time: one that can't be read could
   // hold anything.
@@ -249,17 +241,6 @@ async function ownRenameInTheWay(
     folder = join(folder, name);
   }
   return true;
-}
-
-/**
- * Whether `path` names a file in the working tree, as git names one: no `..` or `.git` folder in it
- * (of any case, as file systems on macOS and Windows don't tell them apart), and not from the root.
- * Split on slashes, and backslashes too on Windows only, where they're slashes: elsewhere one can be
- * in a name. A link on the way is looked for when it's deleted (see `deleteFiles`).
- */
-function isPlainPath(path: string): boolean {
-  const parts = path.split(process.platform === "win32" ? /[\\/]/ : "/");
-  return parts.every((part) => part !== "" && part !== ".." && part.toLowerCase() !== ".git");
 }
 
 /** Whether two paths differ only in the case of their letters. */
@@ -402,12 +383,16 @@ async function unchangedSince(
     regular.length
       ? // A line each, quoted as git reads a line that starts with a quote: a path can have any
         // character, a newline too.
+        // Failing at one, a clean filter missing say, it's all taken for changed, and kept.
         run(["hash-object", "--stdin-paths"], {
           ...options,
           stdin: regular
             .map(({ path }) => `"${path.replace(/[\\"]/g, "\\$&").replace(/\n/g, "\\n")}"\n`)
             .join(""),
-        }).then((output) => output.split("\n"))
+        }).then(
+          (output) => output.split("\n"),
+          () => [] as string[],
+        )
       : [],
     inBatches(links, ({ path }) =>
       readlink(fullPath(repo.path, bytes(path)), { encoding: "buffer" }),
@@ -482,13 +467,20 @@ export async function discard(
       // empty, but hidden as deleted.
       return paths.filter((each) => shown!.get(each) !== hidden!.get(each));
     };
-    const [entries, intended, { head, source }, blocker, there] = await Promise.all([
+    const tree = side === "staged" ? sourceTree(run) : Promise.resolve({ head: null, source: "" });
+    const [entries, intended, { head, source }, blocker, there, added] = await Promise.all([
       // The paths in the index, with their mode and stage: a conflict's are 1-3.
       listed(["ls-files", "--format=%(objectmode) %(stage) %(path)"]),
       mayBeIntended ? intentToAdd() : ([] as string[]),
-      side === "staged" ? sourceTree(run) : { head: null, source: "" },
+      tree,
       gitDir && operationBlocker(gitDir, "discard its staged changes"),
       entriesAt(repo.path, paths),
+      // Staged, but not in HEAD: taken out of the index, and nothing's written in their place.
+      side === "staged"
+        ? tree.then(({ source: from }) =>
+            listed(["diff", "--cached", "--name-only", "--no-renames", "--diff-filter=A", from]),
+          )
+        : ([] as string[]),
     ]);
     if (blocker) throw new DiscardBlockedError(blocker);
     // Its staged changes are against HEAD as it was: a commit made since could have taken them.
@@ -533,25 +525,21 @@ export async function discard(
     const at = (each: string) => there[paths.indexOf(each)];
     // A copy's source is still there on this side, unlike a rename's: in the index, or in the
     // working tree.
-    const copied =
+    // A copy, as it's listed, leaves its source as it is, which is still there on this side, unlike
+    // a rename's: in the index, or in the working tree. Otherwise its list is out of date.
+    const copied = status === "copied";
+    const sourceThere =
       origPath !== null &&
       (side === "staged"
         ? tracked.has(origPath)
         : at(origPath) === "file" || at(origPath) === "link");
+    if (origPath !== null && copied !== sourceThere) {
+      throw new DiscardBlockedError(
+        `${path} changed since its changes were shown, so nothing was discarded.`,
+      );
+    }
     const discarded = copied ? [path] : paths;
     // Put back as HEAD or the index has them, over what's in the working tree.
-    // Staged, but not in HEAD: taken out of the index, and nothing's written in their place.
-    const added =
-      side === "staged"
-        ? await listed([
-            "diff",
-            "--cached",
-            "--name-only",
-            "--no-renames",
-            "--diff-filter=A",
-            source,
-          ])
-        : [];
     const written =
       side === "staged"
         ? discarded.filter((each) => !added.includes(each))
@@ -579,10 +567,12 @@ export async function discard(
       if (entry === "folder" && submodules.has(each)) continue;
       // A rename into a folder of its previous name, or out of one: what's there is the rename's
       // own, which discarding it deletes first.
-      // oxlint-disable-next-line no-await-in-loop -- two at most.
-      if (each === origPath && !copied && (await ownRenameInTheWay(repo, path, origPath, entry))) {
-        continue;
-      }
+      const own =
+        each === origPath &&
+        !copied &&
+        // oxlint-disable-next-line no-await-in-loop -- two at most.
+        (await ownRenameInTheWay(repo, path, origPath, entry, at(path)));
+      if (own) continue;
       throw inTheWay(each, entry);
     }
     // Where one's in a folder of the other's name, the file's deleted before its previous path's
@@ -619,7 +609,6 @@ export async function discard(
       if (entry === "folder" || entry === "unreadable") {
         throw inTheWay(each, entry);
       }
-      if (!isPlainPath(each)) throw new OutsideRepositoryError(each);
     }
     // What's put back first, so a failure there has deleted nothing; but where it's in a folder of
     // the other's name, what's in the way of it goes first.
@@ -638,12 +627,18 @@ export async function discard(
       await putBack();
       await letGo();
     }
-    const left = await deleteFiles(
-      repo.path,
-      untracked.map((each) => Buffer.from(each)),
-    );
-    if (left.length) {
-      throw new DiscardBlockedError(`${left[0]!.toString()} couldn't be deleted.`);
+    // By git, which goes through no link, nor out of the working tree; ignored by now or not.
+    if (untracked.length) {
+      await run(["clean", "-f", "-x", "-q", "--", ...exactly(untracked)], {
+        globPathspecs: true,
+        ...REWRITES,
+      });
+      const bytes = untracked.map((each) => Buffer.from(each));
+      // It deletes nothing it shouldn't, silently: what's still there is said.
+      const still = await entriesAt(repo.path, bytes);
+      const left = untracked.find((_, i) => still[i] !== undefined);
+      if (left !== undefined) throw new DiscardBlockedError(`${left} couldn't be deleted.`);
+      await removeEmptyFolders(repo.path, bytes);
     }
   });
 }
@@ -693,6 +688,8 @@ async function restoreAll(repo: Repo, run: GitCommand, source: string): Promise<
       ...reading,
       untracked: "ignore",
     });
+  // What's at each deleted path, as last looked at.
+  const keptEntries = new Map<string, Entry>();
   /** Those of the deleted `files` that something has taken the place of. */
   const takenPlaces = async (files: SourceFile[]) => {
     const entries = await entriesAt(
@@ -702,12 +699,14 @@ async function restoreAll(repo: Repo, run: GitCommand, source: string): Promise<
     const there = files.map((file, i) => Object.assign({}, file, { entry: entries[i] }));
     const unchanged = await unchangedSince(repo, run, there, reading);
     // Not a submodule's folder, where its removal from the index is put back: it's its own.
-    return files.filter(
+    const taken = files.filter(
       ({ path, mode }, i) =>
         entries[i] !== undefined &&
         !unchanged.has(path) &&
         !(entries[i] === "folder" && mode === "160000"),
     );
+    for (const [i, { path }] of files.entries()) keptEntries.set(path, entries[i]);
+    return taken;
   };
   const untracked = () => records(run, ["ls-files", "--others", "--exclude-standard"], reading);
   const [deleted, before] = await Promise.all([
@@ -716,9 +715,13 @@ async function restoreAll(repo: Repo, run: GitCommand, source: string): Promise<
     untracked(),
   ]);
   const kept = await takenPlaces(deleted);
-  // What's kept is left out by its name alone, not with what's in a folder of the same name, which
-  // can be staged files to discard.
-  await restoreFromSource([":/", ...kept.map(({ path }) => excludingExactly(path))]);
+  // What's kept is left out, with what's in a folder of the same name; that, which can be staged
+  // files to discard, is put back apart, one folder at a time: none may have any.
+  await restoreFromSource([":/", ...kept.map(({ path }) => `:(exclude,literal)${path}`)]);
+  for (const { path } of kept) {
+    // oxlint-disable-next-line no-await-in-loop -- one at a time, each may name nothing.
+    if (keptEntries.get(path) === "folder") await restoreFromSource([`:(literal)${path}/`]);
+  }
   // Untracked files only once the rest is done, which may fail. Those that aren't ignored, now nor
   // before, by the ignore files as they were: what either ignores isn't listed, like an `.env` a
   // deleted `.gitignore` ignored, or one only an uncommitted rule does. Not a repository inside

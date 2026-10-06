@@ -94,25 +94,36 @@ export function entriesAt(
 
 /**
  * Deletes the files and links at `paths` (as bytes) in the working tree whose root is `root`, a
- * batch at a time, then the folders that leaves empty, as git keeps none: not through a link where
- * one of their folders was, which has nothing of the working tree's. Resolves to the paths it
- * couldn't delete, a folder at one too.
+ * batch at a time, then the folders that leaves empty (see `removeEmptyFolders`): not through a
+ * link where one of their folders was, which has nothing of the working tree's. Resolves to the
+ * paths it couldn't delete, a folder at one too.
  */
 export async function deleteFiles(root: string, paths: Buffer[]): Promise<Buffer[]> {
-  // Its folders looked at again right before, rather than gone through, if one's been made a link,
-  // to a folder outside, say; a folder isn't a file to delete.
+  // Their folders looked at again right before, rather than gone through, if one's been made a
+  // link, to a folder outside, say; a folder isn't a file to delete.
   const entries = await entriesAt(root, paths);
-  const deleted = await inBatches(paths, async (path) => {
-    const entry = entries[paths.indexOf(path)];
-    if (entry === undefined || entry === "blocked") return true;
-    if (entry === "folder" || entry === "unreadable") return false;
-    return unlink(fullPath(root, path)).then(
-      () => true,
-      // Gone already, or a file has taken the place of one of its folders since.
-      (error: NodeJS.ErrnoException) => error.code === "ENOENT" || error.code === "ENOTDIR",
-    );
-  });
-  // The folders they were in, by depth, the deepest first: one empties another.
+  const deleted = await inBatches(
+    paths.map((path, i) => ({ path, entry: entries[i] })),
+    async ({ path, entry }) => {
+      if (entry === undefined || entry === "blocked") return true;
+      if (entry === "folder" || entry === "unreadable") return false;
+      return unlink(fullPath(root, path)).then(
+        () => true,
+        // Gone already, or a file has taken the place of one of its folders since.
+        (error: NodeJS.ErrnoException) => error.code === "ENOENT" || error.code === "ENOTDIR",
+      );
+    },
+  );
+  await removeEmptyFolders(root, paths);
+  return paths.filter((_, i) => !deleted[i]);
+}
+
+/**
+ * Removes the folders `paths` (as bytes) were in that are empty now, as git keeps none: by depth,
+ * the deepest first, as one empties another, and only each that's a folder of the working tree's,
+ * not a link to one, which `rmdir` would go through.
+ */
+export async function removeEmptyFolders(root: string, paths: Buffer[]): Promise<void> {
   const byDepth: Set<string>[] = [];
   for (const path of paths) {
     const parts = path.toString("latin1").split("/");
@@ -122,11 +133,14 @@ export async function deleteFiles(root: string, paths: Buffer[]): Promise<Buffer
   }
   for (const folders of byDepth.toReversed()) {
     if (!folders) continue;
+    const names = [...folders].map((folder) => Buffer.from(folder, "latin1"));
     // oxlint-disable-next-line no-await-in-loop -- a depth at a time, on purpose.
-    await inBatches([...folders], (folder) =>
+    const entries = await entriesAt(root, names);
+    // oxlint-disable-next-line no-await-in-loop -- a depth at a time, on purpose.
+    await inBatches(
+      names.filter((_, i) => entries[i] === "folder"),
       // Fails, as it should, at one that isn't empty.
-      rmdir(fullPath(root, Buffer.from(folder, "latin1"))).catch(() => undefined),
+      (folder) => rmdir(fullPath(root, folder)).catch(() => undefined),
     );
   }
-  return paths.filter((_, i) => !deleted[i]);
 }

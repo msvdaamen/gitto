@@ -1,4 +1,11 @@
-import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -23,5 +30,15 @@ describe("what's in the working tree", () => {
     const left = await deleteFiles(tree, [Buffer.from("dir/file"), Buffer.from("real/file")]);
     expect(left).toEqual([]);
     expect(readFileSync(join(outside, "file"), "utf8")).toBe("outside\n");
+  });
+
+  it("doesn't remove an empty folder through a link either", async () => {
+    const tree = mkdtempSync(join(root, "tree-"));
+    const outside = mkdtempSync(join(root, "outside-"));
+    mkdirSync(join(outside, "b"));
+    symlinkSync(outside, join(tree, "a"));
+
+    expect(await deleteFiles(tree, [Buffer.from("a/b/c")])).toEqual([]);
+    expect(existsSync(join(outside, "b"))).toBe(true);
   });
 });
