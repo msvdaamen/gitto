@@ -1,4 +1,11 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -10,7 +17,7 @@ import {
 } from "../../core/errors";
 import type { Repo } from "../../core/repo";
 import { createMergeConflict, tryGit } from "../../test/conflicts";
-import { git, rejection, repos } from "../../test/fixtures";
+import { createRepo, git, rejection, repos } from "../../test/fixtures";
 import { saveWorkingTreeFile } from "../diff/working-tree";
 import { stage, stageAll } from "../staging/commands";
 import { getStatus } from "../status/commands";
@@ -87,6 +94,16 @@ describe("a text conflict", () => {
     await markResolved(repo, "f.txt", version);
   });
 
+  it("is marked resolved with its markers when the user says they belong in it", async () => {
+    const path = createMergeConflict("resolve-with-markers");
+    const repo = await repos.open("resolve-with-markers");
+    const { text } = await getConflict(repo, "f.txt");
+
+    await markResolved(repo, "f.txt", text!.version, true);
+    expect(await statusFiles(repo)).toEqual([["f.txt", "modified", null]]);
+    expect(git(path, "show", ":f.txt")).toContain("<<<<<<< HEAD");
+  });
+
   it("isn't marked resolved once it changed on disk since it was read", async () => {
     const path = createMergeConflict("resolve-changed");
     const repo = await repos.open("resolve-changed");
@@ -107,7 +124,7 @@ describe("a text conflict", () => {
     const error = await rejection(stage(repo, ["f.txt", "README"]));
     expect(error).toBeInstanceOf(ConflictMarkersError);
     expect((error as Error).message).toBe(
-      "f.txt still has conflict markers. Resolve its conflicts, then mark it resolved.",
+      "f.txt still has conflict markers. Resolve its conflicts, or mark it resolved with them from its changes if they belong in it.",
     );
     await expect(stageAll(repo)).rejects.toBeInstanceOf(ConflictMarkersError);
     // None was staged.
@@ -251,6 +268,39 @@ describe("a binary file", () => {
     await keepSide(repo, "b.bin", "theirs", shown(await getConflict(repo, "b.bin")));
     expect([...readFileSync(join(path, "b.bin"))]).toEqual([0, 1, 4]);
     expect(await statusFiles(repo)).toEqual([["b.bin", "modified", null]]);
+  });
+});
+
+describe("a symbolic link", () => {
+  it("isn't followed, even out of the repository, and is resolved by keeping a side", async () => {
+    const path = createRepo("link-conflict");
+    git(path, "config", "core.symlinks", "true");
+    writeFileSync(join(path, "README"), "readme\n");
+    symlinkSync("/etc/hosts", join(path, "config"));
+    git(path, "add", "-A");
+    git(path, "commit", "-qm", "base");
+    git(path, "checkout", "-qb", "side");
+    rmSync(join(path, "config"));
+    symlinkSync("../theirs", join(path, "config"));
+    git(path, "commit", "-qam", "theirs");
+    git(path, "checkout", "-q", "main");
+    rmSync(join(path, "config"));
+    symlinkSync("/etc/ours", join(path, "config"));
+    git(path, "commit", "-qam", "ours");
+    tryGit(path, "merge", "-q", "side");
+    const repo = await repos.open("link-conflict");
+
+    const conflict = await getConflict(repo, "config");
+    expect(conflict).toMatchObject({
+      ours: { mode: "120000" },
+      theirs: { mode: "120000" },
+      text: null,
+      version: null,
+      unreadable: null,
+    });
+    await keepSide(repo, "config", "theirs", shown(conflict));
+    expect(readlinkSync(join(path, "config"))).toBe("../theirs");
+    expect(await statusFiles(repo)).toEqual([["config", "modified", null]]);
   });
 });
 

@@ -1,5 +1,7 @@
 import type { ChangedFile, Conflict } from "@gitto/git/types";
+import { AlertDialog } from "@kobalte/core/alert-dialog";
 import { useQueryClient, type QueryClient } from "@tanstack/solid-query";
+import { cn } from "cn";
 import Check from "lucide-solid/icons/check";
 import ChevronDown from "lucide-solid/icons/chevron-down";
 import ChevronUp from "lucide-solid/icons/chevron-up";
@@ -22,6 +24,7 @@ import {
 } from "solid-js";
 
 import { Button, IconButton } from "@/components/ui/button";
+import { DIALOG_BOX, DialogPortal } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Notice } from "@/components/ui/notice";
 import { conflictKind, describeConflict, describeSide, keepLabel } from "@/git/conflicts";
@@ -133,8 +136,14 @@ export function useConflictResolution(props: {
   });
 
   const [progress, setProgress] = createSignal<ConflictProgress>();
-  /** The viewer's progress, once it's of this file. */
-  const shownProgress = () => (kind()?.kind === "text" ? progress() : undefined);
+  /**
+   * The viewer's progress, once it's of this file: the last one's is still on show while this
+   * one's conflicts are being highlighted.
+   */
+  const shownProgress = () => {
+    const shown = progress();
+    return kind()?.kind === "text" && shown?.fileKey === props.fileKey() ? shown : undefined;
+  };
   const [commands, setCommands] = createSignal<ConflictCommands>();
   /** Why the last thing done to the conflict failed, and of which file. */
   const [error, setError] = createSignal<{ key: string; message: string }>();
@@ -143,8 +152,13 @@ export function useConflictResolution(props: {
 
   const resolveFile = useResolveFile();
   const [resolving, setResolving] = createSignal(false);
-  // Nor while the last file's still on show, as this one's loads.
-  const busy = () => resolving() || !!shownProgress()?.saving || query.isPlaceholderData;
+  // Nor while the last file's still on show, as this one's loads, nor before this one's version
+  // on disk is known, which a write is checked against: just after editing, say.
+  const busy = () =>
+    resolving() ||
+    query.isPlaceholderData ||
+    (kind()?.kind === "text" &&
+      (!shownProgress() || shownProgress()!.saving || !shownProgress()!.version));
 
   /** The next conflicted file in the list after this one, or the first before it. */
   const nextConflicted = () => {
@@ -154,13 +168,16 @@ export function useConflictResolution(props: {
     return ordered.find((file) => file.status === "conflicted" && file.path !== path());
   };
 
-  /** Whether it has no conflicts left to resolve in its text, so it can be marked resolved. */
-  const canMark = () => {
-    const current = kind();
-    if (current?.kind !== "text") return false;
+  /**
+   * Whether it has no conflicts left in its text, so it's ready to be marked resolved. One that
+   * has is only marked resolved with them once the user says they belong in it (`confirming`).
+   */
+  const ready = () => {
     const shown = shownProgress();
-    return !!shown && shown.left === 0 && !shown.saving && !shown.problem;
+    return !!shown && shown.left === 0 && !shown.problem;
   };
+  /** Asking whether to mark it resolved with its markers left, as they belong in it. */
+  const [confirming, setConfirming] = createSignal(false);
 
   /**
    * Resolves the file whole: marks it resolved, or keeps a side, its edits saved first; then on to
@@ -197,7 +214,9 @@ export function useConflictResolution(props: {
   /** The version of the file to check before resolving it whole: the latest one written here. */
   const version = () => shownProgress()?.version ?? data()?.version ?? null;
   const markResolved = () => {
-    if (canMark()) void resolveWhole({ action: "mark", version: version() });
+    if (kind()?.kind !== "text" || busy()) return;
+    if (ready()) void resolveWhole({ action: "mark", version: version(), withMarkers: false });
+    else setConfirming(true);
   };
   const keep = ({ base, ours, theirs }: Conflict, side: "ours" | "theirs") =>
     void resolveWhole({
@@ -221,6 +240,8 @@ export function useConflictResolution(props: {
 
   const onKeyDown = (event: KeyboardEvent) => {
     if (!active() || event.defaultPrevented || props.editing() || isTyping(event)) return;
+    // Not for what's behind a dialog or a menu that has the keys.
+    if (inOverlay(event)) return;
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
       markResolved();
@@ -238,7 +259,7 @@ export function useConflictResolution(props: {
       event.preventDefault();
       if (event.key === "]") commands()?.next();
       else commands()?.previous();
-    } else if (resolutions[key] && !busy()) {
+    } else if (resolutions[key] && !busy() && kind()?.kind === "text") {
       event.preventDefault();
       commands()?.resolve(resolutions[key]);
     }
@@ -247,7 +268,8 @@ export function useConflictResolution(props: {
   return {
     active,
     /** Whether it can be edited by hand: its text, once it's on show as it is on disk. */
-    editable: () => kind()?.kind === "text" && !!shownProgress()?.version,
+    editable: () =>
+      kind()?.kind === "text" && !!shownProgress()?.version && !query.isPlaceholderData,
     onKeyDown,
 
     /** The conflicts left, stepping through them, marking the file resolved, and the next file. */
@@ -281,8 +303,8 @@ export function useConflictResolution(props: {
           <Show when={kind()?.kind === "text"}>
             <Button
               icon={Check}
-              variant={canMark() ? "primary" : "secondary"}
-              disabled={!canMark() || busy()}
+              variant={ready() ? "primary" : "secondary"}
+              disabled={busy()}
               class="ml-1 h-[26px] gap-1.5 rounded-md px-2 text-[11.5px] font-[600] shadow-none enabled:hover:translate-y-0"
               onClick={markResolved}
             >
@@ -324,6 +346,16 @@ export function useConflictResolution(props: {
           <Show when={error()?.key === props.fileKey() && error()}>
             {(shown) => <Notice role="alert" icon={TriangleAlert} message={shown().message} />}
           </Show>
+          <MarkersDialog
+            open={confirming()}
+            path={path()}
+            left={shownProgress()?.left ?? 0}
+            onCancel={() => setConfirming(false)}
+            onConfirm={() => {
+              setConfirming(false);
+              void resolveWhole({ action: "mark", version: version(), withMarkers: true });
+            }}
+          />
         </>
       );
     },
@@ -436,6 +468,66 @@ function Loading() {
       <EmptyState icon={LoaderCircle} loading title="Loading the conflict…" class="h-full" />
     </Show>
   );
+}
+
+/**
+ * Asks before marking a file resolved with conflict markers left in it, which is only right when
+ * they belong in it, like a test's fixture of them: they're staged as they are. Esc, or clicking
+ * outside, cancels.
+ */
+function MarkersDialog(props: {
+  open: boolean;
+  path: string;
+  /** How many conflicts the view reads in it; none when its markers can't be read as conflicts. */
+  left: number;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const name = () => props.path.slice(props.path.lastIndexOf("/") + 1);
+  return (
+    <AlertDialog open={props.open} onOpenChange={(open) => !open && props.onCancel()} modal>
+      <DialogPortal>
+        <AlertDialog.Content class={cn(DIALOG_BOX, "max-w-[440px] p-5")}>
+          <div class="flex items-start gap-3">
+            <span class="grid size-9 shrink-0 place-items-center rounded-[9px] bg-amber-soft text-amber">
+              <TriangleAlert size={18} strokeWidth={1.9} />
+            </span>
+            <div class="min-w-0">
+              <AlertDialog.Title class="m-0 text-[15px] font-[680]">
+                Mark {name()} resolved with its conflict markers?
+              </AlertDialog.Title>
+              <AlertDialog.Description class="m-0 mt-2 text-[12.5px] leading-[1.55] text-text-soft">
+                {props.left > 0
+                  ? `It still has ${props.left} ${props.left === 1 ? "conflict" : "conflicts"}.`
+                  : "It still has conflict markers."}{" "}
+                Mark it resolved only if they belong in it, like a test's fixture of them: they're
+                staged as they are.
+              </AlertDialog.Description>
+            </div>
+          </div>
+          <div class="mt-5 flex justify-end gap-2">
+            <Button variant="ghost" onClick={props.onCancel}>
+              Cancel
+            </Button>
+            <Button variant="primary" onClick={props.onConfirm}>
+              Mark resolved
+            </Button>
+          </div>
+        </AlertDialog.Content>
+      </DialogPortal>
+    </AlertDialog>
+  );
+}
+
+/**
+ * Whether a key pressed in `event`'s target is for a dialog, a menu or a list that's open, rather
+ * than for the view behind it.
+ */
+function inOverlay(event: KeyboardEvent) {
+  const target = event.composedPath()[0];
+  const overlay = '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]';
+  if (target instanceof Element && target.closest(overlay)) return true;
+  return document.querySelector('[aria-modal="true"], [role="menu"]') !== null;
 }
 
 /** Whether a key pressed in `event`'s target is typing, e.g. in the commit message. */

@@ -86,7 +86,12 @@ function RouteComponent() {
   const [resolving, setResolving] = createSignal<{ repositoryId: string; file: ChangedFile }>();
   createEffect(() => {
     const pending = resolving();
-    if (!pending || pending.repositoryId !== repositoryId()) return;
+    if (!pending) return;
+    // Not once another row, or another repository, was picked meanwhile: it was asked for there.
+    if (pending.repositoryId !== repositoryId() || selectedId() !== WIP_ID) {
+      setResolving(undefined);
+      return;
+    }
     if (detailsId() !== WIP_ID) return;
     setResolving(undefined);
     void openFileOf(WIP_ID)({ kind: "unstaged" }, pending.file);

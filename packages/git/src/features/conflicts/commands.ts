@@ -7,8 +7,10 @@ import {
   FileChangedOnDiskError,
   FileTooLargeError,
   NotUtf8Error,
+  OutsideRepositoryError,
 } from "../../core/errors";
 import type { GitCommand, Repo } from "../../core/repo";
+import { MAX_BLOB_BYTES } from "../diff/limits";
 import { decodeUtf8, readWorkingTreeBytes } from "../diff/working-tree";
 import { countConflicts, isBinary } from "./markers";
 import type { Conflict, ConflictSide, ConflictSides } from "./schema";
@@ -55,24 +57,29 @@ export async function getConflict(repo: Repo, path: string): Promise<Conflict> {
   return { ...sides, ...file };
 }
 
-/** What's in the working tree at `path`, as `getConflict` has it. */
+/**
+ * What's in the working tree at `path`, as `getConflict` has it. Not what a symbolic link leads
+ * to, which is no part of the conflict, and can be outside the repository: a link's conflict is
+ * resolved by keeping a side.
+ */
 async function readText(
   repo: Repo,
   path: string,
 ): Promise<Pick<Conflict, "text" | "version" | "binary" | "unreadable">> {
+  const none = { text: null, version: null, binary: false };
+  if (await isLink(repo, path)) return { ...none, unreadable: null };
   let file: Awaited<ReturnType<typeof readWorkingTreeBytes>>;
   try {
     file = await readWorkingTreeBytes(repo, path);
   } catch (error) {
-    if (!(error instanceof FileTooLargeError)) throw error;
-    return {
-      text: null,
-      version: null,
-      binary: false,
-      unreadable: "This file is too large to show.",
-    };
+    if (error instanceof FileTooLargeError) {
+      return { ...none, unreadable: "This file is too large to show." };
+    }
+    // In a folder that's a link out of the repository, say.
+    if (error instanceof OutsideRepositoryError) return { ...none, unreadable: error.message };
+    throw error;
   }
-  if (!file) return { text: null, version: null, binary: false, unreadable: null };
+  if (!file) return { ...none, unreadable: null };
   const { bytes, version } = file;
   if (isBinary(bytes)) {
     return { text: null, version, binary: true, unreadable: "This file is binary." };
@@ -142,7 +149,8 @@ function sameSide(a: ConflictSide | null, b: ConflictSide | null): boolean {
 
 /**
  * Marks the conflicted file at `path` resolved, as it is in the working tree: stages it, or its
- * deletion if it's gone. Rejects with `ConflictMarkersError` if it still has conflict markers, and
+ * deletion if it's gone. Rejects with `ConflictMarkersError` if it still has conflict markers,
+ * unless `withMarkers`: the user said they belong in it, like a test's fixture of them. Rejects
  * with `FileChangedOnDiskError` if it isn't at `version` (when given), the version the user saw.
  * Does nothing if it isn't conflicted any more, e.g. as it was staged in a terminal.
  */
@@ -150,6 +158,7 @@ export async function markResolved(
   repo: Repo,
   path: string,
   version: string | null,
+  withMarkers = false,
 ): Promise<void> {
   await repo.exclusive(async (run) => {
     const sides = await readSides(run, path);
@@ -160,7 +169,7 @@ export async function markResolved(
         throw new FileChangedOnDiskError(path, file ? "changed" : "deleted");
       }
     }
-    await refuseConflictMarkers(repo, run, [path]);
+    if (!withMarkers) await refuseConflictMarkers(repo, run, [path]);
     await run(["add", "--all", "--", path]);
   });
 }
@@ -183,40 +192,59 @@ export async function refuseConflictMarkers(
         paths.some((given) => path === given || path.startsWith(`${given}/`)),
       )
     : unmerged;
+  // However large it is: only one that's left out could be staged with its markers.
   const marked = await Promise.all(
-    staged.map(async (path) => ((await conflictsIn(repo, path)) > 0 ? path : undefined)),
+    staged.map(async (path) =>
+      ((await conflictsIn(repo, path, Infinity)) ?? 0) > 0 ? path : undefined,
+    ),
   );
   const left = marked.filter((path) => path !== undefined);
   if (left.length > 0) throw new ConflictMarkersError(left);
 }
 
 /**
- * How many conflicts the file at `path` in the working tree has left; none if it's binary, gone,
- * or a symbolic link, which git doesn't write markers into, and which can lead anywhere.
+ * How many conflicts the text file at `path` in the working tree has left; `undefined` if it isn't
+ * one: it's gone, binary, larger than `maxBytes`, or a symbolic link, which git doesn't write
+ * markers into, and which can lead anywhere.
  */
-async function conflictsIn(repo: Repo, path: string): Promise<number> {
-  const isLink = await lstat(join(repo.path, path)).then(
+async function conflictsIn(
+  repo: Repo,
+  path: string,
+  maxBytes: number,
+): Promise<number | undefined> {
+  if (await isLink(repo, path)) return undefined;
+  let file: Awaited<ReturnType<typeof readWorkingTreeBytes>>;
+  try {
+    file = await readWorkingTreeBytes(repo, path, maxBytes);
+  } catch (error) {
+    if (error instanceof FileTooLargeError || error instanceof OutsideRepositoryError) {
+      return undefined;
+    }
+    throw error;
+  }
+  if (!file || isBinary(file.bytes)) return undefined;
+  // Markers are ASCII, which reads the same in any of the encodings git merges as text.
+  return countConflicts(file.bytes.toString("latin1"));
+}
+
+/** Whether `path` in the working tree is a symbolic link; not if there's nothing there. */
+function isLink(repo: Repo, path: string): Promise<boolean> {
+  return lstat(join(repo.path, path)).then(
     (stats) => stats.isSymbolicLink(),
     () => false,
   );
-  if (isLink) return 0;
-  const file = await readWorkingTreeBytes(repo, path, Infinity);
-  // Markers are ASCII, which reads the same in any of the encodings git merges as text.
-  return file && !isBinary(file.bytes) ? countConflicts(file.bytes.toString("latin1")) : 0;
 }
 
 /**
  * Which of the conflicted text files at `paths` have no conflict markers left: resolved in the
  * working tree, but not marked so yet. Not one that's binary, which git leaves without markers, nor
- * one too large to read, or gone.
+ * one too large to read (see `MAX_BLOB_BYTES`), or gone.
  */
 export async function markerFree(repo: Repo, paths: string[]): Promise<string[]> {
   const free = await Promise.all(
     paths.map(async (path) => {
-      const file = await readWorkingTreeBytes(repo, path).catch(() => undefined);
-      const resolved =
-        file && !isBinary(file.bytes) && countConflicts(file.bytes.toString("latin1")) === 0;
-      return resolved ? path : undefined;
+      const left = await conflictsIn(repo, path, MAX_BLOB_BYTES).catch(() => undefined);
+      return left === 0 ? path : undefined;
     }),
   );
   return free.filter((path) => path !== undefined);

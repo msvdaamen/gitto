@@ -5,6 +5,7 @@ import {
   ChangesTooLargeError,
   ConflictChangedError,
   ConflictMarkersError,
+  EditorNeededError,
   FileChangedOnDiskError,
   FileTooLargeError,
   FolderNotFoundError,
@@ -75,7 +76,8 @@ function toApiError(error: unknown): unknown {
     error instanceof NoUpstreamError ||
     error instanceof UnsupportedGitError ||
     error instanceof ConflictMarkersError ||
-    error instanceof NoOperationError
+    error instanceof NoOperationError ||
+    error instanceof EditorNeededError
   ) {
     return new ORPCError("PRECONDITION_FAILED", { message: error.message, cause: error });
   }

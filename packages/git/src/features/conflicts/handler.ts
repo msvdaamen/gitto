@@ -13,5 +13,7 @@ export const conflictsRouter = os.router({
     .handler(({ context, input }) => keepSide(context.repo, input.path, input.side, input)),
   markResolved: os.markResolved
     .use(withRepo)
-    .handler(({ context, input }) => markResolved(context.repo, input.path, input.version)),
+    .handler(({ context, input }) =>
+      markResolved(context.repo, input.path, input.version, input.withMarkers),
+    ),
 });

@@ -64,9 +64,12 @@ export function operationTitle(operation: Operation): string {
     case "rebase":
       return `Rebasing ${operation.branch ?? "HEAD"} onto ${operation.onto}`;
     case "cherry-pick":
-      return `Cherry-picking ${operation.commit.sha} ${operation.commit.subject}`.trimEnd();
-    case "revert":
-      return `Reverting ${operation.commit.sha} ${operation.commit.subject}`.trimEnd();
+    case "revert": {
+      const verb = operation.kind === "cherry-pick" ? "Cherry-picking" : "Reverting";
+      // None between the commits of a series, once one was committed by hand.
+      const commit = operation.commit;
+      return commit ? `${verb} ${commit.sha} ${commit.subject}`.trimEnd() : `${verb} commits`;
+    }
     case "am":
       return "Applying patches";
   }

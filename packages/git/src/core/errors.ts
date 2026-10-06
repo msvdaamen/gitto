@@ -154,8 +154,8 @@ export class ConflictMarkersError extends MessageError {
     const others = paths.length - 1;
     super(
       others === 0
-        ? `${first} still has conflict markers. Resolve its conflicts, then mark it resolved.`
-        : `${first} and ${others} other ${others === 1 ? "file" : "files"} still have conflict markers. Resolve their conflicts first.`,
+        ? `${first} still has conflict markers. Resolve its conflicts, or mark it resolved with them from its changes if they belong in it.`
+        : `${first} and ${others} other ${others === 1 ? "file" : "files"} still have conflict markers. Resolve their conflicts, or mark each resolved with them from its changes if they belong in it.`,
     );
   }
 }
@@ -169,6 +169,9 @@ export class ConflictChangedError extends MessageError {
 
 /** No merge, rebase, cherry-pick, revert or `git am` is under way, or another one than shown. */
 export class NoOperationError extends MessageError {}
+
+/** What's asked of git needs an editor for a message, which Gitto can't open: a rebase's reword. */
+export class EditorNeededError extends MessageError {}
 
 /** No repository with that id has been added to Gitto. */
 export class RepositoryNotFoundError extends MessageError {

@@ -101,5 +101,7 @@ describe("what's under way", () => {
     expect(operationTitle(pick)).toBe("Cherry-picking 1a2b3c4 Fix it");
     expect(operationProgress(pick)).toBe("2 more to go");
     expect(operationProgress({ ...pick, remaining: 0 })).toBeUndefined();
+    // Between the commits of a series, once one was committed by hand.
+    expect(operationTitle({ ...pick, commit: null })).toBe("Cherry-picking commits");
   });
 });

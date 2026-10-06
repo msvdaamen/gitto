@@ -59,6 +59,7 @@ vi.mock("./conflict-viewer", () => ({
         (disk) => {
           if (!disk) return;
           props.onProgress({
+            fileKey: props.fileKey,
             left: viewer.left,
             current: viewer.left ? 1 : undefined,
             saving: false,
@@ -165,13 +166,67 @@ describe("a file with text conflicts", () => {
     expect(screen.queryByRole("button", { name: "Stage file" })).not.toBeInTheDocument();
   });
 
-  it("isn't marked resolved while conflicts are left", async () => {
-    renderView(conflicted("a.txt"));
+  it("is only marked resolved with conflicts left once the user says they belong in it", async () => {
+    const { onOpen } = renderView(conflicted("a.txt"));
     await screen.findByText("2 conflicts left");
 
-    expect(screen.getByRole("button", { name: "Mark resolved" })).toBeDisabled();
     fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+    expect(await screen.findByRole("alertdialog")).toHaveTextContent(
+      "Mark a.txt resolved with its conflict markers?It still has 2 conflicts.",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(rpc.git.conflicts.markResolved).not.toHaveBeenCalled();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Mark resolved" }));
+    const dialog = await screen.findByRole("alertdialog");
+    await userEvent.click(dialog.querySelector("button:last-child")!);
+    await vi.waitFor(() =>
+      expect(rpc.git.conflicts.markResolved).toHaveBeenCalledWith({
+        repositoryId: "repo",
+        path: "a.txt",
+        version: "v1",
+        withMarkers: true,
+      }),
+    );
+    expect(onOpen).toHaveBeenCalledWith(UNSTAGED, conflicted("b.txt"));
+  });
+
+  it("doesn't take another file's progress for its own", async () => {
+    viewer.left = 0;
+    renderView(conflicted("a.txt"));
+    await screen.findByText("No conflicts left");
+
+    // The viewer still says how the last file went, while this one's conflicts are highlighted.
+    viewer.props!.onProgress({
+      fileKey: "unstaged::b.txt",
+      left: 0,
+      current: undefined,
+      saving: false,
+      version: "v9",
+      problem: undefined,
+    });
+    await vi.waitFor(() =>
+      expect(screen.getByRole("button", { name: "Mark resolved" })).toBeDisabled(),
+    );
+    expect(screen.queryByText("No conflicts left")).not.toBeInTheDocument();
+  });
+
+  it("leaves its keys to a dialog or menu on top of it", async () => {
+    renderView(conflicted("a.txt"));
+    await screen.findByText("2 conflicts left");
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    const button = document.createElement("button");
+    dialog.append(button);
+    document.body.append(dialog);
+    try {
+      fireEvent.keyDown(button, { key: "t" });
+      fireEvent.keyDown(button, { key: "]" });
+      expect(viewer.commands.resolve).not.toHaveBeenCalled();
+      expect(viewer.commands.next).not.toHaveBeenCalled();
+    } finally {
+      dialog.remove();
+    }
   });
 
   it("is marked resolved once none are, then the next conflicted file opens", async () => {
@@ -184,6 +239,7 @@ describe("a file with text conflicts", () => {
       repositoryId: "repo",
       path: "a.txt",
       version: "v1",
+      withMarkers: false,
     });
     expect(onOpen).toHaveBeenCalledWith(UNSTAGED, conflicted("b.txt"));
   });

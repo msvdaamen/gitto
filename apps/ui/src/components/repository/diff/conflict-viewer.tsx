@@ -53,6 +53,8 @@ export interface ConflictCommands {
 
 /** How resolving the file on show is going. */
 export interface ConflictProgress {
+  /** Names the file on show (see `fileKey`): another one's, until this one's is on show. */
+  fileKey: string | undefined;
   /** How many conflicts are left. */
   left: number;
   /** Where the current one is among them, from 1; `undefined` without one. */
@@ -160,6 +162,7 @@ export default function ConflictViewer(props: {
       const left = conflictsLeft(shown?.state);
       const at = current === undefined ? -1 : left.indexOf(current);
       props.onProgress({
+        fileKey: shown?.fileKey,
         left: left.length,
         current: at === -1 ? undefined : at + 1,
         saving,
@@ -190,7 +193,7 @@ export default function ConflictViewer(props: {
         button.title = side ? `${label}: ${side}` : "Keep both, ours first";
         button.className =
           "h-[22px] cursor-pointer rounded-[5px] border border-border bg-panel-raised px-2 text-[11.5px] font-[600] text-text-soft enabled:hover:border-[color-mix(in_srgb,var(--primary)_45%,var(--border))] enabled:hover:text-text focus-ring disabled:cursor-default disabled:opacity-50";
-        button.disabled = saving;
+        button.disabled = !resolvable();
         button.addEventListener("click", () => request(action, resolution));
         row.append(button);
       }
@@ -203,12 +206,18 @@ export default function ConflictViewer(props: {
       return row;
     };
 
-    /** Marks the current conflict's row, and turns the buttons off while one is being saved. */
+    /**
+     * Whether a conflict can be resolved now: not while another's being saved, nor before the
+     * file's version on disk is known, which the write is checked against (after editing, say).
+     */
+    const resolvable = () => !saving && !!shown?.version;
+
+    /** Marks the current conflict's row, and turns the buttons off while none can be resolved. */
     const markCurrent = () => {
       for (const row of wrapper.querySelectorAll<HTMLElement>("[data-conflict]")) {
         const isCurrent = row.dataset.conflict === String(current);
         row.toggleAttribute("data-current", isCurrent);
-        for (const button of row.querySelectorAll("button")) button.disabled = saving;
+        for (const button of row.querySelectorAll("button")) button.disabled = !resolvable();
       }
     };
 

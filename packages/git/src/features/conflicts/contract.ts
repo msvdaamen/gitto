@@ -26,8 +26,10 @@ export const ConflictsContract = {
   ),
   /**
    * Marks a conflicted file resolved as it is in the working tree, by staging it. Fails with
-   * PRECONDITION_FAILED if it still has conflict markers, and with CONFLICT if it isn't at
-   * `version` (when given) any more.
+   * PRECONDITION_FAILED if it still has conflict markers, unless `withMarkers` (the user said they
+   * belong in it), and with CONFLICT if it isn't at `version` (when given) any more.
    */
-  markResolved: oc.input(PathInput.extend({ version: z.string().nullable() })),
+  markResolved: oc.input(
+    PathInput.extend({ version: z.string().nullable(), withMarkers: z.boolean().optional() }),
+  ),
 };

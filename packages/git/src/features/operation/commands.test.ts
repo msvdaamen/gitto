@@ -1,9 +1,10 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { GitError, NoOperationError } from "../../core/errors";
+import { EditorNeededError, GitError, NoOperationError } from "../../core/errors";
 import type { Repo } from "../../core/repo";
 import { commitFiles, createDivergedRepo, createMergeConflict, tryGit } from "../../test/conflicts";
 import { createRepo, git, rejection, repos } from "../../test/fixtures";
@@ -117,6 +118,26 @@ describe("a rebase", () => {
     expect(git(path, "log", "--format=%s", "main..side")).toBe("theirs again\ntheirs");
   });
 
+  it("isn't continued when a commit ahead is to be reworded, which needs an editor", async () => {
+    const path = createDivergedRepo("op-rebase-reword", {
+      base: { "f.txt": "one\ntwo\nthree\n" },
+      ours: { "f.txt": "one\nours\nthree\n" },
+      theirs: { "f.txt": "one\ntheirs\nthree\n" },
+    });
+    git(path, "checkout", "-q", "side");
+    commitFiles(path, { "g.txt": "g\n" }, "another");
+    // An interactive rebase, its second commit to be reworded.
+    spawnSync("git", ["rebase", "-i", "main"], {
+      cwd: path,
+      env: { ...process.env, GIT_SEQUENCE_EDITOR: "perl -pi -e 's/^pick/reword/ if $. == 2'" },
+    });
+    const repo = await repos.open("op-rebase-reword");
+    await resolve(repo, "one\nresolved\nthree\n");
+
+    await expect(continueOperation(repo, "rebase")).rejects.toBeInstanceOf(EditorNeededError);
+    expect(await getOperation(repo)).toMatchObject({ kind: "rebase", steps: { step: 1 } });
+  });
+
   it("is aborted, back on the branch as it was", async () => {
     const path = createRebase("op-rebase-abort");
     const before = git(path, "rev-parse", "ORIG_HEAD");
@@ -164,6 +185,48 @@ describe("a cherry-pick", () => {
     await continueOperation(repo, "cherry-pick");
     expect(await getOperation(repo)).toBeNull();
     expect(git(path, "rev-parse", "HEAD")).toBe(head);
+  });
+
+  it("skips only the commit it stopped at, not a later one that turns out empty", async () => {
+    const path = createDivergedRepo("op-cherry-pick-later-empty", {
+      base: { "f.txt": "one\ntwo\nthree\n" },
+      ours: { "f.txt": "one\nours\nthree\n", "g.txt": "g\n" },
+      theirs: { "f.txt": "one\ntheirs\nthree\n" },
+    });
+    // Already on main: empty once it's picked.
+    git(path, "checkout", "-q", "side");
+    commitFiles(path, { "g.txt": "g\n" }, "add g");
+    git(path, "checkout", "-q", "main");
+    tryGit(path, "cherry-pick", "main..side");
+    const repo = await repos.open("op-cherry-pick-later-empty");
+
+    await resolve(repo, "one\nours and theirs\nthree\n");
+    await expect(continueOperation(repo, "cherry-pick")).rejects.toBeInstanceOf(GitError);
+    expect(git(path, "log", "-1", "--format=%s")).toBe("theirs");
+    expect(await getOperation(repo)).toMatchObject({
+      kind: "cherry-pick",
+      commit: { subject: "add g" },
+    });
+  });
+
+  it("is still under way once the commit it stopped at was committed by hand", async () => {
+    const path = createDivergedRepo("op-cherry-picks-by-hand", {
+      base: { "f.txt": "one\ntwo\nthree\n" },
+      ours: { "f.txt": "one\nours\nthree\n" },
+      theirs: { "f.txt": "one\ntheirs\nthree\n" },
+    });
+    git(path, "checkout", "-q", "side");
+    commitFiles(path, { "g.txt": "g\n" }, "another");
+    git(path, "checkout", "-q", "main");
+    tryGit(path, "cherry-pick", "main..side");
+    const repo = await repos.open("op-cherry-picks-by-hand");
+    await resolve(repo, "one\nresolved\nthree\n");
+    git(path, "commit", "-q", "--no-edit");
+
+    expect(await getOperation(repo)).toEqual({ kind: "cherry-pick", commit: null, remaining: 1 });
+    await continueOperation(repo, "cherry-pick");
+    expect(await getOperation(repo)).toBeNull();
+    expect(git(path, "log", "-2", "--format=%s")).toBe("another\ntheirs");
   });
 
   it("counts the commits left in a series", async () => {

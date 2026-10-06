@@ -47,7 +47,12 @@ export type ConflictResolution =
       sides: ConflictSides;
       version: string | null;
     }
-  | { action: "mark"; version: string | null };
+  | {
+      action: "mark";
+      version: string | null;
+      /** Even with conflict markers left: the user said they belong in it. */
+      withMarkers: boolean;
+    };
 
 /**
  * Resolves a conflicted file whole (see `ConflictResolution`). Settles once that's done, rather
@@ -73,7 +78,12 @@ export function useResolveFile() {
             sides: resolution.sides,
             version: resolution.version,
           })
-        : rpc.git.conflicts.markResolved({ repositoryId, path, version: resolution.version }),
+        : rpc.git.conflicts.markResolved({
+            repositoryId,
+            path,
+            version: resolution.version,
+            withMarkers: resolution.withMarkers,
+          }),
     onSettled: (_result, _error, { repositoryId }) =>
       void queryClient.invalidateQueries({ queryKey: gitKeys.uncommitted(repositoryId) }),
   }));

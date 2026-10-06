@@ -29,8 +29,11 @@ export const OperationSchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.enum(["cherry-pick", "revert"]),
-    /** The commit being cherry-picked or reverted. */
-    commit: CommitNameSchema,
+    /**
+     * The commit being cherry-picked or reverted; `null` between the commits of a series, once
+     * the one it stopped at was committed by hand.
+     */
+    commit: CommitNameSchema.nullable(),
     /** How many more are to be after it, in a series of them. */
     remaining: z.number(),
   }),
