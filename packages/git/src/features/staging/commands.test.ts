@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readlinkSync,
   renameSync,
   rmSync,
   symlinkSync,
@@ -1078,6 +1079,32 @@ describe("discarding a file's changes", () => {
     expect(contents(repo.path, "a file.txt")).toBe("changed\n");
   });
 
+  it("discards a staged deletion that a file added with --intent-to-add took the place of", async () => {
+    const repo = await createHistoryRepo("discard-staged-intent");
+    git(repo.path, "rm", "-q", "--cached", "a file.txt");
+    git(repo.path, "add", "-N", "a file.txt");
+
+    await discard(repo, { path: "a file.txt", origPath: null, status: "deleted" }, "staged");
+    expect(contents(repo.path, "a file.txt")).toBe("a\nmore\n");
+    expect(await statusFiles(repo)).toEqual([
+      { path: "new file.txt", origPath: null, staged: null, unstaged: "untracked" },
+    ]);
+  });
+
+  it("says a folder is in the way of an untracked file that a folder took the place of", async () => {
+    const repo = await createHistoryRepo("discard-untracked-folder");
+    rmSync(join(repo.path, "new file.txt"));
+    mkdirSync(join(repo.path, "new file.txt"));
+    writeFileSync(join(repo.path, "new file.txt", "x"), "x\n");
+
+    const error = await rejection(
+      discard(repo, { path: "new file.txt", origPath: null, status: "untracked" }, "unstaged"),
+    );
+    expect((error as Error).message).toBe(
+      "A folder is at new file.txt now. Move or delete it, then discard the changes.",
+    );
+  });
+
   it("leaves a submodule's changes to be discarded in it", async () => {
     createSubmoduleRepo("discard-submodule");
     const repo = await repos.open("discard-submodule");
@@ -1338,6 +1365,58 @@ describe("discarding all changes", () => {
 
     await discardAll(repo);
     expect(contents(path, "mod/m.txt")).toBe("local\n");
+  });
+
+  it("keeps a link where a file was, whose target reads the same as the file", async () => {
+    const path = createRepo("discard-all-link-for-file");
+    writeFileSync(join(path, "x"), "y");
+    git(path, "add", ".");
+    git(path, "commit", "-q", "-m", "first");
+    writeFileSync(join(path, ".git", "info", "exclude"), "x\n");
+    git(path, "rm", "-q", "--cached", "x");
+    rmSync(join(path, "x"));
+    symlinkSync("y", join(path, "x"));
+    const repo = await repos.open("discard-all-link-for-file");
+
+    expect(await discardAll(repo)).toEqual([{ path: "x", reason: "in-the-way" }]);
+    expect(readlinkSync(join(path, "x"))).toBe("y");
+  });
+
+  it("says it kept a submodule whose name isn't ASCII", async () => {
+    const path = createRepo("discard-all-submodule-name");
+    writeFileSync(join(path, "a.txt"), "a\n");
+    const mod = join(path, "modé");
+    mkdirSync(mod);
+    git(mod, "init", "-q");
+    git(
+      mod,
+      "-c",
+      "user.name=T",
+      "-c",
+      "user.email=t@e",
+      "commit",
+      "-q",
+      "--allow-empty",
+      "-m",
+      "1",
+    );
+    git(path, "add", ".");
+    git(path, "commit", "-q", "-m", "first");
+    git(
+      mod,
+      "-c",
+      "user.name=T",
+      "-c",
+      "user.email=t@e",
+      "commit",
+      "-q",
+      "--allow-empty",
+      "-m",
+      "2",
+    );
+    const repo = await repos.open("discard-all-submodule-name");
+
+    expect(await discardAll(repo)).toEqual([{ path: "modé", reason: "submodule" }]);
   });
 
   it("deletes nothing untracked when it can't discard the rest", async () => {

@@ -42,10 +42,25 @@ export async function entryAt(root: string, path: string | Buffer): Promise<Entr
       if (stats.isFile()) return "file";
       return stats.isSymbolicLink() ? "link" : "other";
     },
-    (error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return undefined;
+    async (error: NodeJS.ErrnoException) => {
+      // On Windows, a file where one of its folders goes is ENOENT too, rather than ENOTDIR.
+      if (error.code === "ENOENT") return (await fileAbove(root, path)) ? "blocked" : undefined;
       return error.code === "ENOTDIR" ? "blocked" : "unreadable";
     },
+  );
+}
+
+/** Whether something other than a folder is where one of `path`'s folders goes. */
+async function fileAbove(root: string, path: string | Buffer): Promise<boolean> {
+  const name = typeof path === "string" ? path : path.toString("latin1");
+  const slash = name.lastIndexOf("/");
+  if (slash === -1) return false;
+  const parent = name.slice(0, slash);
+  const folder = typeof path === "string" ? parent : Buffer.from(parent, "latin1");
+  return lstat(fullPath(root, folder)).then(
+    (stats) => !stats.isDirectory(),
+    (error: NodeJS.ErrnoException) =>
+      error.code === "ENOENT" ? fileAbove(root, folder) : error.code === "ENOTDIR",
   );
 }
 
