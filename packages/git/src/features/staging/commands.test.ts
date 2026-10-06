@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -808,6 +809,21 @@ describe("discarding a file's changes", () => {
     ]);
   });
 
+  it("deletes a file added with --intent-to-add that git pairs with a deleted one as its rename", async () => {
+    const repo = await createHistoryRepo("discard-intent-rename");
+    const path = repo.path;
+    renameSync(join(path, "c.txt"), join(path, "d.txt"));
+    git(path, "add", "-N", "d.txt");
+
+    await discard(repo, { path: "d.txt", origPath: "c.txt" }, "unstaged");
+    expect(contents(path, "d.txt")).toBeNull();
+    expect(contents(path, "c.txt")).toBe("b\n");
+    expect(await statusFiles(repo)).toEqual([
+      { path: "a file.txt", origPath: null, staged: null, unstaged: "modified" },
+      { path: "new file.txt", origPath: null, staged: null, unstaged: "untracked" },
+    ]);
+  });
+
   it("leaves the files in a folder of the same name alone", async () => {
     const path = createRepo("discard-folder");
     mkdirSync(join(path, "foo"));
@@ -860,6 +876,33 @@ describe("discarding all changes", () => {
     expect(existsSync(join(path, "dir"))).toBe(false);
     expect(readFileSync(join(path, "bin.dat"))).toEqual(Buffer.from([0, 1, 2]));
     expect(contents(path, "debug.log")).toBe("ignored\n");
+  });
+
+  it("deletes a staged file that's ignored, which isn't kept like the unstaged ones", async () => {
+    const repo = await createHistoryRepo("discard-all-ignored");
+    const path = repo.path;
+    writeFileSync(join(path, ".git", "info", "exclude"), "*.log\n");
+    writeFileSync(join(path, "staged.log"), "staged\n");
+    git(path, "add", "-f", "staged.log");
+
+    await discardAll(repo);
+    expect(contents(path, "staged.log")).toBeNull();
+  });
+
+  it("leaves a deleted file deleted where a folder took its place, with what's in it", async () => {
+    const repo = await createHistoryRepo("discard-all-folder");
+    const path = repo.path;
+    writeFileSync(join(path, ".git", "info", "exclude"), "*.log\n");
+    rmSync(join(path, "c.txt"));
+    mkdirSync(join(path, "c.txt"));
+    writeFileSync(join(path, "c.txt", "important.log"), "kept\n");
+
+    await discardAll(repo);
+    expect(contents(path, "c.txt/important.log")).toBe("kept\n");
+    // The rest is discarded all the same.
+    expect(await statusFiles(repo)).toEqual([
+      { path: "c.txt", origPath: null, staged: null, unstaged: "deleted" },
+    ]);
   });
 
   it("puts back a file whose name isn't UTF-8", async () => {

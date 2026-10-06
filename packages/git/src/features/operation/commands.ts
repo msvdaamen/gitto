@@ -175,6 +175,24 @@ export async function operationUnderWay(gitDir: string): Promise<OperationKind |
 }
 
 /**
+ * Why `action` can't be done now, if it can't: an operation is under way, or files are conflicted,
+ * which `run` (a command of `repo.exclusive`) checks. `action` ends what it says, e.g. "merge":
+ * "Finish or abort it, then merge."
+ */
+export async function underWayBlocker(
+  gitDir: string,
+  run: GitCommand,
+  action: string,
+): Promise<string | undefined> {
+  const [operation, conflicted] = await Promise.all([operationUnderWay(gitDir), hasConflicts(run)]);
+  if (operation) {
+    return `A ${OPERATION_NAMES[operation]} is under way. Finish or abort it, then ${action}.`;
+  }
+  if (conflicted) return `Some files have conflicts. Resolve them, then ${action}.`;
+  return undefined;
+}
+
+/**
  * Checks that the operation under way is `kind`, the one the user saw; rejects with
  * `NoOperationError` if it isn't, e.g. as it was finished in a terminal meanwhile.
  */

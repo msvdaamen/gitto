@@ -13,7 +13,7 @@ import {
   type GitCommand,
   type Repo,
 } from "../../core/repo";
-import { OPERATION_NAMES, operationUnderWay } from "../operation/commands";
+import { underWayBlocker } from "../operation/commands";
 import { parseRefName } from "../refs/parse";
 import { fetchedName } from "../remote/commands";
 import { isRef } from "./commands";
@@ -51,23 +51,15 @@ export async function mergeBranch(repo: Repo, ref: string, into: string): Promis
     const wording = Promise.all([commit, head]).then(([sha, before]) =>
       sha && before ? mergeMessage(run, sha, ref) : undefined,
     );
-    const [operation, conflicted, current, sha, before, message, named] = await Promise.all([
-      operationUnderWay(gitDir),
-      hasConflicts(run),
+    const [blocker, current, sha, before, message, named] = await Promise.all([
+      underWayBlocker(gitDir, run, "merge"),
       currentBranch(run),
       commit,
       head,
       wording,
       resolveRef(run, target.name),
     ]);
-    if (operation) {
-      throw new MergeBlockedError(
-        `A ${OPERATION_NAMES[operation]} is under way. Finish or abort it, then merge.`,
-      );
-    }
-    if (conflicted) {
-      throw new MergeBlockedError("Some files have conflicts. Resolve them, then merge.");
-    }
+    if (blocker) throw new MergeBlockedError(blocker);
     if (current === null) {
       throw new MergeBlockedError("HEAD is detached: check out a branch to merge into it.");
     }

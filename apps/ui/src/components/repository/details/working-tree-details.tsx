@@ -46,7 +46,8 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
   const stage = useStage(() => props.repositoryId);
   const unstage = useUnstage(() => props.repositoryId);
   const discard = useDiscard(() => props.repositoryId);
-  const operation = useOperationInProgress(() => props.repositoryId);
+  // Without Suspense, like the status: it's refetched whenever anything changes on disk.
+  const operation = useUnsuspendedData(useOperationInProgress(() => props.repositoryId));
   const busy = () => stage.isPending || unstage.isPending || discard.isPending;
   // The changes being asked about discarding.
   const [discarding, setDiscarding] = createSignal<DiscardTarget>();
@@ -64,14 +65,11 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
     disabled: (file) => busy() || !canDiscard(file),
     run: (file) => setDiscarding({ file, side }),
   });
-  // Why the changes can't all be discarded, if they can't; `undefined` until the status and the
-  // operation under way have loaded.
+  // Why the changes can't all be discarded, if they can't: also while what that depends on loads.
   const discardAllBlocked = () => {
     const current = summary();
-    const under = operation.data;
-    return current && under !== undefined
-      ? (discardAllBlocker(current, under) ?? false)
-      : undefined;
+    const under = operation();
+    return current && under !== undefined ? discardAllBlocker(current, under) : "Loading…";
   };
   const lastCommit = useHeadSha(summary);
   // Read once: in JSX, `summary() && headLabel(summary().head)` would check a memo of whether
@@ -103,10 +101,10 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
         </div>
         <IconButton
           label="Discard all changes…"
-          title={discardAllBlocked() || "Discard all changes"}
+          title={discardAllBlocked() ?? "Discard all changes"}
           icon={Trash}
           class="ml-auto self-start"
-          disabled={discardAllBlocked() !== false || busy()}
+          disabled={discardAllBlocked() !== undefined || busy()}
           onClick={() => setDiscarding("all")}
         />
       </div>
