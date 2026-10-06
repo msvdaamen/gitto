@@ -4,7 +4,7 @@ import { basename, join, resolve } from "node:path";
 import { v7 as uuidv7 } from "uuid";
 
 import type { Repository } from "../types";
-import { NotAGitRepositoryError } from "./errors";
+import { NotAGitRepositoryError, RepositoryListError } from "./errors";
 import type { RepositoryStore } from "./store";
 
 export interface RepositoryService {
@@ -39,11 +39,15 @@ export class RepositoryServiceImpl implements RepositoryService {
     if (!isRepository) throw new NotAGitRepositoryError(repoPath);
 
     const repository: Repository = { id: uuidv7(), name: basename(repoPath), path: repoPath };
-    await this.store.create(repository);
+    await this.store.create(repository).catch((error: unknown) => {
+      throw new RepositoryListError(error);
+    });
     return repository;
   }
 
   async removeRepository(id: string): Promise<void> {
-    await this.store.delete(id);
+    await this.store.delete(id).catch((error: unknown) => {
+      throw new RepositoryListError(error);
+    });
   }
 }

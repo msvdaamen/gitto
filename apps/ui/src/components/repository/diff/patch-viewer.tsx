@@ -227,8 +227,11 @@ export default function PatchViewer(props: {
       if (editing.active()) return;
       const sameFile = shownDiff !== undefined && shownFileKey === patch.fileKey;
       // The same file, with lines shown around its changes: the new patch is filled in with the
-      // whole file too, to show the same ones.
-      const kept = sameFile && !shownDiff!.isPartial ? await keptExpansion(patch.diff) : undefined;
+      // whole file too, to show the same ones. Not an added or deleted file's, whose patch has
+      // all its lines, and no other side to read (git names it with zeros): as once it's edited.
+      const whole = patch.diff.type === "new" || patch.diff.type === "deleted";
+      const kept =
+        sameFile && !shownDiff!.isPartial && !whole ? await keptExpansion(patch.diff) : undefined;
       const diff = kept?.diff ?? patch.diff;
       await highlights.highlight(diff, HIGHLIGHT_WAIT_MS);
       // Passed over for another patch meanwhile, or editing started.
