@@ -7,6 +7,7 @@ import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline";
+import * as tty from "node:tty";
 
 const ROOT = path.resolve(import.meta.dirname, "../../..");
 const APP_DIR = path.join(ROOT, "apps/electron");
@@ -219,8 +220,12 @@ const COMMANDS = {
   },
 };
 
-// Electron must not get the terminal's stdin; read it through its own stream.
-const input = fs.createReadStream(null, { fd: fs.openSync("/dev/stdin", "r") });
+// Electron must not get the terminal's stdin; read it through its own stream. A terminal's (in
+// tmux) through a tty stream: a file stream's read blocks a thread, which process.exit waits for.
+const stdinFd = fs.openSync("/dev/stdin", "r");
+const input = tty.isatty(stdinFd)
+  ? new tty.ReadStream(stdinFd)
+  : fs.createReadStream(null, { fd: stdinFd });
 const rl = readline.createInterface({
   input,
   output: process.stdout,

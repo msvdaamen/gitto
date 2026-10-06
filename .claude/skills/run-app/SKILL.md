@@ -35,6 +35,10 @@ path, or make the demo one, whose branches cover each way a merge goes (`ff`, `d
 .claude/skills/run-app/make-demo-repo.sh /tmp/gitto-demo
 ```
 
+Running it again resets the demo repository; it won't replace a folder that's something else. Its
+commits are by "Demo" (it sets `GIT_AUTHOR_*` and `GIT_COMMITTER_*`, which cloud sessions set
+too), but the commits you make in the app are by whoever the environment says.
+
 ## 3. Drive it
 
 **A script**: pipe commands in; the app closes when they're done (a whole run takes seconds).
@@ -51,15 +55,42 @@ ss after-merge
 EOF
 ```
 
-**Step by step**, keeping the app open between commands, in tmux:
+**Step by step**, keeping the app open between commands: `send.sh` runs the driver in tmux (it
+starts it the first time), sends one command, waits for it to finish and prints its output. It
+exits 1 if the command failed.
 
 ```bash
-tmux new-session -d -s gitto -x 200 -y 50 'node .claude/skills/run-app/driver.mjs'
-tmux send-keys -t gitto 'launch' Enter
-timeout 60 bash -c 'until tmux capture-pane -t gitto -p | grep -q "done: launch"; do sleep 0.2; done'
-tmux send-keys -t gitto 'open /tmp/gitto-demo' Enter
-tmux capture-pane -t gitto -p
+.claude/skills/run-app/send.sh launch
+.claude/skills/run-app/send.sh open /tmp/gitto-demo
+.claude/skills/run-app/send.sh ss opened
+.claude/skills/run-app/send.sh quit
 ```
+
+A merge that stops at a conflict, resolved in the conflict view and committed (the banner above
+the history shows the merge under way, the view opens on the first conflicted file):
+
+```bash
+node .claude/skills/run-app/driver.mjs <<'EOF'
+launch
+open /tmp/gitto-demo
+rclick refs/heads/conflict
+click-role menuitem Merge conflict into main
+wait Keep both
+ss conflict
+click-role button Keep both
+click-role button Mark resolved
+sleep 1000
+ss resolved
+click-role button Commit merge
+sleep 1500
+ss merged
+EOF
+git -C /tmp/gitto-demo log --oneline --graph --all
+```
+
+In the conflict view, each conflict has **Keep ours**, **Keep theirs** and **Keep both**, and the
+file **Keep all of ours** and **Keep all of theirs**; **Mark resolved** stages it. The banner has
+**Resolve conflicts**, **Abort** and **Commit merge** (**Continue** for a rebase or cherry-pick).
 
 Every command prints `done: <command>` when finished, and `ERROR in <command>: …` if it failed.
 Screenshots go to `/tmp/gitto-shots/<name>.png` (`SCREENSHOT_DIR` to change). **Read them**: a
@@ -102,5 +133,6 @@ are printed as they come.
 - **No native folder picker.** `open` replaces `dialog.showOpenDialog` in the main process to
   answer with the path.
 - **Leftover runs.** Don't kill processes with `pkill -f <pattern>`: it matches the shell running
-  the command too. Use `quit`, or `kill` by PID.
+  the command too. Use `quit`, or `kill` by PID. A driver stuck in `send.sh`'s tmux session goes with
+  `tmux kill-session -t gitto`; the next `send.sh` starts a new one.
 - Chromium's dbus errors are expected (there's no session bus) and filtered out.
