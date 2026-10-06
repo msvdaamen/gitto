@@ -1,5 +1,11 @@
-import type { ChangedFile } from "@gitto/git/types";
-import { keepPreviousData, useQuery, type QueryClient, type QueryKey } from "@tanstack/solid-query";
+import type { ChangedFile, WorkingTreeFiles } from "@gitto/git/types";
+import {
+  keepPreviousData,
+  queryOptions,
+  useQuery,
+  type QueryClient,
+  type QueryKey,
+} from "@tanstack/solid-query";
 import { createMemo } from "solid-js";
 
 import { lineTotals } from "@/git/changes";
@@ -28,9 +34,9 @@ export function changedFilesQuery(
   fetch: FilesFetcher,
   enabled = true,
 ) {
-  return {
+  return queryOptions({
     queryKey: queryKey(repositoryId, sha),
-    queryFn: async ({ signal }: { signal: AbortSignal }) => ({
+    queryFn: async ({ signal }) => ({
       sha,
       // A commit can change tens of thousands of files.
       files: new Opaque(await fetch({ repositoryId, sha }, { signal })),
@@ -38,7 +44,7 @@ export function changedFilesQuery(
     staleTime: Infinity,
     placeholderData: keepPreviousData,
     enabled,
-  };
+  });
 }
 
 /**
@@ -85,15 +91,24 @@ export function fetchBlob(client: QueryClient, repositoryId: string, oid: string
  */
 export function useWorkingTreeChanges(repositoryId: () => string) {
   const query = useUncommittedFiles(repositoryId);
-  // Without Suspense: they're refetched while they're on show (see `useUnsuspendedData`).
-  const changes = useUnsuspendedData(query);
+  const { staged, unstaged, uncounted } = useWorkingTreeLists(query);
+  return { query, staged, unstaged, uncounted };
+}
 
+/**
+ * The lists in the uncommitted changes `query` loads (see `useUncommittedFiles`): what's staged
+ * for the next commit and what isn't, and whether their lines were counted. Read without Suspense:
+ * they're refetched while they're on show (see `useUnsuspendedData`).
+ */
+export function useWorkingTreeLists(query: { data: Opaque<WorkingTreeFiles> | undefined }) {
+  const changes = useUnsuspendedData(query);
   const staged = createMemo(() => stagedFiles(changes()?.value.staged ?? []));
   const unstaged = createMemo(() => changes()?.value.unstaged ?? []);
   /** Whether there are too many files for their lines to have been counted. */
   const uncounted = () => changes()?.value.uncounted ?? false;
-
-  return { query, staged, unstaged, uncounted };
+  /** Whether the changes are loaded: `undefined` until they are. */
+  const loaded = () => changes() !== undefined;
+  return { staged, unstaged, uncounted, loaded };
 }
 
 /** The staged files to list: a conflict shows up on both sides, but it's resolved by staging it. */
