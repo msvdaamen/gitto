@@ -1,7 +1,5 @@
 import type { ChangedFile, Conflict } from "@gitto/git/types";
-import { AlertDialog } from "@kobalte/core/alert-dialog";
 import { useQueryClient, type QueryClient } from "@tanstack/solid-query";
-import { cn } from "cn";
 import Check from "lucide-solid/icons/check";
 import ChevronDown from "lucide-solid/icons/chevron-down";
 import ChevronUp from "lucide-solid/icons/chevron-up";
@@ -24,10 +22,9 @@ import {
 } from "solid-js";
 
 import { Button, IconButton } from "@/components/ui/button";
-import { DIALOG_BOX, DialogPortal } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Notice } from "@/components/ui/notice";
-import { conflictKind, describeConflict, describeSide, keepLabel } from "@/git/conflicts";
+import { conflictKind, describeConflict } from "@/git/conflicts";
 import {
   conflictQuery,
   useConflict,
@@ -39,8 +36,10 @@ import { gitKeys } from "@/git/queries/keys";
 import { useUnsuspendedData } from "@/git/queries/unsuspended";
 import { useDelayed } from "@/hooks/delayed";
 
+import { ConflictSides } from "./conflict-sides";
 import type * as ViewerModule from "./conflict-viewer";
 import type { ConflictCommands, ConflictProgress, Resolution } from "./conflict-viewer";
+import { MarkersDialog } from "./markers-dialog";
 import type { EditSession } from "./viewer-editing";
 
 let viewerModule: Promise<typeof ViewerModule> | undefined;
@@ -383,7 +382,11 @@ export function useConflictResolution(props: {
           </Match>
           <Match when={kind()?.kind === "sides" && data()} keyed>
             {(shown) => (
-              <Sides conflict={shown} disabled={busy()} onKeep={(side) => keep(shown, side)} />
+              <ConflictSides
+                conflict={shown}
+                disabled={busy()}
+                onKeep={(side) => keep(shown, side)}
+              />
             )}
           </Match>
           <Match when={kind()?.kind === "text"}>
@@ -425,41 +428,6 @@ export function useConflictResolution(props: {
   };
 }
 
-/**
- * A conflict that's resolved by keeping one side whole: what each side has at the file's path,
- * and a button to keep it, e.g. "Delete, as theirs does".
- */
-function Sides(props: {
-  conflict: Conflict;
-  disabled: boolean;
-  onKeep: (side: "ours" | "theirs") => void;
-}) {
-  return (
-    <div class="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
-      <span class="flex flex-col items-center gap-1.5 text-faint">
-        <GitMergeConflict size={22} />
-        <strong class="text-[13.5px] text-text-soft">{describeConflict(props.conflict)}</strong>
-        <Show when={props.conflict.unreadable}>
-          {(reason) => <span class="text-[11.5px]">{reason()}</span>}
-        </Show>
-      </span>
-      <div class="grid w-full max-w-[460px] grid-cols-2 gap-3">
-        {(["ours", "theirs"] as const).map((side) => (
-          <div class="flex flex-col items-center gap-2 rounded-lg border border-border bg-panel p-3">
-            <span class="text-[10.5px] font-[700] tracking-[.07em] text-muted uppercase">
-              {side}
-            </span>
-            <span class="text-[12px] text-text-soft">{describeSide(props.conflict[side])}</span>
-            <Button disabled={props.disabled} onClick={() => props.onKeep(side)}>
-              {keepLabel(props.conflict, side)}
-            </Button>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 /** Shown while the conflict loads, unless it's quick about it. */
 function Loading() {
   const shown = useDelayed(() => true, 150);
@@ -467,55 +435,6 @@ function Loading() {
     <Show when={shown()}>
       <EmptyState icon={LoaderCircle} loading title="Loading the conflict…" class="h-full" />
     </Show>
-  );
-}
-
-/**
- * Asks before marking a file resolved with conflict markers left in it, which is only right when
- * they belong in it, like a test's fixture of them: they're staged as they are. Esc, or clicking
- * outside, cancels.
- */
-function MarkersDialog(props: {
-  open: boolean;
-  path: string;
-  /** How many conflicts the view reads in it; none when its markers can't be read as conflicts. */
-  left: number;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  const name = () => props.path.slice(props.path.lastIndexOf("/") + 1);
-  return (
-    <AlertDialog open={props.open} onOpenChange={(open) => !open && props.onCancel()} modal>
-      <DialogPortal>
-        <AlertDialog.Content class={cn(DIALOG_BOX, "max-w-[440px] p-5")}>
-          <div class="flex items-start gap-3">
-            <span class="grid size-9 shrink-0 place-items-center rounded-[9px] bg-amber-soft text-amber">
-              <TriangleAlert size={18} strokeWidth={1.9} />
-            </span>
-            <div class="min-w-0">
-              <AlertDialog.Title class="m-0 text-[15px] font-[680]">
-                Mark {name()} resolved with its conflict markers?
-              </AlertDialog.Title>
-              <AlertDialog.Description class="m-0 mt-2 text-[12.5px] leading-[1.55] text-text-soft">
-                {props.left > 0
-                  ? `It still has ${props.left} ${props.left === 1 ? "conflict" : "conflicts"}.`
-                  : "It still has conflict markers."}{" "}
-                Mark it resolved only if they belong in it, like a test's fixture of them: they're
-                staged as they are.
-              </AlertDialog.Description>
-            </div>
-          </div>
-          <div class="mt-5 flex justify-end gap-2">
-            <Button variant="ghost" onClick={props.onCancel}>
-              Cancel
-            </Button>
-            <Button variant="primary" onClick={props.onConfirm}>
-              Mark resolved
-            </Button>
-          </div>
-        </AlertDialog.Content>
-      </DialogPortal>
-    </AlertDialog>
   );
 }
 

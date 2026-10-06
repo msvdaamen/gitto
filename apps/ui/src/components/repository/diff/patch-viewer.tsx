@@ -13,7 +13,6 @@ import { createViewerEditing, type EditSession } from "./viewer-editing";
 import {
   APP_CSS,
   focusableExpandButtons,
-  forget,
   HIGHLIGHT_WAIT_MS,
   parsed,
   THEMES,
@@ -240,7 +239,7 @@ export default function PatchViewer(props: {
       if (shownDiff && !sameFile) root.scrollTop = 0;
       // The lines shown around the last one's changes are by hunk, which another's don't match.
       diffs.expanded = kept?.expanded ?? new Map();
-      if (sameFile && shownDiff!.cacheKey !== diff.cacheKey) forget(shownDiff!);
+      if (sameFile && shownDiff!.cacheKey !== diff.cacheKey) highlights.forget(shownDiff!);
       shownDiff = diff;
       shownFileKey = patch.fileKey;
       patchOnShow = patch;

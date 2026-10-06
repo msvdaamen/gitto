@@ -11,6 +11,9 @@ import { rpc } from "@/lib/rpc";
 
 import { gitKeys } from "./keys";
 
+/** How long a conflicted file is kept once nothing shows it, rather than queries' five minutes. */
+const CONFLICT_GC_MS = 60_000;
+
 /** Loads a conflicted file's sides, and its text with the conflict markers if it's text. */
 export function conflictQuery(repositoryId: string, path: string) {
   return queryOptions({
@@ -19,6 +22,9 @@ export function conflictQuery(repositoryId: string, path: string) {
     // Only refetched once it's invalidated: like the status, whenever the working tree or the
     // index changes (see `filePatchQuery`).
     staleTime: Infinity,
+    // Not kept long once nothing shows it, as a blob isn't (see `fetchBlob`): it's the whole file,
+    // and one is loaded ahead whenever the pointer rests on a conflicted file.
+    gcTime: CONFLICT_GC_MS,
   });
 }
 

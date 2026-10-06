@@ -235,17 +235,39 @@ function isLink(repo: Repo, path: string): Promise<boolean> {
   );
 }
 
+/** When a file in the working tree last changed, going by what the file system says of it. */
+async function stampOf(repo: Repo, path: string): Promise<string | undefined> {
+  const stats = await lstat(join(repo.path, path)).catch(() => undefined);
+  return stats && `${stats.ino}:${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`;
+}
+
+/**
+ * Each repository's conflicted files as `markerFree` last read them, by their paths: whether they
+ * had markers left, and when they last changed then. Only the ones asked about last are kept.
+ */
+const markerChecks = new Map<string, Map<string, { stamp: string; free: boolean }>>();
+
 /**
  * Which of the conflicted text files at `paths` have no conflict markers left: resolved in the
  * working tree, but not marked so yet. Not one that's binary, which git leaves without markers, nor
- * one too large to read (see `MAX_BLOB_BYTES`), or gone.
+ * one too large to read (see `MAX_BLOB_BYTES`), or gone. Asked on every change in the working tree
+ * (see `getStatus`), so a file is only read again once it changed since.
  */
 export async function markerFree(repo: Repo, paths: string[]): Promise<string[]> {
+  const last = markerChecks.get(repo.path);
+  const checks = new Map<string, { stamp: string; free: boolean }>();
   const free = await Promise.all(
     paths.map(async (path) => {
-      const left = await conflictsIn(repo, path, MAX_BLOB_BYTES).catch(() => undefined);
-      return left === 0 ? path : undefined;
+      const stamp = await stampOf(repo, path);
+      const known = stamp === undefined ? undefined : last?.get(path);
+      const isFree =
+        known !== undefined && known.stamp === stamp
+          ? known.free
+          : (await conflictsIn(repo, path, MAX_BLOB_BYTES).catch(() => undefined)) === 0;
+      if (stamp !== undefined) checks.set(path, { stamp, free: isFree });
+      return isFree ? path : undefined;
     }),
   );
+  markerChecks.set(repo.path, checks);
   return free.filter((path) => path !== undefined);
 }

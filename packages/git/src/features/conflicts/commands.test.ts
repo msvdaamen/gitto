@@ -104,6 +104,20 @@ describe("a text conflict", () => {
     expect(git(path, "show", ":f.txt")).toContain("<<<<<<< HEAD");
   });
 
+  it("is said to be ready, and no longer, as its markers go and come back", async () => {
+    const path = createMergeConflict("ready-again");
+    const repo = await repos.open("ready-again");
+    const markers = readFileSync(join(path, "f.txt"), "utf8");
+    expect((await getStatus(repo)).changes.markerFree).toEqual([]);
+
+    writeFileSync(join(path, "f.txt"), "one\nresolved\nthree\n");
+    expect((await getStatus(repo)).changes.markerFree).toEqual(["f.txt"]);
+    // Read again only once it changed: the same answer until then.
+    expect((await getStatus(repo)).changes.markerFree).toEqual(["f.txt"]);
+    writeFileSync(join(path, "f.txt"), markers);
+    expect((await getStatus(repo)).changes.markerFree).toEqual([]);
+  });
+
   it("isn't marked resolved once it changed on disk since it was read", async () => {
     const path = createMergeConflict("resolve-changed");
     const repo = await repos.open("resolve-changed");

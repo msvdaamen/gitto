@@ -26,20 +26,31 @@ class ConflictParser extends UnresolvedFile<undefined> {
 
   parse(file: FileContents, maxContextLines: number) {
     this.options.maxContextLines = maxContextLines;
+    this.dropParsed();
+    try {
+      const parsed = this["getOrComputeDiff"]({
+        file,
+        fileDiff: undefined,
+        actions: undefined,
+        markerRows: undefined,
+      });
+      if (!parsed) throw new Error("The file's conflicts couldn't be read.");
+      return parsed;
+    } finally {
+      // Not kept: it's the whole file, and its whole diff, which the parser would hold for as
+      // long as the app runs.
+      this.dropParsed();
+    }
+  }
+
+  /** Lets go of the file last parsed, which it keeps to parse it only once. */
+  private dropParsed() {
     this.computedCache = {
       file: undefined,
       fileDiff: undefined,
       actions: undefined,
       markerRows: undefined,
     };
-    const parsed = this["getOrComputeDiff"]({
-      file,
-      fileDiff: undefined,
-      actions: undefined,
-      markerRows: undefined,
-    });
-    if (!parsed) throw new Error("The file's conflicts couldn't be read.");
-    return parsed;
   }
 }
 
@@ -162,6 +173,43 @@ function toPartial(diff: FileDiffMetadata): FileDiffMetadata {
     unifiedLineCount: last ? last.unifiedLineStart + last.unifiedLineCount : 0,
     splitLineCount: last ? last.splitLineStart + last.splitLineCount : 0,
   };
+}
+
+/**
+ * Past this many lines of conflicts and the lines around them, a file is shown whole rather than
+ * conflict by conflict: the library draws all of those at once, not just the ones on screen.
+ */
+const MAX_CONFLICT_LINES = 10_000;
+
+/**
+ * `contents`' conflicts, to show one by one (see `parseConflicts`); or, if they can't be, why: the
+ * file is shown whole then, to edit by hand. Neither for a file without conflicts.
+ */
+export function readConflicts(
+  name: string,
+  contents: string,
+  cacheKey: string,
+): { state?: ConflictState; problem?: string } {
+  let state: ConflictState | undefined;
+  try {
+    state = parseConflicts(name, contents, cacheKey);
+  } catch {
+    return {
+      problem: "This file's conflict markers can't be read as conflicts. Edit them by hand.",
+    };
+  }
+  if (state && drawnLines(state.diff) > MAX_CONFLICT_LINES) {
+    return {
+      problem:
+        "This file's conflicts are too long to show one by one. Edit it by hand, or keep one side.",
+    };
+  }
+  return { state };
+}
+
+/** How many lines the library draws of `diff`: its hunks', not those between them. */
+function drawnLines(diff: FileDiffMetadata): number {
+  return diff.hunks.reduce((lines, hunk) => lines + hunk.unifiedLineCount, 0);
 }
 
 /**
