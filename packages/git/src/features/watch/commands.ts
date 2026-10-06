@@ -56,10 +56,7 @@ export async function* watchGitDir(
           root,
           (error, events) => {
             if (error) return changes.fail(error);
-            for (const event of events) {
-              const change = classify(dirs, event.path);
-              if (change) changes.add(change);
-            }
+            changes.addAll(events.flatMap((event) => classify(dirs, event.path) ?? []));
           },
           { ignore: GIT_DIR_IGNORED },
         ),
@@ -134,10 +131,12 @@ export async function* watchWorkingTree(repo: Repo, signal?: AbortSignal): Async
       root,
       (error, events) => {
         if (error) return changes.fail(error);
-        for (const event of events) {
-          const path = relative(root, event.path).split(sep).join("/");
-          if (path) changes.add(path);
-        }
+        changes.addAll(
+          events.flatMap((event) => {
+            const path = relative(root, event.path).split(sep).join("/");
+            return path ? [path] : [];
+          }),
+        );
       },
       { ignore: [dirs.gitDir, ...nowIgnored] },
     );

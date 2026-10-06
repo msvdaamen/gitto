@@ -1,7 +1,10 @@
 import { cn } from "cn";
 import type { LucideIcon } from "lucide-solid";
-import type { JSX } from "solid-js";
+import LoaderCircle from "lucide-solid/icons/loader-circle";
+import { Show, type JSX } from "solid-js";
 import { Dynamic } from "solid-js/web";
+
+import { useDelayed } from "@/hooks/delayed";
 
 /** Centered placeholder for an empty, loading or failed panel. */
 export function EmptyState(props: {
@@ -35,5 +38,18 @@ export function EmptyState(props: {
         </span>
       )}
     </div>
+  );
+}
+
+/** How long something loads before `LoadingState` says so: a quick load doesn't flash it. */
+const LOADING_SHOWN_AFTER_MS = 150;
+
+/** An `EmptyState` saying `title` is loading, shown once that's taken a moment. */
+export function LoadingState(props: { title: string; class?: string }) {
+  const shown = useDelayed(() => true, LOADING_SHOWN_AFTER_MS);
+  return (
+    <Show when={shown()}>
+      <EmptyState icon={LoaderCircle} loading title={props.title} class={props.class} />
+    </Show>
   );
 }

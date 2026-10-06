@@ -26,8 +26,17 @@ export class Batches<T> {
   }
 
   add(value: T) {
-    if (this.closed) return;
-    this.pending.push(value);
+    this.addAll([value]);
+  }
+
+  /**
+   * Adds `values` at once, as a watcher reports its changes: the batch is put off once for all of
+   * them, rather than once per change, of which a build can report thousands at a time.
+   */
+  addAll(values: readonly T[]) {
+    if (this.closed || values.length === 0) return;
+    // One by one: spread into `push`, thousands of them would overflow the stack.
+    for (const value of values) this.pending.push(value);
     const now = performance.now();
     this.deadline ??= now + MAX_WAIT_MS;
     clearTimeout(this.timer);

@@ -10,6 +10,7 @@ import { createEffect, on, onCleanup, untrack } from "solid-js";
 
 import { useConnected } from "@/hooks/connected";
 import { useTheme } from "@/hooks/theme";
+import { errorMessage } from "@/lib/errors";
 
 import {
   markConflictRows,
@@ -354,7 +355,7 @@ export default function ConflictViewer(props: {
       } catch (error) {
         // Not shown after all: its highlighting isn't kept either.
         highlights.forget(state.diff);
-        props.onError(error instanceof Error ? error.message : String(error));
+        props.onError(errorMessage(error));
       } finally {
         saving = false;
         report();
@@ -415,7 +416,7 @@ export default function ConflictViewer(props: {
       } catch (error) {
         if (disposed || !editing) return;
         editing = false;
-        props.onEditFailed(error instanceof Error ? error.message : String(error));
+        props.onEditFailed(errorMessage(error));
         void run();
       }
     };

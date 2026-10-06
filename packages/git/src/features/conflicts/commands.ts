@@ -204,13 +204,28 @@ export async function refuseConflictMarkers(
       )
     : unmerged;
   // However large it is: only one that's left out could be staged with its markers.
-  const marked = await Promise.all(
-    staged.map(async (path) =>
-      ((await conflictsIn(repo, path, Infinity)) ?? 0) > 0 ? path : undefined,
-    ),
+  const marked = await readAtOnce(staged, async (path) =>
+    ((await conflictsIn(repo, path, Infinity)) ?? 0) > 0 ? path : undefined,
   );
   const left = marked.filter((path) => path !== undefined);
   if (left.length > 0) throw new ConflictMarkersError(left);
+}
+
+/**
+ * How many conflicted files are read at once, to tell whether they have markers left: a merge can
+ * leave thousands conflicted, and every one of them open at the same time would run the process
+ * out of file descriptors.
+ */
+const READ_AT_ONCE = 50;
+
+/** `read` of each of `paths`, `READ_AT_ONCE` at a time, in order. */
+async function readAtOnce<T>(paths: string[], read: (path: string) => Promise<T>): Promise<T[]> {
+  const results: T[] = [];
+  for (let i = 0; i < paths.length; i += READ_AT_ONCE) {
+    // oxlint-disable-next-line no-await-in-loop -- one batch at a time, on purpose.
+    results.push(...(await Promise.all(paths.slice(i, i + READ_AT_ONCE).map(read))));
+  }
+  return results;
 }
 
 /**
@@ -281,18 +296,16 @@ const markerChecks = new Map<string, Map<string, { stamp: string; free: boolean 
 export async function markerFree(repo: Repo, paths: string[]): Promise<string[]> {
   const last = markerChecks.get(repo.path);
   const checks = new Map<string, { stamp: string; free: boolean }>();
-  const free = await Promise.all(
-    paths.map(async (path) => {
-      const stamp = await stampOf(repo, path);
-      const known = stamp === undefined ? undefined : last?.get(path);
-      const isFree =
-        known !== undefined && known.stamp === stamp
-          ? known.free
-          : (await conflictsIn(repo, path, MAX_BLOB_BYTES).catch(() => undefined)) === 0;
-      if (stamp !== undefined) checks.set(path, { stamp, free: isFree });
-      return isFree ? path : undefined;
-    }),
-  );
+  const free = await readAtOnce(paths, async (path) => {
+    const stamp = await stampOf(repo, path);
+    const known = stamp === undefined ? undefined : last?.get(path);
+    const isFree =
+      known !== undefined && known.stamp === stamp
+        ? known.free
+        : (await conflictsIn(repo, path, MAX_BLOB_BYTES).catch(() => undefined)) === 0;
+    if (stamp !== undefined) checks.set(path, { stamp, free: isFree });
+    return isFree ? path : undefined;
+  });
   markerChecks.set(repo.path, checks);
   return free.filter((path) => path !== undefined);
 }

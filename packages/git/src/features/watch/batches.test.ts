@@ -30,6 +30,18 @@ describe("Batches", () => {
     batches.close();
   });
 
+  it("takes several changes at once, as one batch", async () => {
+    const batches = new Batches<number>();
+    const handed = collect(batches);
+
+    batches.addAll([1, 2]);
+    batches.addAll([]);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(handed).toEqual([[1, 2]]);
+
+    batches.close();
+  });
+
   it("doesn't hold changes back for as long as they keep coming", async () => {
     const batches = new Batches<number>();
     const handed = collect(batches);
