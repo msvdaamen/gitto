@@ -74,7 +74,7 @@ describe("the router", () => {
       ),
     ).toMatchObject({
       code: "CONFLICT",
-      message: "The stashes changed before the stash could be popped, so nothing was popped.",
+      message: "The stash is gone: the stashes changed before it could be popped.",
     });
   });
 

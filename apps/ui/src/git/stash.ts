@@ -26,6 +26,14 @@ export function popBlocker(
   return undefined;
 }
 
+/** Whether a stash can be popped: the status and the stashes have loaded, and nothing blocks it. */
+export function canPop(
+  status: Pick<StatusSummary, "counts"> | undefined,
+  stashes: readonly Stash[] | undefined,
+): boolean {
+  return !!status && !!stashes && !popBlocker(status, stashes);
+}
+
 /** Which stash popping would put back, or why it can't. */
 export function popTitle(status: Pick<StatusSummary, "counts">, stashes: readonly Stash[]): string {
   return popBlocker(status, stashes) ?? `Pop "${stashes[0]!.message}"`;

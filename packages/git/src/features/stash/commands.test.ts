@@ -7,7 +7,14 @@ import { RepositoryChangedError, StashConflictError } from "../../core/errors";
 import type { Repo } from "../../core/repo";
 import { createRepo, git, repos } from "../../test/fixtures";
 import { parseStatus, STATUS_ARGS } from "../status/parse";
-import { getStashFilePatch, getStashFiles, listStashes, popStash, pushStash } from "./commands";
+import {
+  dropStash,
+  getStashFilePatch,
+  getStashFiles,
+  listStashes,
+  popStash,
+  pushStash,
+} from "./commands";
 
 /** Each changed file, with how it changed in the index and the working tree. */
 async function statusFiles(repo: Repo) {
@@ -26,6 +33,24 @@ function createCommittedRepo(name: string): string {
   git(path, "add", ".");
   git(path, "commit", "-qm", "first");
   return path;
+}
+
+/**
+ * `repo`, with `meanwhile` run once its stashes have been listed in a write, as git outside Gitto
+ * could, which a write doesn't keep out.
+ */
+function listedThen(repo: Repo, meanwhile: () => void): Repo {
+  return {
+    ...repo,
+    exclusive: (task) =>
+      repo.exclusive((run) =>
+        task(async (args, options) => {
+          const output = await run(args, options);
+          if (args[0] === "stash" && args[1] === "list") meanwhile();
+          return output;
+        }),
+      ),
+  };
 }
 
 /** The newest stash's SHA. */
@@ -75,7 +100,7 @@ describe("stashes", () => {
     expect(await listStashes(repo)).toEqual([]);
   });
 
-  it("lists the newest first, and pops only the newest", async () => {
+  it("lists the newest first, and pops an older one by its SHA", async () => {
     const path = createCommittedRepo("several");
     writeFileSync(join(path, "a.txt"), "older\n");
     git(path, "stash", "push", "-q", "-m", "older");
@@ -89,12 +114,77 @@ describe("stashes", () => {
       "On main: older",
     ]);
 
-    await expect(popStash(repo, stashes[1]!.sha)).rejects.toBeInstanceOf(RepositoryChangedError);
-    expect(await listStashes(repo)).toEqual(stashes);
+    await popStash(repo, stashes[1]!.sha);
+    expect(await listStashes(repo)).toEqual([stashes[0]]);
+    expect(readFileSync(join(path, "a.txt"), "utf8")).toBe("older\n");
+    expect(readFileSync(join(path, "b.txt"), "utf8")).toBe("b\n");
 
-    await popStash(repo, stashes[0]!.sha);
-    expect(await listStashes(repo)).toEqual([stashes[1]]);
-    expect(readFileSync(join(path, "b.txt"), "utf8")).toBe("newer\n");
+    // Gone now.
+    await expect(popStash(repo, stashes[1]!.sha)).rejects.toBeInstanceOf(RepositoryChangedError);
+    expect(await listStashes(repo)).toEqual([stashes[0]]);
+  });
+
+  it("drops a stash by its SHA, leaving the others and the changes", async () => {
+    const path = createCommittedRepo("drop");
+    writeFileSync(join(path, "a.txt"), "older\n");
+    git(path, "stash", "push", "-q", "-m", "older");
+    writeFileSync(join(path, "a.txt"), "middle\n");
+    git(path, "stash", "push", "-q", "-m", "middle");
+    writeFileSync(join(path, "a.txt"), "newer\n");
+    git(path, "stash", "push", "-q", "-m", "newer");
+    writeFileSync(join(path, "b.txt"), "local\n");
+    const repo = await repos.open("drop");
+    const [newer, middle, older] = await listStashes(repo);
+
+    await dropStash(repo, middle!.sha);
+    expect(await listStashes(repo)).toEqual([newer, older]);
+    expect(await statusFiles(repo)).toEqual([["b.txt", null, "modified"]]);
+
+    await dropStash(repo, newer!.sha);
+    expect(await listStashes(repo)).toEqual([older]);
+
+    await expect(dropStash(repo, middle!.sha)).rejects.toBeInstanceOf(RepositoryChangedError);
+    expect(await listStashes(repo)).toEqual([older]);
+  });
+
+  it("pops nothing when git outside Gitto moves the stash", async () => {
+    const path = createCommittedRepo("pop-moved");
+    writeFileSync(join(path, "a.txt"), "older\n");
+    git(path, "stash", "push", "-q", "-m", "older");
+    writeFileSync(join(path, "a.txt"), "newer\n");
+    git(path, "stash", "push", "-q", "-m", "newer");
+    const repo = await repos.open("pop-moved");
+    const [newer, older] = await listStashes(repo);
+    const moving = listedThen(repo, () => {
+      writeFileSync(join(path, "b.txt"), "outside\n");
+      git(path, "stash", "push", "-q", "-m", "outside");
+    });
+
+    await expect(popStash(moving, older!.sha)).rejects.toBeInstanceOf(RepositoryChangedError);
+    expect((await listStashes(repo)).slice(1)).toEqual([newer, older]);
+    expect(await statusFiles(repo)).toEqual([]);
+  });
+
+  it("puts back another stash dropped instead, when git outside Gitto moves the stash", async () => {
+    const path = createCommittedRepo("drop-moved");
+    writeFileSync(join(path, "a.txt"), "older\n");
+    git(path, "stash", "push", "-q", "-m", "older");
+    writeFileSync(join(path, "a.txt"), "newer\n");
+    git(path, "stash", "push", "-q", "-m", "newer");
+    const repo = await repos.open("drop-moved");
+    const [newer, older] = await listStashes(repo);
+    const moving = listedThen(repo, () => {
+      writeFileSync(join(path, "b.txt"), "outside\n");
+      git(path, "stash", "push", "-q", "-m", "outside");
+    });
+
+    await expect(dropStash(moving, older!.sha)).rejects.toBeInstanceOf(RepositoryChangedError);
+    const after = await listStashes(repo);
+    expect(after.map((stash) => [stash.sha, stash.message])).toEqual([
+      [newer!.sha, newer!.message],
+      [expect.any(String), "On main: outside"],
+      [older!.sha, older!.message],
+    ]);
   });
 
   it("does nothing when there's nothing to stash", async () => {

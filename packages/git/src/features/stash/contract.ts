@@ -15,9 +15,11 @@ export const StashContract = {
   /** The patch of one file a stash changed, compared to its base, as in its files. */
   filePatch: oc.input(FileInput.extend({ sha: FullSha })).output(z.string()),
   /**
-   * Puts the newest stash's changes back, and drops it. Takes its full SHA, and fails if another
-   * stash has become the newest since, so it's always the one the user saw that's popped. A pop
-   * that conflicts is left to resolve, and the stash kept.
+   * Puts a stash's changes back, and drops it. Takes its full SHA rather than its place among the
+   * others, which can change, so it's always the one the user saw that's popped; fails if it's
+   * gone. A pop that conflicts is left to resolve, and the stash kept.
    */
   pop: oc.input(RepositoryInput.extend({ sha: FullSha })),
+  /** Drops a stash, throwing its changes away. Takes its full SHA, as `pop` does. */
+  drop: oc.input(RepositoryInput.extend({ sha: FullSha })),
 };
