@@ -48,7 +48,8 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
   const unstage = useUnstage(() => props.repositoryId);
   const discard = useDiscard(() => props.repositoryId);
   // Without Suspense, like the status: it's refetched whenever anything changes on disk.
-  const operation = useUnsuspendedData(useOperationInProgress(() => props.repositoryId));
+  const operationQuery = useOperationInProgress(() => props.repositoryId);
+  const operation = useUnsuspendedData(operationQuery);
   const busy = () => stage.isPending || unstage.isPending || discard.isPending;
   // Why staging, unstaging or discarding last failed: each keeps its error until it's run again.
   const lastError = () =>
@@ -87,6 +88,9 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
   const discardAllBlocked = () => {
     const current = summary();
     const under = operation();
+    if (under === undefined && operationQuery.error) {
+      return `Couldn't tell whether an operation is under way: ${operationQuery.error.message}`;
+    }
     return current && under !== undefined ? discardAllBlocker(current, under) : "Loading…";
   };
   const lastCommit = useHeadSha(summary);

@@ -1002,6 +1002,20 @@ describe("discarding a file's changes", () => {
     expect(contents(path, "d")).toBe("stuff\n");
   });
 
+  it("deletes an untracked file with the folders it leaves empty, also once it's ignored", async () => {
+    const repo = await createHistoryRepo("discard-untracked-folders");
+    const path = repo.path;
+    mkdirSync(join(path, "d", "e"), { recursive: true });
+    writeFileSync(join(path, "d", "e", "f"), "f\n");
+    writeFileSync(join(path, "d", "kept"), "kept\n");
+    // Listed when it was shown, ignored since.
+    writeFileSync(join(path, ".git", "info", "exclude"), "f\n");
+
+    await discard(repo, { path: "d/e/f", origPath: null }, "unstaged");
+    expect(existsSync(join(path, "d", "e"))).toBe(false);
+    expect(contents(path, "d/kept")).toBe("kept\n");
+  });
+
   it("leaves a submodule's changes to be discarded in it", async () => {
     createSubmoduleRepo("discard-submodule");
     const repo = await repos.open("discard-submodule");
@@ -1192,6 +1206,36 @@ describe("discarding all changes", () => {
     writeFileSync(join(path, ".git", "info", "exclude"), "latest\n");
     git(path, "rm", "-q", "--cached", "latest");
     const repo = await repos.open("discard-all-link");
+
+    expect(await discardAll(repo)).toEqual([]);
+    expect(await statusFiles(repo)).toEqual([]);
+  });
+
+  it("keeps what a deleted ignore file ignored, once it's put back", async () => {
+    const path = createRepo("discard-all-deleted-ignore");
+    writeFileSync(join(path, ".gitignore"), ".env\n");
+    git(path, "add", ".");
+    git(path, "commit", "-q", "-m", "first");
+    writeFileSync(join(path, ".env"), "secret\n");
+    rmSync(join(path, ".gitignore"));
+    writeFileSync(join(path, "untracked.txt"), "untracked\n");
+    const repo = await repos.open("discard-all-deleted-ignore");
+
+    expect(await discardAll(repo)).toEqual([]);
+    expect(contents(path, ".gitignore")).toBe(".env\n");
+    expect(contents(path, ".env")).toBe("secret\n");
+    expect(contents(path, "untracked.txt")).toBeNull();
+  });
+
+  it("compares a link where its file was in a repository whose folder isn't ASCII", async () => {
+    const path = createRepo("discard-all-rép");
+    mkdirSync(join(path, "v2"));
+    symlinkSync("v2", join(path, "latest"));
+    git(path, "add", ".");
+    git(path, "commit", "-q", "--allow-empty", "-m", "first");
+    writeFileSync(join(path, ".git", "info", "exclude"), "latest\n");
+    git(path, "rm", "-q", "--cached", "latest");
+    const repo = await repos.open("discard-all-rép");
 
     expect(await discardAll(repo)).toEqual([]);
     expect(await statusFiles(repo)).toEqual([]);

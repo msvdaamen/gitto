@@ -282,6 +282,21 @@ describe("discarding changes", () => {
     );
   });
 
+  it("says why it can't discard all changes when what's under way couldn't be read", async () => {
+    rpc.git.operation.get.mockRejectedValue(new Error("MERGE_HEAD is unreadable."));
+    setChanges([file("a.txt")]);
+    renderDetails();
+
+    const button = await screen.findByRole("button", { name: "Discard all changes…" });
+    await vi.waitFor(() =>
+      expect(button).toHaveAttribute(
+        "title",
+        "Couldn't tell whether an operation is under way: MERGE_HEAD is unreadable.",
+      ),
+    );
+    expect(button).toBeDisabled();
+  });
+
   it("doesn't discard all changes while a merge is under way, which would go on without them", async () => {
     rpc.git.operation.get.mockResolvedValue({ kind: "merge", merging: "side", into: "main" });
     setChanges([file("a.txt")]);
