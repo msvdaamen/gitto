@@ -56,16 +56,19 @@ fi
 command -v Xvfb
 
 step "Playwright (drives the app; globally installed on cloud sessions, else cached here)"
-if ! NODE_PATH="$(npm root -g)" node -e 'require("playwright-core")' >/dev/null 2>&1 \
-  && ! NODE_PATH="$(npm root -g)" node -e 'require("playwright")' >/dev/null 2>&1; then
+# Where driver.mjs looks: the cache, then the global packages.
+has_playwright() {
+  NODE_PATH="$1" node -e 'try { require("playwright-core") } catch { require("playwright") }' \
+    >/dev/null 2>&1
+}
+if ! has_playwright "$CACHE/node_modules" && ! has_playwright "$(npm root -g)"; then
   npm install --silent --prefix "$CACHE" playwright-core
 fi
 echo ok
 
 step "Production build into apps/electron/.vite (rerun after changing the code)"
-(cd "$ROOT/apps/electron" && pnpm package >/dev/null)
+node "$ROOT/.claude/skills/run-app/build.mjs"
 grep -q 'from "node:sqlite"' "$ROOT/apps/electron/.vite/build/main.js" \
   || { echo "node:sqlite wasn't kept external: was the build run on Node <24?" >&2; exit 1; }
-echo "built apps/electron/.vite"
 
 printf '\nReady. Next:\n  export PATH="$(cat ~/.cache/gitto-run/node-bin):$PATH"\n  node %s/.claude/skills/run-app/driver.mjs\n' "$ROOT"

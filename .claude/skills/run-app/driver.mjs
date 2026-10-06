@@ -15,16 +15,17 @@ const CACHE = path.join(os.homedir(), ".cache/gitto-run");
 const SHOT_DIR = process.env.SCREENSHOT_DIR || "/tmp/gitto-shots";
 fs.mkdirSync(SHOT_DIR, { recursive: true });
 
-/** Playwright, from setup.sh's cache or the global packages. */
+/** Playwright, from setup.sh's cache, else the global packages. */
 function loadPlaywright() {
-  const roots = [path.join(CACHE, "node_modules")];
-  try {
-    roots.push(execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim());
-  } catch {}
+  // npm is only asked when the cache doesn't have it: it takes a while to start.
+  const roots = [
+    () => path.join(CACHE, "node_modules"),
+    () => execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim(),
+  ];
   for (const root of roots) {
     for (const name of ["playwright-core", "playwright"]) {
       try {
-        return createRequire(path.join(root, "noop.js"))(name);
+        return createRequire(path.join(root(), "noop.js"))(name);
       } catch {}
     }
   }
@@ -33,21 +34,68 @@ function loadPlaywright() {
 const { _electron: electron } = loadPlaywright();
 
 let xvfb = null;
+let display = null;
 let app = null;
 let page = null;
-let profile = null;
+/** One per tmux session of send.sh's (GITTO_SESSION), so drivers side by side don't share it. */
+const profile = path.join(os.tmpdir(), `gitto-run-profile-${process.env.GITTO_SESSION || "gitto"}`);
 
-/** Starts Xvfb on a free display, unless DISPLAY is set; xvfb-run's auth trips Electron up. */
+/**
+ * Starts Xvfb unless DISPLAY is set or it's running already (xvfb-run's auth trips Electron up).
+ * It picks a free display itself, and writes its number once it takes connections.
+ */
 async function ensureDisplay() {
   if (process.env.DISPLAY) return process.env.DISPLAY;
-  let n = 90;
-  while (fs.existsSync(`/tmp/.X${n}-lock`)) n++;
-  xvfb = spawn("Xvfb", [`:${n}`, "-screen", "0", "1400x900x24", "-ac"], { stdio: "ignore" });
-  for (let i = 0; i < 50 && !fs.existsSync(`/tmp/.X11-unix/X${n}`); i++) {
-    // oxlint-disable-next-line no-await-in-loop -- polling until Xvfb's socket is there.
-    await new Promise((r) => setTimeout(r, 100));
+  // Still running, from a launch before (quit stops it).
+  if (xvfb?.exitCode === null && xvfb.signalCode === null) return display;
+  const child = spawn("Xvfb", ["-displayfd", "3", "-screen", "0", "1400x900x24", "-ac"], {
+    stdio: ["ignore", "ignore", "pipe", "pipe"],
+  });
+  let stderr = "";
+  child.stderr.on("data", (chunk) => (stderr += chunk));
+  const number = await new Promise((resolve, reject) => {
+    let out = "";
+    child.stdio[3].on("data", (chunk) => {
+      out += chunk;
+      if (out.includes("\n")) resolve(out.trim());
+    });
+    child.once("error", (e) => reject(new Error(`couldn't start Xvfb: ${e.message}`)));
+    child.once("exit", (code, signal) =>
+      reject(new Error(`Xvfb exited (${signal ?? code}): ${stderr.trim().split("\n").pop()}`)),
+    );
+  });
+  xvfb = child;
+  display = `:${number}`;
+  return display;
+}
+
+/** Starts the app, with a fresh profile unless `keep`, and waits for its home page. */
+async function start(keep) {
+  const electronBin = createRequire(path.join(APP_DIR, "package.json"))("electron");
+  if (!fs.existsSync(path.join(APP_DIR, ".vite/build/main.js"))) {
+    throw new Error("no build: run .claude/skills/run-app/setup.sh");
   }
-  return `:${n}`;
+  if (!keep) fs.rmSync(profile, { recursive: true, force: true });
+  const env = { ...process.env, DISPLAY: await ensureDisplay() };
+  app = await electron.launch({
+    executablePath: electronBin,
+    args: ["--no-sandbox", `--user-data-dir=${profile}`, APP_DIR],
+    env,
+    timeout: 90_000,
+  });
+  for (const stream of [app.process().stdout, app.process().stderr]) {
+    readline.createInterface({ input: stream }).on("line", (line) => {
+      if (!NOISE.test(line)) console.log(`[main] ${line}`);
+    });
+  }
+  const window = await app.firstWindow();
+  window.on("console", (m) => {
+    if (m.type() === "error" || m.type() === "warning") console.log(`[ui:${m.type()}] ${m.text()}`);
+  });
+  window.on("pageerror", (e) => console.log(`[ui:exception] ${e.message}`));
+  await window.getByText("Open repository").first().waitFor({ timeout: 30_000 });
+  // Only now, as `launch` takes a page to mean it's launched.
+  page = window;
 }
 
 const need = () => {
@@ -65,32 +113,14 @@ const NOISE =
 const COMMANDS = {
   /** Launches the app with a fresh profile (no repositories), or `launch keep` to keep the last. */
   async launch(arg) {
-    if (app) return console.log("already launched");
-    const electronBin = createRequire(path.join(APP_DIR, "package.json"))("electron");
-    if (!fs.existsSync(path.join(APP_DIR, ".vite/build/main.js"))) {
-      throw new Error("no build: run .claude/skills/run-app/setup.sh");
+    if (page) return console.log("already launched");
+    try {
+      await start(arg === "keep");
+    } catch (e) {
+      // Whatever did start, so the next `launch` starts afresh.
+      await COMMANDS.quit();
+      throw e;
     }
-    profile = path.join(os.tmpdir(), "gitto-run-profile");
-    if (arg !== "keep") fs.rmSync(profile, { recursive: true, force: true });
-    const display = await ensureDisplay();
-    app = await electron.launch({
-      executablePath: electronBin,
-      args: ["--no-sandbox", `--user-data-dir=${profile}`, APP_DIR],
-      env: { ...process.env, DISPLAY: display },
-      timeout: 90_000,
-    });
-    for (const stream of [app.process().stdout, app.process().stderr]) {
-      readline.createInterface({ input: stream }).on("line", (line) => {
-        if (!NOISE.test(line)) console.log(`[main] ${line}`);
-      });
-    }
-    page = await app.firstWindow();
-    page.on("console", (m) => {
-      if (m.type() === "error" || m.type() === "warning")
-        console.log(`[ui:${m.type()}] ${m.text()}`);
-    });
-    page.on("pageerror", (e) => console.log(`[ui:exception] ${e.message}`));
-    await page.getByText("Open repository").first().waitFor({ timeout: 30_000 });
     console.log("launched", page.url());
   },
 
@@ -101,12 +131,29 @@ const COMMANDS = {
     await app.evaluate(({ dialog }, d) => {
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [d] });
     }, target);
+    const before = page.url();
+    // A branch's row of the repository on show, if any: gone once the new one's are shown.
+    const shown = await page.$("[data-branch]");
     // On the home page, or the tabs' + once a repository is open.
     const button = page.getByRole("button", { name: "Open repository" }).filter({ visible: true });
     if (await button.count()) await button.first().click();
-    else await visible(page.getByTitle("Open repository")).click();
-    await page.locator("[data-branch]").first().waitFor({ timeout: 15_000 });
-    console.log("opened", target);
+    else await visible(page.getByRole("button", { name: "Open new repository" })).click();
+    // The route names the repository on show, so it changes once the new one is: the branches
+    // shown until then are the last one's.
+    await page
+      .waitForURL((url) => url.href !== before, { timeout: 15_000 })
+      .catch(() => {
+        throw new Error(`${target} didn't open (is it on show already, or not a repository?)`);
+      });
+    if (shown) await page.waitForFunction((row) => !row.isConnected, shown, { timeout: 15_000 });
+    // Its branches loaded; a repository without commits has none, so it's opened all the same.
+    const loaded = await page
+      .locator("[data-branch]")
+      .first()
+      .waitFor({ timeout: 10_000 })
+      .then(() => true)
+      .catch(() => false);
+    console.log("opened", target + (loaded ? "" : " (no branches shown)"));
   },
 
   /** Screenshot of the window, to SCREENSHOT_DIR/<name>.png. Look at it. */
@@ -150,9 +197,19 @@ const COMMANDS = {
 
   /** Right-clicks a branch's label in the history instead, by its full ref name. */
   async "rclick-label"(ref) {
-    // The sidebar's row comes first; the label is the second element marked with it.
-    const label = need().locator(`[data-branch="${ref}"]`).filter({ visible: true }).nth(1);
-    await label.dispatchEvent("contextmenu", { button: 2 });
+    // The labels are spans, the sidebar's rows buttons. Made in the page, as Playwright's own
+    // contextmenu event is a plain Event, without the position the menu opens at.
+    await visible(need().locator(`span[data-branch="${ref}"]`)).evaluate(
+      (label) => {
+        const box = label.getBoundingClientRect();
+        const at = { clientX: box.left + box.width / 2, clientY: box.top + box.height / 2 };
+        label.dispatchEvent(
+          new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, ...at }),
+        );
+      },
+      undefined,
+      { timeout: 5000 },
+    );
     console.log("right-clicked label", ref);
   },
 
@@ -207,12 +264,14 @@ const COMMANDS = {
     if (app) await app.close().catch(() => {});
     app = null;
     page = null;
-    if (xvfb && xvfb.exitCode === null) {
+    // Not if it's exited already, by a signal too: its exit event has been and gone.
+    if (xvfb && xvfb.exitCode === null && xvfb.signalCode === null) {
       const exited = new Promise((r) => xvfb.once("exit", r));
       xvfb.kill();
       await exited;
     }
     xvfb = null;
+    display = null;
   },
 
   help() {

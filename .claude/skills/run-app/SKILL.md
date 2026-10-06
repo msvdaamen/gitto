@@ -19,11 +19,14 @@ export PATH="$(cat ~/.cache/gitto-run/node-bin):$PATH"   # Node 24, in every new
 It installs Node 24 (with nvm) when needed, the dependencies, Electron's binary, Xvfb, Playwright,
 and builds into `apps/electron/.vite`. Each step is skipped when it's done already.
 
-**After changing code, rebuild** (the driver runs the build, not the sources):
+**After changing code, rebuild** (the driver runs the build, not the sources; ~5 s):
 
 ```bash
-(cd apps/electron && pnpm package >/dev/null)
+node .claude/skills/run-app/build.mjs
 ```
+
+It builds the `.vite` targets in `forge.config.ts` as `pnpm package` does, without also packaging
+the app into `out/`, which takes half a minute more and isn't used.
 
 ## 2. A repository to open
 
@@ -57,7 +60,8 @@ EOF
 
 **Step by step**, keeping the app open between commands: `send.sh` runs the driver in tmux (it
 starts it the first time), sends one command, waits for it to finish and prints its output. It
-exits 1 if the command failed.
+exits 1 if the command failed. To run two apps side by side, give each its own `GITTO_SESSION`
+(the tmux session, and the app's profile).
 
 ```bash
 .claude/skills/run-app/send.sh launch
@@ -96,23 +100,23 @@ Every command prints `done: <command>` when finished, and `ERROR in <command>: �
 Screenshots go to `/tmp/gitto-shots/<name>.png` (`SCREENSHOT_DIR` to change). **Read them**: a
 command succeeding doesn't mean the UI shows what it should. Check git's side with `git -C <repo>`.
 
-| Command                       | What it does                                                                          |
-| ----------------------------- | ------------------------------------------------------------------------------------- |
-| `launch`                      | Starts the app with a fresh profile (`launch keep` keeps the last one's repositories) |
-| `open <dir>`                  | Opens the repository at the absolute path `dir` (answers the folder picker)           |
-| `ss [name]`                   | Screenshot of the window                                                              |
-| `click-text <text>`           | Clicks the visible element with that text (exact, else containing)                    |
-| `click-role <role> <name>`    | E.g. `click-role button Commit merge`, `click-role menuitem Merge ff into main`       |
-| `click-title <title>`         | Clicks an icon-only button by its tooltip                                             |
-| `rclick <ref>`                | Right-clicks a branch in the sidebar by full ref name: `rclick refs/heads/main`       |
-| `rclick-label <ref>`          | Right-clicks the branch's label in the history instead                                |
-| `menu`                        | Lists the open menu's items, with `[disabled]` on disabled ones                       |
-| `press <key>` / `type <text>` | Keyboard, e.g. `press Escape`                                                         |
-| `wait <text>`                 | Waits up to 10 s for visible text                                                     |
-| `sleep [ms]`                  | Waits (default 1000)                                                                  |
-| `text [css]`                  | Prints the page's text, or an element's, e.g. `text [role=alertdialog]`               |
-| `eval <js>`                   | Runs JavaScript in the page, prints the result as JSON                                |
-| `quit`                        | Closes the app (and the driver's Xvfb)                                                |
+| Command                       | What it does                                                                                     |
+| ----------------------------- | ------------------------------------------------------------------------------------------------ |
+| `launch`                      | Starts the app with a fresh profile (`launch keep` keeps the last one's repositories)            |
+| `open <dir>`                  | Opens the repository at the absolute path `dir` (answers the folder picker), also as another tab |
+| `ss [name]`                   | Screenshot of the window                                                                         |
+| `click-text <text>`           | Clicks the visible element with that text (exact, else containing)                               |
+| `click-role <role> <name>`    | E.g. `click-role button Commit merge`, `click-role menuitem Merge ff into main`                  |
+| `click-title <title>`         | Clicks an icon-only button by its tooltip                                                        |
+| `rclick <ref>`                | Right-clicks a branch in the sidebar by full ref name: `rclick refs/heads/main`                  |
+| `rclick-label <ref>`          | Right-clicks the branch's label in the history instead                                           |
+| `menu`                        | Lists the open menu's items, with `[disabled]` on disabled ones                                  |
+| `press <key>` / `type <text>` | Keyboard, e.g. `press Escape`                                                                    |
+| `wait <text>`                 | Waits up to 10 s for visible text                                                                |
+| `sleep [ms]`                  | Waits (default 1000)                                                                             |
+| `text [css]`                  | Prints the page's text, or an element's, e.g. `text [role=alertdialog]`                          |
+| `eval <js>`                   | Runs JavaScript in the page, prints the result as JSON                                           |
+| `quit`                        | Closes the app (and the driver's Xvfb)                                                           |
 
 The main process's logs (`[main] …`, e.g. RPC errors) and the UI's errors and warnings (`[ui:…]`)
 are printed as they come.

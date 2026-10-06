@@ -8,9 +8,9 @@
 # A demo repository already at $1 is replaced; anything else there is left alone.
 set -euo pipefail
 dir="${1:?usage: make-demo-repo.sh <dir>}"
-# A demo repository is told by its config, which nothing else has.
+# A demo repository is told by its own config (not a repository's around it), which nothing else has.
 if [ -n "$(ls -A "$dir" 2>/dev/null)" ] &&
-  [ "$(git -C "$dir" config --local user.email 2>/dev/null)" != demo@example.com ]; then
+  [ "$(git --git-dir="$dir/.git" config --local user.email 2>/dev/null)" != demo@example.com ]; then
   echo "$dir is there and isn't a demo repository: pick another path" >&2
   exit 1
 fi
@@ -20,6 +20,8 @@ cd "$dir"
 git init -q -b main
 git config user.name "Demo"
 git config user.email "demo@example.com"
+# Not signed even where the environment signs commits: there'd be no key for Demo.
+git config commit.gpgsign false
 # Environment variables beat the config, and cloud sessions set the author's.
 export GIT_AUTHOR_NAME=Demo GIT_AUTHOR_EMAIL=demo@example.com
 export GIT_COMMITTER_NAME=Demo GIT_COMMITTER_EMAIL=demo@example.com
