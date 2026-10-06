@@ -15,7 +15,7 @@ import { getStagedFilePatch, getUnstagedFilePatch } from "../diff/commands";
 import { checkWorkingTreePath } from "../diff/working-tree";
 import { operationBlocker, underWayBlocker } from "../operation/commands";
 import { linesPatch, type LineAction } from "./lines";
-import type { LineSelection, UncommittedSide } from "./schema";
+import type { KeptChange, LineSelection, UncommittedSide } from "./schema";
 
 // Paths go to git's stdin, NUL-separated, rather than on the command line, which holds only so
 // many (32k characters on Windows).
@@ -40,6 +40,12 @@ export async function unstage(repo: Repo, paths: string[]): Promise<void> {
     : ["rm", "--cached", "-r", "-q", ...PATHS_FROM_STDIN];
   await repo.write(args, { stdin: nulSeparated(paths) });
 }
+
+/**
+ * `restore`, not into submodules, whatever `submodule.recurse` says: their changes are their own,
+ * and kept.
+ */
+const RESTORE = ["restore", "--no-recurse-submodules"];
 
 /** For a command that puts files in the working tree back, or deletes them (see `rewritesFiles`). */
 const REWRITES = { rewritesFiles: true };
@@ -249,13 +255,14 @@ async function unchangedSince(
 ): Promise<Set<string>> {
   const files = paths.filter(({ entry }) => entry === "file").map(({ path }) => path);
   const links = paths.filter(({ entry }) => entry === "link").map(({ path }) => path);
-  if (!files.length && !links.length) return new Set();
+  const compared = [...files, ...links];
+  if (!compared.length) return new Set();
   const bytes = (path: string) => Buffer.from(path, options.binary ? "latin1" : "utf8");
-  const [format, tree, hashes, targets] = await Promise.all([
-    run(["rev-parse", "--show-object-format"]),
-    // Every file in the source, as `<mode> <type> <object>\t<path>`: looked up by path, what it
-    // doesn't have isn't there.
-    run(["ls-tree", "-r", "-z", "--full-tree", source], options),
+  const [sources, hashes, targets, format] = await Promise.all([
+    run(["cat-file", "--batch-check=%(objectname)", "-z"], {
+      ...options,
+      stdin: nulSeparated(compared.map((path) => `${source}:${path}`)),
+    }),
     files.length
       ? // A line each, quoted as git reads a line that starts with a quote: a path can have any
         // character, a newline too.
@@ -264,22 +271,35 @@ async function unchangedSince(
           stdin: files
             .map((path) => `"${path.replace(/[\\"]/g, "\\$&").replace(/\n/g, "\\n")}"\n`)
             .join(""),
-        }).then((output) => output.split("\n"))
+        }).then((output) => output.split("\n").slice(0, files.length))
       : [],
     inBatches(links, (path) => readlink(fullPath(repo.path, bytes(path)), { encoding: "buffer" })),
+    links.length ? run(["rev-parse", "--show-object-format"]) : "",
   ]);
-  const objects = new Map<string, string>();
-  for (const record of tree.split("\0")) {
-    const tab = record.indexOf("\t");
-    if (tab !== -1) objects.set(record.slice(tab + 1), record.slice(0, tab).split(" ")[2]!);
+  // What the source has at each, a line each: its object's name, or for one it doesn't have, what
+  // was asked for and "missing", which can be lines of its own.
+  const objects: (string | undefined)[] = [];
+  let at = 0;
+  for (const path of compared) {
+    const missing = `${source}:${path} missing\n`;
+    if (sources.startsWith(missing, at)) {
+      objects.push(undefined);
+      at += missing.length;
+    } else {
+      const end = sources.indexOf("\n", at);
+      objects.push(sources.slice(at, end));
+      at = end + 1;
+    }
   }
   // A link's blob is where it leads, which `hash-object` would follow instead: hashed as git does.
   const algorithm = format.trim() === "sha256" ? "sha256" : "sha1";
-  const linkHashes = targets.map((target) =>
-    createHash(algorithm).update(`blob ${target.length}\0`).update(target).digest("hex"),
-  );
-  const ours = [...hashes.slice(0, files.length), ...linkHashes];
-  return new Set([...files, ...links].filter((path, i) => objects.get(path) === ours[i]));
+  const ours = [
+    ...hashes,
+    ...targets.map((target) =>
+      createHash(algorithm).update(`blob ${target.length}\0`).update(target).digest("hex"),
+    ),
+  ];
+  return new Set(compared.filter((_, i) => objects[i] !== undefined && objects[i] === ours[i]));
 }
 
 /**
@@ -309,12 +329,23 @@ export async function discard(repo: Repo, file: LinesFile, side: UncommittedSide
     // back, emptying the file, so it's deleted instead. Staged only when they're shown, deleted from
     // the working tree or not. Without renames, which would pair one with a deleted file.
     const intentToAdd = async () => {
-      const [all, real] = await Promise.all(
-        ["visible", "invisible"].map((shown) =>
-          listed(["diff", "--cached", "--name-only", "--no-renames", `--ita-${shown}-in-index`]),
-        ),
+      // `<status>`, then the path: one added with `--intent-to-add` is shown otherwise when it's
+      // hidden, as deleted or not at all; any other is shown the same.
+      const [shown, hidden] = await Promise.all(
+        ["visible", "invisible"].map(async (ita) => {
+          const fields = await listed([
+            "diff",
+            "--cached",
+            "--name-status",
+            "--no-renames",
+            `--ita-${ita}-in-index`,
+          ]);
+          const statuses = new Map<string, string>();
+          for (let i = 0; i + 1 < fields.length; i += 2) statuses.set(fields[i + 1]!, fields[i]!);
+          return statuses;
+        }),
       );
-      return all!.filter((each) => named.has(each) && !real!.includes(each));
+      return paths.filter((each) => shown!.has(each) && shown!.get(each) !== hidden!.get(each));
     };
     const [entries, intended, source, blocker, there] = await Promise.all([
       // The paths in the index, with their mode and stage: a conflict's are 1-3.
@@ -376,20 +407,24 @@ export async function discard(repo: Repo, file: LinesFile, side: UncommittedSide
     }
     if (side === "staged") {
       await run(
-        ["restore", `--source=${source}`, "--staged", "--worktree", ...PATHS_FROM_STDIN],
+        [...RESTORE, `--source=${source}`, "--staged", "--worktree", ...PATHS_FROM_STDIN],
         exactlyFromStdin(discarded),
       );
       return;
     }
     // Untracked, and deleted as the file that's listed, ignored by now or not. Not a folder: a
     // repository inside this one, whose changes are discarded in it.
-    const untracked = discarded.filter((each) => !tracked.has(each) && at(each) !== undefined);
+    // Gone already, or in a folder a file has taken the place of: nothing's left to delete.
+    const untracked = discarded.filter(
+      (each) => !tracked.has(each) && at(each) !== undefined && at(each) !== "blocked",
+    );
     for (const each of untracked) {
       if (at(each) === "folder") {
         throw new DiscardBlockedError(
           `${each} is a repository of its own: discard its changes in it.`,
         );
       }
+      if (at(each) === "unreadable") throw new DiscardBlockedError(inTheWayOf(each, "unreadable"));
       // oxlint-disable-next-line no-await-in-loop -- two at most.
       await checkWorkingTreePath(repo, each);
     }
@@ -404,7 +439,7 @@ export async function discard(repo: Repo, file: LinesFile, side: UncommittedSide
       await run(["rm", "-f", "-q", ...PATHS_FROM_STDIN], exactlyFromStdin(intended));
     }
     if (written.length) {
-      await run(["restore", "--worktree", ...PATHS_FROM_STDIN], exactlyFromStdin(written));
+      await run([...RESTORE, "--worktree", ...PATHS_FROM_STDIN], exactlyFromStdin(written));
     }
   });
 }
@@ -424,7 +459,7 @@ export async function discard(repo: Repo, file: LinesFile, side: UncommittedSide
  * changes are discarded by aborting it. Kept under way, it would go on without them, and a merge be
  * committed with none of the branch's.
  */
-export async function discardAll(repo: Repo): Promise<string[]> {
+export async function discardAll(repo: Repo): Promise<KeptChange[]> {
   const { gitDir } = await gitDirs(repo);
   return repo.exclusive(async (run) => {
     const [blocker, source] = await Promise.all([
@@ -433,7 +468,10 @@ export async function discardAll(repo: Repo): Promise<string[]> {
     ]);
     if (blocker) throw new DiscardBlockedError(blocker);
     const kept = await restoreAll(repo, run, source);
-    return kept.map((path) => Buffer.from(path, "latin1").toString("utf8"));
+    return kept.map(({ path, reason }) => ({
+      path: Buffer.from(path, "latin1").toString("utf8"),
+      reason,
+    }));
   });
 }
 
@@ -442,7 +480,7 @@ export async function discardAll(repo: Repo): Promise<string[]> {
  * and deletes the untracked ones; resolves to the paths, as bytes, of the changes it keeps (see
  * `discardAll`).
  */
-async function restoreAll(repo: Repo, run: GitCommand, source: string): Promise<string[]> {
+async function restoreAll(repo: Repo, run: GitCommand, source: string): Promise<KeptChange[]> {
   // As pathspecs, with their magic, and as bytes: a path goes back to git as it came, also one
   // that isn't UTF-8.
   const reading = { binary: true };
@@ -451,7 +489,7 @@ async function restoreAll(repo: Repo, run: GitCommand, source: string): Promise<
     (await run([...args, "-z"], reading)).split("\0").filter(Boolean);
   const restore = async (pathspecs: string[]) => {
     try {
-      await run(["restore", `--source=${source}`, "--staged", "--worktree", ...PATHS_FROM_STDIN], {
+      await run([...RESTORE, `--source=${source}`, "--staged", "--worktree", ...PATHS_FROM_STDIN], {
         stdin: nulSeparated(pathspecs),
         ...options,
       });
@@ -501,12 +539,21 @@ async function restoreAll(repo: Repo, run: GitCommand, source: string): Promise<
     (_, i) => i % 2 === 1 && /^:(160000 |\d{6} 160000 )/.test(changed[i - 1]!),
   );
   const repositories = after.filter((path) => path.endsWith("/"));
-  return [
-    ...new Set([
-      ...still,
-      ...submodules,
-      ...repositories,
-      ...left.map((path) => path.toString("latin1")),
-    ]),
-  ];
+  // A path once, with the first reason: a repository that took a deleted file's place is in the
+  // way, and listed as its folder.
+  const told = new Map<string, KeptChange>();
+  const keep = (paths: string[], reason: KeptChange["reason"]) => {
+    for (const path of paths) {
+      const name = path.replace(/\/$/, "");
+      if (!told.has(name)) told.set(name, { path, reason });
+    }
+  };
+  keep(still, "in-the-way");
+  keep(submodules, "submodule");
+  keep(repositories, "repository");
+  keep(
+    left.map((path) => path.toString("latin1")),
+    "undeletable",
+  );
+  return [...told.values()];
 }

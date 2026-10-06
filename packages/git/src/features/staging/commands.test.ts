@@ -1016,6 +1016,15 @@ describe("discarding a file's changes", () => {
     expect(contents(path, "d/kept")).toBe("kept\n");
   });
 
+  it("deletes a file added with --intent-to-add over one the last commit has", async () => {
+    const repo = await createHistoryRepo("discard-intent-over-head");
+    git(repo.path, "rm", "-q", "--cached", "a file.txt");
+    git(repo.path, "add", "-N", "a file.txt");
+
+    await discard(repo, { path: "a file.txt", origPath: null }, "unstaged");
+    expect(contents(repo.path, "a file.txt")).toBeNull();
+  });
+
   it("leaves a submodule's changes to be discarded in it", async () => {
     createSubmoduleRepo("discard-submodule");
     const repo = await repos.open("discard-submodule");
@@ -1132,7 +1141,7 @@ describe("discarding all changes", () => {
     git(path, "rm", "-q", "--cached", "c.txt", "bin.dat");
     writeFileSync(join(path, "bin.dat"), "local\n");
 
-    expect(await discardAll(repo)).toEqual(["bin.dat"]);
+    expect(await discardAll(repo)).toEqual([{ path: "bin.dat", reason: "in-the-way" }]);
     expect(contents(path, "bin.dat")).toBe("local\n");
     expect(await statusFiles(repo)).toEqual([
       { path: "bin.dat", origPath: null, staged: "deleted", unstaged: null },
@@ -1168,7 +1177,7 @@ describe("discarding all changes", () => {
     const repo = await repos.open("discard-all-odd-copies");
 
     // The quoted one is untracked, deleted, and put back; the link, ignored, is kept.
-    expect(await discardAll(repo)).toEqual(["latest"]);
+    expect(await discardAll(repo)).toEqual([{ path: "latest", reason: "in-the-way" }]);
     expect(contents(path, '"draft.txt')).toBe("d\n");
   });
 
@@ -1241,6 +1250,31 @@ describe("discarding all changes", () => {
     expect(await statusFiles(repo)).toEqual([]);
   });
 
+  it("names a repository that took a deleted file's place once", async () => {
+    const repo = await createHistoryRepo("discard-all-repository-in-place");
+    rmSync(join(repo.path, "c.txt"));
+    mkdirSync(join(repo.path, "c.txt"));
+    git(join(repo.path, "c.txt"), "init", "-q");
+
+    expect(await discardAll(repo)).toEqual([{ path: "c.txt", reason: "in-the-way" }]);
+  });
+
+  it("keeps the changes in a submodule, whatever submodule.recurse says", async () => {
+    const origin = createRepo("discard-all-recurse-origin");
+    writeFileSync(join(origin, "m.txt"), "base\n");
+    git(origin, "add", ".");
+    git(origin, "commit", "-q", "-m", "base");
+    const path = createRepo("discard-all-recurse");
+    git(path, "-c", "protocol.file.allow=always", "submodule", "add", "-q", origin, "mod");
+    git(path, "commit", "-q", "-m", "with mod");
+    git(path, "config", "submodule.recurse", "true");
+    writeFileSync(join(path, "mod", "m.txt"), "local\n");
+    const repo = await repos.open("discard-all-recurse");
+
+    await discardAll(repo);
+    expect(contents(path, "mod/m.txt")).toBe("local\n");
+  });
+
   it("deletes nothing untracked when it can't discard the rest", async () => {
     const repo = await createHistoryRepo("discard-all-locked");
     writeFileSync(join(repo.path, ".git", "index.lock"), "");
@@ -1272,7 +1306,7 @@ describe("discarding all changes", () => {
     writeFileSync(join(path, "u"), "u\n");
     const repo = await repos.open("discard-all-unborn-nested");
 
-    expect(await discardAll(repo)).toEqual(["mod/"]);
+    expect(await discardAll(repo)).toEqual([{ path: "mod/", reason: "repository" }]);
     expect(contents(path, "f")).toBeNull();
     expect(contents(path, "u")).toBeNull();
     expect(existsSync(join(mod, ".git"))).toBe(true);
@@ -1286,7 +1320,10 @@ describe("discarding all changes", () => {
     writeFileSync(join(path, "a.txt"), "changed\n");
     const repo = await repos.open("discard-all-kept");
 
-    expect(await discardAll(repo)).toEqual(["mod", "nested/"]);
+    expect(await discardAll(repo)).toEqual([
+      { path: "mod", reason: "submodule" },
+      { path: "nested/", reason: "repository" },
+    ]);
     expect(contents(path, "a.txt")).toBe("a\n");
   });
 

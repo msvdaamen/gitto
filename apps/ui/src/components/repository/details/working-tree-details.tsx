@@ -1,4 +1,4 @@
-import type { ChangedFile, UncommittedSide } from "@gitto/git/types";
+import type { ChangedFile, KeptChange, UncommittedSide } from "@gitto/git/types";
 import type { LucideIcon } from "lucide-solid";
 import CircleCheck from "lucide-solid/icons/circle-check";
 import FilePen from "lucide-solid/icons/file-pen";
@@ -63,7 +63,7 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
   // The changes being asked about discarding.
   const [discarding, setDiscarding] = createSignal<DiscardTarget>();
   // The changes discarding them all last kept, as it couldn't discard them.
-  const [kept, setKept] = createSignal<string[]>([]);
+  const [kept, setKept] = createSignal<KeptChange[]>([]);
   // Another repository's changes aren't this one's.
   createEffect(
     on(

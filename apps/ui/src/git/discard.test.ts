@@ -54,11 +54,20 @@ describe("discarding a file's changes", () => {
 });
 
 describe("discarding all changes", () => {
-  it("says which changes it kept, the first few by name", () => {
-    expect(keptMessage(["mod"])).toBe(
-      "Kept mod: a submodule's or a repository's own changes are discarded in it, and a deleted file isn't put back over what has taken its place.",
+  it("says which changes it kept, the first few by name, and why", () => {
+    expect(keptMessage([{ path: "mod", reason: "submodule" }])).toBe(
+      "Kept mod: a submodule's changes are discarded in it.",
     );
-    expect(keptMessage(["a", "b", "c", "d", "e"])).toMatch(/^Kept a, b, c and 2 more: /);
+    expect(
+      keptMessage([
+        { path: "a", reason: "in-the-way" },
+        { path: "b", reason: "undeletable" },
+        { path: "c", reason: "in-the-way" },
+        { path: "d", reason: "in-the-way" },
+      ]),
+    ).toBe(
+      "Kept a, b, c and 1 more: a deleted file isn't put back over what has taken its place; an untracked file couldn't be deleted.",
+    );
   });
 
   it("waits for conflicts to be resolved, and needs changes", () => {

@@ -2,7 +2,7 @@ import { oc } from "@orpc/contract";
 import * as z from "zod";
 
 import { FileInput, RepositoryInput } from "../../input";
-import { LineSelectionSchema, UncommittedSideSchema } from "./schema";
+import { KeptChangeSchema, LineSelectionSchema, UncommittedSideSchema } from "./schema";
 
 const PathsInput = RepositoryInput.extend({ paths: z.array(z.string().min(1)).min(1) });
 
@@ -44,7 +44,7 @@ export const StagingContract = {
   /**
    * Discards every uncommitted change, untracked files included; fails with PRECONDITION_FAILED,
    * discarding nothing, while files are conflicted or an operation like a merge is under way.
-   * Returns the paths of the changes it kept, as it can't discard them (see `discardAll`).
+   * Returns the changes it kept, as it can't discard them, and why (see `discardAll`).
    */
-  discardAll: oc.input(RepositoryInput).output(z.object({ kept: z.array(z.string()) })),
+  discardAll: oc.input(RepositoryInput).output(z.object({ kept: z.array(KeptChangeSchema) })),
 };

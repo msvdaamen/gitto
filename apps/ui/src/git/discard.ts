@@ -1,4 +1,10 @@
-import type { ChangedFile, Operation, StatusSummary, UncommittedSide } from "@gitto/git/types";
+import type {
+  ChangedFile,
+  KeptChange,
+  Operation,
+  StatusSummary,
+  UncommittedSide,
+} from "@gitto/git/types";
 
 import { isNestedRepository } from "./changes";
 import { operationName } from "./conflicts";
@@ -31,11 +37,23 @@ export function discardDescription(file: ChangedFile, side: UncommittedSide): st
   return `The changes to ${file.path} that aren't staged are lost; its staged ones stay.`;
 }
 
-/** What's said of the changes discarding them all kept, as it can't discard them: their paths. */
-export function keptMessage(paths: string[]): string {
-  const named = paths.slice(0, 3).join(", ");
-  const more = paths.length > 3 ? ` and ${paths.length - 3} more` : "";
-  return `Kept ${named}${more}: a submodule's or a repository's own changes are discarded in it, and a deleted file isn't put back over what has taken its place.`;
+/** Why discarding them all kept a change, by its reason. */
+const KEPT_BECAUSE: Record<KeptChange["reason"], string> = {
+  submodule: "a submodule's changes are discarded in it",
+  repository: "a repository inside this one has its changes discarded in it",
+  "in-the-way": "a deleted file isn't put back over what has taken its place",
+  undeletable: "an untracked file couldn't be deleted",
+};
+
+/** What's said of the changes discarding them all kept, as it can't discard them, and why. */
+export function keptMessage(kept: KeptChange[]): string {
+  const named = kept
+    .slice(0, 3)
+    .map(({ path }) => path)
+    .join(", ");
+  const more = kept.length > 3 ? ` and ${kept.length - 3} more` : "";
+  const because = [...new Set(kept.map(({ reason }) => KEPT_BECAUSE[reason]))].join("; ");
+  return `Kept ${named}${more}: ${because}.`;
 }
 
 /**

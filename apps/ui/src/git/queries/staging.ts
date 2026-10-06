@@ -1,4 +1,4 @@
-import type { ChangedFile, LineSelection, UncommittedSide } from "@gitto/git/types";
+import type { ChangedFile, KeptChange, LineSelection, UncommittedSide } from "@gitto/git/types";
 import { hashKey, useMutation, useQueryClient } from "@tanstack/solid-query";
 
 import { stagingPaths } from "@/git/changes";
@@ -36,17 +36,20 @@ export type DiscardTarget = { file: ChangedFile; side: UncommittedSide } | "all"
  * be discarded (see `discardAll`).
  */
 export function useDiscard(repositoryId: () => string) {
-  return useStagingMutation(repositoryId, async (id, target: DiscardTarget): Promise<string[]> => {
-    if (target === "all") return (await rpc.git.staging.discardAll({ repositoryId: id })).kept;
-    const { file, side } = target;
-    await rpc.git.staging.discard({
-      repositoryId: id,
-      path: file.path,
-      origPath: file.origPath,
-      side,
-    });
-    return [];
-  });
+  return useStagingMutation(
+    repositoryId,
+    async (id, target: DiscardTarget): Promise<KeptChange[]> => {
+      if (target === "all") return (await rpc.git.staging.discardAll({ repositoryId: id })).kept;
+      const { file, side } = target;
+      await rpc.git.staging.discard({
+        repositoryId: id,
+        path: file.path,
+        origPath: file.origPath,
+        side,
+      });
+      return [];
+    },
+  );
 }
 
 function useStagingMutation<T, R = unknown>(
@@ -55,10 +58,15 @@ function useStagingMutation<T, R = unknown>(
 ) {
   const queryClient = useQueryClient();
   return useMutation(() => ({
+    // The repository it runs on, kept for when it's done: another may be on show by then.
+    onMutate: () => ({ id: repositoryId() }),
     mutationFn: (target: T) => run(repositoryId(), target),
-    // The watcher would catch this too, but refetching right away feels snappier.
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: gitKeys.uncommitted(repositoryId()) }),
+    // The watcher would catch this too, but refetching right away feels snappier. Also after a
+    // failure, which may have changed some of it.
+    onSettled: (_data, _error, _target, started) =>
+      queryClient.invalidateQueries({
+        queryKey: gitKeys.uncommitted(started?.id ?? repositoryId()),
+      }),
   }));
 }
 

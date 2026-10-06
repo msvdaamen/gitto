@@ -1,4 +1,4 @@
-import type { ChangedFile, Operation, Uncommitted } from "@gitto/git/types";
+import type { ChangedFile, KeptChange, Operation, Uncommitted } from "@gitto/git/types";
 import { render, screen } from "@solidjs/testing-library";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import userEvent from "@testing-library/user-event";
@@ -17,7 +17,7 @@ const rpc = vi.hoisted(() => ({
     staging: {
       stage: vi.fn(async () => {}),
       discard: vi.fn(async () => {}),
-      discardAll: vi.fn(async (): Promise<{ kept: string[] }> => ({ kept: [] })),
+      discardAll: vi.fn(async (): Promise<{ kept: KeptChange[] }> => ({ kept: [] })),
     },
     operation: { get: vi.fn(async (): Promise<Operation | null> => null) },
   },
@@ -232,7 +232,9 @@ describe("discarding changes", () => {
 
   it("says which changes discarding them all kept", async () => {
     const user = userEvent.setup();
-    rpc.git.staging.discardAll.mockResolvedValueOnce({ kept: ["mod"] });
+    rpc.git.staging.discardAll.mockResolvedValueOnce({
+      kept: [{ path: "mod", reason: "submodule" }],
+    });
     setChanges([file("a.txt"), file("mod")]);
     renderDetails();
 
