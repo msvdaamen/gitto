@@ -108,9 +108,10 @@ export function useBranchMenuOpenFor() {
 /**
  * The menu of what can be done with a branch, opened by right-clicking an element in `children`
  * marked with its full ref name as `data-branch`, like a row in the sidebar or a label in the
- * history (see `RowMenu`): creating a branch from it, and merging it into the checked-out one, which
- * isn't offered for that one itself. Neither while a switch of branches or a merge is running. Merging waits while HEAD is detached, or a merge, a rebase or
- * conflicts are under way, as git would refuse. Needs a `BranchMenuProvider` around it.
+ * history (see `RowMenu`): creating a branch from it, and merging it into the checked-out one,
+ * which isn't offered for that one itself. Neither is possible while a switch of branches or a
+ * merge is running. Merging is also disabled while HEAD is detached, or an operation (a merge, a
+ * rebase…) or conflicts are under way, as git would refuse. Needs a `BranchMenuProvider` around it.
  */
 export function BranchMenu(props: { repositoryId: string; children: JSX.Element }) {
   const actions = useContext(BranchActions);
