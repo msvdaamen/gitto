@@ -1,11 +1,12 @@
 import { Popover } from "@kobalte/core/popover";
 import { cn } from "cn";
 import X from "lucide-solid/icons/x";
-import type { JSX } from "solid-js";
+import { Show, type JSX } from "solid-js";
 
 /**
  * A button (or anything else that starts an action), with a popover under it that says why the
- * action failed until dismissed: e.g. the toolbar's Pull, or a tab's Remove.
+ * action failed until dismissed: e.g. the toolbar's Pull, or a tab's Remove. Or, given `anchor`,
+ * the popover alone, placed by that element.
  */
 export function FailurePopover(props: {
   /** The action, e.g. "Pull". */
@@ -14,16 +15,23 @@ export function FailurePopover(props: {
   onDismiss: () => void;
   /** Classes for the element around `children`, which the popover is placed under. */
   class?: string;
-  children: JSX.Element;
+  /** Where the popover goes; under `children`, by default. */
+  placement?: "bottom-start" | "right-start";
+  /** The element the popover is placed by, rather than one around `children`. */
+  anchor?: () => HTMLElement | undefined;
+  children?: JSX.Element;
 }) {
   return (
     <Popover
       open={!!props.error}
       onOpenChange={(open) => !open && props.onDismiss()}
-      placement="bottom-start"
+      placement={props.placement ?? "bottom-start"}
       gutter={6}
+      anchorRef={props.anchor}
     >
-      <Popover.Anchor class={cn("flex", props.class)}>{props.children}</Popover.Anchor>
+      <Show when={!props.anchor}>
+        <Popover.Anchor class={cn("flex", props.class)}>{props.children}</Popover.Anchor>
+      </Show>
       <Popover.Portal>
         <Popover.Content
           // Not focused: the action can fail while the user is typing elsewhere.

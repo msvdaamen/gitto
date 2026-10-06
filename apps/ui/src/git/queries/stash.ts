@@ -30,9 +30,11 @@ export function useStashFiles(repositoryId: () => string, sha: () => string) {
 }
 
 /**
- * Stashes every change, and pops the newest stash; whether each is running, and why it last
+ * Stashes every change, pops a stash, and drops one; whether each is running, and why it last
  * failed. Each counts as running until the repository has reloaded, so the stashes and changes on
- * show are never ones from before it: a pop names the stash it pops, which has to be the newest.
+ * show are never ones from before it. One runs at a time (`isPending`): the toolbar's pop names the
+ * stash it pops, which has to be the newest. A pop of the newest, from the toolbar, and one of the
+ * stash picked in a list are separate, to show each where it was started.
  */
 export function useStashActions(repositoryId: () => string) {
   const queryClient = useQueryClient();
@@ -44,12 +46,35 @@ export function useStashActions(repositoryId: () => string) {
       await queryClient.invalidateQueries({ queryKey: gitKeys.repository(id) });
     }
   };
-  return {
-    stash: useRepositoryOperation("stash", repositoryId, (id) =>
+  const popping = (id: string, sha: string) =>
+    reloading(id, rpc.git.stash.pop({ repositoryId: id, sha }));
+  const operations = [
+    useRepositoryOperation("stash", repositoryId, (id) =>
       reloading(id, rpc.git.stash.push({ repositoryId: id })),
     ),
-    pop: useRepositoryOperation("pop", repositoryId, (id, sha: string) =>
-      reloading(id, rpc.git.stash.pop({ repositoryId: id, sha })),
+    useRepositoryOperation("pop", repositoryId, popping),
+    useRepositoryOperation("pop-picked", repositoryId, popping),
+    useRepositoryOperation("drop-stash", repositoryId, (id, sha: string) =>
+      reloading(id, rpc.git.stash.drop({ repositoryId: id, sha })),
     ),
+  ] as const;
+  const isPending = () => operations.some((operation) => operation.isPending());
+  /** `operation`, which doesn't run while any of them is. */
+  const oneAtATime = <T>(operation: ReturnType<typeof useRepositoryOperation<T>>) => ({
+    ...operation,
+    run: (input: T, options?: { onSuccess?: () => void }) => {
+      if (!isPending()) operation.run(input, options);
+    },
+  });
+  const [stash, pop, popPicked, drop] = operations;
+  return {
+    stash: oneAtATime(stash),
+    /** Pops the newest stash, by its SHA. */
+    pop: oneAtATime(pop),
+    /** Pops the stash picked in a list, the newest or an older one. */
+    popPicked: oneAtATime(popPicked),
+    drop: oneAtATime(drop),
+    /** Whether any of them is running. */
+    isPending,
   };
 }

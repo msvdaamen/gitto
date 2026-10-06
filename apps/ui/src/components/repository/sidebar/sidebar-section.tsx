@@ -2,8 +2,10 @@ import { Popover } from "@kobalte/core/popover";
 import { cn } from "cn";
 import type { LucideIcon } from "lucide-solid";
 import ChevronRight from "lucide-solid/icons/chevron-right";
+import LoaderCircle from "lucide-solid/icons/loader-circle";
 import { Show } from "solid-js";
 import type { JSX } from "solid-js";
+import { Dynamic } from "solid-js/web";
 
 import { VirtualList } from "@/components/ui/virtual-list";
 import { compactCount } from "@/lib/format";
@@ -28,10 +30,14 @@ const SECTION_CHROME = 1 + HEADER_HEIGHT + 1 + 2 * LIST_PADDING;
  * instead, that opens its rows in a popover.
  */
 export function SidebarSection<T>(props: {
+  /** The section's element, e.g. to place a popover by. */
+  ref?: (element: HTMLElement) => void;
   title: string;
   /** Marks the rows' list, so it starts at the top again in another repository (`SCROLL_IDS`). */
   scrollId: ScrollId;
   icon: LucideIcon;
+  /** Running something on its items, e.g. a pop of a stash: a spinner takes the icon's place. */
+  busy?: boolean;
   count: number;
   collapsed: boolean;
   onToggle: () => void;
@@ -43,6 +49,8 @@ export function SidebarSection<T>(props: {
 
   return (
     <section
+      ref={props.ref}
+      aria-busy={props.busy}
       class={cn(
         // At least its top border and its header.
         "flex min-h-[calc(var(--header-height)+1px)] flex-col border-t border-border-soft max-md:min-h-0 max-md:flex-none max-md:border-0",
@@ -70,7 +78,7 @@ export function SidebarSection<T>(props: {
             !props.collapsed && "rotate-90",
           )}
         />
-        <props.icon size={13} class="shrink-0" />
+        <SectionIcon icon={props.icon} busy={props.busy} size={13} />
         <SectionTitle title={props.title} count={props.count} />
       </button>
       <Show when={expanded()}>
@@ -84,10 +92,27 @@ export function SidebarSection<T>(props: {
           {props.children}
         </VirtualList>
       </Show>
-      <RailSection title={props.title} icon={props.icon} count={props.count} items={props.items}>
+      <RailSection
+        title={props.title}
+        icon={props.icon}
+        busy={props.busy}
+        count={props.count}
+        items={props.items}
+      >
         {props.children}
       </RailSection>
     </section>
+  );
+}
+
+/** A section's icon, or a spinner in its place while it's busy. */
+function SectionIcon(props: { icon: LucideIcon; busy?: boolean; size: number }) {
+  return (
+    <Dynamic
+      component={props.busy ? LoaderCircle : props.icon}
+      size={props.size}
+      class={cn("shrink-0", props.busy && "animate-spin motion-reduce:animate-none")}
+    />
   );
 }
 
@@ -112,6 +137,7 @@ function SectionTitle(props: { title: string; count: number }) {
 function RailSection<T>(props: {
   title: string;
   icon: LucideIcon;
+  busy?: boolean;
   count: number;
   items: T[];
   children: (item: () => T) => JSX.Element;
@@ -123,7 +149,7 @@ function RailSection<T>(props: {
         title={props.title}
         aria-label={`${props.title} (${props.count})`}
       >
-        <props.icon size={16} />
+        <SectionIcon icon={props.icon} busy={props.busy} size={16} />
         <Show when={props.count > 0}>
           <span class="absolute -top-0.5 -right-1 min-w-[16px] rounded-full border-2 border-panel bg-panel-active px-[3px] text-center text-[10px] leading-[11px] font-[700] text-text-soft tabular-nums">
             {compactCount(props.count)}

@@ -21,18 +21,21 @@ import { BranchMenu } from "./branch-menu";
 import { CreateBranchDialog } from "./create-branch-dialog";
 import { SidebarFolder, SidebarRow } from "./sidebar-row";
 import { SidebarSection } from "./sidebar-section";
+import { StashMenu } from "./stash-menu";
 
 /**
  * The sidebar's sections: branches, remotes, tags, stashes.
  * Double-clicking a branch switches to it; for a remote one, to the local branch tracking it.
- * Right-clicking one opens a menu of what can be done with it, like creating a branch from it.
+ * Right-clicking one opens a menu of what can be done with it, like creating a branch from it;
+ * right-clicking a stash, one to pop or delete it.
  */
 export function RefList(props: { repositoryId: string }) {
   const refs = useRefs(() => props.repositoryId);
   const stashes = useStashes(() => props.repositoryId);
   const switchBranch = useSwitchBranch(() => props.repositoryId);
   const ago = useRelativeTime();
-  // The branch whose menu is open, and the one a new one is being named to be created from.
+  // The branch or stash whose menu is open, and the branch a new one is being named to be created
+  // from. A full ref name and a SHA can't clash.
   const [menuFor, setMenuFor] = createSignal<string>();
   const [branchFrom, setBranchFrom] = createSignal<Ref>();
   createEffect(
@@ -177,23 +180,31 @@ export function RefList(props: { repositoryId: string }) {
         >
           {(tag) => <SidebarRow icon={Tag} label={tag().name} />}
         </SidebarSection>
-        <SidebarSection
-          title="Stashes"
-          scrollId="sidebar-stashes"
-          icon={Inbox}
-          count={stashes.data?.length ?? 0}
-          {...collapsible("stashes")}
-          items={stashes.data ?? []}
-        >
-          {(stash) => (
-            <SidebarRow
-              icon={Archive}
-              label={stash().message}
-              title={`${stash().message}\nStashed ${ago(stash().createdAt).toLowerCase()}`}
-            />
-          )}
-        </SidebarSection>
       </BranchMenu>
+      <StashMenu repositoryId={props.repositoryId} onOpenFor={setMenuFor}>
+        {(section) => (
+          <SidebarSection
+            ref={section.ref}
+            title="Stashes"
+            scrollId="sidebar-stashes"
+            icon={Inbox}
+            busy={section.busy()}
+            count={stashes.data?.length ?? 0}
+            {...collapsible("stashes")}
+            items={stashes.data ?? []}
+          >
+            {(stash) => (
+              <SidebarRow
+                data-stash={stash().sha}
+                icon={Archive}
+                label={stash().message}
+                title={`${stash().message}\nStashed ${ago(stash().createdAt).toLowerCase()}`}
+                highlighted={menuFor() === stash().sha}
+              />
+            )}
+          </SidebarSection>
+        )}
+      </StashMenu>
       <CreateBranchDialog
         repositoryId={props.repositoryId}
         from={branchFrom()}

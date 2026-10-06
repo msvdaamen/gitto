@@ -1,7 +1,14 @@
 import { implement } from "@orpc/server";
 
 import { withRepo, type GitContext } from "../../core/middleware";
-import { getStashFilePatch, getStashFiles, listStashes, popStash, pushStash } from "./commands";
+import {
+  dropStash,
+  getStashFilePatch,
+  getStashFiles,
+  listStashes,
+  popStash,
+  pushStash,
+} from "./commands";
 import { StashContract } from "./contract";
 
 const os = implement(StashContract).$context<GitContext>();
@@ -18,4 +25,5 @@ export const stashRouter = os.router({
       getStashFilePatch(context.repo, input.sha, input, signal),
     ),
   pop: os.pop.use(withRepo).handler(({ context, input }) => popStash(context.repo, input.sha)),
+  drop: os.drop.use(withRepo).handler(({ context, input }) => dropStash(context.repo, input.sha)),
 });
