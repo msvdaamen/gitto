@@ -22,14 +22,21 @@ export async function entryAt(root: string, path: string | Buffer): Promise<Entr
 
 /**
  * What's at each of `paths`, as `entryAt` says, read a batch at a time: there can be thousands, as
- * many as the files in a deleted folder.
+ * many as the files in a deleted folder. Stops after the batch with one that `until` is true of,
+ * if it's given, with only the entries read so far.
  */
-export async function entriesAt(root: string, paths: (string | Buffer)[]): Promise<Entry[]> {
+export async function entriesAt(
+  root: string,
+  paths: (string | Buffer)[],
+  until?: (entry: Entry) => boolean,
+): Promise<Entry[]> {
   const entries: Entry[] = [];
   for (let i = 0; i < paths.length; i += 100) {
     const batch = paths.slice(i, i + 100);
     // oxlint-disable-next-line no-await-in-loop -- one batch at a time, on purpose.
-    entries.push(...(await Promise.all(batch.map((path) => entryAt(root, path)))));
+    const read = await Promise.all(batch.map((path) => entryAt(root, path)));
+    entries.push(...read);
+    if (until && read.some(until)) break;
   }
   return entries;
 }

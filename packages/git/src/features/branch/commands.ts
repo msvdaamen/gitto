@@ -1,4 +1,4 @@
-import { entryAt } from "../../core/entry";
+import { entriesAt, type Entry } from "../../core/entry";
 import { ChangesStashedError, GitError } from "../../core/errors";
 import { currentBranch, resolveRef, succeeds, type GitCommand, type Repo } from "../../core/repo";
 import type { RunOptions } from "../../core/runner";
@@ -198,13 +198,11 @@ async function popsCleanly(run: GitCommand, root: string, sha: string): Promise<
   const untracked = (await run(["ls-tree", "-r", "-z", "--name-only", `${sha}^3`]))
     .split("\0")
     .filter(Boolean);
-  // In batches, stopping at the first that's in the way: there can be thousands.
-  for (let i = 0; i < untracked.length; i += 100) {
-    const batch = untracked.slice(i, i + 100);
-    // Something there, or a file where one of its folders would go.
-    // oxlint-disable-next-line no-await-in-loop -- one batch at a time, on purpose.
-    const entries = await Promise.all(batch.map((file) => entryAt(root, file)));
-    if (entries.some((entry) => entry !== undefined)) return false;
-  }
-  return true;
+  // Stopping at the first that's in the way.
+  return !(await entriesAt(root, untracked, inTheWay)).some(inTheWay);
+}
+
+/** Whether something's at a path, or a file is where one of its folders would go. */
+function inTheWay(entry: Entry): boolean {
+  return entry !== undefined;
 }

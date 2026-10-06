@@ -953,6 +953,33 @@ describe("discarding a file's changes", () => {
     ]);
   });
 
+  it("doesn't put back a rename's previous path where a folder has taken its place", async () => {
+    const repo = await createHistoryRepo("discard-intent-rename-folder");
+    const path = repo.path;
+    renameSync(join(path, "c.txt"), join(path, "d.txt"));
+    git(path, "add", "-N", "d.txt");
+    mkdirSync(join(path, "c.txt"));
+    writeFileSync(join(path, "c.txt", "f"), "f\n");
+
+    const error = await rejection(discard(repo, { path: "d.txt", origPath: "c.txt" }, "unstaged"));
+    expect((error as Error).message).toBe(
+      "A folder is at c.txt now. Move or delete it, then discard the changes.",
+    );
+    expect(contents(path, "d.txt")).toBe("b\n");
+  });
+
+  it("puts back a rename's previous path over its copy left by rm --cached", async () => {
+    const repo = await createHistoryRepo("discard-rename-own-copy");
+    const path = repo.path;
+    writeFileSync(join(path, "d.txt"), "b\n");
+    git(path, "rm", "-q", "--cached", "c.txt");
+    git(path, "add", "d.txt");
+
+    await discard(repo, { path: "d.txt", origPath: "c.txt" }, "staged");
+    expect(contents(path, "c.txt")).toBe("b\n");
+    expect(contents(path, "d.txt")).toBeNull();
+  });
+
   it("leaves a submodule's changes to be discarded in it", async () => {
     createSubmoduleRepo("discard-submodule");
     const repo = await repos.open("discard-submodule");
@@ -1060,6 +1087,72 @@ describe("discarding all changes", () => {
     expect(await discardAll(repo)).toEqual([]);
     expect(contents(path, "a")).toBe("a\n");
     expect(await statusFiles(repo)).toEqual([]);
+  });
+
+  it("puts back a file taken out of the index that's ignored now, unless it changed", async () => {
+    const repo = await createHistoryRepo("discard-all-untracked-ignored");
+    const path = repo.path;
+    writeFileSync(join(path, ".git", "info", "exclude"), "c.txt\nbin.dat\n");
+    git(path, "rm", "-q", "--cached", "c.txt", "bin.dat");
+    writeFileSync(join(path, "bin.dat"), "local\n");
+
+    expect(await discardAll(repo)).toEqual(["bin.dat"]);
+    expect(contents(path, "bin.dat")).toBe("local\n");
+    expect(await statusFiles(repo)).toEqual([
+      { path: "bin.dat", origPath: null, staged: "deleted", unstaged: null },
+    ]);
+  });
+
+  it("leaves out a file something took the place of by its name alone, glob characters too", async () => {
+    const path = createRepo("discard-all-glob-name");
+    writeFileSync(join(path, "x[1]*"), "x\n");
+    git(path, "add", ".");
+    git(path, "commit", "-q", "-m", "first");
+    git(path, "rm", "-q", "x[1]*");
+    mkdirSync(join(path, "x[1]*"));
+    writeFileSync(join(path, "x[1]*", "y"), "y\n");
+    git(path, "add", "x[1]*/y");
+    const repo = await repos.open("discard-all-glob-name");
+
+    expect(await discardAll(repo)).toEqual([]);
+    expect(contents(path, "x[1]*")).toBe("x\n");
+  });
+
+  it("deletes nothing untracked when it can't discard the rest", async () => {
+    const repo = await createHistoryRepo("discard-all-locked");
+    writeFileSync(join(repo.path, ".git", "index.lock"), "");
+
+    expect(await rejection(discardAll(repo))).toBeInstanceOf(IndexLockedError);
+    rmSync(join(repo.path, ".git", "index.lock"));
+    expect(contents(repo.path, "new file.txt")).toBe("new\n");
+  });
+
+  it("before the first commit, deletes staged files but keeps a repository staged inside", async () => {
+    const path = createRepo("discard-all-unborn-nested");
+    writeFileSync(join(path, "f"), "f\n");
+    const mod = join(path, "mod");
+    mkdirSync(mod);
+    git(mod, "init", "-q");
+    git(
+      mod,
+      "-c",
+      "user.name=T",
+      "-c",
+      "user.email=t@e",
+      "commit",
+      "-q",
+      "--allow-empty",
+      "-m",
+      "1",
+    );
+    git(path, "add", "f", "mod");
+    writeFileSync(join(path, "u"), "u\n");
+    const repo = await repos.open("discard-all-unborn-nested");
+
+    expect(await discardAll(repo)).toEqual(["mod/"]);
+    expect(contents(path, "f")).toBeNull();
+    expect(contents(path, "u")).toBeNull();
+    expect(existsSync(join(mod, ".git"))).toBe(true);
   });
 
   it("says which changes it kept: a submodule's, and a repository's inside this one", async () => {
