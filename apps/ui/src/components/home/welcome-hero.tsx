@@ -6,8 +6,8 @@ import Plus from "lucide-solid/icons/plus";
 import Sparkles from "lucide-solid/icons/sparkles";
 import { createMemo, Show } from "solid-js";
 
-import { FailurePopover } from "@/components/repository/failure-popover";
 import { Button } from "@/components/ui/button";
+import { FailurePopover } from "@/components/ui/failure-popover";
 import { useRelativeTime } from "@/hooks/relative-time";
 
 import { demoAction } from "./demo-action";

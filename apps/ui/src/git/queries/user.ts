@@ -9,8 +9,9 @@ export function useUserName() {
     queryFn: ({ signal }) => rpc.git.user.name(undefined, { signal }),
     // Not under `gitKeys`, so it doesn't get their defaults (see `queryClient`): without these,
     // `git config user.name` would run again every time the window got focus, for a name that's
-    // read once and all but never changes.
+    // read once and all but never changes. Until it's set, though: someone without one can set it
+    // in a terminal, then come back to be greeted by it.
     staleTime: Infinity,
-    refetchOnWindowFocus: false,
+    refetchOnWindowFocus: (query) => (query.state.data === null ? "always" : false),
   }));
 }

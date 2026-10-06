@@ -61,11 +61,13 @@ async function gitFetch(run: GitCommand, args: string[], settings: string[] = []
  * for (and holds up) the other writes to the repository: the fetch takes as long as the network.
  */
 export async function pull(repo: Repo): Promise<void> {
-  // Where git keeps FETCH_HEAD and the state of a rebase; asked for once, and only awaited once
-  // the branch is read, which can fail first: that's the error to report.
-  const dirs = lazily(() => gitDirs(repo));
+  // Where git keeps FETCH_HEAD and the state of a rebase; asked for once, alongside the branch.
+  // Awaited only once the branch is read, which can fail first: that's the error to report, so
+  // this one mustn't go unhandled meanwhile.
+  const dirs = gitDirs(repo);
+  dirs.catch(() => undefined);
   const { branch, upstream, config: settings } = await readBranch(repo.read, dirs);
-  const { gitDir } = await dirs();
+  const { gitDir } = await dirs;
   // Its merge commit is worded unless the pull will rebase, or only fast-forward, which makes none
   // (as the settings say before fetching).
   const fetched = await fetchUpstream(repo, gitDir, upstream, makesMergeCommit(settings, branch));
@@ -76,12 +78,6 @@ export async function pull(repo: Repo): Promise<void> {
     // Also after a merge that stopped at conflicts, say: the remotes are fetched all the same.
     fetchAfterPull(repo, remotesToFetch(settings, upstream.remote));
   }
-}
-
-/** `read`, run the first time the result is asked for, and once. */
-function lazily<T>(read: () => Promise<T>): () => Promise<T> {
-  let result: Promise<T> | undefined;
-  return () => (result ??= read());
 }
 
 /**
@@ -152,12 +148,12 @@ interface Upstream {
 /** The checked-out branch, and the upstream it pulls from; rejects if there isn't one. */
 async function readBranch(
   run: GitCommand,
-  dirs: () => Promise<GitDirs>,
+  dirs: Promise<GitDirs>,
 ): Promise<{ branch: string; upstream: Upstream; config: PullConfig }> {
   const [branch, config] = await Promise.all([currentBranch(run), readConfig(run)]);
   if (branch === null) {
     // HEAD is detached while a rebase stops: it's that to finish, not a branch to check out.
-    const rebasing = (await rebaseState((await dirs()).gitDir)).rebasing;
+    const rebasing = (await rebaseState((await dirs).gitDir)).rebasing;
     throw new NoUpstreamError(rebasing ? REBASING : NO_BRANCH);
   }
   // From the config: a branch without commits yet has no ref to ask for its upstream. A remote

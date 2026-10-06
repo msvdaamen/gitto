@@ -7,8 +7,8 @@ import { createEffect, createSignal, For, onCleanup, Show, Suspense, type JSX } 
 
 import { useOpenRepository, useRemoveRepository, useRepositories } from "@/hooks/repositories";
 
-import { FailurePopover } from "./repository/failure-popover";
 import { IconButton } from "./ui/button";
+import { FailurePopover } from "./ui/failure-popover";
 import { GittoIcon } from "./ui/gitto-icon";
 
 const HOME_TAB = "home";

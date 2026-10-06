@@ -40,6 +40,8 @@ export function useAddRepository() {
       return path ? rpc.repository.add({ path }) : null;
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: REPOSITORIES_KEY }),
+    // The UI shows only the message; the stack and cause are for whoever looks into it.
+    onError: (error) => console.error("Couldn't add the repository", error),
   }));
 }
 
@@ -69,5 +71,6 @@ export function useRemoveRepository() {
   return useMutation(() => ({
     mutationFn: (id: string) => rpc.repository.remove({ id }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: REPOSITORIES_KEY }),
+    onError: (error) => console.error("Couldn't remove the repository", error),
   }));
 }

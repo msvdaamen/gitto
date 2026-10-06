@@ -18,17 +18,17 @@ export class RepositoryServiceImpl implements RepositoryService {
   constructor(private readonly store: RepositoryStore) {}
 
   async getRepositories(): Promise<Repository[]> {
-    return this.store.getAll();
+    return listed("read", this.store.getAll());
   }
 
   async getRepository(id: string): Promise<Repository | undefined> {
-    return this.store.getById(id);
+    return listed("read", this.store.getById(id));
   }
 
   async addRepository(path: string): Promise<Repository> {
     const repoPath = resolve(path);
 
-    const existing = await this.store.getByPath(repoPath);
+    const existing = await listed("read", this.store.getByPath(repoPath));
     if (existing) return existing;
 
     // `.git` is a directory in regular clones and a file in worktrees and submodules.
@@ -39,15 +39,18 @@ export class RepositoryServiceImpl implements RepositoryService {
     if (!isRepository) throw new NotAGitRepositoryError(repoPath);
 
     const repository: Repository = { id: uuidv7(), name: basename(repoPath), path: repoPath };
-    await this.store.create(repository).catch((error: unknown) => {
-      throw new RepositoryListError(error);
-    });
+    await listed("update", this.store.create(repository));
     return repository;
   }
 
   async removeRepository(id: string): Promise<void> {
-    await this.store.delete(id).catch((error: unknown) => {
-      throw new RepositoryListError(error);
-    });
+    await listed("update", this.store.delete(id));
   }
+}
+
+/** `query` of the list of repositories, rejecting with why it failed in words (see the error). */
+function listed<T>(action: "read" | "update", query: Promise<T>): Promise<T> {
+  return query.catch((error: unknown) => {
+    throw new RepositoryListError(action, error);
+  });
 }

@@ -4,8 +4,8 @@ import X from "lucide-solid/icons/x";
 import type { JSX } from "solid-js";
 
 /**
- * A toolbar button (or other part of the toolbar), with a popover under it that says why its action
- * failed until dismissed.
+ * A button (or anything else that starts an action), with a popover under it that says why the
+ * action failed until dismissed: e.g. the toolbar's Pull, or a tab's Remove.
  */
 export function FailurePopover(props: {
   /** The action, e.g. "Pull". */

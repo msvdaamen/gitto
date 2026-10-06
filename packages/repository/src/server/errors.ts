@@ -10,12 +10,12 @@ export class NotAGitRepositoryError extends Error {
 }
 
 /**
- * Gitto's list of repositories couldn't be changed, e.g. as its database is locked or the disk is
- * full: said with SQLite's reason, which the database's own error wraps in its query.
+ * Gitto's list of repositories couldn't be read or changed, e.g. as its database is locked or the
+ * disk is full: said with SQLite's reason, which the database's own error wraps in its query.
  */
 export class RepositoryListError extends Error {
-  constructor(cause: unknown) {
-    super(`Gitto couldn't update its list of repositories: ${reason(cause)}`, { cause });
+  constructor(action: "read" | "update", cause: unknown) {
+    super(`Gitto couldn't ${action} its list of repositories: ${reason(cause)}`, { cause });
     this.name = new.target.name;
   }
 }

@@ -184,16 +184,18 @@ export function createViewerEditing(deps: ViewerEditingDeps): ViewerEditing {
         contents,
         cacheKey: diff.cacheKey && `${diff.cacheKey}:whole`,
       });
-      return { diff: whole, version: read.version, text: contents };
+      return { diff: whole, version: read.version };
     }
     if (diff.isPartial) {
       const { hydrated, version } = await highlights.loadWhole(diff, deps.loadFile);
       if (!version) throw new Error("This file can't be edited.");
-      return { diff: hydrated, version, text: hydrated.additionLines.join("") };
+      return { diff: hydrated, version };
     }
-    // Whole already, as more of it was shown, or it was edited: still the file on disk?
+    // Whole already, as more of it was shown, or it was edited: still the file on disk? Throws if
+    // it isn't.
     const read = await readNewSide(diff);
-    return { diff, version: read.version, text: fitToLines(diff.additionLines, read.contents) };
+    fitToLines(diff.additionLines, read.contents);
+    return { diff, version: read.version };
   };
 
   /** The working tree's side of `diff`, with its version. */

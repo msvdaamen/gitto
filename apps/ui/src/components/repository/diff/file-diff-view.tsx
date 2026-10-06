@@ -33,6 +33,7 @@ import { Button, IconButton } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { FileStatusBadge } from "@/components/ui/file-status-badge";
 import { LineStats } from "@/components/ui/line-stats";
+import { Notice } from "@/components/ui/notice";
 import {
   countsOf,
   hasPatch,
@@ -57,7 +58,7 @@ import { useUnsuspendedData } from "@/git/queries/unsuspended";
 import { useDelayed } from "@/hooks/delayed";
 import { useDiffStyle } from "@/hooks/diff-style";
 
-import { EditNotice, useFileEditing } from "./file-editing";
+import { useFileEditing } from "./file-editing";
 import { useFileStaging } from "./file-staging";
 import type * as ViewerModule from "./patch-viewer";
 
@@ -274,7 +275,7 @@ export function FileDiffView(props: {
     showsPatch,
     target: () => next() ?? previous(),
     leave: fileEditing.leave,
-    onOpen: (target, opened) => props.onOpen(target, opened),
+    open: (target) => props.onOpen(props.source, target),
   });
 
   let section: HTMLElement | undefined;
@@ -344,7 +345,7 @@ export function FileDiffView(props: {
       </FileDiffHeader>
       <fileEditing.Banner />
       <fileStaging.Banner />
-      <Show when={filesError()}>{(message) => <EditNotice message={message()} />}</Show>
+      <Show when={filesError()}>{(message) => <Notice message={message()} />}</Show>
 
       <div class="min-h-0 flex-1">
         <Switch>

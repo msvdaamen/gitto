@@ -1,11 +1,8 @@
-import { cn } from "cn";
-import type { LucideIcon } from "lucide-solid";
-import FileWarning from "lucide-solid/icons/file-exclamation-point";
 import Pencil from "lucide-solid/icons/pencil";
-import { children, createSignal, onCleanup, onMount, Show, type JSX } from "solid-js";
-import { Dynamic } from "solid-js/web";
+import { createSignal, onCleanup, onMount, Show } from "solid-js";
 
 import { Button, IconButton } from "@/components/ui/button";
+import { Notice } from "@/components/ui/notice";
 import { saveWorkingTreeFile } from "@/git/queries/file-diff";
 
 import { createAutosave } from "./autosave";
@@ -199,7 +196,7 @@ export function useFileEditing(props: {
           <Show when={editing() && state()} keyed>
             {(current) => (
               <Show when={current.kind === "changed-on-disk" || current.kind === "failed"}>
-                <EditNotice message={"message" in current ? current.message : ""}>
+                <Notice message={"message" in current ? current.message : ""}>
                   <Show
                     when={current.kind === "changed-on-disk"}
                     fallback={
@@ -215,12 +212,12 @@ export function useFileEditing(props: {
                       Overwrite
                     </Button>
                   </Show>
-                </EditNotice>
+                </Notice>
               </Show>
             )}
           </Show>
           <Show when={startError()}>
-            {(message) => <EditNotice message={`Couldn't edit the file: ${message()}`} />}
+            {(message) => <Notice message={`Couldn't edit the file: ${message()}`} />}
           </Show>
           <UnsavedChangesDialog
             open={asking() !== undefined}
@@ -233,33 +230,4 @@ export function useFileEditing(props: {
       );
     },
   };
-}
-
-/**
- * A line under the header about the edits, or something else that went wrong with the file. A
- * status, as the edits' are: the user is told, but not interrupted; an alert for what they asked
- * for and didn't get, like lines that couldn't be staged.
- */
-export function EditNotice(props: {
-  message: string;
-  role?: "status" | "alert";
-  icon?: LucideIcon;
-  /** Buttons for what can be done about it, after the message. */
-  children?: JSX.Element;
-}) {
-  const actions = children(() => props.children);
-  return (
-    <p
-      role={props.role ?? "status"}
-      // Less padding around buttons, which are taller than the text: the same height either way.
-      class={cn(
-        "m-0 flex shrink-0 items-center gap-1.5 border-b border-border px-3 text-[11.5px] text-muted",
-        actions() ? "py-1" : "py-1.5",
-      )}
-    >
-      <Dynamic component={props.icon ?? FileWarning} size={13} class="shrink-0 text-amber" />
-      <span class="mr-auto">{props.message}</span>
-      {actions()}
-    </p>
-  );
 }

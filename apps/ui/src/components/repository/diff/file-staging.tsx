@@ -2,13 +2,13 @@ import type { ChangedFile } from "@gitto/git/types";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
 import { createSignal, Show } from "solid-js";
 
+import { Notice } from "@/components/ui/notice";
 import { isNestedRepository } from "@/git/changes";
 import { isUncommitted, type DiffSource } from "@/git/diff-source";
 import { hasHunks, stagedWhole } from "@/git/patch";
 import type { FilePatch } from "@/git/queries/file-diff";
 import { useStageFile, useStageLines } from "@/git/queries/staging";
 
-import { EditNotice } from "./file-editing";
 import type { LineStaging } from "./patch-viewer";
 
 /**
@@ -44,8 +44,8 @@ export function useFileStaging(props: {
   target: () => ChangedFile | undefined;
   /** Saves the file's edits and stops editing it; resolves to whether it did (`useFileEditing`). */
   leave: () => Promise<boolean>;
-  /** Opens another file's changes: the one to move on to. */
-  onOpen: (source: DiffSource, file: ChangedFile) => void;
+  /** Opens another file of the same source's: the one to move on to. */
+  open: (file: ChangedFile) => void;
 }) {
   /** What's done with the file's changes: staged, or unstaged, by the side they're on. */
   const stagingAction = () => (props.source().kind === "staged" ? "unstage" : "stage");
@@ -66,7 +66,7 @@ export function useFileStaging(props: {
    * file was opened meanwhile.
    */
   const moveOn = (key: string, target: ChangedFile | undefined) => {
-    if (target && key === props.fileKey()) props.onOpen(props.source(), target);
+    if (target && key === props.fileKey()) props.open(target);
   };
 
   const lineStaging = (): LineStaging | undefined => {
@@ -152,7 +152,7 @@ export function useFileStaging(props: {
     Banner() {
       return (
         <Show when={stagingError()?.key === props.fileKey() && stagingError()}>
-          {(error) => <EditNotice role="alert" icon={TriangleAlert} message={error().message} />}
+          {(error) => <Notice role="alert" icon={TriangleAlert} message={error().message} />}
         </Show>
       );
     },

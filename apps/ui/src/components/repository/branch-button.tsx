@@ -2,12 +2,12 @@ import { Popover } from "@kobalte/core/popover";
 import GitBranch from "lucide-solid/icons/git-branch";
 import { createEffect, createSignal, on, Suspense } from "solid-js";
 
+import { FailurePopover } from "@/components/ui/failure-popover";
 import { useCreateBranch } from "@/git/queries/branch";
 import { useStatus } from "@/git/queries/status";
 import { branchSource, hasUncommittedChanges } from "@/git/status";
 
 import { BranchForm } from "./branch-form";
-import { FailurePopover } from "./failure-popover";
 import { ToolbarButton } from "./toolbar-button";
 
 /**
