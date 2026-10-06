@@ -14,6 +14,7 @@ const rpc = vi.hoisted(() => ({
     status: { get: vi.fn(async () => uncommitted) },
     commit: { message: vi.fn(), pushedTo: vi.fn() },
     staging: {
+      stage: vi.fn(async () => {}),
       discard: vi.fn(async () => {}),
       discardAll: vi.fn(async (): Promise<{ kept: string[] }> => ({ kept: [] })),
     },
@@ -185,6 +186,22 @@ describe("discarding changes", () => {
     expect(await screen.findByRole("alertdialog")).toHaveTextContent("Discard all changes?");
     await user.click(screen.getByRole("button", { name: "Discard" }));
     expect(rpc.git.staging.discardAll).toHaveBeenCalledWith({ repositoryId: "repo" });
+  });
+
+  it("says why the last of staging and discarding failed, not an earlier one", async () => {
+    const user = userEvent.setup();
+    rpc.git.staging.stage.mockRejectedValueOnce(new Error("Another git process is running."));
+    rpc.git.staging.discard.mockRejectedValueOnce(new Error("A folder is at a.txt now."));
+    setChanges([file("a.txt")]);
+    renderDetails();
+
+    await user.click(await screen.findByRole("button", { name: "Stage a.txt" }));
+    expect(await screen.findByText("Another git process is running.")).toBeInTheDocument();
+    await openMenu(user, "a.txt");
+    await user.click(await screen.findByRole("menuitem", { name: "Discard changes…" }));
+    await user.click(await screen.findByRole("button", { name: "Discard" }));
+    expect(await screen.findByText("A folder is at a.txt now.")).toBeInTheDocument();
+    expect(screen.queryByText("Another git process is running.")).not.toBeInTheDocument();
   });
 
   it("says which changes discarding them all kept", async () => {

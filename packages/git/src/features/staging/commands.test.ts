@@ -919,7 +919,7 @@ describe("discarding a file's changes", () => {
 
     const error = await rejection(discard(repo, { path: "d.txt", origPath: "c.txt" }, "staged"));
     expect((error as Error).message).toBe(
-      "Something else is at c.txt now. Move or delete it, then discard the changes.",
+      "The file at c.txt isn't the last commit's. Move or delete it, then discard the changes.",
     );
     expect(contents(path, "c.txt")).toBe("new work\n");
     expect(contents(path, "d.txt")).toBe("b\n");
@@ -942,42 +942,47 @@ describe("discarding a file's changes", () => {
     expect(contents(path, "README")).toBe("readme\n");
   });
 
-  it("puts back a file taken out of the index, over its copy that's left untracked", async () => {
+  it("puts back a file taken out of the index over its copy, unless that changed", async () => {
     const repo = await createHistoryRepo("discard-rm-cached");
-    git(repo.path, "rm", "-q", "--cached", "a file.txt");
+    const path = repo.path;
+    git(path, "rm", "-q", "--cached", "a file.txt", "c.txt");
 
-    await discard(repo, { path: "a file.txt", origPath: null }, "staged");
-    expect(contents(repo.path, "a file.txt")).toBe("a\nmore\n");
+    // Changed since: its changes aren't listed as such, so they aren't written over.
+    const error = await rejection(discard(repo, { path: "a file.txt", origPath: null }, "staged"));
+    expect((error as Error).message).toBe(
+      "The file at a file.txt isn't the last commit's. Move or delete it, then discard the changes.",
+    );
+    expect(contents(path, "a file.txt")).toBe("changed\n");
+
+    await discard(repo, { path: "c.txt", origPath: null }, "staged");
+    expect(contents(path, "c.txt")).toBe("b\n");
     expect(await statusFiles(repo)).toEqual([
+      { path: "a file.txt", origPath: null, staged: "deleted", unstaged: null },
+      { path: "a file.txt", origPath: null, staged: null, unstaged: "untracked" },
       { path: "new file.txt", origPath: null, staged: null, unstaged: "untracked" },
     ]);
   });
 
-  it("doesn't put back a rename's previous path where a folder has taken its place", async () => {
-    const repo = await createHistoryRepo("discard-intent-rename-folder");
-    const path = repo.path;
-    renameSync(join(path, "c.txt"), join(path, "d.txt"));
-    git(path, "add", "-N", "d.txt");
-    mkdirSync(join(path, "c.txt"));
-    writeFileSync(join(path, "c.txt", "f"), "f\n");
+  it("deletes a file added with --intent-to-add that's been deleted, rather than emptying it", async () => {
+    const repo = await createHistoryRepo("discard-intent-deleted");
+    git(repo.path, "add", "-N", "new file.txt");
+    rmSync(join(repo.path, "new file.txt"));
 
-    const error = await rejection(discard(repo, { path: "d.txt", origPath: "c.txt" }, "unstaged"));
-    expect((error as Error).message).toBe(
-      "A folder is at c.txt now. Move or delete it, then discard the changes.",
-    );
-    expect(contents(path, "d.txt")).toBe("b\n");
+    await discard(repo, { path: "new file.txt", origPath: null }, "unstaged");
+    expect(contents(repo.path, "new file.txt")).toBeNull();
+    expect(await statusFiles(repo)).toEqual([
+      { path: "a file.txt", origPath: null, staged: null, unstaged: "modified" },
+    ]);
   });
 
-  it("puts back a rename's previous path over its copy left by rm --cached", async () => {
-    const repo = await createHistoryRepo("discard-rename-own-copy");
-    const path = repo.path;
-    writeFileSync(join(path, "d.txt"), "b\n");
-    git(path, "rm", "-q", "--cached", "c.txt");
-    git(path, "add", "d.txt");
+  it("names the conflicted path, a rename's previous one too", async () => {
+    const path = createMergeConflict("discard-conflict-orig");
+    const repo = await repos.open("discard-conflict-orig");
+    writeFileSync(join(path, "g.txt"), "g\n");
+    git(path, "add", "g.txt");
 
-    await discard(repo, { path: "d.txt", origPath: "c.txt" }, "staged");
-    expect(contents(path, "c.txt")).toBe("b\n");
-    expect(contents(path, "d.txt")).toBeNull();
+    const error = await rejection(discard(repo, { path: "g.txt", origPath: "f.txt" }, "unstaged"));
+    expect((error as Error).message).toMatch(/^f\.txt is conflicted\./);
   });
 
   it("leaves a submodule's changes to be discarded in it", async () => {
@@ -1116,6 +1121,24 @@ describe("discarding all changes", () => {
 
     expect(await discardAll(repo)).toEqual([]);
     expect(contents(path, "x[1]*")).toBe("x\n");
+  });
+
+  it("keeps a deleted file where a link, or a file named like a quoted path, took its place", async () => {
+    const path = createRepo("discard-all-odd-copies");
+    writeFileSync(join(path, "latest"), "l\n");
+    writeFileSync(join(path, '"draft.txt'), "d\n");
+    git(path, "add", ".");
+    git(path, "commit", "-q", "-m", "first");
+    writeFileSync(join(path, ".git", "info", "exclude"), "latest\n");
+    git(path, "rm", "-q", "--cached", "latest", '"draft.txt');
+    rmSync(join(path, "latest"));
+    mkdirSync(join(path, "v2"));
+    symlinkSync("v2", join(path, "latest"));
+    const repo = await repos.open("discard-all-odd-copies");
+
+    // The quoted one is untracked, deleted, and put back; the link, ignored, is kept.
+    expect(await discardAll(repo)).toEqual(["latest"]);
+    expect(contents(path, '"draft.txt')).toBe("d\n");
   });
 
   it("deletes nothing untracked when it can't discard the rest", async () => {

@@ -2,10 +2,11 @@ import { lstat } from "node:fs/promises";
 import { join } from "node:path";
 
 /**
- * What's at a path in the working tree: a folder, a file (or a link), nothing (`undefined`), or
- * `blocked`: a file is where one of its folders would go, or it couldn't be looked at.
+ * What's at a path in the working tree: a folder, a file, a link, something else (like a pipe),
+ * nothing (`undefined`), or `blocked`: a file is where one of its folders would go, or it couldn't
+ * be looked at.
  */
-export type Entry = "folder" | "file" | "blocked" | undefined;
+export type Entry = "folder" | "file" | "link" | "other" | "blocked" | undefined;
 
 /**
  * What's at `path` in the working tree whose root is `root`; `path` as bytes (see
@@ -15,7 +16,11 @@ export async function entryAt(root: string, path: string | Buffer): Promise<Entr
   const full =
     typeof path === "string" ? join(root, path) : Buffer.concat([Buffer.from(`${root}/`), path]);
   return lstat(full).then(
-    (stats) => (stats.isDirectory() ? "folder" : "file"),
+    (stats) => {
+      if (stats.isDirectory()) return "folder";
+      if (stats.isFile()) return "file";
+      return stats.isSymbolicLink() ? "link" : "other";
+    },
     (error: NodeJS.ErrnoException) => (error.code === "ENOENT" ? undefined : "blocked"),
   );
 }

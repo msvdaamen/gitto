@@ -216,8 +216,8 @@ async function sourceTree(run: GitCommand): Promise<string> {
 }
 
 /**
- * Those of `paths` (as bytes if `binary`) whose file in the working tree is as `source` has it:
- * writing it over loses nothing, like a file's own copy left by `rm --cached`.
+ * Those of `paths` (as bytes if `binary`), each a file in the working tree, that are as `source`
+ * has them: writing them over loses nothing, like a file's own copy left by `rm --cached`.
  */
 async function unchangedSince(
   run: GitCommand,
@@ -225,20 +225,23 @@ async function unchangedSince(
   paths: string[],
   options: { binary?: boolean } = {},
 ): Promise<Set<string>> {
-  // A line each: a path with a newline in it is taken for changed.
-  const listed = paths.filter((path) => !path.includes("\n"));
-  if (!listed.length) return new Set();
-  const lines = (each: (path: string) => string) =>
-    listed.map((path) => `${each(path)}\n`).join("");
+  if (!paths.length) return new Set();
   const [hashes, sources] = await Promise.all([
-    run(["hash-object", "--stdin-paths"], { ...options, stdin: lines((path) => path) }),
-    run(["cat-file", "--batch-check=%(objectname)"], {
+    // A line each, quoted as git reads a line that starts with a quote: a path can have any
+    // character, a newline too.
+    run(["hash-object", "--stdin-paths"], {
       ...options,
-      stdin: lines((path) => `${source}:${path}`),
+      stdin: paths
+        .map((path) => `"${path.replace(/[\\"]/g, "\\$&").replace(/\n/g, "\\n")}"\n`)
+        .join(""),
+    }),
+    run(["cat-file", "--batch-check=%(objectname)", "-z"], {
+      ...options,
+      stdin: nulSeparated(paths.map((path) => `${source}:${path}`)),
     }),
   ]);
   const [ours, theirs] = [hashes.split("\n"), sources.split("\n")];
-  return new Set(listed.filter((_, i) => ours[i] === theirs[i]));
+  return new Set(paths.filter((_, i) => ours[i] === theirs[i]));
 }
 
 /**
@@ -264,15 +267,21 @@ export async function discard(repo: Repo, file: LinesFile, side: UncommittedSide
     // On the command line, which holds them: there are two at most.
     const listed = async (args: string[]) =>
       (await run([...args, "-z", "--", ...paths])).split("\0").filter(Boolean);
-    const [entries, added, source, blocker, there] = await Promise.all([
+    // Added with `--intent-to-add`: in the index with no contents yet, which `restore` would put
+    // back, emptying the file, so it's deleted instead. Staged only when they're shown, deleted from
+    // the working tree or not. Without renames, which would pair one with a deleted file.
+    const intentToAdd = async () => {
+      const [all, real] = await Promise.all(
+        ["visible", "invisible"].map((shown) =>
+          listed(["diff", "--cached", "--name-only", "--no-renames", `--ita-${shown}-in-index`]),
+        ),
+      );
+      return all!.filter((each) => named.has(each) && !real!.includes(each));
+    };
+    const [entries, intended, source, blocker, there] = await Promise.all([
       // The paths in the index, with their mode and stage: a conflict's are 1-3.
       listed(["ls-files", "--format=%(objectmode) %(stage) %(path)"]),
-      // Added with `--intent-to-add`: in the index with no contents yet, which `restore` would put
-      // back, emptying the file, so it's deleted instead. Without renames: one paired with a
-      // deleted file would be listed as its rename, not as added.
-      side === "unstaged"
-        ? listed(["diff", "--name-only", "--no-renames", "--diff-filter=A"])
-        : ([] as string[]),
+      side === "unstaged" ? intentToAdd() : ([] as string[]),
       side === "staged" ? sourceTree(run) : "",
       gitDir && operationBlocker(gitDir, "discard its staged changes"),
       Promise.all(paths.map((each) => entryAt(repo.path, each))),
@@ -286,7 +295,7 @@ export async function discard(repo: Repo, file: LinesFile, side: UncommittedSide
       if (!named.has(entryPath)) continue;
       if (entry[7] !== "0") {
         throw new DiscardBlockedError(
-          `${path} is conflicted. Resolve its conflicts rather than discarding its changes.`,
+          `${entryPath} is conflicted. Resolve its conflicts rather than discarding its changes.`,
         );
       }
       if (entry.startsWith("160000")) {
@@ -296,32 +305,36 @@ export async function discard(repo: Repo, file: LinesFile, side: UncommittedSide
       }
       tracked.add(entryPath);
     }
-    const intended = new Set(added.filter((each) => named.has(each)));
     const at = (each: string) => there[paths.indexOf(each)];
     // A copy's source is still there on this side, unlike a rename's: in the index, or in the
     // working tree.
     const copied =
-      origPath !== null && (side === "staged" ? tracked.has(origPath) : at(origPath) === "file");
+      origPath !== null &&
+      (side === "staged"
+        ? tracked.has(origPath)
+        : at(origPath) === "file" || at(origPath) === "link");
     const discarded = copied ? [path] : paths;
     // Put back as HEAD or the index has them, over what's in the working tree.
     const written =
       side === "staged"
         ? discarded
-        : discarded.filter((each) => tracked.has(each) && !intended.has(each));
-    // A file at a rename's previous path is fine to write over if it's that file as it was, like
-    // its copy left by `rm --cached`; the file itself is, tracked or not.
-    const unchanged =
-      side === "staged" && origPath !== null && !copied && at(origPath) === "file"
-        ? await unchangedSince(run, source, [origPath])
-        : new Set<string>();
+        : discarded.filter((each) => tracked.has(each) && !intended.includes(each));
+    // What's there is fine to write over if it's the tracked file's, or one that's as the source
+    // has it, like its copy left by `rm --cached`: nothing's lost. Not a folder, nor another file,
+    // like one at a rename's previous path, or one taken out of the index that changed since, which
+    // isn't shown as such when it's ignored.
+    // Only ever on the staged side, where everything's written from the source.
+    const loose = written.filter((each) => !tracked.has(each) && at(each) === "file");
+    const unchanged = await unchangedSince(run, source, loose);
     for (const each of written) {
       const entry = at(each);
-      const ownCopy = entry === "file" && (each === path || unchanged.has(each));
-      if (entry !== undefined && !ownCopy) {
-        throw new DiscardBlockedError(
-          `${entry === "folder" ? "A folder" : "Something else"} is at ${each} now. Move or delete it, then discard the changes.`,
-        );
-      }
+      const files = entry === "file" || entry === "link";
+      if (entry === undefined || (files && (tracked.has(each) || unchanged.has(each)))) continue;
+      throw new DiscardBlockedError(
+        entry === "folder"
+          ? `A folder is at ${each} now. Move or delete it, then discard the changes.`
+          : `The file at ${each} isn't the last commit's. Move or delete it, then discard the changes.`,
+      );
     }
     if (side === "staged") {
       await run(
@@ -339,8 +352,9 @@ export async function discard(repo: Repo, file: LinesFile, side: UncommittedSide
         ...REWRITES,
       });
     }
-    if (intended.size)
-      await run(["rm", "-f", "-q", ...PATHS_FROM_STDIN], exactlyFromStdin([...intended]));
+    if (intended.length) {
+      await run(["rm", "-f", "-q", ...PATHS_FROM_STDIN], exactlyFromStdin(intended));
+    }
     if (written.length) {
       await run(["restore", "--worktree", ...PATHS_FROM_STDIN], exactlyFromStdin(written));
     }
@@ -382,7 +396,8 @@ export async function discardAll(repo: Repo): Promise<string[]> {
     ]);
     // `:<mode> <mode> <object> <object> <status>`, then the path.
     const submodules = changed.filter(
-      (field, i) => i % 2 === 1 && changed[i - 1]!.includes("160000"),
+      // A submodule's mode, on either side; not its objects, which could read the same.
+      (_, i) => i % 2 === 1 && /^:(160000 |\d{6} 160000 )/.test(changed[i - 1]!),
     );
     const kept = new Set([...inTheWay, ...submodules, ...untracked]);
     return [...kept].map((path) => Buffer.from(path, "latin1").toString("utf8"));
@@ -397,7 +412,8 @@ export async function discardAll(repo: Repo): Promise<string[]> {
 async function restoreAll(repo: Repo, run: GitCommand, source: string): Promise<string[]> {
   // As pathspecs, with their magic, and as bytes: a path goes back to git as it came, also one
   // that isn't UTF-8.
-  const options = { globPathspecs: true, binary: true, ...REWRITES };
+  const reading = { binary: true };
+  const options = { ...reading, globPathspecs: true, ...REWRITES };
   const restore = async (pathspecs: string[]) => {
     try {
       await run(["restore", `--source=${source}`, "--staged", "--worktree", ...PATHS_FROM_STDIN], {
@@ -416,12 +432,12 @@ async function restoreAll(repo: Repo, run: GitCommand, source: string): Promise<
       paths.map((path) => Buffer.from(path, "latin1")),
     );
     const files = paths.filter((_, i) => entries[i] === "file");
-    const unchanged = await unchangedSince(run, source, files, options);
+    const unchanged = await unchangedSince(run, source, files, reading);
     return paths.filter((path, i) => entries[i] !== undefined && !unchanged.has(path));
   };
   const deleted = await run(
     ["diff", source, "--name-only", "-z", "--no-renames", "--diff-filter=D"],
-    options,
+    reading,
   );
   const kept = await inTheWay(deleted.split("\0").filter(Boolean));
   // Untracked files only once the rest is done, which may fail; and before what's kept is looked at

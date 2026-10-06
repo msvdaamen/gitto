@@ -50,6 +50,15 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
   // Without Suspense, like the status: it's refetched whenever anything changes on disk.
   const operation = useUnsuspendedData(useOperationInProgress(() => props.repositoryId));
   const busy = () => stage.isPending || unstage.isPending || discard.isPending;
+  // Why staging, unstaging or discarding last failed: each keeps its error until it's run again.
+  const lastError = () =>
+    [stage, unstage, discard]
+      .filter((mutation) => mutation.error)
+      .reduce<(typeof stage | typeof discard) | undefined>(
+        (latest, mutation) =>
+          !latest || mutation.submittedAt > latest.submittedAt ? mutation : latest,
+        undefined,
+      )?.error;
   // The changes being asked about discarding.
   const [discarding, setDiscarding] = createSignal<DiscardTarget>();
   // The changes discarding them all last kept, as it couldn't discard them.
@@ -124,7 +133,7 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
         </Notice>
       </Show>
 
-      <Show when={changes.query.error ?? stage.error ?? unstage.error ?? discard.error} keyed>
+      <Show when={changes.query.error ?? lastError()} keyed>
         {(error) => (
           <EmptyState
             icon={TriangleAlert}
