@@ -90,6 +90,7 @@ describe("the router", () => {
             origPath: null,
             status: "modified",
             side: "unstaged",
+            head: null,
           },
           { context },
         ),

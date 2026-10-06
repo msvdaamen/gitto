@@ -1133,6 +1133,54 @@ describe("discarding a file's changes", () => {
     expect(readFileSync(join(elsewhere, "file"), "utf8")).toBe("elsewhere\n");
   });
 
+  it("deletes a file added with --intent-to-add over an empty one the last commit has", async () => {
+    const path = createRepo("discard-intent-over-empty");
+    writeFileSync(join(path, "empty.txt"), "");
+    git(path, "add", ".");
+    git(path, "commit", "-q", "-m", "first");
+    git(path, "rm", "-q", "--cached", "empty.txt");
+    writeFileSync(join(path, "empty.txt"), "new\n");
+    git(path, "add", "-N", "empty.txt");
+    const repo = await repos.open("discard-intent-over-empty");
+
+    await discard(repo, { path: "empty.txt", origPath: null, status: "added" }, "unstaged");
+    expect(contents(path, "empty.txt")).toBeNull();
+    expect(await statusFiles(repo)).toEqual([
+      { path: "empty.txt", origPath: null, staged: "deleted", unstaged: null },
+    ]);
+    await discard(repo, { path: "empty.txt", origPath: null, status: "deleted" }, "staged");
+    expect(contents(path, "empty.txt")).toBe("");
+    expect(await statusFiles(repo)).toEqual([]);
+  });
+
+  it("discards a rename that only changed its name's case", async () => {
+    const path = createRepo("discard-case-rename");
+    writeFileSync(join(path, "readme"), "r\n");
+    git(path, "add", ".");
+    git(path, "commit", "-q", "-m", "first");
+    git(path, "mv", "readme", "README");
+    const repo = await repos.open("discard-case-rename");
+
+    await discard(repo, { path: "README", origPath: "readme", status: "renamed" }, "staged");
+    expect(contents(path, "readme")).toBe("r\n");
+    expect(await statusFiles(repo)).toEqual([]);
+  });
+
+  it("discards no staged changes once HEAD has moved since they were listed", async () => {
+    const repo = await createHistoryRepo("discard-head-moved");
+    git(repo.path, "add", "new file.txt");
+    const listed = git(repo.path, "rev-parse", "HEAD");
+    git(repo.path, "commit", "-q", "-m", "since");
+
+    const error = await rejection(
+      discard(repo, { path: "new file.txt", origPath: null, status: "added" }, "staged", listed),
+    );
+    expect((error as Error).message).toBe(
+      "new file.txt changed since its changes were shown, so nothing was discarded.",
+    );
+    expect(contents(repo.path, "new file.txt")).toBe("new\n");
+  });
+
   it("leaves a submodule's changes to be discarded in it", async () => {
     createSubmoduleRepo("discard-submodule");
     const repo = await repos.open("discard-submodule");

@@ -131,6 +131,7 @@ describe("discarding changes", () => {
       origPath: null,
       status: "untracked",
       side: "unstaged",
+      head: "a1",
     });
 
     await openMenu(user, "b.txt");
@@ -142,6 +143,7 @@ describe("discarding changes", () => {
       origPath: null,
       status: "modified",
       side: "staged",
+      head: "a1",
     });
   });
 
@@ -159,6 +161,7 @@ describe("discarding changes", () => {
       origPath: "a.txt",
       status: "copied",
       side: "staged",
+      head: "a1",
     });
   });
 

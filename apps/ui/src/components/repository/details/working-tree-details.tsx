@@ -85,12 +85,17 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
     // Not a file's staged changes while an operation is under way, which would go on without them.
     // Not known to be while that loads, or couldn't be read: the git side refuses if one is.
     disabled: (file) => busy() || !canDiscard(file) || (side === "staged" && !!operation()),
-    run: (file) => setDiscarding({ file, side }),
+    run: (file) => {
+      // HEAD as the file's changes are listed against: checked to still be where it was.
+      const head = summary()?.head;
+      setDiscarding({ file, side, head: !head || head.kind === "unborn" ? null : head.sha });
+    },
   });
   // Why the changes can't all be discarded, if they can't: also while what that depends on loads.
   const discardAllBlocked = () => {
     const current = summary();
     const under = operation();
+    if (!current && status.error) return `Couldn't read the status: ${status.error.message}`;
     if (under === undefined && operationQuery.error) {
       return `Couldn't tell whether an operation is under way: ${operationQuery.error.message}`;
     }

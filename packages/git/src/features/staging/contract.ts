@@ -40,11 +40,13 @@ export const StagingContract = {
    */
   discard: oc.input(
     // Not an empty path, which, as a pathspec, names every file.
-    // Its status as its list has it, which it's checked to still have.
+    // Its status as its list has it, and the commit HEAD was at then (`null` before the first),
+    // which they're checked to still be.
     FileInput.extend({
       path: z.string().min(1),
       status: FileStatusSchema,
       side: UncommittedSideSchema,
+      head: z.string().nullable(),
     }),
   ),
   /**

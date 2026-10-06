@@ -27,8 +27,13 @@ export function useUnstage(repositoryId: () => string) {
   );
 }
 
-/** Changes to discard: a file's, on the side of the uncommitted changes it's listed on, or all. */
-export type DiscardTarget = { file: ChangedFile; side: UncommittedSide } | "all";
+/**
+ * Changes to discard: a file's, on the side of the uncommitted changes it's listed on, with the
+ * commit HEAD was at then (`null` before the first), or all.
+ */
+export type DiscardTarget =
+  | { file: ChangedFile; side: UncommittedSide; head: string | null }
+  | "all";
 
 /**
  * Discards changes, which can't be brought back: a file's (see `discard` in the git package), or
@@ -40,7 +45,7 @@ export function useDiscard(repositoryId: () => string) {
     repositoryId,
     async (id, target: DiscardTarget): Promise<KeptChange[]> => {
       if (target === "all") return (await rpc.git.staging.discardAll({ repositoryId: id })).kept;
-      const { file, side } = target;
+      const { file, side, head } = target;
       await rpc.git.staging.discard({
         repositoryId: id,
         path: file.path,
@@ -48,6 +53,7 @@ export function useDiscard(repositoryId: () => string) {
         // Checked to still be its status: its list may be out of date.
         status: file.status,
         side,
+        head,
       });
       return [];
     },

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { access, readdir, readlink } from "node:fs/promises";
-import { join, sep } from "node:path";
+import { access, lstat, readdir, readlink } from "node:fs/promises";
+import { join } from "node:path";
 
 import { deleteFiles, entriesAt, fullPath, inBatches, type Entry } from "../../core/entry";
 import {
@@ -222,9 +222,10 @@ function excludingExactly(path: string): string {
 }
 
 /**
- * Whether what's at a rename's previous path, `entry`, is only the rename's own `path`: a folder
- * that holds nothing else, where it was renamed into a folder of its previous name, or the file
- * itself where one of its previous path's folders goes, where it was renamed out of one.
+ * Whether what's at a rename's previous path, `entry`, is only the rename's own `path`: the file
+ * itself, where only its name's case changed on a file system that doesn't tell cases apart; a
+ * folder that holds nothing else, where it was renamed into a folder of its previous name; or the
+ * file itself where one of its previous path's folders goes, where it was renamed out of one.
  */
 async function ownRenameInTheWay(
   repo: Repo,
@@ -232,14 +233,29 @@ async function ownRenameInTheWay(
   origPath: string,
   entry: Entry,
 ): Promise<boolean> {
+  if (sameButCase(path, origPath)) {
+    const [file, previous] = await Promise.all(
+      [path, origPath].map((each) => lstat(join(repo.path, each)).catch(() => undefined)),
+    );
+    return !!file && !!previous && file.ino === previous.ino && file.dev === previous.dev;
+  }
   if (entry === "blocked") return origPath.startsWith(`${path}/`);
   if (entry !== "folder" || !path.startsWith(`${origPath}/`)) return false;
-  // The folders down to it, and it.
-  const inner = path.slice(origPath.length + 1).split("/");
-  const own = new Set(inner.map((_, i) => inner.slice(0, i + 1).join(sep)));
-  // A folder in it that can't be read could hold anything.
-  const held = await readdir(join(repo.path, origPath), { recursive: true }).catch(() => undefined);
-  return held?.every((each) => own.has(each)) ?? false;
+  // Each folder down to it holding only the next, a level at a time: one that can't be read could
+  // hold anything.
+  let folder = join(repo.path, origPath);
+  for (const name of path.slice(origPath.length + 1).split("/")) {
+    // oxlint-disable-next-line no-await-in-loop -- a level at a time, stopping at the first other.
+    const held = await readdir(folder).catch(() => undefined);
+    if (held?.length !== 1 || held[0] !== name) return false;
+    folder = join(folder, name);
+  }
+  return true;
+}
+
+/** Whether two paths differ only in the case of their letters. */
+function sameButCase(path: string, other: string): boolean {
+  return path !== other && path.toLowerCase() === other.toLowerCase();
 }
 
 /** Why the file at `path` isn't discarded, as `entry` is in the way of it. */
@@ -414,6 +430,8 @@ export async function discard(
   repo: Repo,
   file: LinesFile & { status: FileStatus },
   side: UncommittedSide,
+  /** The commit HEAD was at when the file was listed, `null` before the first; checked if given. */
+  listedHead?: string | null,
 ): Promise<void> {
   const { path, origPath, status } = file;
   const paths = origPath ? [path, origPath] : [path];
@@ -446,17 +464,26 @@ export async function discard(
           return statuses;
         }),
       );
-      return paths.filter((each) => shown!.has(each) && shown!.get(each) !== hidden!.get(each));
+      // Not only where it's shown: over an empty file HEAD has, it's shown as nothing, being as
+      // empty, but hidden as deleted.
+      return paths.filter((each) => shown!.get(each) !== hidden!.get(each));
     };
-    const [entries, intended, source, blocker, there] = await Promise.all([
+    const [entries, intended, head, blocker, there] = await Promise.all([
       // The paths in the index, with their mode and stage: a conflict's are 1-3.
       listed(["ls-files", "--format=%(objectmode) %(stage) %(path)"]),
       mayBeIntended ? intentToAdd() : ([] as string[]),
-      side === "staged" ? sourceTree(run) : "",
+      side === "staged" ? resolveRef(run, "HEAD") : null,
       gitDir && operationBlocker(gitDir, "discard its staged changes"),
       entriesAt(repo.path, paths),
     ]);
     if (blocker) throw new DiscardBlockedError(blocker);
+    // Its staged changes are against HEAD as it was: a commit made since could have taken them.
+    if (side === "staged" && listedHead !== undefined && head !== listedHead) {
+      throw new DiscardBlockedError(
+        `${path} changed since its changes were shown, so nothing was discarded.`,
+      );
+    }
+    const source = side === "staged" ? (head ?? (await emptyTree(run))) : "";
     // Only the paths themselves, not what's in a folder of the same name, which is another file's.
     const tracked = new Set<string>();
     for (const entry of entries) {
@@ -526,8 +553,12 @@ export async function discard(
     }
     // Where one's in a folder of the other's name, the file's deleted before its previous path's
     // put back, one at a time: the two can't be named apart at once.
+    // Or where they're the same but for case, which a file system needn't tell apart.
     const nested =
-      origPath !== null && (path.startsWith(`${origPath}/`) || origPath.startsWith(`${path}/`));
+      origPath !== null &&
+      (path.startsWith(`${origPath}/`) ||
+        origPath.startsWith(`${path}/`) ||
+        sameButCase(path, origPath));
     if (side === "staged") {
       const args = [`--source=${source}`, "--staged", "--worktree"];
       if (!nested) return void (await restore(run, args, exactly(discarded)));
@@ -652,8 +683,9 @@ async function restoreAll(repo: Repo, run: GitCommand, source: string): Promise<
     repo.path,
     files.map((path) => Buffer.from(path, "latin1")),
   );
-  // Those whose way that cleared.
-  const still = await takenPlaces(kept);
+  // Those whose way that cleared, or putting the rest back did, by discarding staged files in a
+  // folder that took their place.
+  const still = kept.length ? await takenPlaces(kept) : [];
   const freed = kept.filter((file) => !still.includes(file)).map(({ path }) => path);
   if (freed.length) await restoreFromSource(exactly(freed));
   // Submodules whose commits differ, or that have changes, whatever `diff.ignoreSubmodules` says:
