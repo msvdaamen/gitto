@@ -17,6 +17,8 @@ export const StatusFileSchema = z.object({
    * deleted by both; with the modes ours and theirs have (`000000` where it's not there).
    */
   conflict: z.object({ xy: z.string(), ours: z.string(), theirs: z.string() }).optional(),
+  /** A submodule, a repository of its own committed in this one. */
+  submodule: z.literal(true).optional(),
 });
 
 export type StatusFile = z.infer<typeof StatusFileSchema>;

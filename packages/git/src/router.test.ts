@@ -84,7 +84,13 @@ describe("the router", () => {
       await apiError(
         call(
           gitRouter.staging.discard,
-          { repositoryId: ids.history, path: "", origPath: null, side: "unstaged" },
+          {
+            repositoryId: ids.history,
+            path: "",
+            origPath: null,
+            status: "modified",
+            side: "unstaged",
+          },
           { context },
         ),
       ),

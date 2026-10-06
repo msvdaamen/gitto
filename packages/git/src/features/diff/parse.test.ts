@@ -27,6 +27,31 @@ describe("parseDiff", () => {
     ]);
   });
 
+  it("marks a submodule, by its mode on either side", () => {
+    const output = [":160000 160000 aaa bbb M", "mod", ":000000 160000 000 ccc A", "new", ""].join(
+      "\0",
+    );
+
+    expect(parseDiff(output)).toEqual([
+      {
+        path: "mod",
+        status: "modified",
+        origPath: null,
+        additions: null,
+        deletions: null,
+        submodule: true,
+      },
+      {
+        path: "new",
+        status: "added",
+        origPath: null,
+        additions: null,
+        deletions: null,
+        submodule: true,
+      },
+    ]);
+  });
+
   it("keeps a conflicted file conflicted, though it's listed as modified too", () => {
     // What `git diff --raw --numstat -z` has for a file with a conflict.
     const output = [

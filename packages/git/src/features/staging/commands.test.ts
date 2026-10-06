@@ -742,7 +742,7 @@ describe("discarding a file's changes", () => {
     git(path, "add", "a file.txt");
     writeFileSync(join(path, "a file.txt"), "a\nmore\nstaged\nunstaged\n");
 
-    await discard(repo, { path: "a file.txt", origPath: null }, "unstaged");
+    await discard(repo, { path: "a file.txt", origPath: null, status: "modified" }, "unstaged");
     expect(contents(path, "a file.txt")).toBe("a\nmore\nstaged\n");
     expect(await statusFiles(repo)).toEqual([
       { path: "a file.txt", origPath: null, staged: "modified", unstaged: null },
@@ -757,7 +757,7 @@ describe("discarding a file's changes", () => {
     writeFileSync(join(path, "dir", "one.txt"), "one\n");
     writeFileSync(join(path, "dir", "two.txt"), "two\n");
 
-    await discard(repo, { path: "dir/one.txt", origPath: null }, "unstaged");
+    await discard(repo, { path: "dir/one.txt", origPath: null, status: "untracked" }, "unstaged");
     expect(contents(path, "dir/one.txt")).toBeNull();
     expect(contents(path, "dir/two.txt")).toBe("two\n");
     expect(contents(path, "new file.txt")).toBe("new\n");
@@ -767,7 +767,7 @@ describe("discarding a file's changes", () => {
     const repo = await createHistoryRepo("discard-deleted");
     rmSync(join(repo.path, "bin.dat"));
 
-    await discard(repo, { path: "bin.dat", origPath: null }, "unstaged");
+    await discard(repo, { path: "bin.dat", origPath: null, status: "deleted" }, "unstaged");
     expect(readFileSync(join(repo.path, "bin.dat"))).toEqual(Buffer.from([0, 1, 2]));
   });
 
@@ -778,7 +778,7 @@ describe("discarding a file's changes", () => {
     git(path, "add", "a file.txt");
     writeFileSync(join(path, "a file.txt"), "staged\nunstaged\n");
 
-    await discard(repo, { path: "a file.txt", origPath: null }, "staged");
+    await discard(repo, { path: "a file.txt", origPath: null, status: "modified" }, "staged");
     expect(contents(path, "a file.txt")).toBe("a\nmore\n");
     expect(await statusFiles(repo)).toEqual([
       { path: "new file.txt", origPath: null, staged: null, unstaged: "untracked" },
@@ -791,8 +791,8 @@ describe("discarding a file's changes", () => {
     git(path, "add", "new file.txt");
     git(path, "mv", "c.txt", "d.txt");
 
-    await discard(repo, { path: "new file.txt", origPath: null }, "staged");
-    await discard(repo, { path: "d.txt", origPath: "c.txt" }, "staged");
+    await discard(repo, { path: "new file.txt", origPath: null, status: "added" }, "staged");
+    await discard(repo, { path: "d.txt", origPath: "c.txt", status: "renamed" }, "staged");
     expect(contents(path, "new file.txt")).toBeNull();
     expect(contents(path, "d.txt")).toBeNull();
     expect(contents(path, "c.txt")).toBe("b\n");
@@ -809,8 +809,12 @@ describe("discarding a file's changes", () => {
     writeFileSync(join(path, "untracked copy.txt"), "a\nmore\n");
 
     // As `git status` lists them with `status.renames=copies`.
-    await discard(repo, { path: "copy.txt", origPath: "a file.txt" }, "staged");
-    await discard(repo, { path: "untracked copy.txt", origPath: "a file.txt" }, "unstaged");
+    await discard(repo, { path: "copy.txt", origPath: "a file.txt", status: "copied" }, "staged");
+    await discard(
+      repo,
+      { path: "untracked copy.txt", origPath: "a file.txt", status: "untracked" },
+      "unstaged",
+    );
     expect(contents(path, "copy.txt")).toBeNull();
     expect(contents(path, "untracked copy.txt")).toBeNull();
     expect(contents(path, "a file.txt")).toBe("changed\n");
@@ -823,7 +827,7 @@ describe("discarding a file's changes", () => {
     git(path, "add", ".");
     const repo = await repos.open("discard-unborn");
 
-    await discard(repo, { path: "x y.txt", origPath: null }, "staged");
+    await discard(repo, { path: "x y.txt", origPath: null, status: "added" }, "staged");
     expect(contents(path, "x y.txt")).toBeNull();
     expect(await statusFiles(repo)).toEqual([
       { path: "kept.txt", origPath: null, staged: "added", unstaged: null },
@@ -834,7 +838,7 @@ describe("discarding a file's changes", () => {
     const repo = await createHistoryRepo("discard-intent");
     git(repo.path, "add", "-N", "new file.txt");
 
-    await discard(repo, { path: "new file.txt", origPath: null }, "unstaged");
+    await discard(repo, { path: "new file.txt", origPath: null, status: "added" }, "unstaged");
     expect(contents(repo.path, "new file.txt")).toBeNull();
     expect(await statusFiles(repo)).toEqual([
       { path: "a file.txt", origPath: null, staged: null, unstaged: "modified" },
@@ -847,7 +851,7 @@ describe("discarding a file's changes", () => {
     renameSync(join(path, "c.txt"), join(path, "d.txt"));
     git(path, "add", "-N", "d.txt");
 
-    await discard(repo, { path: "d.txt", origPath: "c.txt" }, "unstaged");
+    await discard(repo, { path: "d.txt", origPath: "c.txt", status: "renamed" }, "unstaged");
     expect(contents(path, "d.txt")).toBeNull();
     expect(contents(path, "c.txt")).toBe("b\n");
     expect(await statusFiles(repo)).toEqual([
@@ -866,7 +870,7 @@ describe("discarding a file's changes", () => {
     writeFileSync(join(path, "foo"), "now a file\n");
     const repo = await repos.open("discard-folder");
 
-    await discard(repo, { path: "foo", origPath: null }, "unstaged");
+    await discard(repo, { path: "foo", origPath: null, status: "untracked" }, "unstaged");
     expect(await statusFiles(repo)).toEqual([
       { path: "foo/a", origPath: null, staged: null, unstaged: "deleted" },
     ]);
@@ -882,7 +886,9 @@ describe("discarding a file's changes", () => {
     writeFileSync(join(path, "a", "x"), "precious\n");
     const repo = await repos.open("discard-folder-unstaged");
 
-    const error = await rejection(discard(repo, { path: "a", origPath: null }, "unstaged"));
+    const error = await rejection(
+      discard(repo, { path: "a", origPath: null, status: "deleted" }, "unstaged"),
+    );
     expect(error).toBeInstanceOf(DiscardBlockedError);
     expect((error as Error).message).toBe(
       "A folder is at a now. Move or delete it, then discard the changes.",
@@ -901,9 +907,9 @@ describe("discarding a file's changes", () => {
     git(path, "add", "a/x");
     const repo = await repos.open("discard-folder-staged");
 
-    expect(await rejection(discard(repo, { path: "a", origPath: null }, "staged"))).toBeInstanceOf(
-      DiscardBlockedError,
-    );
+    expect(
+      await rejection(discard(repo, { path: "a", origPath: null, status: "deleted" }, "staged")),
+    ).toBeInstanceOf(DiscardBlockedError);
     expect(contents(path, "a/x")).toBe("precious\n");
     expect(await statusFiles(repo)).toEqual([
       { path: "a", origPath: null, staged: "deleted", unstaged: null },
@@ -917,7 +923,9 @@ describe("discarding a file's changes", () => {
     git(path, "mv", "c.txt", "d.txt");
     writeFileSync(join(path, "c.txt"), "new work\n");
 
-    const error = await rejection(discard(repo, { path: "d.txt", origPath: "c.txt" }, "staged"));
+    const error = await rejection(
+      discard(repo, { path: "d.txt", origPath: "c.txt", status: "renamed" }, "staged"),
+    );
     expect((error as Error).message).toBe(
       "The file at c.txt isn't the last commit's. Move or delete it, then discard the changes.",
     );
@@ -932,13 +940,15 @@ describe("discarding a file's changes", () => {
     writeFileSync(join(path, "README"), "changed\n");
     const repo = await repos.open("discard-merge");
 
-    const error = await rejection(discard(repo, { path: "f.txt", origPath: null }, "staged"));
+    const error = await rejection(
+      discard(repo, { path: "f.txt", origPath: null, status: "modified" }, "staged"),
+    );
     expect((error as Error).message).toBe(
       "A merge is under way. Finish or abort it, then discard its staged changes.",
     );
     expect(contents(path, "f.txt")).toBe("one\nresolved\nthree\n");
     // Unstaged changes aren't the merge's.
-    await discard(repo, { path: "README", origPath: null }, "unstaged");
+    await discard(repo, { path: "README", origPath: null, status: "modified" }, "unstaged");
     expect(contents(path, "README")).toBe("readme\n");
   });
 
@@ -948,13 +958,15 @@ describe("discarding a file's changes", () => {
     git(path, "rm", "-q", "--cached", "a file.txt", "c.txt");
 
     // Changed since: its changes aren't listed as such, so they aren't written over.
-    const error = await rejection(discard(repo, { path: "a file.txt", origPath: null }, "staged"));
+    const error = await rejection(
+      discard(repo, { path: "a file.txt", origPath: null, status: "deleted" }, "staged"),
+    );
     expect((error as Error).message).toBe(
       "The file at a file.txt isn't the last commit's. Move or delete it, then discard the changes.",
     );
     expect(contents(path, "a file.txt")).toBe("changed\n");
 
-    await discard(repo, { path: "c.txt", origPath: null }, "staged");
+    await discard(repo, { path: "c.txt", origPath: null, status: "deleted" }, "staged");
     expect(contents(path, "c.txt")).toBe("b\n");
     expect(await statusFiles(repo)).toEqual([
       { path: "a file.txt", origPath: null, staged: "deleted", unstaged: null },
@@ -968,7 +980,7 @@ describe("discarding a file's changes", () => {
     git(repo.path, "add", "-N", "new file.txt");
     rmSync(join(repo.path, "new file.txt"));
 
-    await discard(repo, { path: "new file.txt", origPath: null }, "unstaged");
+    await discard(repo, { path: "new file.txt", origPath: null, status: "deleted" }, "unstaged");
     expect(contents(repo.path, "new file.txt")).toBeNull();
     expect(await statusFiles(repo)).toEqual([
       { path: "a file.txt", origPath: null, staged: null, unstaged: "modified" },
@@ -981,7 +993,9 @@ describe("discarding a file's changes", () => {
     writeFileSync(join(path, "g.txt"), "g\n");
     git(path, "add", "g.txt");
 
-    const error = await rejection(discard(repo, { path: "g.txt", origPath: "f.txt" }, "unstaged"));
+    const error = await rejection(
+      discard(repo, { path: "g.txt", origPath: "f.txt", status: "renamed" }, "unstaged"),
+    );
     expect((error as Error).message).toMatch(/^f\.txt is conflicted\./);
   });
 
@@ -995,7 +1009,9 @@ describe("discarding a file's changes", () => {
     writeFileSync(join(path, "d"), "stuff\n");
     const repo = await repos.open("discard-blocked");
 
-    const error = await rejection(discard(repo, { path: "d/x", origPath: null }, "unstaged"));
+    const error = await rejection(
+      discard(repo, { path: "d/x", origPath: null, status: "deleted" }, "unstaged"),
+    );
     expect((error as Error).message).toBe(
       "A file is where a folder of d/x goes. Move or delete it, then discard the changes.",
     );
@@ -1011,7 +1027,7 @@ describe("discarding a file's changes", () => {
     // Listed when it was shown, ignored since.
     writeFileSync(join(path, ".git", "info", "exclude"), "f\n");
 
-    await discard(repo, { path: "d/e/f", origPath: null }, "unstaged");
+    await discard(repo, { path: "d/e/f", origPath: null, status: "untracked" }, "unstaged");
     expect(existsSync(join(path, "d", "e"))).toBe(false);
     expect(contents(path, "d/kept")).toBe("kept\n");
   });
@@ -1021,15 +1037,54 @@ describe("discarding a file's changes", () => {
     git(repo.path, "rm", "-q", "--cached", "a file.txt");
     git(repo.path, "add", "-N", "a file.txt");
 
-    await discard(repo, { path: "a file.txt", origPath: null }, "unstaged");
+    await discard(repo, { path: "a file.txt", origPath: null, status: "added" }, "unstaged");
     expect(contents(repo.path, "a file.txt")).toBeNull();
+  });
+
+  it("discards a rename into a folder of its previous name, and out of one", async () => {
+    const path = createRepo("discard-nested-rename");
+    writeFileSync(join(path, "a"), "a\n");
+    mkdirSync(join(path, "b"));
+    writeFileSync(join(path, "b", "c"), "c\n");
+    git(path, "add", ".");
+    git(path, "commit", "-q", "-m", "first");
+    git(path, "mv", "a", "tmp");
+    mkdirSync(join(path, "a"));
+    git(path, "mv", "tmp", "a/b");
+    git(path, "mv", "b/c", "tmp");
+    // Its folder is left, empty.
+    rmSync(join(path, "b"), { recursive: true });
+    git(path, "mv", "tmp", "b");
+    const repo = await repos.open("discard-nested-rename");
+
+    await discard(repo, { path: "a/b", origPath: "a", status: "renamed" }, "staged");
+    await discard(repo, { path: "b", origPath: "b/c", status: "renamed" }, "staged");
+    expect(contents(path, "a")).toBe("a\n");
+    expect(contents(path, "b/c")).toBe("c\n");
+    expect(await statusFiles(repo)).toEqual([]);
+  });
+
+  it("discards nothing of a file that changed since it was listed", async () => {
+    const repo = await createHistoryRepo("discard-out-of-date");
+    // Listed as modified, then taken out of the index in a terminal.
+    git(repo.path, "rm", "-q", "--cached", "a file.txt");
+
+    const error = await rejection(
+      discard(repo, { path: "a file.txt", origPath: null, status: "modified" }, "unstaged"),
+    );
+    expect((error as Error).message).toBe(
+      "a file.txt changed since its changes were shown, so nothing was discarded.",
+    );
+    expect(contents(repo.path, "a file.txt")).toBe("changed\n");
   });
 
   it("leaves a submodule's changes to be discarded in it", async () => {
     createSubmoduleRepo("discard-submodule");
     const repo = await repos.open("discard-submodule");
 
-    const error = await rejection(discard(repo, { path: "mod", origPath: null }, "unstaged"));
+    const error = await rejection(
+      discard(repo, { path: "mod", origPath: null, status: "modified" }, "unstaged"),
+    );
     expect((error as Error).message).toBe(
       "mod is a submodule, a repository of its own: discard its changes in it.",
     );
@@ -1042,7 +1097,9 @@ describe("discarding a file's changes", () => {
 
     for (const side of ["unstaged", "staged"] as const) {
       // oxlint-disable-next-line no-await-in-loop -- one after the other, on the same file.
-      const error = await rejection(discard(repo, { path: "f.txt", origPath: null }, side));
+      const error = await rejection(
+        discard(repo, { path: "f.txt", origPath: null, status: "conflicted" }, side),
+      );
       expect(error).toBeInstanceOf(DiscardBlockedError);
     }
     expect(contents(path, "f.txt")).toBe(before);

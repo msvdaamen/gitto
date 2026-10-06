@@ -178,5 +178,6 @@ function uncounted(file: StatusFile, status: FileStatus): ChangedFile {
     origPath: moved ? file.origPath : null,
     additions: null,
     deletions: null,
+    ...(file.submodule && { submodule: true as const }),
   };
 }

@@ -17,6 +17,7 @@ describe("discarding a file's changes", () => {
     expect(canDiscard(file("new.txt", "untracked"))).toBe(true);
     expect(canDiscard(file("a.txt", "conflicted"))).toBe(false);
     expect(canDiscard(file("nested/", "untracked"))).toBe(false);
+    expect(canDiscard({ ...file("mod", "modified"), submodule: true })).toBe(false);
   });
 
   it("says what's lost, by the side it's listed on", () => {

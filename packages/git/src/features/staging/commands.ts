@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { access, readlink } from "node:fs/promises";
+import { access, readdir, readlink } from "node:fs/promises";
+import { join, sep } from "node:path";
 
 import { deleteFiles, entriesAt, entryAt, fullPath, inBatches, type Entry } from "../../core/entry";
 import {
@@ -11,6 +12,7 @@ import {
 } from "../../core/errors";
 import { gitDirs } from "../../core/git-dirs";
 import { resolveRef, type GitCommand, type Repo } from "../../core/repo";
+import type { FileStatus } from "../../schema";
 import { refuseConflictMarkers } from "../conflicts/commands";
 import { emptyTree, getStagedFilePatch, getUnstagedFilePatch } from "../diff/commands";
 import { checkWorkingTreePath } from "../diff/working-tree";
@@ -218,6 +220,26 @@ function excludingExactly(path: string): string {
   return `:(exclude,glob)${glob.join("")}`;
 }
 
+/**
+ * Whether what's at a rename's previous path, `entry`, is only the rename's own `path`: a folder
+ * that holds nothing else, where it was renamed into a folder of its previous name, or the file
+ * itself where one of its previous path's folders goes, where it was renamed out of one.
+ */
+async function ownRenameInTheWay(
+  repo: Repo,
+  path: string,
+  origPath: string,
+  entry: Entry,
+): Promise<boolean> {
+  if (entry === "blocked") return origPath.startsWith(`${path}/`);
+  if (entry !== "folder" || !path.startsWith(`${origPath}/`)) return false;
+  // The folders down to it, and it.
+  const inner = path.slice(origPath.length + 1).split("/");
+  const own = new Set(inner.map((_, i) => inner.slice(0, i + 1).join(sep)));
+  const held = await readdir(join(repo.path, origPath), { recursive: true });
+  return held.every((each) => own.has(each));
+}
+
 /** What's in the way of putting back the file at `path`, where `entry` is. */
 function inTheWayOf(path: string, entry: Entry): string {
   switch (entry) {
@@ -323,8 +345,12 @@ async function unchangedSince(
  * a file back would write over something that isn't it: a folder that has taken its place, or
  * another file at a rename's previous path.
  */
-export async function discard(repo: Repo, file: LinesFile, side: UncommittedSide): Promise<void> {
-  const { path, origPath } = file;
+export async function discard(
+  repo: Repo,
+  file: LinesFile & { status: FileStatus },
+  side: UncommittedSide,
+): Promise<void> {
+  const { path, origPath, status } = file;
   const paths = origPath ? [path, origPath] : [path];
   const named = new Set(paths);
   const gitDir = side === "staged" ? (await gitDirs(repo)).gitDir : undefined;
@@ -381,6 +407,14 @@ export async function discard(repo: Repo, file: LinesFile, side: UncommittedSide
       }
       tracked.add(entryPath);
     }
+    // The file as its list showed it, tracked or not: otherwise it changed since, and its list is
+    // out of date. Discarding what it showed could delete what's tracked now, say.
+    const listedTracked = side === "staged" ? status !== "deleted" : status !== "untracked";
+    if (listedTracked !== tracked.has(path)) {
+      throw new DiscardBlockedError(
+        `${path} changed since its changes were shown, so nothing was discarded.`,
+      );
+    }
     const at = (each: string) => there[paths.indexOf(each)];
     // A copy's source is still there on this side, unlike a rename's: in the index, or in the
     // working tree.
@@ -408,15 +442,26 @@ export async function discard(repo: Repo, file: LinesFile, side: UncommittedSide
       const entry = at(each);
       const files = entry === "file" || entry === "link";
       if (entry === undefined || (files && (tracked.has(each) || unchanged.has(each)))) continue;
+      // A rename into a folder of its previous name, or out of one: what's there is the rename's
+      // own, which discarding it deletes first.
+      // oxlint-disable-next-line no-await-in-loop -- two at most.
+      if (each === origPath && !copied && (await ownRenameInTheWay(repo, path, origPath, entry))) {
+        continue;
+      }
       throw new DiscardBlockedError(
         `${inTheWayOf(each, entry)} Move or delete it, then discard the changes.`,
       );
     }
     if (side === "staged") {
-      await run(
-        [...RESTORE, `--source=${source}`, "--staged", "--worktree", ...PATHS_FROM_STDIN],
-        exactlyFromStdin(discarded),
-      );
+      // One at a time, the file first: where it's in a folder of its previous name, or that's in
+      // one of its, it's deleted before that's put back, and the two can't be named apart at once.
+      for (const each of discarded) {
+        // oxlint-disable-next-line no-await-in-loop -- two at most, one after the other.
+        await run(
+          [...RESTORE, `--source=${source}`, "--staged", "--worktree", ...PATHS_FROM_STDIN],
+          exactlyFromStdin([each]),
+        );
+      }
       return;
     }
     // Untracked, and deleted as the file that's listed, ignored by now or not. Not a folder: a
@@ -492,8 +537,9 @@ async function restoreAll(repo: Repo, run: GitCommand, source: string): Promise<
   // that isn't UTF-8.
   const reading = { binary: true };
   const options = { ...reading, globPathspecs: true, ...REWRITES };
+  // `args` NUL-separated: `-z` goes before any `--`.
   const list = async (args: string[]) =>
-    (await run([...args, "-z"], reading)).split("\0").filter(Boolean);
+    (await run(args.includes("-z") ? args : [...args, "-z"], reading)).split("\0").filter(Boolean);
   const restore = async (pathspecs: string[]) => {
     try {
       await run([...RESTORE, `--source=${source}`, "--staged", "--worktree", ...PATHS_FROM_STDIN], {
@@ -541,11 +587,14 @@ async function restoreAll(repo: Repo, run: GitCommand, source: string): Promise<
   if (freed.length) await restore(exactly(freed));
   // Submodules, whose commits differ: `:<mode> <mode> <object> <object> <status>`, then the path,
   // a submodule's mode on either side, not its objects, which could read the same.
-  // Whatever `diff.ignoreSubmodules` says.
-  const changed = await list(["diff", "--raw", "--no-renames", "--ignore-submodules=none"]);
-  const submodules = changed.filter(
-    (_, i) => i % 2 === 1 && /^:(160000 |\d{6} 160000 )/.test(changed[i - 1]!),
-  );
+  // The submodules in the index, and of those, the changed ones, whatever `diff.ignoreSubmodules`
+  // says: only them, as looking at one runs a status in it.
+  const gitlinks = (await list(["ls-files", "--format=%(objectmode) %(path)"]))
+    .filter((entry) => entry.startsWith("160000 "))
+    .map((entry) => entry.slice(7));
+  const submodules = gitlinks.length
+    ? await list(["diff", "--name-only", "--ignore-submodules=none", "-z", "--", ...gitlinks])
+    : [];
   const repositories = after.filter((path) => path.endsWith("/"));
   // A path once, with the first reason: a repository that took a deleted file's place is in the
   // way, and listed as its folder.

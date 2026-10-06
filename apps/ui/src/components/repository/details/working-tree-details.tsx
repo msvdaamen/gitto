@@ -50,7 +50,9 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
   // Without Suspense, like the status: it's refetched whenever anything changes on disk.
   const operationQuery = useOperationInProgress(() => props.repositoryId);
   const operation = useUnsuspendedData(operationQuery);
-  const busy = () => stage.isPending || unstage.isPending || discard.isPending;
+  // A discard waiting for the edits to a file on show to be saved, before it's run.
+  const [preparing, setPreparing] = createSignal(false);
+  const busy = () => stage.isPending || unstage.isPending || discard.isPending || preparing();
   // Why staging, unstaging or discarding last failed: each keeps its error until it's run again.
   const lastError = () =>
     [stage, unstage, discard]
@@ -221,7 +223,14 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
           const id = props.repositoryId;
           // Once the edits to a file on show are saved: they'd be written back over what's
           // discarded, or kept from it.
-          if (!(await (props.files?.beforeChange() ?? true)) || id !== props.repositoryId) return;
+          setPreparing(true);
+          let saved: boolean;
+          try {
+            saved = await (props.files?.beforeChange() ?? true);
+          } finally {
+            setPreparing(false);
+          }
+          if (!saved || id !== props.repositoryId) return;
           discard.mutate(target, {
             onSuccess: (left) => id === props.repositoryId && setKept(left),
           });

@@ -45,6 +45,8 @@ export function useDiscard(repositoryId: () => string) {
         repositoryId: id,
         path: file.path,
         origPath: file.origPath,
+        // Checked to still be its status: its list may be out of date.
+        status: file.status,
         side,
       });
       return [];

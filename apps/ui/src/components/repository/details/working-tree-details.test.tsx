@@ -129,6 +129,7 @@ describe("discarding changes", () => {
       repositoryId: "repo",
       path: "new.txt",
       origPath: null,
+      status: "untracked",
       side: "unstaged",
     });
 
@@ -139,6 +140,7 @@ describe("discarding changes", () => {
       repositoryId: "repo",
       path: "b.txt",
       origPath: null,
+      status: "modified",
       side: "staged",
     });
   });
@@ -155,6 +157,7 @@ describe("discarding changes", () => {
       repositoryId: "repo",
       path: "copy.txt",
       origPath: "a.txt",
+      status: "copied",
       side: "staged",
     });
   });
@@ -174,6 +177,11 @@ describe("discarding changes", () => {
     };
     await discardA();
     expect(rpc.git.staging.discard).not.toHaveBeenCalled();
+    // Nor is another discard started meanwhile.
+    // Found while the dialog closes, which hides the rest.
+    expect(
+      screen.getByRole("button", { name: "Discard all changes…", hidden: true }),
+    ).toBeDisabled();
     saved(false);
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(rpc.git.staging.discard).not.toHaveBeenCalled();

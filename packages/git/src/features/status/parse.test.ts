@@ -42,6 +42,13 @@ describe("parseStatus", () => {
     ]);
   });
 
+  it("marks a submodule", () => {
+    const submodule = "1 .M SC.. 160000 160000 160000 aaa aaa mod\0";
+    expect(parseStatus(submodule).files).toEqual([
+      { path: "mod", origPath: null, staged: null, unstaged: "modified", submodule: true },
+    ]);
+  });
+
   it("handles a detached HEAD", () => {
     expect(parseStatus("# branch.oid 2222\0# branch.head (detached)\0")).toEqual({
       head: { kind: "detached", sha: "2222" },

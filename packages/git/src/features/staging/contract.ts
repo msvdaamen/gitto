@@ -2,6 +2,7 @@ import { oc } from "@orpc/contract";
 import * as z from "zod";
 
 import { FileInput, RepositoryInput } from "../../input";
+import { FileStatusSchema } from "../../schema";
 import { KeptChangeSchema, LineSelectionSchema, UncommittedSideSchema } from "./schema";
 
 const PathsInput = RepositoryInput.extend({ paths: z.array(z.string().min(1)).min(1) });
@@ -39,7 +40,12 @@ export const StagingContract = {
    */
   discard: oc.input(
     // Not an empty path, which, as a pathspec, names every file.
-    FileInput.extend({ path: z.string().min(1), side: UncommittedSideSchema }),
+    // Its status as its list has it, which it's checked to still have.
+    FileInput.extend({
+      path: z.string().min(1),
+      status: FileStatusSchema,
+      side: UncommittedSideSchema,
+    }),
   ),
   /**
    * Discards every uncommitted change, untracked files included; fails with PRECONDITION_FAILED,

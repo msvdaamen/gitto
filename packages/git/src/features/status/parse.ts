@@ -32,14 +32,14 @@ export function parseStatus(output: string): Status {
       // Ordinary change: 1 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <path>
       case "1": {
         const fields = splitFields(record, 9);
-        files.push(file(fields[8]!, null, fields[1]!));
+        files.push(file(fields[8]!, null, fields[1]!, fields[2]!));
         break;
       }
       // Rename or copy: 2 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <X><score> <path>, then <origPath>
       case "2": {
         const fields = splitFields(record, 10);
         const origPath = records[++i] ?? null;
-        files.push(file(fields[9]!, origPath, fields[1]!));
+        files.push(file(fields[9]!, origPath, fields[1]!, fields[2]!));
         break;
       }
       // Unmerged: u <XY> <sub> <m1> <m2> <m3> <mW> <h1> <h2> <h3> <path>
@@ -83,12 +83,14 @@ function toHead(oid: string, name: string): Head {
   return { kind: "branch", name, sha: oid };
 }
 
-function file(path: string, origPath: string | null, xy: string): StatusFile {
+function file(path: string, origPath: string | null, xy: string, sub: string): StatusFile {
   return {
     path,
     origPath,
     staged: CODES[xy[0]!] ?? null,
     unstaged: CODES[xy[1]!] ?? null,
+    // `<sub>` is `S…` for a submodule, `N...` for anything else.
+    ...(sub.startsWith("S") && { submodule: true as const }),
   };
 }
 

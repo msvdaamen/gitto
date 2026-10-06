@@ -36,6 +36,9 @@ export function parseDiff(output: string): ChangedFile[] {
       // stays conflicted, as the status has it.
       if (files.get(path)?.status !== "conflicted") {
         files.set(path, { path, status, origPath, additions: null, deletions: null });
+        // `:<mode> <mode> …`, a submodule's on either side.
+        const [before, after] = record.slice(1).split(" ");
+        if (before === "160000" || after === "160000") files.get(path)!.submodule = true;
       }
       continue;
     }

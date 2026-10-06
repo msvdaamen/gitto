@@ -11,10 +11,10 @@ import { operationName } from "./conflicts";
 
 /**
  * Whether a file's changes can be discarded from its list: not a conflicted one's, which are
- * resolved instead, nor a repository inside this one, whose are discarded in it.
+ * resolved instead, nor a repository's inside this one, a submodule too, whose are discarded in it.
  */
 export function canDiscard(file: ChangedFile): boolean {
-  return isOwnChange(file);
+  return isOwnChange(file) && !file.submodule;
 }
 
 /** What discarding a file's changes from its list on `side` loses, to ask before doing it. */
