@@ -15,7 +15,7 @@ import { resolveRef, type GitCommand, type Repo } from "../../core/repo";
 import type { FileStatus } from "../../schema";
 import { refuseConflictMarkers } from "../conflicts/commands";
 import { emptyTree, getStagedFilePatch, getUnstagedFilePatch } from "../diff/commands";
-import { isSubmodule, rawFields } from "../diff/parse";
+import { isSubmodule, rawRecords } from "../diff/parse";
 import { checkWorkingTreePath } from "../diff/working-tree";
 import { operationBlocker, underWayBlocker } from "../operation/commands";
 import { linesPatch, type LineAction } from "./lines";
@@ -86,12 +86,10 @@ export async function unstageAll(repo: Repo): Promise<void> {
       { binary: true },
     );
     // `:<mode in HEAD> <mode> <object in HEAD> <object> <status>`, then the path.
-    const fields = staged.split("\0");
     let entries = "";
-    for (let i = 0; i + 1 < fields.length; i += 2) {
-      const { srcMode: mode, srcObject: object } = rawFields(fields[i]!);
+    for (const { fields, path } of rawRecords(staged.split("\0"))) {
       // A file that isn't in HEAD has mode 0 there, which takes it out of the index.
-      entries += `${mode} ${object}\t${fields[i + 1]}\0`;
+      entries += `${fields.srcMode} ${fields.srcObject}\t${path}\0`;
     }
     if (entries) {
       await run(["update-index", "-z", "--index-info"], { stdin: entries, binary: true });
@@ -307,8 +305,9 @@ async function restore(
 }
 
 /** The tree changes are discarded back to: HEAD's, or before the first commit, the empty tree. */
-async function sourceTree(run: GitCommand): Promise<string> {
-  return (await resolveRef(run, "HEAD")) ?? emptyTree(run);
+async function sourceTree(run: GitCommand): Promise<{ head: string | null; source: string }> {
+  const head = await resolveRef(run, "HEAD");
+  return { head, source: head ?? (await emptyTree(run)) };
 }
 
 /**
@@ -345,12 +344,11 @@ async function deletedSince(
     ["diff", ...args, "--raw", "--no-abbrev", "--no-renames", "--diff-filter=D", "--", ...paths],
     options,
   );
-  const files: SourceFile[] = [];
-  for (let i = 0; i + 1 < fields.length; i += 2) {
-    const { srcMode, srcObject } = rawFields(fields[i]!);
-    files.push({ path: fields[i + 1]!, mode: srcMode, object: srcObject });
-  }
-  return files;
+  return rawRecords(fields).map(({ fields: { srcMode, srcObject }, path }) => ({
+    path,
+    mode: srcMode,
+    object: srcObject,
+  }));
 }
 
 /**
@@ -365,11 +363,18 @@ async function unchangedSince(
   options: { binary?: boolean } = {},
 ): Promise<Set<string>> {
   const bytes = (path: string) => Buffer.from(path, options.binary ? "latin1" : "utf8");
-  // A link's mode is 120000.
-  const alike = files.filter(
-    ({ entry, mode }) =>
-      (entry === "file" || entry === "link") && (entry === "link") === (mode === "120000"),
-  );
+  // A link's mode is 120000; where git writes links as files of where they lead, as on Windows
+  // without them (`core.symlinks`), such a file is one, as its contents are.
+  const asFiles = files.some(({ entry, mode }) => entry === "file" && mode === "120000")
+    ? await run(["config", "--type=bool", "core.symlinks"]).then(
+        (value) => value.trim() === "false",
+        () => false,
+      )
+    : false;
+  const alike = files.filter(({ entry, mode }) => {
+    if (entry === "link") return mode === "120000";
+    return entry === "file" && (mode !== "120000" || asFiles);
+  });
   const candidates = alike.filter(({ entry }) => entry === "file");
   // Not one that can't be read, which `hash-object` would fail at, and all the rest with it: taken
   // for changed, and kept.
@@ -437,12 +442,9 @@ export async function discard(
   const paths = origPath ? [path, origPath] : [path];
   const named = new Set(paths);
   const gitDir = side === "staged" ? (await gitDirs(repo)).gitDir : undefined;
-  // Added with `--intent-to-add`, which only a file listed so can be: unstaged, as added, or as
-  // deleted, renamed or copied once its file's deleted; staged, as deleted, over one HEAD has.
-  const mayBeIntended =
-    side === "unstaged"
-      ? ["added", "deleted", "renamed", "copied"].includes(status)
-      : status === "deleted";
+  // Added with `--intent-to-add`: on the staged side, only one listed as deleted can be, over one
+  // HEAD has; on the unstaged side, any can be by now, which `restore` would empty.
+  const mayBeIntended = side === "unstaged" || status === "deleted";
   await repo.exclusive(async (run) => {
     // On the command line, which holds them: there are two at most.
     const listed = (args: string[]) => records(run, [...args, "--", ...paths]);
@@ -468,11 +470,11 @@ export async function discard(
       // empty, but hidden as deleted.
       return paths.filter((each) => shown!.get(each) !== hidden!.get(each));
     };
-    const [entries, intended, head, blocker, there] = await Promise.all([
+    const [entries, intended, { head, source }, blocker, there] = await Promise.all([
       // The paths in the index, with their mode and stage: a conflict's are 1-3.
       listed(["ls-files", "--format=%(objectmode) %(stage) %(path)"]),
       mayBeIntended ? intentToAdd() : ([] as string[]),
-      side === "staged" ? resolveRef(run, "HEAD") : null,
+      side === "staged" ? sourceTree(run) : { head: null, source: "" },
       gitDir && operationBlocker(gitDir, "discard its staged changes"),
       entriesAt(repo.path, paths),
     ]);
@@ -483,7 +485,6 @@ export async function discard(
         `${path} changed since its changes were shown, so nothing was discarded.`,
       );
     }
-    const source = side === "staged" ? (head ?? (await emptyTree(run))) : "";
     // Only the paths themselves, not what's in a folder of the same name, which is another file's.
     const tracked = new Set<string>();
     for (const entry of entries) {
@@ -508,7 +509,11 @@ export async function discard(
     // delete what's tracked now, say.
     const listedThere = side === "staged" ? status !== "deleted" : status !== "untracked";
     const inIndex = tracked.has(path) && (side === "unstaged" || !intended.includes(path));
-    if (listedThere !== inIndex) {
+    // And unstaged, added with `--intent-to-add` only if it's listed as one can be: one listed as
+    // modified that's been since would be deleted, or emptied.
+    const listedIntended = ["added", "deleted", "renamed", "copied"].includes(status);
+    const intendedSince = side === "unstaged" && intended.includes(path) && !listedIntended;
+    if (listedThere !== inIndex || intendedSince) {
       throw new DiscardBlockedError(
         `${path} changed since its changes were shown, so nothing was discarded.`,
       );
@@ -539,10 +544,15 @@ export async function discard(
       run,
       sources.map((each) => Object.assign(each, { entry: at(each.path) })),
     );
+    // A submodule's folder, where its removal from the index is put back: what's in it is its own.
+    const submodules = new Set(
+      sources.filter(({ mode }) => mode === "160000").map((each) => each.path),
+    );
     for (const each of written) {
       const entry = at(each);
       const files = entry === "file" || entry === "link";
       if (entry === undefined || (files && (tracked.has(each) || unchanged.has(each)))) continue;
+      if (entry === "folder" && submodules.has(each)) continue;
       // A rename into a folder of its previous name, or out of one: what's there is the rename's
       // own, which discarding it deletes first.
       // oxlint-disable-next-line no-await-in-loop -- two at most.
@@ -567,6 +577,13 @@ export async function discard(
         await restore(run, args, exactly([each]));
       }
       return;
+    }
+    // Taken out of the index and deleted, as a file: not a folder, or what can't be looked at.
+    for (const each of intended) {
+      const entry = at(each);
+      if (entry === "folder" || entry === "other" || entry === "unreadable") {
+        throw inTheWay(each, entry);
+      }
     }
     // Untracked, and deleted as the file that's listed, ignored by now or not; gone already, or in
     // a folder a file has taken the place of, there's nothing left to delete.
@@ -626,7 +643,7 @@ export async function discard(
 export async function discardAll(repo: Repo): Promise<KeptChange[]> {
   const { gitDir } = await gitDirs(repo);
   return repo.exclusive(async (run) => {
-    const [blocker, source] = await Promise.all([
+    const [blocker, { source }] = await Promise.all([
       underWayBlocker(gitDir, run, "discard the changes"),
       sourceTree(run),
     ]);
@@ -661,11 +678,18 @@ async function restoreAll(repo: Repo, run: GitCommand, source: string): Promise<
     );
     const there = files.map((file, i) => Object.assign({}, file, { entry: entries[i] }));
     const unchanged = await unchangedSince(repo, run, there, reading);
-    return files.filter(({ path }, i) => entries[i] !== undefined && !unchanged.has(path));
+    // Not a submodule's folder, where its removal from the index is put back: it's its own.
+    return files.filter(
+      ({ path, mode }, i) =>
+        entries[i] !== undefined &&
+        !unchanged.has(path) &&
+        !(entries[i] === "folder" && mode === "160000"),
+    );
   };
   const untracked = () => records(run, ["ls-files", "--others", "--exclude-standard"], reading);
   const [deleted, before] = await Promise.all([
-    deletedSince(run, [source], [], reading),
+    // Not looking into submodules: only one that's gone matters here.
+    deletedSince(run, [source, "--ignore-submodules=dirty"], [], reading),
     untracked(),
   ]);
   const kept = await takenPlaces(deleted);
@@ -695,9 +719,9 @@ async function restoreAll(repo: Repo, run: GitCommand, source: string): Promise<
     ["diff", "--raw", "--no-renames", "--ignore-submodules=none"],
     reading,
   );
-  const submodules = changed.filter(
-    (_, i) => i % 2 === 1 && isSubmodule(rawFields(changed[i - 1]!)),
-  );
+  const submodules = rawRecords(changed)
+    .filter(({ fields }) => isSubmodule(fields))
+    .map((record) => record.path);
   const repositories = after.filter((path) => path.endsWith("/"));
   // A path once, with the first reason: a repository that took a deleted file's place is in the
   // way, and listed as its folder.

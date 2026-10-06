@@ -1181,6 +1181,33 @@ describe("discarding a file's changes", () => {
     expect(contents(repo.path, "new file.txt")).toBe("new\n");
   });
 
+  it("discards nothing of a file listed as modified, added with --intent-to-add since", async () => {
+    const repo = await createHistoryRepo("discard-intent-since");
+    git(repo.path, "rm", "-q", "--cached", "a file.txt");
+    git(repo.path, "add", "-N", "a file.txt");
+
+    const error = await rejection(
+      discard(repo, { path: "a file.txt", origPath: null, status: "modified" }, "unstaged"),
+    );
+    expect((error as Error).message).toMatch(/changed since its changes were shown/);
+    expect(contents(repo.path, "a file.txt")).toBe("changed\n");
+  });
+
+  it("says a folder is in the way of deleting a file added with --intent-to-add", async () => {
+    const repo = await createHistoryRepo("discard-intent-folder");
+    git(repo.path, "add", "-N", "new file.txt");
+    rmSync(join(repo.path, "new file.txt"));
+    mkdirSync(join(repo.path, "new file.txt"));
+    writeFileSync(join(repo.path, "new file.txt", "x"), "x\n");
+
+    const error = await rejection(
+      discard(repo, { path: "new file.txt", origPath: null, status: "added" }, "unstaged"),
+    );
+    expect((error as Error).message).toBe(
+      "A folder is at new file.txt now. Move or delete it, then discard the changes.",
+    );
+  });
+
   it("leaves a submodule's changes to be discarded in it", async () => {
     createSubmoduleRepo("discard-submodule");
     const repo = await repos.open("discard-submodule");
@@ -1493,6 +1520,33 @@ describe("discarding all changes", () => {
     const repo = await repos.open("discard-all-submodule-name");
 
     expect(await discardAll(repo)).toEqual([{ path: "modé", reason: "submodule" }]);
+  });
+
+  it("puts back a submodule taken out of the index, its folder its own", async () => {
+    const path = createSubmoduleRepo("discard-all-submodule-removed");
+    git(join(path, "mod"), "checkout", "-q", "HEAD~1");
+    git(path, "rm", "-q", "--cached", "mod");
+    const repo = await repos.open("discard-all-submodule-removed");
+
+    expect(await discardAll(repo)).toEqual([]);
+    expect(await statusFiles(repo)).toEqual([]);
+    expect(existsSync(join(path, "mod", ".git"))).toBe(true);
+  });
+
+  it("puts back a link written as a file where git doesn't write links", async () => {
+    const path = createRepo("discard-all-link-as-file");
+    symlinkSync("target", join(path, "l"));
+    git(path, "add", ".");
+    git(path, "commit", "-q", "-m", "first");
+    git(path, "config", "core.symlinks", "false");
+    rmSync(join(path, "l"));
+    writeFileSync(join(path, "l"), "target");
+    writeFileSync(join(path, ".git", "info", "exclude"), "l\n");
+    git(path, "rm", "-q", "--cached", "l");
+    const repo = await repos.open("discard-all-link-as-file");
+
+    expect(await discardAll(repo)).toEqual([]);
+    expect(git(path, "ls-files", "l")).toBe("l");
   });
 
   it("deletes nothing untracked when it can't discard the rest", async () => {

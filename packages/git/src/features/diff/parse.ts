@@ -19,6 +19,19 @@ export function rawFields(record: string) {
   return { srcMode, dstMode, srcObject, dstObject, status };
 }
 
+/**
+ * The records of `--raw -z` output without renames, split on NUL: each `rawFields`, then its path.
+ */
+export function rawRecords(
+  output: string[],
+): { fields: ReturnType<typeof rawFields>; path: string }[] {
+  const records = [];
+  for (let i = 0; i + 1 < output.length; i += 2) {
+    records.push({ fields: rawFields(output[i]!), path: output[i + 1]! });
+  }
+  return records;
+}
+
 /** Whether a `--raw` record is a submodule's: its mode on either side. */
 export function isSubmodule({ srcMode, dstMode }: ReturnType<typeof rawFields>): boolean {
   return srcMode === "160000" || dstMode === "160000";
