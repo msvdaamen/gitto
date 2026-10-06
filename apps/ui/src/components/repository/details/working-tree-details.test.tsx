@@ -1,4 +1,4 @@
-import type { ChangedFile, Uncommitted } from "@gitto/git/types";
+import type { ChangedFile, Operation, Uncommitted } from "@gitto/git/types";
 import { render, screen } from "@solidjs/testing-library";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import userEvent from "@testing-library/user-event";
@@ -14,6 +14,7 @@ const rpc = vi.hoisted(() => ({
     status: { get: vi.fn(async () => uncommitted) },
     commit: { message: vi.fn(), pushedTo: vi.fn() },
     staging: { discard: vi.fn(async () => {}), discardAll: vi.fn(async () => {}) },
+    operation: { get: vi.fn(async (): Promise<Operation | null> => null) },
   },
 }));
 vi.mock("@/lib/rpc", () => ({ rpc }));
@@ -101,6 +102,7 @@ describe("discarding changes", () => {
     vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(500);
     rpc.git.staging.discard.mockClear();
     rpc.git.staging.discardAll.mockClear();
+    rpc.git.operation.get.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -131,6 +133,22 @@ describe("discarding changes", () => {
     expect(rpc.git.staging.discard).toHaveBeenLastCalledWith({
       repositoryId: "repo",
       path: "b.txt",
+      origPath: null,
+      side: "staged",
+    });
+  });
+
+  it("discards a copy without its source, which is another file", async () => {
+    const user = userEvent.setup();
+    setChanges([], [{ ...file("copy.txt", "copied"), origPath: "a.txt" }]);
+    renderDetails();
+
+    await openMenu(user, "copy.txt");
+    await user.click(await screen.findByRole("menuitem", { name: "Discard changes…" }));
+    await user.click(await screen.findByRole("button", { name: "Discard" }));
+    expect(rpc.git.staging.discard).toHaveBeenCalledWith({
+      repositoryId: "repo",
+      path: "copy.txt",
       origPath: null,
       side: "staged",
     });
@@ -175,6 +193,21 @@ describe("discarding changes", () => {
       expect(button).toHaveAttribute(
         "title",
         "Resolve the conflicts before discarding all changes.",
+      ),
+    );
+    expect(button).toBeDisabled();
+  });
+
+  it("doesn't discard all changes while a merge is under way, which would go on without them", async () => {
+    rpc.git.operation.get.mockResolvedValue({ kind: "merge", merging: "side", into: "main" });
+    setChanges([file("a.txt")]);
+    renderDetails();
+
+    const button = await screen.findByRole("button", { name: "Discard all changes…" });
+    await vi.waitFor(() =>
+      expect(button).toHaveAttribute(
+        "title",
+        "Finish or abort the merge before discarding all changes.",
       ),
     );
     expect(button).toBeDisabled();

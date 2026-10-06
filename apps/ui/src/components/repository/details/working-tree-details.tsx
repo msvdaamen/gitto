@@ -19,6 +19,7 @@ import { stagingPaths } from "@/git/changes";
 import { shownPathIn, type FileOpener, type UncommittedSource } from "@/git/diff-source";
 import { canDiscard, discardAllBlocker, discardDescription } from "@/git/discard";
 import { useWorkingTreeChanges } from "@/git/queries/diff";
+import { useOperationInProgress } from "@/git/queries/progress";
 import { useDiscard, useStage, useUnstage, type DiscardTarget } from "@/git/queries/staging";
 import { useHeadSha, useStatus } from "@/git/queries/status";
 import { useUnsuspendedData } from "@/git/queries/unsuspended";
@@ -45,6 +46,7 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
   const stage = useStage(() => props.repositoryId);
   const unstage = useUnstage(() => props.repositoryId);
   const discard = useDiscard(() => props.repositoryId);
+  const operation = useOperationInProgress(() => props.repositoryId);
   const busy = () => stage.isPending || unstage.isPending || discard.isPending;
   // The changes being asked about discarding.
   const [discarding, setDiscarding] = createSignal<DiscardTarget>();
@@ -62,10 +64,14 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
     disabled: (file) => busy() || !canDiscard(file),
     run: (file) => setDiscarding({ file, side }),
   });
-  // Why the changes can't all be discarded, if they can't; `undefined` until the status loads.
+  // Why the changes can't all be discarded, if they can't; `undefined` until the status and the
+  // operation under way have loaded.
   const discardAllBlocked = () => {
     const current = summary();
-    return current ? (discardAllBlocker(current) ?? false) : undefined;
+    const under = operation.data;
+    return current && under !== undefined
+      ? (discardAllBlocker(current, under) ?? false)
+      : undefined;
   };
   const lastCommit = useHeadSha(summary);
   // Read once: in JSX, `summary() && headLabel(summary().head)` would check a memo of whether
@@ -179,11 +185,12 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
             : discardDescription(target.file, target.side)
         }
         confirmLabel="Discard"
+        // Not while files are being staged, or other changes discarded: it waits for them.
+        confirmDisabled={busy()}
         onCancel={() => setDiscarding(undefined)}
         onConfirm={(target) => {
           setDiscarding(undefined);
-          // Not while files are being staged, or other changes discarded.
-          if (!busy()) discard.mutate(target);
+          discard.mutate(target);
         }}
       />
     </div>

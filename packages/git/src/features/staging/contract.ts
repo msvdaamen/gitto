@@ -33,13 +33,14 @@ export const StagingContract = {
   unstageLines: oc.input(LinesInput).output(LinesOutput),
   /**
    * Discards a file's changes on `side`, the side it's listed on: its unstaged ones, or all of them
-   * from its staged ones on (see `discard`). Fails with PRECONDITION_FAILED, discarding nothing, if
-   * it's conflicted.
+   * from its staged ones on (see `discard`). `origPath` is a rename's previous path, which is put
+   * back too; not a copy's source, which is another file. Fails with PRECONDITION_FAILED,
+   * discarding nothing, if it's conflicted.
    */
   discard: oc.input(FileInput.extend({ side: UncommittedSideSchema })),
   /**
    * Discards every uncommitted change, untracked files included; fails with PRECONDITION_FAILED,
-   * discarding nothing, while files are conflicted.
+   * discarding nothing, while files are conflicted or an operation like a merge is under way.
    */
   discardAll: oc.input(RepositoryInput),
 };

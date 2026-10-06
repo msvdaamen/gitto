@@ -1,12 +1,14 @@
 import {
-  ConflictsUnresolvedError,
+  DiscardBlockedError,
   GitError,
   LinesNotStageableError,
   PatchChangedError,
 } from "../../core/errors";
-import { hasConflicts, type Repo } from "../../core/repo";
+import { gitDirs } from "../../core/git-dirs";
+import { hasConflicts, type GitCommand, type Repo } from "../../core/repo";
 import { refuseConflictMarkers } from "../conflicts/commands";
 import { getStagedFilePatch, getUnstagedFilePatch } from "../diff/commands";
+import { OPERATION_NAMES, operationUnderWay } from "../operation/commands";
 import { linesPatch, type LineAction } from "./lines";
 import type { LineSelection, UncommittedSide } from "./schema";
 
@@ -62,24 +64,30 @@ export async function unstageAll(repo: Repo): Promise<void> {
   // file in the index up in the whole list, which took 6.9s for 40,000 staged files in vscode,
   // against 60ms this way. As one write, so stages still waiting to run are seen, and none comes
   // in between.
-  await repo.exclusive(async (run) => {
-    // As bytes: a path goes back to git as it came, also one that isn't UTF-8.
-    const staged = await run(
-      ["diff", "--cached", "--raw", "-z", "--no-abbrev", "--no-renames", "--diff-filter=u"],
-      { binary: true },
-    );
-    // `:<mode in HEAD> <mode> <object in HEAD> <object> <status>`, then the path.
-    const fields = staged.split("\0");
-    let entries = "";
-    for (let i = 0; i + 1 < fields.length; i += 2) {
-      const [mode, , object] = fields[i]!.slice(1).split(" ");
-      // A file that isn't in HEAD has mode 0 there, which takes it out of the index.
-      entries += `${mode} ${object}\t${fields[i + 1]}\0`;
-    }
-    if (entries) {
-      await run(["update-index", "-z", "--index-info"], { stdin: entries, binary: true });
-    }
-  });
+  await repo.exclusive(unstageAllButConflicts);
+}
+
+/**
+ * Puts every staged change but conflicts back in the index as HEAD has it, through `run` (a command
+ * of `repo.exclusive`); see `unstageAll`.
+ */
+async function unstageAllButConflicts(run: GitCommand): Promise<void> {
+  // As bytes: a path goes back to git as it came, also one that isn't UTF-8.
+  const staged = await run(
+    ["diff", "--cached", "--raw", "-z", "--no-abbrev", "--no-renames", "--diff-filter=u"],
+    { binary: true },
+  );
+  // `:<mode in HEAD> <mode> <object in HEAD> <object> <status>`, then the path.
+  const fields = staged.split("\0");
+  let entries = "";
+  for (let i = 0; i + 1 < fields.length; i += 2) {
+    const [mode, , object] = fields[i]!.slice(1).split(" ");
+    // A file that isn't in HEAD has mode 0 there, which takes it out of the index.
+    entries += `${mode} ${object}\t${fields[i + 1]}\0`;
+  }
+  if (entries) {
+    await run(["update-index", "-z", "--index-info"], { stdin: entries, binary: true });
+  }
 }
 
 /** A file whose lines are staged or unstaged, as its list has it. */
@@ -174,22 +182,26 @@ function applyLines(
 
 /**
  * Discards a file's changes on `side`, the side of the uncommitted changes it's listed on; a
- * renamed one's at both its paths. From its unstaged changes, those: a tracked file goes back to
- * how the index has it, and an untracked one is deleted. From its staged changes, all of them: it
- * goes back to how HEAD has it, in the index and the working tree, and one HEAD doesn't have is
- * deleted. Rejects with `ConflictsUnresolvedError`, discarding nothing, for a conflicted file,
- * whose conflicts are resolved instead.
+ * renamed one's at both its paths (a copy's source isn't the copy's: it's left out). From its
+ * unstaged changes, those: a tracked file goes back to how the index has it, and an untracked one,
+ * or one added with `--intent-to-add`, is deleted. From its staged changes, all of them: it goes
+ * back to how HEAD has it, in the index and the working tree, and one HEAD doesn't have is deleted.
+ * Rejects with `DiscardBlockedError`, discarding nothing, for a conflicted file, whose conflicts
+ * are resolved instead.
  */
 export async function discard(repo: Repo, file: LinesFile, side: UncommittedSide): Promise<void> {
   const paths = file.origPath ? [file.path, file.origPath] : [file.path];
   await repo.exclusive(async (run) => {
-    // The paths in the index, as `<mode> <object> <stage>\t<path>`: a conflict's at stages 1-3.
-    // On the command line, which holds them: there are two at most.
-    const entries = (await run(["ls-files", "--stage", "-z", "--", ...paths]))
-      .split("\0")
-      .filter(Boolean);
-    if (entries.some((entry) => !entry.slice(0, entry.indexOf("\t")).endsWith(" 0"))) {
-      throw new ConflictsUnresolvedError(
+    // On the command line, which holds them: there are two at most. A path also names what's in a
+    // folder of that name, which is another file's, so only the paths themselves are kept.
+    const listed = async (args: string[]) =>
+      (await run([...args, "-z", "--", ...paths])).split("\0").filter(Boolean);
+    // The paths in the index, with their stage: a conflict's are 1-3.
+    const entries = (await listed(["ls-files", "--format=%(stage) %(path)"]))
+      .map((entry) => ({ stage: entry.slice(0, 1), path: entry.slice(2) }))
+      .filter((entry) => paths.includes(entry.path));
+    if (entries.some((entry) => entry.stage !== "0")) {
+      throw new DiscardBlockedError(
         `${file.path} is conflicted. Resolve its conflicts rather than discarding its changes.`,
       );
     }
@@ -201,14 +213,28 @@ export async function discard(repo: Repo, file: LinesFile, side: UncommittedSide
       await run([...args, ...PATHS_FROM_STDIN], { stdin: nulSeparated(paths), ...REWRITES });
       return;
     }
-    const tracked = new Set(entries.map((entry) => entry.slice(entry.indexOf("\t") + 1)));
-    const untracked = paths.filter((path) => !tracked.has(path));
+    const tracked = entries.map((entry) => entry.path);
+    // Added with `--intent-to-add`: in the index with no contents yet, which `restore` would put
+    // back, emptying the file. Taken out of the index and deleted instead, like an untracked file.
+    const intended = tracked.length
+      ? (await listed(["diff", "--name-only", "--diff-filter=A"])).filter((path) =>
+          tracked.includes(path),
+        )
+      : [];
+    const restored = tracked.filter((path) => !intended.includes(path));
+    const untracked = paths.filter((path) => !tracked.includes(path));
     // `clean` takes no paths from stdin. It leaves ignored files, which aren't listed as untracked,
     // and a repository inside this one, which is: it deletes files, not folders.
     if (untracked.length) await run(["clean", "-f", "-q", "--", ...untracked], REWRITES);
-    if (tracked.size) {
+    if (intended.length) {
+      await run(["rm", "-f", "-q", ...PATHS_FROM_STDIN], {
+        stdin: nulSeparated(intended),
+        ...REWRITES,
+      });
+    }
+    if (restored.length) {
       await run(["restore", "--worktree", ...PATHS_FROM_STDIN], {
-        stdin: nulSeparated(tracked),
+        stdin: nulSeparated(restored),
         ...REWRITES,
       });
     }
@@ -218,29 +244,49 @@ export async function discard(repo: Repo, file: LinesFile, side: UncommittedSide
 /**
  * Discards every uncommitted change: tracked files go back to how HEAD has them, in the index and
  * the working tree, and the ones HEAD doesn't have are deleted, as are untracked files. Ignored
- * files stay, as do repositories inside this one. A merge or a rebase under way stays under way.
- * Rejects with `ConflictsUnresolvedError`, discarding nothing, while files are conflicted: they're
- * resolved instead.
+ * files stay, as do repositories inside this one. Rejects with `DiscardBlockedError`, discarding
+ * nothing, while files are conflicted, which are resolved instead, or while a merge, rebase,
+ * cherry-pick, revert or `git am` is under way: its changes are discarded by aborting it. Kept
+ * under way, it would go on without them, and a merge be committed with none of the branch's.
  */
 export async function discardAll(repo: Repo): Promise<void> {
+  const { gitDir } = await gitDirs(repo);
   await repo.exclusive(async (run) => {
-    if (await hasConflicts(run)) {
-      throw new ConflictsUnresolvedError("Resolve the conflicts before discarding all changes.");
+    const [operation, conflicted] = await Promise.all([
+      operationUnderWay(gitDir),
+      hasConflicts(run),
+    ]);
+    if (operation) {
+      throw new DiscardBlockedError(
+        `A ${OPERATION_NAMES[operation]} is under way. Finish or abort it, then discard the changes.`,
+      );
+    }
+    if (conflicted) {
+      throw new DiscardBlockedError("Resolve the conflicts before discarding all changes.");
     }
     if (await repo.hasHead()) {
-      // Not `reset --hard`, which would also end a merge under way. Only the changed files, staged
-      // or not, both sides of a rename, are restored: `restore .` checks every file in the index,
-      // and fails with none in it nor in HEAD. As bytes: a path goes back to git as it came, also
-      // one that isn't UTF-8.
-      const lists = await Promise.all(
-        [["--cached"], []].map((options) =>
-          run(["diff", ...options, "--name-only", "-z", "--no-renames"], { binary: true }),
-        ),
-      );
-      const paths = new Set(lists.flatMap((list) => list.split("\0")).filter(Boolean));
-      if (paths.size) {
-        await run(["restore", "--source=HEAD", "--staged", "--worktree", ...PATHS_FROM_STDIN], {
-          stdin: nulSeparated(paths),
+      // The index first, as `unstageAll` does, rather than `restore --staged` with the paths,
+      // which is slow with many. Then the working tree's changes compared to it, which are those
+      // of every changed file. As bytes: a path goes back to git as it came, also one that isn't
+      // UTF-8.
+      await unstageAllButConflicts(run);
+      const changed = (filter: string) =>
+        run(["diff", "--name-only", "-z", "--no-renames", `--diff-filter=${filter}`], {
+          binary: true,
+        });
+      // Added with `--intent-to-add`, which HEAD doesn't have: taken out of the index, and deleted.
+      // The rest are written as the index has them.
+      const [intended, others] = await Promise.all([changed("A"), changed("a")]);
+      if (intended) {
+        await run(["rm", "-f", "-q", ...PATHS_FROM_STDIN], {
+          stdin: intended,
+          binary: true,
+          ...REWRITES,
+        });
+      }
+      if (others) {
+        await run(["checkout-index", "-f", "-z", "--stdin"], {
+          stdin: others,
           binary: true,
           ...REWRITES,
         });
@@ -249,6 +295,7 @@ export async function discardAll(repo: Repo): Promise<void> {
       // Before the first commit, everything staged is new.
       await run(["rm", "-r", "-f", "-q", "--ignore-unmatch", "--", "."], REWRITES);
     }
+    // What was staged and HEAD doesn't have is untracked now, and deleted with the rest.
     await run(["clean", "-f", "-d", "-q"], REWRITES);
   });
 }

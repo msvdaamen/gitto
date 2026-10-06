@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
-  ConflictsUnresolvedError,
+  DiscardBlockedError,
   IndexLockedError,
   LinesNotStageableError,
   PatchChangedError,
@@ -797,6 +797,33 @@ describe("discarding a file's changes", () => {
     ]);
   });
 
+  it("deletes a file added with --intent-to-add, rather than emptying it", async () => {
+    const repo = await createHistoryRepo("discard-intent");
+    git(repo.path, "add", "-N", "new file.txt");
+
+    await discard(repo, { path: "new file.txt", origPath: null }, "unstaged");
+    expect(contents(repo.path, "new file.txt")).toBeNull();
+    expect(await statusFiles(repo)).toEqual([
+      { path: "a file.txt", origPath: null, staged: null, unstaged: "modified" },
+    ]);
+  });
+
+  it("leaves the files in a folder of the same name alone", async () => {
+    const path = createRepo("discard-folder");
+    mkdirSync(join(path, "foo"));
+    writeFileSync(join(path, "foo", "a"), "a\n");
+    git(path, "add", ".");
+    git(path, "commit", "-q", "-m", "first");
+    rmSync(join(path, "foo"), { recursive: true });
+    writeFileSync(join(path, "foo"), "now a file\n");
+    const repo = await repos.open("discard-folder");
+
+    await discard(repo, { path: "foo", origPath: null }, "unstaged");
+    expect(await statusFiles(repo)).toEqual([
+      { path: "foo/a", origPath: null, staged: null, unstaged: "deleted" },
+    ]);
+  });
+
   it("leaves a conflicted file to be resolved, on either side", async () => {
     const path = createMergeConflict("discard-conflict");
     const repo = await repos.open("discard-conflict");
@@ -805,7 +832,7 @@ describe("discarding a file's changes", () => {
     for (const side of ["unstaged", "staged"] as const) {
       // oxlint-disable-next-line no-await-in-loop -- one after the other, on the same file.
       const error = await rejection(discard(repo, { path: "f.txt", origPath: null }, side));
-      expect(error).toBeInstanceOf(ConflictsUnresolvedError);
+      expect(error).toBeInstanceOf(DiscardBlockedError);
     }
     expect(contents(path, "f.txt")).toBe(before);
     expect(git(path, "ls-files", "--unmerged")).not.toBe("");
@@ -849,17 +876,27 @@ describe("discarding all changes", () => {
     expect(readFileSync(file, "utf8")).toBe("a\n");
   });
 
-  it("keeps a merge under way, once its conflicts are resolved", async () => {
+  it("discards nothing while a merge is under way, which would be committed without them", async () => {
     const path = createMergeConflict("discard-all-merge");
     writeFileSync(join(path, "f.txt"), "one\nresolved\nthree\n");
     git(path, "add", "f.txt");
-    writeFileSync(join(path, "README"), "changed\n");
     const repo = await repos.open("discard-all-merge");
 
+    const error = await rejection(discardAll(repo));
+    expect(error).toBeInstanceOf(DiscardBlockedError);
+    expect((error as Error).message).toBe(
+      "A merge is under way. Finish or abort it, then discard the changes.",
+    );
+    expect(contents(path, "f.txt")).toBe("one\nresolved\nthree\n");
+  });
+
+  it("deletes files added with --intent-to-add", async () => {
+    const repo = await createHistoryRepo("discard-all-intent");
+    git(repo.path, "add", "-N", "new file.txt");
+
     await discardAll(repo);
-    expect(contents(path, "f.txt")).toBe("one\nours\nthree\n");
-    expect(contents(path, "README")).toBe("readme\n");
-    expect(existsSync(join(path, ".git", "MERGE_HEAD"))).toBe(true);
+    expect(await statusFiles(repo)).toEqual([]);
+    expect(contents(repo.path, "new file.txt")).toBeNull();
   });
 
   it("discards nothing while files are conflicted", async () => {
@@ -867,7 +904,7 @@ describe("discarding all changes", () => {
     writeFileSync(join(path, "README"), "changed\n");
     const repo = await repos.open("discard-all-conflict");
 
-    expect(await rejection(discardAll(repo))).toBeInstanceOf(ConflictsUnresolvedError);
+    expect(await rejection(discardAll(repo))).toBeInstanceOf(DiscardBlockedError);
     expect(contents(path, "README")).toBe("changed\n");
     expect(git(path, "ls-files", "--unmerged")).not.toBe("");
   });

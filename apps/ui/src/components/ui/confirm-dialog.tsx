@@ -19,6 +19,8 @@ export function ConfirmDialog<T>(props: {
   description: (item: T) => JSX.Element;
   /** The button that does it, e.g. "Delete". */
   confirmLabel: string;
+  /** Whether it can't be done now, e.g. while something else runs that it would get in the way of. */
+  confirmDisabled?: boolean;
   onCancel: () => void;
   onConfirm: (item: T) => void;
 }) {
@@ -54,6 +56,7 @@ export function ConfirmDialog<T>(props: {
             </Button>
             <Button
               variant="primary"
+              disabled={props.confirmDisabled}
               onClick={() => props.item !== undefined && props.onConfirm(props.item)}
             >
               {props.confirmLabel}
