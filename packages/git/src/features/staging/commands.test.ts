@@ -985,6 +985,23 @@ describe("discarding a file's changes", () => {
     expect((error as Error).message).toMatch(/^f\.txt is conflicted\./);
   });
 
+  it("says a file is in the way where one of the folders of the file to put back goes", async () => {
+    const path = createRepo("discard-blocked");
+    mkdirSync(join(path, "d"));
+    writeFileSync(join(path, "d", "x"), "x\n");
+    git(path, "add", ".");
+    git(path, "commit", "-q", "-m", "first");
+    rmSync(join(path, "d"), { recursive: true });
+    writeFileSync(join(path, "d"), "stuff\n");
+    const repo = await repos.open("discard-blocked");
+
+    const error = await rejection(discard(repo, { path: "d/x", origPath: null }, "unstaged"));
+    expect((error as Error).message).toBe(
+      "A file is where a folder of d/x goes. Move or delete it, then discard the changes.",
+    );
+    expect(contents(path, "d")).toBe("stuff\n");
+  });
+
   it("leaves a submodule's changes to be discarded in it", async () => {
     createSubmoduleRepo("discard-submodule");
     const repo = await repos.open("discard-submodule");
@@ -1139,6 +1156,43 @@ describe("discarding all changes", () => {
     // The quoted one is untracked, deleted, and put back; the link, ignored, is kept.
     expect(await discardAll(repo)).toEqual(["latest"]);
     expect(contents(path, '"draft.txt')).toBe("d\n");
+  });
+
+  it("keeps what only an uncommitted ignore rule ignores, which isn't listed", async () => {
+    const repo = await createHistoryRepo("discard-all-new-ignore");
+    const path = repo.path;
+    writeFileSync(join(path, ".gitignore"), "secret.env\n");
+    git(path, "add", ".gitignore");
+    writeFileSync(join(path, "secret.env"), "secret\n");
+
+    expect(await discardAll(repo)).toEqual([]);
+    expect(contents(path, ".gitignore")).toBeNull();
+    expect(contents(path, "secret.env")).toBe("secret\n");
+    expect(contents(path, "new file.txt")).toBeNull();
+  });
+
+  it("doesn't say it kept folders of ignored files", async () => {
+    const repo = await createHistoryRepo("discard-all-ignored-folder");
+    writeFileSync(join(repo.path, ".git", "info", "exclude"), "*.pyc\n");
+    mkdirSync(join(repo.path, "cache"));
+    writeFileSync(join(repo.path, "cache", "a.pyc"), "pyc\n");
+
+    expect(await discardAll(repo)).toEqual([]);
+    expect(contents(repo.path, "cache/a.pyc")).toBe("pyc\n");
+  });
+
+  it("puts back a link taken out of the index, as it's unchanged", async () => {
+    const path = createRepo("discard-all-link");
+    mkdirSync(join(path, "v2"));
+    writeFileSync(join(path, "v2", "f"), "f\n");
+    symlinkSync("v2", join(path, "latest"));
+    git(path, "add", ".");
+    git(path, "commit", "-q", "-m", "first");
+    git(path, "rm", "-q", "--cached", "latest");
+    const repo = await repos.open("discard-all-link");
+
+    expect(await discardAll(repo)).toEqual([]);
+    expect(await statusFiles(repo)).toEqual([]);
   });
 
   it("deletes nothing untracked when it can't discard the rest", async () => {

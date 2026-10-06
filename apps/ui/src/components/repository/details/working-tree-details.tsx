@@ -210,10 +210,13 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
         // Not while files are being staged, or other changes discarded: it waits for them.
         confirmDisabled={busy()}
         onCancel={() => setDiscarding(undefined)}
-        onConfirm={(target) => {
+        onConfirm={async (target) => {
           setDiscarding(undefined);
           setKept([]);
           const id = props.repositoryId;
+          // Once the edits to a file on show are saved: they'd be written back over what's
+          // discarded, or kept from it.
+          if (!(await (props.files?.beforeChange() ?? true)) || id !== props.repositoryId) return;
           discard.mutate(target, {
             onSuccess: (left) => id === props.repositoryId && setKept(left),
           });

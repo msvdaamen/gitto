@@ -36,6 +36,11 @@ export interface FileOpener {
   prefetch: (source: DiffSource, file: ChangedFile, uncounted: boolean) => void;
   /** The file whose changes are on show, if any. */
   shown: { source: DiffSource; path: string } | undefined;
+  /**
+   * What changing the working tree waits for, like discarding changes: the edits to the file on
+   * show saved. Resolves to whether to go on.
+   */
+  beforeChange: () => Promise<boolean>;
 }
 
 /** The path of the file on show, if it's one of `source`'s, for its list to mark it. */

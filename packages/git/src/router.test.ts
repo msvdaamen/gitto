@@ -78,6 +78,17 @@ describe("the router", () => {
       code: "CONFLICT",
       message: "The stash is gone: the stashes changed before it could be popped.",
     });
+
+    // An empty path would name every file.
+    expect(
+      await apiError(
+        call(
+          gitRouter.staging.discard,
+          { repositoryId: ids.history, path: "", origPath: null, side: "unstaged" },
+          { context },
+        ),
+      ),
+    ).toMatchObject({ code: "BAD_REQUEST" });
   });
 
   it("runs nothing with a git Gitto doesn't support", async () => {

@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { Suspense } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { FileOpener } from "@/git/diff-source";
 import { gitKeys } from "@/git/queries/keys";
 
 import { WorkingTreeDetails } from "./working-tree-details";
@@ -47,12 +48,12 @@ function setChanges(unstaged: ChangedFile[], staged: ChangedFile[] = []) {
 }
 
 /** The details of the uncommitted changes, as `uncommitted` has them. */
-function renderDetails() {
+function renderDetails(files?: FileOpener) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(() => (
     <QueryClientProvider client={client}>
       <Suspense>
-        <WorkingTreeDetails repositoryId="repo" />
+        <WorkingTreeDetails repositoryId="repo" files={files} />
       </Suspense>
     </QueryClientProvider>
   ));
@@ -156,6 +157,31 @@ describe("discarding changes", () => {
       origPath: "a.txt",
       side: "staged",
     });
+  });
+
+  it("discards once the edits to the file on show are saved, and not if they can't be", async () => {
+    const user = userEvent.setup();
+    setChanges([file("a.txt")]);
+    let saved!: (done: boolean) => void;
+    const beforeChange = vi.fn(() => new Promise<boolean>((resolve) => (saved = resolve)));
+    renderDetails({ open: () => {}, prefetch: () => {}, shown: undefined, beforeChange });
+
+    const discardA = async () => {
+      await openMenu(user, "a.txt");
+      await user.click(await screen.findByRole("menuitem", { name: "Discard changes…" }));
+      await user.click(await screen.findByRole("button", { name: "Discard" }));
+      await vi.waitFor(() => expect(beforeChange).toHaveBeenCalled());
+    };
+    await discardA();
+    expect(rpc.git.staging.discard).not.toHaveBeenCalled();
+    saved(false);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(rpc.git.staging.discard).not.toHaveBeenCalled();
+
+    beforeChange.mockClear();
+    await discardA();
+    saved(true);
+    await vi.waitFor(() => expect(rpc.git.staging.discard).toHaveBeenCalled());
   });
 
   it("discards nothing when it's cancelled, and nothing of a conflicted file", async () => {

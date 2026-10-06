@@ -118,6 +118,7 @@ function RouteComponent() {
       const open = shownFile();
       return open && { source: open.source, path: open.file.path };
     },
+    beforeChange: mayLeaveFile,
   };
   const [sidebarOpen, setSidebarOpen] = createSignal(true);
   const [detailsOpen, setDetailsOpen] = createSignal(true);

@@ -6,6 +6,7 @@ const opener = (shown: FileOpener["shown"]): FileOpener => ({
   open: () => {},
   prefetch: () => {},
   shown,
+  beforeChange: async () => true,
 });
 
 describe("diff sources", () => {

@@ -1,4 +1,7 @@
-import { entriesAt, entryAt } from "../../core/entry";
+import { readlink } from "node:fs/promises";
+import { join } from "node:path";
+
+import { entriesAt, entryAt, type Entry } from "../../core/entry";
 import {
   DiscardBlockedError,
   GitError,
@@ -207,6 +210,21 @@ function excludingExactly(path: string): string {
   return `:(exclude,glob)${glob.join("")}`;
 }
 
+/** What's in the way of putting back the file at `path`, where `entry` is. */
+function inTheWayOf(path: string, entry: Entry): string {
+  switch (entry) {
+    case "folder":
+      return `A folder is at ${path} now.`;
+    case "blocked":
+      return `A file is where a folder of ${path} goes.`;
+    case "other":
+      return `Something that isn't a file is at ${path} now.`;
+    default:
+      // Only ever one put back from the source, on the staged side.
+      return `The file at ${path} isn't the last commit's.`;
+  }
+}
+
 /** The tree changes are discarded back to: HEAD's, or before the first commit, the empty tree. */
 async function sourceTree(run: GitCommand): Promise<string> {
   return (
@@ -216,32 +234,51 @@ async function sourceTree(run: GitCommand): Promise<string> {
 }
 
 /**
- * Those of `paths` (as bytes if `binary`), each a file in the working tree, that are as `source`
- * has them: writing them over loses nothing, like a file's own copy left by `rm --cached`.
+ * Those of `paths` (as bytes if `binary`) whose file or link in the working tree is as `source` has
+ * it: writing it over loses nothing, like a file's own copy left by `rm --cached`.
  */
 async function unchangedSince(
+  repo: Repo,
   run: GitCommand,
   source: string,
-  paths: string[],
+  paths: { path: string; entry: Entry }[],
   options: { binary?: boolean } = {},
 ): Promise<Set<string>> {
-  if (!paths.length) return new Set();
-  const [hashes, sources] = await Promise.all([
-    // A line each, quoted as git reads a line that starts with a quote: a path can have any
-    // character, a newline too.
-    run(["hash-object", "--stdin-paths"], {
+  const files = paths.filter(({ entry }) => entry === "file").map(({ path }) => path);
+  const links = paths.filter(({ entry }) => entry === "link").map(({ path }) => path);
+  const compared = [...files, ...links];
+  if (!compared.length) return new Set();
+  const full = (path: string) =>
+    options.binary ? Buffer.from(`${repo.path}/${path}`, "latin1") : join(repo.path, path);
+  const [fileHashes, linkHashes, sources] = await Promise.all([
+    files.length
+      ? // A line each, quoted as git reads a line that starts with a quote: a path can have any
+        // character, a newline too.
+        run(["hash-object", "--stdin-paths"], {
+          ...options,
+          stdin: files
+            .map((path) => `"${path.replace(/[\\"]/g, "\\$&").replace(/\n/g, "\\n")}"\n`)
+            .join(""),
+        }).then((output) => output.split("\n"))
+      : [],
+    // A link's blob is where it leads, which `hash-object` would follow instead.
+    Promise.all(
+      links.map(async (path) => {
+        const target = await readlink(full(path), { encoding: "buffer" });
+        const hash = await run(["hash-object", "--stdin"], {
+          stdin: target.toString("latin1"),
+          binary: true,
+        });
+        return hash.trim();
+      }),
+    ),
+    run(["cat-file", "--batch-check=%(objectname)", "-Z"], {
       ...options,
-      stdin: paths
-        .map((path) => `"${path.replace(/[\\"]/g, "\\$&").replace(/\n/g, "\\n")}"\n`)
-        .join(""),
-    }),
-    run(["cat-file", "--batch-check=%(objectname)", "-z"], {
-      ...options,
-      stdin: nulSeparated(paths.map((path) => `${source}:${path}`)),
-    }),
+      stdin: nulSeparated(compared.map((path) => `${source}:${path}`)),
+    }).then((output) => output.split("\0")),
   ]);
-  const [ours, theirs] = [hashes.split("\n"), sources.split("\n")];
-  return new Set(paths.filter((_, i) => ours[i] === theirs[i]));
+  const hashes = [...fileHashes.slice(0, files.length), ...linkHashes];
+  return new Set(compared.filter((_, i) => hashes[i] === sources[i]));
 }
 
 /**
@@ -324,16 +361,16 @@ export async function discard(repo: Repo, file: LinesFile, side: UncommittedSide
     // like one at a rename's previous path, or one taken out of the index that changed since, which
     // isn't shown as such when it's ignored.
     // Only ever on the staged side, where everything's written from the source.
-    const loose = written.filter((each) => !tracked.has(each) && at(each) === "file");
-    const unchanged = await unchangedSince(run, source, loose);
+    const loose = written
+      .filter((each) => !tracked.has(each))
+      .map((each) => ({ path: each, entry: at(each) }));
+    const unchanged = await unchangedSince(repo, run, source, loose);
     for (const each of written) {
       const entry = at(each);
       const files = entry === "file" || entry === "link";
       if (entry === undefined || (files && (tracked.has(each) || unchanged.has(each)))) continue;
       throw new DiscardBlockedError(
-        entry === "folder"
-          ? `A folder is at ${each} now. Move or delete it, then discard the changes.`
-          : `The file at ${each} isn't the last commit's. Move or delete it, then discard the changes.`,
+        `${inTheWayOf(each, entry)} Move or delete it, then discard the changes.`,
       );
     }
     if (side === "staged") {
@@ -383,31 +420,15 @@ export async function discardAll(repo: Repo): Promise<string[]> {
       sourceTree(run),
     ]);
     if (blocker) throw new DiscardBlockedError(blocker);
-    // As bytes: a path goes back to git as it came, also one that isn't UTF-8.
-    const bytes = { binary: true };
-    const list = async (args: string[]) =>
-      (await run([...args, "-z"], bytes)).split("\0").filter(Boolean);
-    const inTheWay = await restoreAll(repo, run, source);
-    // What's left to tell of: submodules, whose commits differ, and repositories inside this one,
-    // which `clean` leaves, as it does what it couldn't delete.
-    const [changed, untracked] = await Promise.all([
-      list(["diff", "--raw", "--no-renames"]),
-      list(["ls-files", "--others", "--exclude-standard", "--directory"]),
-    ]);
-    // `:<mode> <mode> <object> <object> <status>`, then the path.
-    const submodules = changed.filter(
-      // A submodule's mode, on either side; not its objects, which could read the same.
-      (_, i) => i % 2 === 1 && /^:(160000 |\d{6} 160000 )/.test(changed[i - 1]!),
-    );
-    const kept = new Set([...inTheWay, ...submodules, ...untracked]);
-    return [...kept].map((path) => Buffer.from(path, "latin1").toString("utf8"));
+    const kept = await restoreAll(repo, run, source);
+    return kept.map((path) => Buffer.from(path, "latin1").toString("utf8"));
   });
 }
 
 /**
  * Puts every tracked file back as `source` has it, through `run` (a command of `repo.exclusive`),
- * and deletes the untracked ones; resolves to the deleted files it doesn't put back, as something
- * has taken their place (see `discardAll`).
+ * and deletes the untracked ones; resolves to the paths, as bytes, of the changes it keeps (see
+ * `discardAll`).
  */
 async function restoreAll(repo: Repo, run: GitCommand, source: string): Promise<string[]> {
   // As pathspecs, with their magic, and as bytes: a path goes back to git as it came, also one
@@ -421,7 +442,7 @@ async function restoreAll(repo: Repo, run: GitCommand, source: string): Promise<
         ...options,
       });
     } catch (error) {
-      // Nothing's tracked, in the source nor in the index: there's nothing to restore.
+      // What it names isn't tracked, in the source nor in the index: there's nothing to restore.
       if (!(error instanceof GitError && /did not match any file/.test(error.stderr))) throw error;
     }
   };
@@ -431,8 +452,8 @@ async function restoreAll(repo: Repo, run: GitCommand, source: string): Promise<
       repo.path,
       paths.map((path) => Buffer.from(path, "latin1")),
     );
-    const files = paths.filter((_, i) => entries[i] === "file");
-    const unchanged = await unchangedSince(run, source, files, reading);
+    const there = paths.map((path, i) => ({ path, entry: entries[i] }));
+    const unchanged = await unchangedSince(repo, run, source, there, reading);
     return paths.filter((path, i) => entries[i] !== undefined && !unchanged.has(path));
   };
   const deleted = await run(
@@ -440,14 +461,31 @@ async function restoreAll(repo: Repo, run: GitCommand, source: string): Promise<
     reading,
   );
   const kept = await inTheWay(deleted.split("\0").filter(Boolean));
-  // Untracked files only once the rest is done, which may fail; and before what's kept is looked at
-  // again, as some of it may be gone then. Left out by themselves, not with what's in a folder of
-  // the same name, which can be staged files to discard.
-  await restore([":/", ...kept.map(excludingExactly)]);
+  // The ignore files last, so `clean` reads them as they are: what only an uncommitted rule ignores
+  // isn't listed, and stays. Untracked files only once the rest is done, which may fail; and before
+  // what's kept is looked at again, as some of it may be gone then. What's kept is left out by its
+  // name alone, not with what's in a folder of the same name, which can be staged files to discard.
+  await restore([":/", ":(exclude,glob)**/.gitignore", ...kept.map(excludingExactly)]);
   await run(["clean", "-f", "-d", "-q"], REWRITES);
   // Those whose way that cleared.
-  const still = new Set(await inTheWay(kept));
-  const freed = kept.filter((path) => !still.has(path));
+  const still = await inTheWay(kept);
+  const freed = kept.filter((path) => !still.includes(path));
+  // Apart: `restore` fails at a pathspec that names nothing.
   if (freed.length) await restore(exactly(freed));
-  return [...still];
+  // What else is left to tell of, with the ignore files as they were: submodules, whose commits
+  // differ, and repositories inside this one, which `clean` leaves, as it does what it couldn't
+  // delete; not folders of ignored files only.
+  const list = async (args: string[]) =>
+    (await run([...args, "-z"], reading)).split("\0").filter(Boolean);
+  const [changed, untracked] = await Promise.all([
+    list(["diff", "--raw", "--no-renames"]),
+    list(["ls-files", "--others", "--exclude-standard", "--directory", "--no-empty-directory"]),
+  ]);
+  // `:<mode> <mode> <object> <object> <status>`, then the path: a submodule's mode on either side,
+  // not its objects, which could read the same.
+  const submodules = changed.filter(
+    (_, i) => i % 2 === 1 && /^:(160000 |\d{6} 160000 )/.test(changed[i - 1]!),
+  );
+  await restore([":(glob)**/.gitignore", ...still.map(excludingExactly)]);
+  return [...new Set([...still, ...submodules, ...untracked])];
 }
