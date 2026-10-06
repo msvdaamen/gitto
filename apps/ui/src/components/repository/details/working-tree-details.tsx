@@ -4,19 +4,22 @@ import CircleCheck from "lucide-solid/icons/circle-check";
 import FilePen from "lucide-solid/icons/file-pen";
 import Minus from "lucide-solid/icons/minus";
 import Plus from "lucide-solid/icons/plus";
+import Trash from "lucide-solid/icons/trash";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
-import { createSignal, Show, type JSX } from "solid-js";
+import { createEffect, createSignal, on, Show, type JSX } from "solid-js";
 
 import { Badge } from "@/components/ui/badge";
-import { LinkButton } from "@/components/ui/button";
+import { IconButton, LinkButton } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Mascot } from "@/components/ui/mascot";
 import { SectionHeader } from "@/components/ui/section-header";
 import { UpdatingIndicator } from "@/components/ui/updating-indicator";
 import { stagingPaths } from "@/git/changes";
 import { shownPathIn, type FileOpener, type UncommittedSource } from "@/git/diff-source";
+import { canDiscard, discardAllBlocker, discardDescription } from "@/git/discard";
 import { useWorkingTreeChanges } from "@/git/queries/diff";
-import { useStage, useUnstage } from "@/git/queries/staging";
+import { useDiscard, useStage, useUnstage, type DiscardTarget } from "@/git/queries/staging";
 import { useHeadSha, useStatus } from "@/git/queries/status";
 import { useUnsuspendedData } from "@/git/queries/unsuspended";
 import { headLabel } from "@/git/status";
@@ -25,11 +28,13 @@ import type { ScrollId } from "@/lib/scroll";
 
 import { ChangedFileList, type FileAction } from "./changed-file-list";
 import { CommitForm } from "./commit-form";
+import { FileMenu, type FileMenuAction } from "./file-menu";
 
 /**
  * The uncommitted changes: what's staged for the next commit, what isn't, and the commit form. The
  * two file lists split the space evenly and scroll on their own, so moving files between them
- * doesn't shift the layout.
+ * doesn't shift the layout. A file's changes are discarded from its menu, and all of them from the
+ * header, each once that's confirmed: they can't be brought back.
  */
 export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOpener }) {
   const changes = useWorkingTreeChanges(() => props.repositoryId);
@@ -39,7 +44,29 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
   const summary = useUnsuspendedData(status);
   const stage = useStage(() => props.repositoryId);
   const unstage = useUnstage(() => props.repositoryId);
-  const busy = () => stage.isPending || unstage.isPending;
+  const discard = useDiscard(() => props.repositoryId);
+  const busy = () => stage.isPending || unstage.isPending || discard.isPending;
+  // The changes being asked about discarding.
+  const [discarding, setDiscarding] = createSignal<DiscardTarget>();
+  // Another repository's changes aren't this one's.
+  createEffect(
+    on(
+      () => props.repositoryId,
+      () => setDiscarding(undefined),
+      { defer: true },
+    ),
+  );
+  const discardFile = (side: UncommittedSource["kind"]): FileMenuAction => ({
+    label: "Discard changes…",
+    icon: Trash,
+    disabled: (file) => busy() || !canDiscard(file),
+    run: (file) => setDiscarding({ file, side }),
+  });
+  // Why the changes can't all be discarded, if they can't; `undefined` until the status loads.
+  const discardAllBlocked = () => {
+    const current = summary();
+    return current ? (discardAllBlocker(current) ?? false) : undefined;
+  };
   const lastCommit = useHeadSha(summary);
   // Read once: in JSX, `summary() && headLabel(summary().head)` would check a memo of whether
   // there's data, which a transition (switching repositories) can leave behind the data itself.
@@ -68,9 +95,17 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
             <UpdatingIndicator class="mt-1" />
           </Show>
         </div>
+        <IconButton
+          label="Discard all changes…"
+          title={discardAllBlocked() || "Discard all changes"}
+          icon={Trash}
+          class="ml-auto self-start"
+          disabled={discardAllBlocked() !== false || busy()}
+          onClick={() => setDiscarding("all")}
+        />
       </div>
 
-      <Show when={changes.query.error ?? stage.error ?? unstage.error} keyed>
+      <Show when={changes.query.error ?? stage.error ?? unstage.error ?? discard.error} keyed>
         {(error) => (
           <EmptyState
             icon={TriangleAlert}
@@ -84,6 +119,7 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
       </Show>
 
       <FileSection
+        repositoryId={props.repositoryId}
         title="Unstaged changes"
         scrollId="unstaged-files"
         source={{ kind: "unstaged" }}
@@ -102,8 +138,10 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
           disabled: busy(),
           run: (file) => stage.mutate(stagingPaths([file])),
         }}
+        menu={[discardFile("unstaged")]}
       />
       <FileSection
+        repositoryId={props.repositoryId}
         title="Staged changes"
         scrollId="staged-files"
         source={{ kind: "staged" }}
@@ -122,6 +160,7 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
           disabled: busy(),
           run: (file) => unstage.mutate(stagingPaths([file])),
         }}
+        menu={[discardFile("staged")]}
       />
 
       <CommitForm
@@ -129,11 +168,30 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
         stagedCount={changes.staged().length}
         lastCommit={lastCommit()}
       />
+
+      <ConfirmDialog
+        item={discarding()}
+        icon={Trash}
+        title={(target) => (target === "all" ? "Discard all changes?" : "Discard changes?")}
+        description={(target) =>
+          target === "all"
+            ? "Every staged and unstaged change is lost, and untracked files are deleted. None of it can be brought back."
+            : discardDescription(target.file, target.side)
+        }
+        confirmLabel="Discard"
+        onCancel={() => setDiscarding(undefined)}
+        onConfirm={(target) => {
+          setDiscarding(undefined);
+          // Not while files are being staged, or other changes discarded.
+          if (!busy()) discard.mutate(target);
+        }}
+      />
     </div>
   );
 }
 
 function FileSection(props: {
+  repositoryId: string;
   title: string;
   icon: LucideIcon;
   tone?: "mint";
@@ -152,8 +210,12 @@ function FileSection(props: {
   busy: boolean;
   onBulk: () => void;
   action: FileAction;
+  /** What can be done with a file from its menu, opened by right-clicking it. */
+  menu: FileMenuAction[];
 }) {
   const [scrollElement, setScrollElement] = createSignal<HTMLDivElement>();
+  // The file whose menu is open, by its path.
+  const [menuFor, setMenuFor] = createSignal<string>();
   return (
     <section class="flex min-h-[130px] flex-1 basis-0 flex-col border-b border-border pt-3">
       <SectionHeader
@@ -176,19 +238,27 @@ function FileSection(props: {
           when={props.files.length}
           fallback={<p class="m-0 px-1 pb-1 text-[11.5px] text-faint">{props.empty}</p>}
         >
-          <ChangedFileList
+          <FileMenu
+            repositoryId={props.repositoryId}
             files={props.files}
-            uncounted={props.uncounted}
-            markerFree={props.markerFree}
-            scrollElement={scrollElement()}
-            action={props.action}
-            onOpen={props.opener && ((file) => props.opener?.open(props.source, file))}
-            openPath={shownPathIn(props.opener, props.source)}
-            onPrefetch={
-              props.opener &&
-              ((file) => props.opener?.prefetch(props.source, file, props.uncounted))
-            }
-          />
+            actions={props.menu}
+            onOpenFor={setMenuFor}
+          >
+            <ChangedFileList
+              files={props.files}
+              uncounted={props.uncounted}
+              markerFree={props.markerFree}
+              scrollElement={scrollElement()}
+              action={props.action}
+              onOpen={props.opener && ((file) => props.opener?.open(props.source, file))}
+              openPath={shownPathIn(props.opener, props.source)}
+              highlightedPath={menuFor()}
+              onPrefetch={
+                props.opener &&
+                ((file) => props.opener?.prefetch(props.source, file, props.uncounted))
+              }
+            />
+          </FileMenu>
         </Show>
       </div>
     </section>

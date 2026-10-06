@@ -12,13 +12,28 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { IndexLockedError, LinesNotStageableError, PatchChangedError } from "../../core/errors";
+import {
+  ConflictsUnresolvedError,
+  IndexLockedError,
+  LinesNotStageableError,
+  PatchChangedError,
+} from "../../core/errors";
 import type { Repo } from "../../core/repo";
+import { createMergeConflict } from "../../test/conflicts";
 import { createHistoryRepo, createRepo, git, rejection, repos } from "../../test/fixtures";
 import { getStagedFilePatch, getUnstagedFilePatch } from "../diff/commands";
 import { getStatus } from "../status/commands";
 import { parseStatus, STATUS_ARGS } from "../status/parse";
-import { stage, stageAll, stageLines, unstage, unstageAll, unstageLines } from "./commands";
+import {
+  discard,
+  discardAll,
+  stage,
+  stageAll,
+  stageLines,
+  unstage,
+  unstageAll,
+  unstageLines,
+} from "./commands";
 import type { LineSelection } from "./schema";
 
 /** Each changed file, with whether its change is staged and unstaged. */
@@ -694,4 +709,190 @@ describe("staging lines, in any combination", () => {
       }
     },
   );
+});
+
+/** A file in the repository at `path`, read as text; `null` if there's none. */
+function contents(path: string, file: string): string | null {
+  return existsSync(join(path, file)) ? readFileSync(join(path, file), "utf8") : null;
+}
+
+describe("discarding a file's changes", () => {
+  it("discards its unstaged changes, keeping its staged ones", async () => {
+    const repo = await createHistoryRepo("discard-unstaged");
+    const path = repo.path;
+    writeFileSync(join(path, "a file.txt"), "a\nmore\nstaged\n");
+    git(path, "add", "a file.txt");
+    writeFileSync(join(path, "a file.txt"), "a\nmore\nstaged\nunstaged\n");
+
+    await discard(repo, { path: "a file.txt", origPath: null }, "unstaged");
+    expect(contents(path, "a file.txt")).toBe("a\nmore\nstaged\n");
+    expect(await statusFiles(repo)).toEqual([
+      { path: "a file.txt", origPath: null, staged: "modified", unstaged: null },
+      { path: "new file.txt", origPath: null, staged: null, unstaged: "untracked" },
+    ]);
+  });
+
+  it("deletes an untracked file, and only it", async () => {
+    const repo = await createHistoryRepo("discard-untracked");
+    const path = repo.path;
+    mkdirSync(join(path, "dir"));
+    writeFileSync(join(path, "dir", "one.txt"), "one\n");
+    writeFileSync(join(path, "dir", "two.txt"), "two\n");
+
+    await discard(repo, { path: "dir/one.txt", origPath: null }, "unstaged");
+    expect(contents(path, "dir/one.txt")).toBeNull();
+    expect(contents(path, "dir/two.txt")).toBe("two\n");
+    expect(contents(path, "new file.txt")).toBe("new\n");
+  });
+
+  it("brings back a file deleted in the working tree", async () => {
+    const repo = await createHistoryRepo("discard-deleted");
+    rmSync(join(repo.path, "bin.dat"));
+
+    await discard(repo, { path: "bin.dat", origPath: null }, "unstaged");
+    expect(readFileSync(join(repo.path, "bin.dat"))).toEqual(Buffer.from([0, 1, 2]));
+  });
+
+  it("discards all of them from its staged changes, back to how HEAD has it", async () => {
+    const repo = await createHistoryRepo("discard-staged");
+    const path = repo.path;
+    writeFileSync(join(path, "a file.txt"), "staged\n");
+    git(path, "add", "a file.txt");
+    writeFileSync(join(path, "a file.txt"), "staged\nunstaged\n");
+
+    await discard(repo, { path: "a file.txt", origPath: null }, "staged");
+    expect(contents(path, "a file.txt")).toBe("a\nmore\n");
+    expect(await statusFiles(repo)).toEqual([
+      { path: "new file.txt", origPath: null, staged: null, unstaged: "untracked" },
+    ]);
+  });
+
+  it("deletes a staged new file, and puts back a staged rename", async () => {
+    const repo = await createHistoryRepo("discard-staged-new");
+    const path = repo.path;
+    git(path, "add", "new file.txt");
+    git(path, "mv", "c.txt", "d.txt");
+
+    await discard(repo, { path: "new file.txt", origPath: null }, "staged");
+    await discard(repo, { path: "d.txt", origPath: "c.txt" }, "staged");
+    expect(contents(path, "new file.txt")).toBeNull();
+    expect(contents(path, "d.txt")).toBeNull();
+    expect(contents(path, "c.txt")).toBe("b\n");
+    expect(await statusFiles(repo)).toEqual([
+      { path: "a file.txt", origPath: null, staged: null, unstaged: "modified" },
+    ]);
+  });
+
+  it("deletes a staged file before the first commit", async () => {
+    const path = createRepo("discard-unborn");
+    writeFileSync(join(path, "x y.txt"), "hi\n");
+    writeFileSync(join(path, "kept.txt"), "kept\n");
+    git(path, "add", ".");
+    const repo = await repos.open("discard-unborn");
+
+    await discard(repo, { path: "x y.txt", origPath: null }, "staged");
+    expect(contents(path, "x y.txt")).toBeNull();
+    expect(await statusFiles(repo)).toEqual([
+      { path: "kept.txt", origPath: null, staged: "added", unstaged: null },
+    ]);
+  });
+
+  it("leaves a conflicted file to be resolved, on either side", async () => {
+    const path = createMergeConflict("discard-conflict");
+    const repo = await repos.open("discard-conflict");
+    const before = contents(path, "f.txt");
+
+    for (const side of ["unstaged", "staged"] as const) {
+      // oxlint-disable-next-line no-await-in-loop -- one after the other, on the same file.
+      const error = await rejection(discard(repo, { path: "f.txt", origPath: null }, side));
+      expect(error).toBeInstanceOf(ConflictsUnresolvedError);
+    }
+    expect(contents(path, "f.txt")).toBe(before);
+    expect(git(path, "ls-files", "--unmerged")).not.toBe("");
+  });
+});
+
+describe("discarding all changes", () => {
+  it("puts back every file as HEAD has it and deletes untracked ones, but not ignored ones", async () => {
+    const repo = await createHistoryRepo("discard-all");
+    const path = repo.path;
+    writeFileSync(join(path, ".git", "info", "exclude"), "*.log\n");
+    writeFileSync(join(path, "debug.log"), "ignored\n");
+    git(path, "add", "a file.txt", "new file.txt");
+    writeFileSync(join(path, "a file.txt"), "changed again\n");
+    git(path, "mv", "c.txt", "d.txt");
+    rmSync(join(path, "bin.dat"));
+    mkdirSync(join(path, "dir", "deeper"), { recursive: true });
+    writeFileSync(join(path, "dir", "deeper", "untracked.txt"), "untracked\n");
+
+    await discardAll(repo);
+    expect(await statusFiles(repo)).toEqual([]);
+    expect(contents(path, "a file.txt")).toBe("a\nmore\n");
+    expect(contents(path, "c.txt")).toBe("b\n");
+    expect(contents(path, "new file.txt")).toBeNull();
+    expect(existsSync(join(path, "dir"))).toBe(false);
+    expect(readFileSync(join(path, "bin.dat"))).toEqual(Buffer.from([0, 1, 2]));
+    expect(contents(path, "debug.log")).toBe("ignored\n");
+  });
+
+  it("puts back a file whose name isn't UTF-8", async () => {
+    const path = createRepo("discard-all-latin1");
+    const name = Buffer.concat([Buffer.from("caf"), Buffer.from([0xe9]), Buffer.from(".txt")]);
+    const file = Buffer.concat([Buffer.from(`${path}/`), name]);
+    writeFileSync(file, "a\n");
+    git(path, "add", ".");
+    git(path, "commit", "-q", "-m", "First");
+    writeFileSync(file, "changed\n");
+    const repo = await repos.open("discard-all-latin1");
+
+    await discardAll(repo);
+    expect(readFileSync(file, "utf8")).toBe("a\n");
+  });
+
+  it("keeps a merge under way, once its conflicts are resolved", async () => {
+    const path = createMergeConflict("discard-all-merge");
+    writeFileSync(join(path, "f.txt"), "one\nresolved\nthree\n");
+    git(path, "add", "f.txt");
+    writeFileSync(join(path, "README"), "changed\n");
+    const repo = await repos.open("discard-all-merge");
+
+    await discardAll(repo);
+    expect(contents(path, "f.txt")).toBe("one\nours\nthree\n");
+    expect(contents(path, "README")).toBe("readme\n");
+    expect(existsSync(join(path, ".git", "MERGE_HEAD"))).toBe(true);
+  });
+
+  it("discards nothing while files are conflicted", async () => {
+    const path = createMergeConflict("discard-all-conflict");
+    writeFileSync(join(path, "README"), "changed\n");
+    const repo = await repos.open("discard-all-conflict");
+
+    expect(await rejection(discardAll(repo))).toBeInstanceOf(ConflictsUnresolvedError);
+    expect(contents(path, "README")).toBe("changed\n");
+    expect(git(path, "ls-files", "--unmerged")).not.toBe("");
+  });
+
+  it("deletes every file before the first commit", async () => {
+    const path = createRepo("discard-all-unborn");
+    writeFileSync(join(path, "staged.txt"), "staged\n");
+    git(path, "add", ".");
+    writeFileSync(join(path, "untracked.txt"), "untracked\n");
+    const repo = await repos.open("discard-all-unborn");
+
+    await discardAll(repo);
+    expect(await statusFiles(repo)).toEqual([]);
+    expect(contents(path, "staged.txt")).toBeNull();
+  });
+
+  it("deletes untracked files when no file was ever committed, and does nothing without changes", async () => {
+    const path = createRepo("discard-all-empty");
+    git(path, "commit", "-q", "--allow-empty", "-m", "empty");
+    writeFileSync(join(path, "untracked.txt"), "untracked\n");
+    const repo = await repos.open("discard-all-empty");
+
+    await discardAll(repo);
+    expect(contents(path, "untracked.txt")).toBeNull();
+    await discardAll(repo);
+    expect(await statusFiles(repo)).toEqual([]);
+  });
 });

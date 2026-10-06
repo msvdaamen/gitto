@@ -2,7 +2,7 @@ import { oc } from "@orpc/contract";
 import * as z from "zod";
 
 import { FileInput, RepositoryInput } from "../../input";
-import { LineSelectionSchema } from "./schema";
+import { LineSelectionSchema, UncommittedSideSchema } from "./schema";
 
 const PathsInput = RepositoryInput.extend({ paths: z.array(z.string().min(1)).min(1) });
 
@@ -31,4 +31,15 @@ export const StagingContract = {
   stageLines: oc.input(LinesInput.extend({ untracked: z.boolean() })).output(LinesOutput),
   /** Unstages some lines of a file's staged changes, returning the staged ones left; see `stageLines`. */
   unstageLines: oc.input(LinesInput).output(LinesOutput),
+  /**
+   * Discards a file's changes on `side`, the side it's listed on: its unstaged ones, or all of them
+   * from its staged ones on (see `discard`). Fails with PRECONDITION_FAILED, discarding nothing, if
+   * it's conflicted.
+   */
+  discard: oc.input(FileInput.extend({ side: UncommittedSideSchema })),
+  /**
+   * Discards every uncommitted change, untracked files included; fails with PRECONDITION_FAILED,
+   * discarding nothing, while files are conflicted.
+   */
+  discardAll: oc.input(RepositoryInput),
 };

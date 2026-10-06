@@ -160,6 +160,9 @@ export class ConflictMarkersError extends MessageError {
   }
 }
 
+/** Changes that can't be discarded while files are conflicted, which are resolved instead. */
+export class ConflictsUnresolvedError extends MessageError {}
+
 /** A conflict that changed since it was shown, e.g. resolved in a terminal: nothing was done. */
 export class ConflictChangedError extends MessageError {
   constructor(path: string) {

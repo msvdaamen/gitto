@@ -1,9 +1,14 @@
-import { GitError, LinesNotStageableError, PatchChangedError } from "../../core/errors";
-import type { Repo } from "../../core/repo";
+import {
+  ConflictsUnresolvedError,
+  GitError,
+  LinesNotStageableError,
+  PatchChangedError,
+} from "../../core/errors";
+import { hasConflicts, type Repo } from "../../core/repo";
 import { refuseConflictMarkers } from "../conflicts/commands";
 import { getStagedFilePatch, getUnstagedFilePatch } from "../diff/commands";
 import { linesPatch, type LineAction } from "./lines";
-import type { LineSelection } from "./schema";
+import type { LineSelection, UncommittedSide } from "./schema";
 
 // Paths go to git's stdin, NUL-separated, rather than on the command line, which holds only so
 // many (32k characters on Windows).
@@ -29,8 +34,11 @@ export async function unstage(repo: Repo, paths: string[]): Promise<void> {
   await repo.write(args, { stdin: nulSeparated(paths) });
 }
 
-function nulSeparated(paths: string[]): string {
-  return paths.map((path) => `${path}\0`).join("");
+/** For a command that puts files in the working tree back, or deletes them (see `rewritesFiles`). */
+const REWRITES = { rewritesFiles: true };
+
+function nulSeparated(paths: Iterable<string>): string {
+  return Array.from(paths, (path) => `${path}\0`).join("");
 }
 
 /** Stages every change, untracked files included; conflicts too, unless markers are left (see `stage`). */
@@ -161,5 +169,86 @@ function applyLines(
       throw error;
     }
     return read(false);
+  });
+}
+
+/**
+ * Discards a file's changes on `side`, the side of the uncommitted changes it's listed on; a
+ * renamed one's at both its paths. From its unstaged changes, those: a tracked file goes back to
+ * how the index has it, and an untracked one is deleted. From its staged changes, all of them: it
+ * goes back to how HEAD has it, in the index and the working tree, and one HEAD doesn't have is
+ * deleted. Rejects with `ConflictsUnresolvedError`, discarding nothing, for a conflicted file,
+ * whose conflicts are resolved instead.
+ */
+export async function discard(repo: Repo, file: LinesFile, side: UncommittedSide): Promise<void> {
+  const paths = file.origPath ? [file.path, file.origPath] : [file.path];
+  await repo.exclusive(async (run) => {
+    // The paths in the index, as `<mode> <object> <stage>\t<path>`: a conflict's at stages 1-3.
+    // On the command line, which holds them: there are two at most.
+    const entries = (await run(["ls-files", "--stage", "-z", "--", ...paths]))
+      .split("\0")
+      .filter(Boolean);
+    if (entries.some((entry) => !entry.slice(0, entry.indexOf("\t")).endsWith(" 0"))) {
+      throw new ConflictsUnresolvedError(
+        `${file.path} is conflicted. Resolve its conflicts rather than discarding its changes.`,
+      );
+    }
+    if (side === "staged") {
+      // `restore` from HEAD can't run before the first commit, when everything staged is new.
+      const args = (await repo.hasHead())
+        ? ["restore", "--source=HEAD", "--staged", "--worktree"]
+        : ["rm", "-r", "-f", "-q"];
+      await run([...args, ...PATHS_FROM_STDIN], { stdin: nulSeparated(paths), ...REWRITES });
+      return;
+    }
+    const tracked = new Set(entries.map((entry) => entry.slice(entry.indexOf("\t") + 1)));
+    const untracked = paths.filter((path) => !tracked.has(path));
+    // `clean` takes no paths from stdin. It leaves ignored files, which aren't listed as untracked,
+    // and a repository inside this one, which is: it deletes files, not folders.
+    if (untracked.length) await run(["clean", "-f", "-q", "--", ...untracked], REWRITES);
+    if (tracked.size) {
+      await run(["restore", "--worktree", ...PATHS_FROM_STDIN], {
+        stdin: nulSeparated(tracked),
+        ...REWRITES,
+      });
+    }
+  });
+}
+
+/**
+ * Discards every uncommitted change: tracked files go back to how HEAD has them, in the index and
+ * the working tree, and the ones HEAD doesn't have are deleted, as are untracked files. Ignored
+ * files stay, as do repositories inside this one. A merge or a rebase under way stays under way.
+ * Rejects with `ConflictsUnresolvedError`, discarding nothing, while files are conflicted: they're
+ * resolved instead.
+ */
+export async function discardAll(repo: Repo): Promise<void> {
+  await repo.exclusive(async (run) => {
+    if (await hasConflicts(run)) {
+      throw new ConflictsUnresolvedError("Resolve the conflicts before discarding all changes.");
+    }
+    if (await repo.hasHead()) {
+      // Not `reset --hard`, which would also end a merge under way. Only the changed files, staged
+      // or not, both sides of a rename, are restored: `restore .` checks every file in the index,
+      // and fails with none in it nor in HEAD. As bytes: a path goes back to git as it came, also
+      // one that isn't UTF-8.
+      const lists = await Promise.all(
+        [["--cached"], []].map((options) =>
+          run(["diff", ...options, "--name-only", "-z", "--no-renames"], { binary: true }),
+        ),
+      );
+      const paths = new Set(lists.flatMap((list) => list.split("\0")).filter(Boolean));
+      if (paths.size) {
+        await run(["restore", "--source=HEAD", "--staged", "--worktree", ...PATHS_FROM_STDIN], {
+          stdin: nulSeparated(paths),
+          binary: true,
+          ...REWRITES,
+        });
+      }
+    } else {
+      // Before the first commit, everything staged is new.
+      await run(["rm", "-r", "-f", "-q", "--ignore-unmatch", "--", "."], REWRITES);
+    }
+    await run(["clean", "-f", "-d", "-q"], REWRITES);
   });
 }

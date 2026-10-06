@@ -16,5 +16,9 @@ export const LineSelectionSchema = z.object({
   additions: z.array(LineRangeSchema),
 });
 
+/** Which side of the uncommitted changes a file's are on: in the working tree, or in the index. */
+export const UncommittedSideSchema = z.enum(["unstaged", "staged"]);
+
 export type LineRange = z.infer<typeof LineRangeSchema>;
 export type LineSelection = z.infer<typeof LineSelectionSchema>;
+export type UncommittedSide = z.infer<typeof UncommittedSideSchema>;

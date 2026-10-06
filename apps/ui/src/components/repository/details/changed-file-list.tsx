@@ -37,6 +37,8 @@ export function ChangedFileList(props: {
   onOpen?: (file: ChangedFile) => void;
   /** The path of the file whose changes are on show, if one's in the list. */
   openPath?: string;
+  /** The path of a file shown as if hovered, e.g. while its menu is open. */
+  highlightedPath?: string;
   /** Loads a file's changes ahead, once the pointer rests on it: it's likely to be opened. */
   onPrefetch?: (file: ChangedFile) => void;
   /** The conflicted files with no conflict markers left, which are badged as ready. */
@@ -53,9 +55,13 @@ export function ChangedFileList(props: {
     >
       {(file) => (
         <div
+          // Marks the row for a menu of what can be done with the file (see `RowMenu`).
+          data-file={file().path}
           class={cn(
             "group flex h-full w-full items-center rounded-md hover:bg-panel-hover",
-            props.openPath === file().path && "bg-panel-active hover:bg-panel-active",
+            props.openPath === file().path
+              ? "bg-panel-active hover:bg-panel-active"
+              : props.highlightedPath === file().path && "bg-panel-hover",
           )}
         >
           {/* A button when the file opens, so its contents (the status's tooltip, say) still

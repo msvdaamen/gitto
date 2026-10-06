@@ -62,6 +62,8 @@ export function LinkButton(props: {
 export function IconButton(props: {
   label: string;
   icon: LucideIcon;
+  /** Its tooltip, if not `label`: e.g. why it's disabled. */
+  title?: string;
   active?: boolean;
   disabled?: boolean;
   class?: string;
@@ -77,7 +79,7 @@ export function IconButton(props: {
         props.class,
       )}
       aria-label={props.label}
-      title={props.label}
+      title={props.title ?? props.label}
       onClick={props.onClick}
     >
       <Dynamic component={props.icon} size={16} strokeWidth={1.8} />

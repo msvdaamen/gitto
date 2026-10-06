@@ -5,6 +5,7 @@ import {
   ChangesTooLargeError,
   ConflictChangedError,
   ConflictMarkersError,
+  ConflictsUnresolvedError,
   EditorNeededError,
   FileChangedOnDiskError,
   FileTooLargeError,
@@ -78,6 +79,7 @@ function toApiError(error: unknown): unknown {
     error instanceof NoUpstreamError ||
     error instanceof UnsupportedGitError ||
     error instanceof ConflictMarkersError ||
+    error instanceof ConflictsUnresolvedError ||
     error instanceof NoOperationError ||
     error instanceof EditorNeededError ||
     error instanceof MergeBlockedError
