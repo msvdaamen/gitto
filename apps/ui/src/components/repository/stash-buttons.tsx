@@ -5,13 +5,14 @@ import { Suspense } from "solid-js";
 import { FailurePopover } from "@/components/ui/failure-popover";
 import { useStashActions, useStashes } from "@/git/queries/stash";
 import { useStatus } from "@/git/queries/status";
-import { popBlocker, popTitle, stashBlocker, stashTitle } from "@/git/stash";
+import { canPop, popTitle, stashBlocker, stashTitle } from "@/git/stash";
 
 import { ToolbarButton } from "./toolbar-button";
 
 /**
  * Stashes every change, untracked files included, and pops the newest stash; each says why if it
- * failed. One at a time: a pop names the stash it pops, which a stash still being made would change.
+ * failed. One at a time, along with the stashes popped and deleted from the sidebar: a pop names the
+ * stash it pops, which a stash still being made would change.
  */
 export function StashButtons(props: { repositoryId: string }) {
   return (
@@ -31,8 +32,7 @@ export function StashButtons(props: { repositoryId: string }) {
 function Stash(props: { repositoryId: string }) {
   const status = useStatus(() => props.repositoryId);
   const stashes = useStashes(() => props.repositoryId);
-  const { stash, pop } = useStashActions(() => props.repositoryId);
-  const pending = () => stash.isPending() || pop.isPending();
+  const { stash, pop, isPending } = useStashActions(() => props.repositoryId);
 
   return (
     <>
@@ -42,7 +42,7 @@ function Stash(props: { repositoryId: string }) {
           label="Stash"
           hideBelow="lg"
           title={status.data ? stashTitle(status.data) : "Stash"}
-          disabled={!status.data || !!stashBlocker(status.data) || pending()}
+          disabled={!status.data || !!stashBlocker(status.data) || isPending()}
           busy={stash.isPending()}
           onClick={() => stash.run()}
         />
@@ -59,9 +59,7 @@ function Stash(props: { repositoryId: string }) {
                 ? `Couldn't load the stashes: ${stashes.error.message}`
                 : "Pop"
           }
-          disabled={
-            !status.data || !stashes.data || !!popBlocker(status.data, stashes.data) || pending()
-          }
+          disabled={!canPop(status.data, stashes.data) || isPending()}
           busy={pop.isPending()}
           count={stashes.data?.length}
           onClick={() => {

@@ -103,35 +103,81 @@ async function stashedFilePatch(
 }
 
 /**
- * Puts the stash `sha` back and drops it, as long as it's still the newest. What was staged when it
- * was stashed is staged again, if that can be done safely (see below). A pop that conflicts is left
- * to resolve, and the stash kept, as git does.
+ * Puts the stash `sha` back and drops it, the newest or an older one. What was staged when it was
+ * stashed is staged again, if that can be done safely (see below). A pop that conflicts is left to
+ * resolve, and the stash kept, as git does.
  */
 export async function popStash(repo: Repo, sha: string): Promise<void> {
-  // One write, so no other stash of Gitto's can become the newest between checking and popping.
-  await repo.exclusive(async (run) => {
-    if ((await resolveRef(run, "refs/stash")) !== sha) {
-      throw new RepositoryChangedError(
-        "The stashes changed before the stash could be popped, so nothing was popped.",
-      );
-    }
-    await popNewest(run);
-  });
+  // One write, so no other stash of Gitto's can move it between finding and popping it.
+  await repo.exclusive(async (run) => popRef(run, await stashRef(run, sha, "popped"), sha));
 }
 
 /**
  * Pops the newest stash through `run` (a command of `repo.exclusive`), as `popStash` does, without
  * checking which one it is.
  */
-export async function popNewest(run: GitCommand): Promise<void> {
+export function popNewest(run: GitCommand): Promise<void> {
+  return popRef(run, "stash@{0}");
+}
+
+/**
+ * Drops the stash `sha`, the newest or an older one, throwing its changes away. Should another have
+ * been dropped instead, as git outside Gitto pushed or dropped one meanwhile, it's put back.
+ */
+export async function dropStash(repo: Repo, sha: string): Promise<void> {
+  // One write, so no other stash of Gitto's can move it between finding and dropping it.
+  await repo.exclusive(async (run) => {
+    const ref = await stashRef(run, sha, "deleted");
+    // Not `--quiet`: git names the stash it dropped, as "Dropped stash@{1} (<sha>)".
+    const output = await run(["stash", "drop", ref], STASH_ENV);
+    const dropped = /^Dropped .+ \(([0-9a-f]+)\)$/m.exec(output)?.[1];
+    if (dropped === sha) return;
+    if (dropped) {
+      // Its message, as the stash's commit has it, to keep it as it was named.
+      const message = (await run(["show", "--no-patch", "--format=%s", dropped])).trim();
+      await run(["stash", "store", "--message", message, dropped], STASH_ENV);
+    }
+    throw new RepositoryChangedError(
+      "The stashes changed as the stash was being deleted, so it wasn't. Another one was dropped instead, and has been put back as the newest.",
+    );
+  });
+}
+
+/**
+ * The stash `sha` as git names it among the others, e.g. `stash@{2}`, through `run`; throws if it's
+ * gone, saying it wasn't `done` (e.g. "popped"). The first, should it be in the list more than once:
+ * the same commit, so the same changes, either way.
+ */
+async function stashRef(run: GitCommand, sha: string, done: string): Promise<string> {
+  const index = parseStashList(await run(["stash", "list", "-z", STASH_LIST_FORMAT])).findIndex(
+    (stash) => stash.sha === sha,
+  );
+  if (index === -1) throw stashGone(done);
+  return `stash@{${index}}`;
+}
+
+/** Says the stash is gone, so it wasn't `done` (e.g. "popped"). */
+function stashGone(done: string): RepositoryChangedError {
+  return new RepositoryChangedError(
+    `The stash is gone: the stashes changed before it could be ${done}.`,
+  );
+}
+
+/**
+ * Pops the stash `ref` (e.g. `stash@{1}`) through `run`, as `popStash` does; as long as it's still
+ * the stash `sha`, if given, which git outside Gitto can change.
+ */
+async function popRef(run: GitCommand, ref: string, sha?: string): Promise<void> {
   const [conflicted, staged] = await Promise.all([hasConflicts(run), hasStagedChanges(run)]);
+  // Checked last thing before popping it.
+  if (sha && (await resolveRef(run, ref)) !== sha) throw stashGone("popped");
   try {
     // Putting back what was staged (`--index`) is only tried when nothing is staged now: when
     // something is, a pop that fails partway can unstage it, and leave half the stash applied.
     // Without staged changes, it either works, fails like a plain pop, or fails before changing
     // anything when the staged changes don't apply, and a plain pop follows.
-    if (!staged && (await popIndex(run))) return;
-    await run(["stash", "pop", "--quiet"], STASH_WRITE);
+    if (!staged && (await popIndex(run, ref))) return;
+    await run(["stash", "pop", "--quiet", ref], STASH_WRITE);
   } catch (error) {
     // Git won't pop over conflicts that were already there, and says so.
     if (error instanceof GitError && !conflicted && (await hasConflicts(run))) {
@@ -144,11 +190,11 @@ export async function popNewest(run: GitCommand): Promise<void> {
 }
 
 /**
- * Pops the newest stash with what was staged staged again; `false`, having changed nothing, when
+ * Pops the stash `ref` with what was staged staged again; `false`, having changed nothing, when
  * that won't apply to the index.
  */
-function popIndex(run: GitCommand): Promise<boolean> {
-  return run(["stash", "pop", "--index", "--quiet"], STASH_WRITE).then(
+function popIndex(run: GitCommand, ref: string): Promise<boolean> {
+  return run(["stash", "pop", "--index", "--quiet", ref], STASH_WRITE).then(
     () => true,
     (error: unknown) => {
       if (!(error instanceof GitError)) throw error;
