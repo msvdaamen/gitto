@@ -13,9 +13,13 @@ const LinesInput = FileInput.extend({ patch: z.string(), lines: LineSelectionSch
 const LinesOutput = z.object({ patch: z.string() });
 
 export const StagingContract = {
+  /**
+   * Stages files whole; fails with PRECONDITION_FAILED, staging none, if a conflicted one still has
+   * conflict markers, as that would mark it resolved with them.
+   */
   stage: oc.input(PathsInput),
   unstage: oc.input(PathsInput),
-  /** Stages every change, untracked files and conflicts included. */
+  /** Stages every change, untracked files and conflicts included; see `stage` for the conflicts. */
   stageAll: oc.input(RepositoryInput),
   /** Unstages every staged change; conflicts stay conflicted. */
   unstageAll: oc.input(RepositoryInput),

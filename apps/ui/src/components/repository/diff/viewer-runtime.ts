@@ -214,6 +214,17 @@ export class ViewHighlights {
     return loaded;
   }
 
+  /**
+   * Drops `diff` from the cache at once (see `forget`), replaced by a newer one while the view's
+   * open, and lets go of it: a file can be saved, or its conflicts resolved, many times meanwhile.
+   */
+  forget(diff: FileDiffMetadata): void {
+    forget(diff);
+    for (const [key, kept] of this.diffs) {
+      if (kept === diff) this.diffs.delete(key);
+    }
+  }
+
   /** Drops the long diffs from the cache, as the view closes; the shorter ones stay. */
   drop(): void {
     for (const [key, diff] of this.diffs) {

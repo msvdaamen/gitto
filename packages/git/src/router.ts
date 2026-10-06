@@ -1,7 +1,9 @@
 import { branchRouter } from "./features/branch/handler";
 import { commitRouter } from "./features/commit/handler";
+import { conflictsRouter } from "./features/conflicts/handler";
 import { diffRouter } from "./features/diff/handler";
 import { historyRouter } from "./features/history/handler";
+import { operationRouter } from "./features/operation/handler";
 import { overviewRouter } from "./features/overview/handler";
 import { refsRouter } from "./features/refs/handler";
 import { remoteRouter } from "./features/remote/handler";
@@ -23,6 +25,8 @@ export const gitRouter = {
   commit: commitRouter,
   remote: remoteRouter,
   stash: stashRouter,
+  conflicts: conflictsRouter,
+  operation: operationRouter,
   overview: overviewRouter,
   watch: watchRouter,
   version: versionRouter,

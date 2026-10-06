@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import type { Repo } from "../../core/repo";
 import type { FileStatus } from "../../schema";
+import { markerFree } from "../conflicts/commands";
 import { parseDiff } from "../diff/parse";
 import type { ChangedFile } from "../diff/schema";
 import { parseStatus, STATUS_ARGS } from "./parse";
@@ -41,12 +42,21 @@ async function readStatus(
   const output = await repo.read(STATUS_ARGS, { signal });
   repo.statusTook(performance.now() - start);
   const { files, ...status } = parseStatus(output);
-  const { changes, outputs } = await getWorkingTreeFiles(repo, files, signal);
-  // Everything shown comes from git's output, so the same output means the same status.
+  const [{ changes, outputs }, resolved] = await Promise.all([
+    getWorkingTreeFiles(repo, files, signal),
+    resolvedConflicts(repo, files),
+  ]);
+  // Everything shown comes from git's output, so the same output means the same status, but for
+  // which conflicts have markers left, which comes from the files.
   const hash = createHash("sha1");
-  for (const part of [output, ...outputs]) hash.update(part).update("\0");
+  for (const part of [output, ...outputs, ...resolved]) hash.update(part).update("\0");
   return {
-    uncommitted: { ...status, counts: countFiles(files), changes, version: hash.digest("hex") },
+    uncommitted: {
+      ...status,
+      counts: countFiles(files),
+      changes: { ...changes, markerFree: resolved },
+      version: hash.digest("hex"),
+    },
     snapshot: snapshotOf(output),
   };
 }
@@ -64,6 +74,34 @@ function countFiles(files: StatusFile[]): StatusCounts {
   }
   return { files: files.length, staged, unstaged, conflicted };
 }
+
+/**
+ * Past this many conflicted files, none is read to tell whether it still has conflict markers: that
+ * is done on every change in the working tree.
+ */
+const MAX_CHECKED_CONFLICTS = 200;
+
+/**
+ * The conflicted text files in `files` that have no conflict markers left (see `markerFree`):
+ * those changed or added on both sides, as files rather than links or submodules.
+ */
+function resolvedConflicts(repo: Repo, files: StatusFile[]): Promise<string[]> {
+  const text = files.filter(
+    ({ conflict }) =>
+      conflict &&
+      (conflict.xy === "UU" || conflict.xy === "AA") &&
+      REGULAR_FILE.test(conflict.ours) &&
+      REGULAR_FILE.test(conflict.theirs),
+  );
+  if (text.length === 0 || text.length > MAX_CHECKED_CONFLICTS) return Promise.resolve([]);
+  return markerFree(
+    repo,
+    text.map((file) => file.path),
+  );
+}
+
+/** A file's mode, executable or not, rather than a link's or a submodule's. */
+const REGULAR_FILE = /^100(644|755)$/;
 
 /**
  * Past this many characters of paths, the unstaged diff isn't limited to the changed files: the
@@ -88,7 +126,7 @@ async function getWorkingTreeFiles(
   repo: Repo,
   files: StatusFile[],
   signal?: AbortSignal,
-): Promise<{ changes: WorkingTreeFiles; outputs: string[] }> {
+): Promise<{ changes: Omit<WorkingTreeFiles, "markerFree">; outputs: string[] }> {
   const untracked = files
     .filter((file) => file.unstaged === "untracked")
     .map((file) => uncounted(file, "untracked"));

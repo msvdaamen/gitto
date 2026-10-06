@@ -95,3 +95,35 @@ describe("opening a file", () => {
     );
   });
 });
+
+/** A conflicted file at `path`. */
+function conflicted(path: string) {
+  return { path, status: "conflicted", origPath: null, additions: 1, deletions: 1 } as const;
+}
+
+describe("a conflicted file", () => {
+  beforeEach(() => {
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(500);
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(500);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("is badged as ready once it has no conflict markers left", async () => {
+    const scroller = document.createElement("div");
+    render(() => (
+      <ChangedFileList
+        files={[conflicted("a.txt"), conflicted("b.txt")]}
+        markerFree={new Set(["b.txt"])}
+        scrollElement={scroller}
+      />
+    ));
+
+    expect(await screen.findByTitle("conflicted")).toHaveTextContent("!");
+    expect(screen.getByTitle("conflicted, but resolved: ready to mark resolved")).toHaveTextContent(
+      "✓",
+    );
+  });
+});

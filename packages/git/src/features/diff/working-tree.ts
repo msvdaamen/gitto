@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { open, realpath, rename, rm } from "node:fs/promises";
+import { open, realpath, rename, rm, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 
 import {
@@ -81,8 +81,82 @@ export async function readWorkingTreeFile(repo: Repo, path: string): Promise<Wor
   return { contents: decodeUtf8(bytes), version: versionOf(bytes) };
 }
 
-/** The bytes and permissions of the file at `resolved` (the path `path` leads to). */
-async function readFile(resolved: string, path: string): Promise<{ bytes: Buffer; mode: number }> {
+/**
+ * The bytes of the file at `path` in the working tree, as `readWorkingTreeFile` reads them, and
+ * their version; `undefined` if there's no file there: nothing, or a folder, like a submodule's.
+ */
+export async function readWorkingTreeBytes(
+  repo: Repo,
+  path: string,
+  maxBytes = MAX_BLOB_BYTES,
+): Promise<{ bytes: Buffer; version: string } | undefined> {
+  const resolved = await resolveFile(repo, path);
+  if (!resolved) return undefined;
+  const { bytes } = await readFile(resolved, path, maxBytes);
+  return { bytes, version: versionOf(bytes) };
+}
+
+/** How much of a file `scanWorkingTreeFile` reads at a time. */
+const SCAN_CHUNK_BYTES = 1024 * 1024;
+
+/**
+ * Reads the file at `path` in the working tree a piece at a time, handing each to `onChunk`, which
+ * mustn't keep it: the buffer's used again for the next. Resolves to the file's version (see
+ * `readWorkingTreeFile`), never having all of it in memory, whatever its size up to `maxBytes`
+ * (`FileTooLargeError` past that); `undefined` if there's no file there.
+ */
+export async function scanWorkingTreeFile(
+  repo: Repo,
+  path: string,
+  onChunk: (chunk: Buffer) => void = () => undefined,
+  maxBytes = Infinity,
+): Promise<string | undefined> {
+  const resolved = await resolveFile(repo, path);
+  if (!resolved) return undefined;
+  const file = await open(
+    resolved,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  );
+  try {
+    const stats = await file.stat();
+    if (!stats.isFile()) throw new OutsideRepositoryError(path);
+    if (stats.size > maxBytes) throw new FileTooLargeError(stats.size);
+    const hash = createHash("sha1");
+    const buffer = Buffer.alloc(Math.min(SCAN_CHUNK_BYTES, Math.max(stats.size, 1)));
+    for (;;) {
+      // oxlint-disable-next-line no-await-in-loop -- a piece at a time, in order.
+      const { bytesRead } = await file.read(buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      const chunk = buffer.subarray(0, bytesRead);
+      hash.update(chunk);
+      onChunk(chunk);
+    }
+    return hash.digest("hex");
+  } finally {
+    await file.close();
+  }
+}
+
+/** Where the file at `path` is on disk (see `resolveWorkingTreePath`); `undefined` if none is. */
+async function resolveFile(repo: Repo, path: string): Promise<string | undefined> {
+  try {
+    const resolved = await resolveWorkingTreePath(repo, path);
+    return (await stat(resolved)).isFile() ? resolved : undefined;
+  } catch (error) {
+    if (error instanceof WorkingTreeFileNotFoundError) return undefined;
+    throw error;
+  }
+}
+
+/**
+ * The bytes and permissions of the file at `resolved` (the path `path` leads to); rejects with
+ * `FileTooLargeError` above `maxBytes`.
+ */
+async function readFile(
+  resolved: string,
+  path: string,
+  maxBytes = MAX_BLOB_BYTES,
+): Promise<{ bytes: Buffer; mode: number }> {
   // Not following a link put in its place since it was checked, and not waiting for a writer, as
   // opening a named pipe would: it's no file to read, which is only known once it's open.
   const file = await open(
@@ -92,14 +166,15 @@ async function readFile(resolved: string, path: string): Promise<{ bytes: Buffer
   try {
     const stats = await file.stat();
     if (!stats.isFile()) throw new OutsideRepositoryError(path);
-    if (stats.size > MAX_BLOB_BYTES) throw new FileTooLargeError(stats.size);
+    if (stats.size > maxBytes) throw new FileTooLargeError(stats.size);
     return { bytes: await file.readFile(), mode: stats.mode };
   } finally {
     await file.close();
   }
 }
 
-function versionOf(bytes: Uint8Array): string {
+/** Names `bytes`, the contents of a file in the working tree: what a save checks it still has. */
+export function versionOf(bytes: Uint8Array): string {
   return createHash("sha1").update(bytes).digest("hex");
 }
 
@@ -210,7 +285,7 @@ function toCrlf(text: string): string {
 const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 /** `bytes` as UTF-8; rejects with `NotUtf8Error` if they aren't. */
-function decodeUtf8(bytes: Uint8Array): string {
+export function decodeUtf8(bytes: Uint8Array): string {
   try {
     return utf8.decode(bytes);
   } catch {

@@ -21,6 +21,7 @@ const status: Uncommitted = {
     staged: [],
     unstaged: [{ path: "a.txt", status: "modified", origPath: null, additions: 1, deletions: 0 }],
     uncounted: false,
+    markerFree: [],
   },
   version: "v1",
 };

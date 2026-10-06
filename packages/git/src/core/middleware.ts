@@ -3,6 +3,9 @@ import { ORPCError, os } from "@orpc/server";
 import {
   ChangesStashedError,
   ChangesTooLargeError,
+  ConflictChangedError,
+  ConflictMarkersError,
+  EditorNeededError,
   FileChangedOnDiskError,
   FileTooLargeError,
   FolderNotFoundError,
@@ -10,6 +13,7 @@ import {
   HeadMovedError,
   IndexLockedError,
   LinesNotStageableError,
+  NoOperationError,
   NoUpstreamError,
   NotARepositoryError,
   NotUtf8Error,
@@ -68,7 +72,13 @@ function toApiError(error: unknown): unknown {
   if (error instanceof LinesNotStageableError) {
     return new ORPCError("UNPROCESSABLE_CONTENT", { message: error.message, cause: error });
   }
-  if (error instanceof NoUpstreamError || error instanceof UnsupportedGitError) {
+  if (
+    error instanceof NoUpstreamError ||
+    error instanceof UnsupportedGitError ||
+    error instanceof ConflictMarkersError ||
+    error instanceof NoOperationError ||
+    error instanceof EditorNeededError
+  ) {
     return new ORPCError("PRECONDITION_FAILED", { message: error.message, cause: error });
   }
   if (
@@ -79,7 +89,8 @@ function toApiError(error: unknown): unknown {
     error instanceof RepositoryChangedError ||
     error instanceof StashConflictError ||
     error instanceof FileChangedOnDiskError ||
-    error instanceof PatchChangedError
+    error instanceof PatchChangedError ||
+    error instanceof ConflictChangedError
   ) {
     return new ORPCError("CONFLICT", { message: error.message, cause: error });
   }

@@ -1,4 +1,4 @@
-import type { StatusSummary, Uncommitted, WorkingTreeFiles } from "@gitto/git/types";
+import type { ChangedFile, StatusSummary, Uncommitted, WorkingTreeFiles } from "@gitto/git/types";
 import { queryOptions, useQuery } from "@tanstack/solid-query";
 import { createMemo } from "solid-js";
 
@@ -42,6 +42,22 @@ const selectSummary = ({ head, upstream, ahead, behind, counts }: Uncommitted): 
   counts,
 });
 const selectChanges = (data: Uncommitted) => new Opaque<WorkingTreeFiles>(data.changes);
+
+/** The conflicted files, and which of them have no conflict markers left. */
+export interface ConflictedFiles {
+  files: ChangedFile[];
+  markerFree: string[];
+}
+
+const selectConflicted = ({ changes }: Uncommitted): ConflictedFiles => ({
+  files: changes.unstaged.filter((file) => file.status === "conflicted"),
+  markerFree: changes.markerFree,
+});
+
+/** The conflicted files (see `ConflictedFiles`), for what's shown of them outside the lists. */
+export function useConflictedFiles(repositoryId: () => string) {
+  return useQuery(() => uncommittedQuery(repositoryId(), selectConflicted));
+}
 
 /** Where HEAD is, and how many files changed. */
 export function useStatus(repositoryId: () => string) {

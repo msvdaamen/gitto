@@ -28,7 +28,7 @@ function setChanges(unstaged: ChangedFile[]) {
     ahead: 0,
     behind: 0,
     counts: { files: unstaged.length, staged: 0, unstaged: unstaged.length, conflicted: 0 },
-    changes: { staged: [], unstaged, uncounted: false },
+    changes: { staged: [], unstaged, uncounted: false, markerFree: [] },
     version: String(Math.random()),
   };
 }

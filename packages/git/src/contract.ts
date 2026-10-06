@@ -1,7 +1,9 @@
 import { BranchContract } from "./features/branch/contract";
 import { CommitContract } from "./features/commit/contract";
+import { ConflictsContract } from "./features/conflicts/contract";
 import { DiffContract } from "./features/diff/contract";
 import { HistoryContract } from "./features/history/contract";
+import { OperationContract } from "./features/operation/contract";
 import { OverviewContract } from "./features/overview/contract";
 import { RefsContract } from "./features/refs/contract";
 import { RemoteContract } from "./features/remote/contract";
@@ -23,6 +25,8 @@ export const GitContract = {
   commit: CommitContract,
   remote: RemoteContract,
   stash: StashContract,
+  conflicts: ConflictsContract,
+  operation: OperationContract,
   overview: OverviewContract,
   watch: WatchContract,
   version: VersionContract,

@@ -1,5 +1,6 @@
 import { GitError, LinesNotStageableError, PatchChangedError } from "../../core/errors";
 import type { Repo } from "../../core/repo";
+import { refuseConflictMarkers } from "../conflicts/commands";
 import { getStagedFilePatch, getUnstagedFilePatch } from "../diff/commands";
 import { linesPatch, type LineAction } from "./lines";
 import type { LineSelection } from "./schema";
@@ -8,9 +9,15 @@ import type { LineSelection } from "./schema";
 // many (32k characters on Windows).
 const PATHS_FROM_STDIN = ["--pathspec-from-file=-", "--pathspec-file-nul"];
 
-/** Stages the files at `paths`, whole. */
+/**
+ * Stages the files at `paths`, whole. A conflicted one is marked resolved by that, so it isn't
+ * while it still has conflict markers: rejects with `ConflictMarkersError`, and stages none.
+ */
 export async function stage(repo: Repo, paths: string[]): Promise<void> {
-  await repo.write(["add", ...PATHS_FROM_STDIN], { stdin: nulSeparated(paths) });
+  await repo.exclusive(async (run) => {
+    await refuseConflictMarkers(repo, run, paths);
+    await run(["add", ...PATHS_FROM_STDIN], { stdin: nulSeparated(paths) });
+  });
 }
 
 /** Unstages the files at `paths`, whole; their changes stay in the working tree. */
@@ -26,9 +33,12 @@ function nulSeparated(paths: string[]): string {
   return paths.map((path) => `${path}\0`).join("");
 }
 
-/** Stages every change, untracked files included. */
+/** Stages every change, untracked files included; conflicts too, unless markers are left (see `stage`). */
 export async function stageAll(repo: Repo): Promise<void> {
-  await repo.write(["add", "-A"]);
+  await repo.exclusive(async (run) => {
+    await refuseConflictMarkers(repo, run);
+    await run(["add", "-A"]);
+  });
 }
 
 export async function unstageAll(repo: Repo): Promise<void> {
