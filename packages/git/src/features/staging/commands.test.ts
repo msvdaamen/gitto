@@ -1188,6 +1188,8 @@ describe("discarding all changes", () => {
     symlinkSync("v2", join(path, "latest"));
     git(path, "add", ".");
     git(path, "commit", "-q", "-m", "first");
+    // Ignored, so `clean` leaves it, and it's compared.
+    writeFileSync(join(path, ".git", "info", "exclude"), "latest\n");
     git(path, "rm", "-q", "--cached", "latest");
     const repo = await repos.open("discard-all-link");
 
