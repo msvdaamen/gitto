@@ -99,8 +99,8 @@ export function fetchBlob(client: QueryClient, repositoryId: string, oid: string
  */
 export function useWorkingTreeChanges(repositoryId: () => string) {
   const query = useUncommittedFiles(repositoryId);
-  const { staged, unstaged, uncounted } = useWorkingTreeLists(query);
-  return { query, staged, unstaged, uncounted };
+  const { staged, unstaged, uncounted, markerFree } = useWorkingTreeLists(query);
+  return { query, staged, unstaged, uncounted, markerFree };
 }
 
 /**
@@ -114,9 +114,11 @@ export function useWorkingTreeLists(query: { data: Opaque<WorkingTreeFiles> | un
   const unstaged = createMemo(() => changes()?.value.unstaged ?? []);
   /** Whether there are too many files for their lines to have been counted. */
   const uncounted = () => changes()?.value.uncounted ?? false;
+  /** The conflicted files with no conflict markers left, ready to be marked resolved. */
+  const markerFree = createMemo(() => new Set(changes()?.value.markerFree));
   /** Whether the changes are loaded: `undefined` until they are. */
   const loaded = () => changes() !== undefined;
-  return { staged, unstaged, uncounted, loaded };
+  return { staged, unstaged, uncounted, markerFree, loaded };
 }
 
 /** The staged files to list: a conflict shows up on both sides, but it's resolved by staging it. */

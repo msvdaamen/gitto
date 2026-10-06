@@ -46,6 +46,7 @@ describe("a repository with history", () => {
         },
       ],
       uncounted: false,
+      markerFree: [],
     });
   });
 });
@@ -70,7 +71,12 @@ describe("a repository without commits", () => {
       head: { kind: "unborn", name: "main" },
       counts: { files: 0, staged: 0, unstaged: 0, conflicted: 0 },
     });
-    expect(status.changes).toEqual({ staged: [], unstaged: [], uncounted: false });
+    expect(status.changes).toEqual({
+      staged: [],
+      unstaged: [],
+      uncounted: false,
+      markerFree: [],
+    });
   });
 });
 
@@ -97,6 +103,7 @@ async function fullDiffs(repo: Repo) {
         })),
     ],
     uncounted: false,
+    markerFree: [],
   };
 }
 
@@ -218,6 +225,7 @@ describe("the changed files", () => {
       staged: withoutCounts(diffs.staged),
       unstaged: withoutCounts(diffs.unstaged),
       uncounted: true,
+      markerFree: [],
     });
     expect(changes.staged).toEqual([
       expect.objectContaining({ path: "both.txt", status: "modified" }),

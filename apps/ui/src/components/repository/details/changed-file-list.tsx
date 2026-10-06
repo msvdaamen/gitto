@@ -39,6 +39,8 @@ export function ChangedFileList(props: {
   openPath?: string;
   /** Loads a file's changes ahead, once the pointer rests on it: it's likely to be opened. */
   onPrefetch?: (file: ChangedFile) => void;
+  /** The conflicted files with no conflict markers left, which are badged as ready. */
+  markerFree?: ReadonlySet<string>;
 }) {
   let hover: ReturnType<typeof setTimeout> | undefined;
   onCleanup(() => clearTimeout(hover));
@@ -74,7 +76,7 @@ export function ChangedFileList(props: {
             }}
             onPointerLeave={() => clearTimeout(hover)}
           >
-            <FileStatusBadge status={file().status} />
+            <FileStatusBadge status={file().status} ready={props.markerFree?.has(file().path)} />
             <span class="flex min-w-0 flex-col gap-0.5">
               <strong class="truncate text-[12px] font-[540]">
                 {file().path.split("/").slice(-1)[0]}

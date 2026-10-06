@@ -50,6 +50,7 @@ export function parseStatus(output: string): Status {
           origPath: null,
           staged: "conflicted",
           unstaged: "conflicted",
+          conflict: { xy: fields[1]!, ours: fields[4]!, theirs: fields[5]! },
         });
         break;
       }

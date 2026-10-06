@@ -1,0 +1,645 @@
+// The conflicts in a file, from @pierre/diffs. Loaded on its own (see `useConflictResolution`), as
+// it brings Shiki.
+import {
+  hydratePartialDiff,
+  UnresolvedFile,
+  VirtualizedFile,
+  Virtualizer,
+  type FileContents,
+  type FileDiffMetadata,
+  type MergeConflictResolution,
+  type UnresolvedFileOptions,
+} from "@pierre/diffs";
+import type * as EditModule from "@pierre/diffs/edit";
+import type { Editor } from "@pierre/diffs/edit";
+import { createEffect, on, onCleanup, untrack } from "solid-js";
+
+import { useConnected } from "@/hooks/connected";
+import { useTheme } from "@/hooks/theme";
+
+import {
+  conflictsCacheKey,
+  conflictsLeft,
+  CONTEXT_LINES,
+  markerLabel,
+  parseConflicts,
+  wholeSides,
+  type ConflictAction,
+  type ConflictState,
+} from "./conflict-diff";
+import type { EditSession } from "./viewer-editing";
+import {
+  APP_CSS,
+  EXPAND_HIGHLIGHT_WAIT_MS,
+  focusableExpandButtons,
+  forget,
+  HIGHLIGHT_WAIT_MS,
+  THEMES,
+  ViewHighlights,
+  workerPool,
+} from "./viewer-runtime";
+
+/** How a conflict is resolved: ours, theirs, or both, ours first. */
+export type Resolution = MergeConflictResolution;
+
+/** What the header does to the conflicts on show. */
+export interface ConflictCommands {
+  /** Scrolls to the next conflict left, or the previous one, which becomes the current one. */
+  next: () => void;
+  previous: () => void;
+  /** Resolves the current conflict. */
+  resolve: (resolution: Resolution) => void;
+}
+
+/** How resolving the file on show is going. */
+export interface ConflictProgress {
+  /** How many conflicts are left. */
+  left: number;
+  /** Where the current one is among them, from 1; `undefined` without one. */
+  current: number | undefined;
+  /** Whether a conflict is being resolved: written to disk, and shown once it is. */
+  saving: boolean;
+  /** The version of the file on show on disk; `null` until it's known, e.g. after editing. */
+  version: string | null;
+  /** Why the file's conflicts aren't shown one by one, as its whole text is instead. */
+  problem: string | undefined;
+}
+
+/** The file on disk, as last read. */
+export interface DiskFile {
+  contents: string;
+  version: string;
+}
+
+/**
+ * Past this many lines of conflicts and the lines around them, a file is shown whole rather than
+ * conflict by conflict: the library draws all of those at once, not just the ones on screen.
+ */
+const MAX_CONFLICT_LINES = 10_000;
+
+/** The library's editor, loaded the first time a file's edited. */
+let editorModule: Promise<typeof EditModule> | undefined;
+const loadEditor = () => (editorModule ??= import("@pierre/diffs/edit"));
+
+/** The library's view of a conflicted file, with the lines it shows around the conflicts in reach. */
+class ConflictFile extends UnresolvedFile<undefined> {
+  /** Shows no more lines around the conflicts than it did at first, as for another file. */
+  resetExpanded(): void {
+    this.hunksRenderer.setExpandedHunksMap(new Map());
+  }
+}
+
+/** The file's text and what's shown of it: its conflicts, or the whole of it without. */
+interface Shown {
+  fileKey: string;
+  contents: string;
+  /** Its version on disk; `null` while that isn't known. */
+  version: string | null;
+  /** Its conflicts, if they're shown one by one. */
+  state: ConflictState | undefined;
+  problem: string | undefined;
+}
+
+/**
+ * A conflicted file's conflicts, each with buttons to keep ours, theirs or both, and the lines
+ * around them, more of which are shown when asked. Resolving one rewrites its region of the file,
+ * which is written to disk (`save`) before it's shown, highlighted: in its place, so the view stays
+ * where it is. A file without conflicts left, or whose markers can't be read as conflicts, is shown
+ * whole instead.
+ *
+ * Given the file as it's read from disk again (`disk`), it shows it only if it's changed by
+ * something else since, e.g. another editor: not again as it was written here, nor as it was read
+ * before that. While it's edited (`editing`), the whole file is, markers and all, in place, and
+ * what's read from disk is held until editing stops.
+ */
+export default function ConflictViewer(props: {
+  /** Names the file: another name is another file, which starts at its top. */
+  fileKey: string;
+  path: string;
+  /** The file as it was last read from disk; `undefined` until it's read. */
+  disk: DiskFile | undefined;
+  /** Writes `contents` over the file at `version`; resolves to its new version. */
+  save: (contents: string, version: string) => Promise<string>;
+  /** Edits the whole file in place; changing to false keeps the edits on show. */
+  editing: boolean;
+  onEditing: (session: EditSession | undefined) => void;
+  onEdit: (text: string) => void;
+  onEditFailed: (message: string) => void;
+  onProgress: (progress: ConflictProgress) => void;
+  onCommands: (commands: ConflictCommands | undefined) => void;
+  /** Why the last conflict couldn't be resolved; `undefined` once one is. */
+  onError: (message: string | undefined) => void;
+  /** The file read last is on show. */
+  onShown: () => void;
+}) {
+  const { theme } = useTheme();
+  let scroller: HTMLDivElement | undefined;
+  let conflictsWrapper: HTMLDivElement | undefined;
+  let fileWrapper: HTMLDivElement | undefined;
+
+  const connected = useConnected(() => scroller);
+  createEffect(() => {
+    if (!connected() || !scroller || !conflictsWrapper || !fileWrapper) return;
+    untrack(() => setUp(scroller!, conflictsWrapper!, fileWrapper!));
+  });
+
+  function setUp(root: HTMLDivElement, wrapper: HTMLDivElement, wholeWrapper: HTMLDivElement) {
+    const highlights = new ViewHighlights();
+    /** The file on show. */
+    let shown: Shown | undefined;
+    /** The text each diff on show was of, to fill it in with the whole file's. */
+    const texts = new WeakMap<FileDiffMetadata, string>();
+    /** Versions of the file that were written over here: read from disk before that, and stale. */
+    const superseded = new Set<string>();
+    /** The conflict the header's buttons and keys are of, by its index. */
+    let current: number | undefined;
+    let saving = false;
+    let disposed = false;
+
+    const report = () => {
+      const left = conflictsLeft(shown?.state);
+      const at = current === undefined ? -1 : left.indexOf(current);
+      props.onProgress({
+        left: left.length,
+        current: at === -1 ? undefined : at + 1,
+        saving,
+        version: shown?.version ?? null,
+        problem: shown?.problem,
+      });
+      markCurrent();
+    };
+
+    // The conflicts' buttons, in the library's rows for them: elements of the page, not of the
+    // diff's shadow root, so they're styled like the rest of it.
+    const renderActions = (action: ConflictAction) => {
+      const row = document.createElement("div");
+      row.dataset.conflict = String(action.conflictIndex);
+      row.className =
+        "flex min-w-0 items-center gap-1 py-[3px] pl-2 font-sans text-[11.5px] text-muted data-current:text-text-soft data-current:shadow-[inset_2px_0_0_var(--primary)]";
+      // Drawn again as the library sees fit, e.g. once it's highlighted.
+      row.toggleAttribute("data-current", action.conflictIndex === current);
+      const choices: [Resolution, string, string][] = [
+        ["current", "Keep ours", markerLabel(action.markerLines.start)],
+        ["incoming", "Keep theirs", markerLabel(action.markerLines.end)],
+        ["both", "Keep both", ""],
+      ];
+      for (const [resolution, label, side] of choices) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = label;
+        button.title = side ? `${label}: ${side}` : "Keep both, ours first";
+        button.className =
+          "h-[22px] cursor-pointer rounded-[5px] border border-border bg-panel-raised px-2 text-[11.5px] font-[600] text-text-soft enabled:hover:border-[color-mix(in_srgb,var(--primary)_45%,var(--border))] enabled:hover:text-text focus-ring disabled:cursor-default disabled:opacity-50";
+        button.disabled = saving;
+        button.addEventListener("click", () => request(action, resolution));
+        row.append(button);
+      }
+      const sides = document.createElement("span");
+      sides.className = "ml-1.5 truncate text-faint";
+      const ours = markerLabel(action.markerLines.start);
+      const theirs = markerLabel(action.markerLines.end);
+      sides.textContent = ours || theirs ? `${ours || "ours"} ⟷ ${theirs || "theirs"}` : "";
+      row.append(sides);
+      return row;
+    };
+
+    /** Marks the current conflict's row, and turns the buttons off while one is being saved. */
+    const markCurrent = () => {
+      for (const row of wrapper.querySelectorAll<HTMLElement>("[data-conflict]")) {
+        const isCurrent = row.dataset.conflict === String(current);
+        row.toggleAttribute("data-current", isCurrent);
+        for (const button of row.querySelectorAll("button")) button.disabled = saving;
+      }
+    };
+
+    const options = (): UnresolvedFileOptions<undefined> => ({
+      theme: THEMES,
+      themeType: theme(),
+      disableFileHeader: true,
+      unsafeCSS: CONFLICT_CSS,
+      onPostRender: focusableExpandButtons,
+      hunkSeparators: "line-info",
+      maxContextLines: CONTEXT_LINES,
+      mergeConflictActionsType: renderActions,
+      // Told what the user chose, rather than resolving by itself: it's written to disk first.
+      onMergeConflictAction: ({ conflict, resolution }) => {
+        const action = shown?.state?.actions[conflict.conflictIndex];
+        if (action) request(action, resolution);
+      },
+      // The whole of both sides, from the text the diff is of: to show more lines around the
+      // conflicts, highlighted first, as `loadFiles` does for a patch.
+      loadDiffFiles: async (diff) => {
+        const text = texts.get(diff);
+        if (text === undefined || !diff.cacheKey) throw new Error("The file has changed since.");
+        const files = wholeSides(props.path, text, diff.cacheKey);
+        await highlights.highlight(
+          hydratePartialDiff("clone", diff, files),
+          EXPAND_HIGHLIGHT_WAIT_MS,
+        );
+        return files;
+      },
+    });
+    const conflicts = new ConflictFile(options(), workerPool());
+
+    /** The whole file, shown in place of its conflicts, and edited, through a virtualizer. */
+    let whole: { file: VirtualizedFile<undefined>; virtualizer: Virtualizer } | undefined;
+    const wholeOptions = () => ({
+      theme: THEMES,
+      themeType: theme(),
+      disableFileHeader: true,
+      unsafeCSS: APP_CSS,
+      onEditChange: (event: { file: FileContents }) => props.onEdit(event.file.contents),
+      // Shown afresh once editing stops, as the edits' conflicts are (see `stopEditing`).
+      onEditComplete: () => "reject" as const,
+    });
+
+    /** Shows `contents` whole, rather than its conflicts, highlighted first. */
+    const showWhole = async (contents: string, cacheKey: string) => {
+      const file = { name: props.path, contents, cacheKey };
+      await Promise.race([
+        workerPool()
+          .primeFileHighlightCache(file)
+          .catch(() => undefined),
+        new Promise((resolve) => setTimeout(resolve, HIGHLIGHT_WAIT_MS)),
+      ]);
+      if (disposed) return;
+      if (!whole) {
+        const virtualizer = new Virtualizer();
+        virtualizer.setup(root, wholeWrapper);
+        whole = {
+          file: new VirtualizedFile(wholeOptions(), virtualizer, undefined, workerPool()),
+          virtualizer,
+        };
+      }
+      wrapper.hidden = true;
+      wholeWrapper.hidden = false;
+      whole.file.render({ file, containerWrapper: wholeWrapper });
+    };
+
+    const hideWhole = () => {
+      wrapper.hidden = false;
+      wholeWrapper.hidden = true;
+      if (!whole) return;
+      whole.file.cleanUp();
+      whole.virtualizer.cleanUp();
+      whole = undefined;
+    };
+
+    /**
+     * Shows `contents`: its conflicts, or the whole of it. Another file starts at its top; the
+     * same one changed elsewhere stays where it's scrolled to.
+     */
+    const showText = async (fileKey: string, contents: string, version: string | null) => {
+      const other = shown?.fileKey !== fileKey;
+      // Named by what's in it: a file that's back to what it was is shown as it was then.
+      const cacheKey = conflictsCacheKey(fileKey, contents, version);
+      let state: ConflictState | undefined;
+      let problem: string | undefined;
+      try {
+        state = parseConflicts(props.path, contents, cacheKey);
+        if (state && drawnLines(state.diff) > MAX_CONFLICT_LINES) {
+          state = undefined;
+          problem =
+            "This file's conflicts are too long to show one by one. Edit it by hand, or keep one side.";
+        }
+      } catch {
+        problem = "This file's conflict markers can't be read as conflicts. Edit them by hand.";
+      }
+      if (state) {
+        await highlights.highlight(state.diff, HIGHLIGHT_WAIT_MS);
+        if (disposed) return;
+        hideWhole();
+        texts.set(state.diff, contents);
+        if (other) root.scrollTop = 0;
+        // The lines shown around the conflicts are by hunk, which another text's don't match.
+        conflicts.resetExpanded();
+        const last = shown?.state?.diff;
+        conflicts.render({
+          file: state.file,
+          fileDiff: state.diff,
+          actions: state.actions,
+          markerRows: state.markerRows,
+          containerWrapper: wrapper,
+          forceRender: true,
+        });
+        if (last && last !== state.diff) forget(last);
+      } else {
+        await showWhole(contents, cacheKey);
+        if (disposed) return;
+        if (other) root.scrollTop = 0;
+      }
+      shown = { fileKey, contents, version, state, problem };
+      current = conflictsLeft(state)[0];
+      report();
+      // Only the file as it was read from disk: not edits whose version isn't known yet.
+      if (version !== null) props.onShown();
+    };
+
+    // What's to be done, one thing at a time: the file as it was read again, and the conflicts
+    // the user resolved, in turn.
+    let wanted: { fileKey: string; disk: DiskFile } | undefined;
+    const requests: { action: ConflictAction; resolution: Resolution }[] = [];
+    let running = false;
+    /** The work under way, which editing waits for. */
+    let active: Promise<void> = Promise.resolve();
+    let editing = false;
+
+    const run = (): Promise<void> => {
+      if (running) return active;
+      running = true;
+      active = work();
+      return active;
+    };
+    const work = async () => {
+      try {
+        for (;;) {
+          // Editing holds the rest until it stops.
+          if (disposed || editing) break;
+          if (wanted) {
+            const next = wanted;
+            wanted = undefined;
+            // oxlint-disable-next-line no-await-in-loop -- one at a time, in order.
+            await sync(next.fileKey, next.disk);
+            continue;
+          }
+          const next = requests.shift();
+          if (!next) break;
+          // oxlint-disable-next-line no-await-in-loop -- each from the text the last one left.
+          await resolveConflict(next.action, next.resolution);
+        }
+      } finally {
+        running = false;
+      }
+    };
+
+    /** Shows the file as it was read from disk, if that's news. */
+    const sync = async (fileKey: string, disk: DiskFile) => {
+      if (shown?.fileKey !== fileKey) {
+        superseded.clear();
+        requests.length = 0;
+        await showText(fileKey, disk.contents, disk.version);
+        return;
+      }
+      if (disk.contents === shown.contents) {
+        // Written here, or the same again: only its version is news.
+        const known = shown.version !== null;
+        shown.version = disk.version;
+        report();
+        if (!known) props.onShown();
+        return;
+      }
+      if (superseded.has(disk.version)) return;
+      // Changed elsewhere: what was asked of the last text isn't of this one.
+      requests.length = 0;
+      await showText(fileKey, disk.contents, disk.version);
+    };
+
+    const request = (action: ConflictAction, resolution: Resolution) => {
+      requests.push({ action, resolution });
+      void run();
+    };
+
+    /**
+     * Resolves the conflict `action` is of, if it's still on show: writes the text that leaves to
+     * disk, and shows it once it's written and highlighted, in the last one's place.
+     */
+    const resolveConflict = async (action: ConflictAction, resolution: Resolution) => {
+      const from = shown;
+      const index = action.conflictIndex;
+      if (!from?.state || from.state.actions[index] !== action || from.version === null) return;
+      const resolved = conflicts.resolveConflict(index, resolution, from.state.diff);
+      if (!resolved) return;
+      const state: ConflictState = {
+        file: resolved.file,
+        diff: resolved.fileDiff,
+        actions: resolved.actions,
+        markerRows: resolved.markerRows,
+      };
+      saving = true;
+      report();
+      try {
+        const [version] = await Promise.all([
+          props.save(resolved.file.contents, from.version),
+          highlights.highlight(state.diff, HIGHLIGHT_WAIT_MS),
+        ]);
+        superseded.add(from.version);
+        if (disposed) return;
+        texts.set(state.diff, resolved.file.contents);
+        // In the last one's place: the lines shown around the conflicts are kept, by hunk.
+        conflicts.render({
+          file: state.file,
+          fileDiff: state.diff,
+          actions: state.actions,
+          markerRows: state.markerRows,
+          containerWrapper: wrapper,
+        });
+        forget(from.state.diff);
+        shown = { ...from, contents: resolved.file.contents, version, state };
+        // On to the next one, or the one before if it was the last.
+        const left = conflictsLeft(state);
+        current = left.find((other) => other > index) ?? left.at(-1);
+        props.onError(undefined);
+      } catch (error) {
+        props.onError(error instanceof Error ? error.message : String(error));
+      } finally {
+        saving = false;
+        report();
+      }
+    };
+
+    /** Scrolls to the conflict `index`, which becomes the current one. */
+    const goTo = (index: number | undefined) => {
+      if (index === undefined) return;
+      current = index;
+      report();
+      wrapper
+        .querySelector<HTMLElement>(`[data-conflict="${index}"]`)
+        ?.scrollIntoView({ block: "center" });
+    };
+    /** Goes to the conflict after the current one, or before it, round to the other end. */
+    const step = (by: 1 | -1) => {
+      const left = conflictsLeft(shown?.state);
+      const at = current === undefined ? -1 : left.indexOf(current);
+      if (at === -1) goTo(by === 1 ? left[0] : left.at(-1));
+      else goTo(left[(at + by + left.length) % left.length]);
+    };
+    props.onCommands({
+      next: () => step(1),
+      previous: () => step(-1),
+      resolve: (resolution) => {
+        const action = current === undefined ? undefined : shown?.state?.actions[current];
+        if (action) request(action, resolution);
+      },
+    });
+
+    // Editing the whole file, markers and all.
+    let editor: Editor<"file", undefined> | undefined;
+    let finishEditing: (() => void) | undefined;
+
+    const startEditing = async () => {
+      if (editing) return;
+      editing = true;
+      // Once what's under way is done: a conflict being written, say.
+      await active;
+      const from = shown;
+      if (!from || from.version === null) {
+        editing = false;
+        props.onEditFailed("The file is still being saved. Try again in a moment.");
+        return;
+      }
+      try {
+        // Where the current conflict is, to be there in the whole file.
+        const line =
+          current === undefined ? undefined : from.state?.actions[current]?.conflict.startLineIndex;
+        const [{ Editor: EditorClass }] = await Promise.all([
+          loadEditor(),
+          showWhole(from.contents, conflictsCacheKey(from.fileKey, from.contents, from.version)),
+        ]);
+        if (disposed || !editing || !whole) return;
+        // At the current conflict, a third of the way down, as it was among the conflicts: once
+        // the editor's on the page, as before that there's nowhere to scroll it to.
+        const opened = new EditorClass<"file", undefined>("file", {
+          onAttach: (attached) =>
+            attached.focus(
+              line === undefined
+                ? { lineNumber: "first-visible" }
+                : { lineNumber: line + 1, offset: root.clientHeight / 3 },
+            ),
+        });
+        editor = opened;
+        finishEditing = opened.edit(whole.file);
+        props.onEditing({
+          version: from.version,
+          discard: () => void stopEditing(true),
+          hasSelection: () => {
+            const selections = opened.getViewState().selections ?? [];
+            const [first] = selections;
+            if (selections.length !== 1 || !first) return selections.length > 1;
+            return (
+              first.start.line !== first.end.line || first.start.character !== first.end.character
+            );
+          },
+        });
+      } catch (error) {
+        if (disposed || !editing) return;
+        editing = false;
+        props.onEditFailed(error instanceof Error ? error.message : String(error));
+        void run();
+      }
+    };
+
+    /**
+     * Stops editing: shows the edits' conflicts, or the file as it was before them if they're
+     * dropped, until it's read from disk again. Either way, its version on disk isn't known until
+     * then: the edits were saved meanwhile, or the file changed on disk, which is why they're
+     * dropped.
+     */
+    const stopEditing = async (discard: boolean) => {
+      if (!editing) return;
+      const opened = editor;
+      const text = opened?.getText();
+      editor = undefined;
+      if (discard) opened?.cleanUp("discard");
+      else finishEditing?.();
+      finishEditing = undefined;
+      editing = false;
+      // Once whoever stopped it is done: dropping the edits, say, which it'd otherwise save.
+      if (opened) queueMicrotask(() => props.onEditing(undefined));
+      const from = shown;
+      if (from) {
+        await showText(from.fileKey, !discard && text !== undefined ? text : from.contents, null);
+      }
+      void run();
+    };
+
+    createEffect(
+      on(
+        () => [props.fileKey, props.disk] as const,
+        ([fileKey, disk]) => {
+          if (!disk) return;
+          wanted = { fileKey, disk };
+          void run();
+        },
+      ),
+    );
+    createEffect(
+      on(
+        () => props.editing,
+        (edit) => void (edit ? startEditing() : stopEditing(false)),
+        { defer: true },
+      ),
+    );
+    createEffect(
+      on(
+        theme,
+        (type) => {
+          conflicts.setThemeType(type);
+          whole?.file.setThemeType(type);
+        },
+        { defer: true },
+      ),
+    );
+
+    onCleanup(() => {
+      disposed = true;
+      props.onCommands(undefined);
+      if (finishEditing) {
+        finishEditing();
+        props.onEditing(undefined);
+      }
+      hideWhole();
+      conflicts.cleanUp();
+      highlights.drop();
+    });
+  }
+
+  return (
+    <div
+      ref={(el) => (scroller = el)}
+      // Focusable, to scroll it with the keyboard, and step through the conflicts with it.
+      tabIndex={0}
+      aria-label="Conflicts"
+      aria-keyshortcuts="[ ] O T B"
+      class="group h-full min-h-0 overflow-auto bg-bg outline-none [--diffs-font-size:12px] [--diffs-line-height:20px] focus-visible:shadow-[inset_0_0_0_1px_var(--primary)]"
+    >
+      <div ref={(el) => (conflictsWrapper = el)} class="[&>*]:min-h-px" />
+      <div ref={(el) => (fileWrapper = el)} hidden class="[&>*]:min-h-px" />
+    </div>
+  );
+}
+
+/** The app's colours (see `APP_CSS`), and the sides' markers named as the buttons name them. */
+const CONFLICT_CSS = `${APP_CSS}
+[data-merge-conflict=marker-start]:after {
+  content: "(ours)";
+}
+[data-merge-conflict=marker-end]:after {
+  content: "(theirs)";
+}`;
+
+/** How many lines the library draws of `diff`: its hunks', not those between them. */
+function drawnLines(diff: FileDiffMetadata): number {
+  return diff.hunks.reduce((lines, hunk) => lines + hunk.unifiedLineCount, 0);
+}
+
+/**
+ * Parses and highlights a conflicted file's conflicts ahead of showing them, as the viewer names
+ * them, so they show at once. Nothing for one without conflicts, or whose markers can't be read.
+ */
+export function prepareConflicts(
+  fileKey: string,
+  path: string,
+  contents: string,
+  version: string,
+): void {
+  let state: ConflictState | undefined;
+  try {
+    state = parseConflicts(path, contents, conflictsCacheKey(fileKey, contents, version));
+  } catch {
+    // Said once it's opened.
+  }
+  if (state)
+    void workerPool()
+      .primeDiffHighlightCache(state.diff)
+      .catch(() => undefined);
+}

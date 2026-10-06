@@ -144,6 +144,32 @@ export class PatchChangedError extends MessageError {
 /** Lines that can't be staged or unstaged on their own, e.g. of a binary file. */
 export class LinesNotStageableError extends MessageError {}
 
+/**
+ * Conflicted files that still have conflict markers, which staging would mark resolved with the
+ * markers in them.
+ */
+export class ConflictMarkersError extends MessageError {
+  constructor(readonly paths: string[]) {
+    const [first] = paths;
+    const others = paths.length - 1;
+    super(
+      others === 0
+        ? `${first} still has conflict markers. Resolve its conflicts, then mark it resolved.`
+        : `${first} and ${others} other ${others === 1 ? "file" : "files"} still have conflict markers. Resolve their conflicts first.`,
+    );
+  }
+}
+
+/** A conflict that changed since it was shown, e.g. resolved in a terminal: nothing was done. */
+export class ConflictChangedError extends MessageError {
+  constructor(path: string) {
+    super(`The conflict in ${path} changed since it was shown, so nothing was resolved.`);
+  }
+}
+
+/** No merge, rebase, cherry-pick, revert or `git am` is under way, or another one than shown. */
+export class NoOperationError extends MessageError {}
+
 /** No repository with that id has been added to Gitto. */
 export class RepositoryNotFoundError extends MessageError {
   constructor(readonly repositoryId: string) {

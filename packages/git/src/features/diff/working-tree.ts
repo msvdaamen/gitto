@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { open, realpath, rename, rm } from "node:fs/promises";
+import { open, realpath, rename, rm, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 
 import {
@@ -81,8 +81,36 @@ export async function readWorkingTreeFile(repo: Repo, path: string): Promise<Wor
   return { contents: decodeUtf8(bytes), version: versionOf(bytes) };
 }
 
-/** The bytes and permissions of the file at `resolved` (the path `path` leads to). */
-async function readFile(resolved: string, path: string): Promise<{ bytes: Buffer; mode: number }> {
+/**
+ * The bytes of the file at `path` in the working tree, as `readWorkingTreeFile` reads them, and
+ * their version; `undefined` if there's no file there: nothing, or a folder, like a submodule's.
+ */
+export async function readWorkingTreeBytes(
+  repo: Repo,
+  path: string,
+  maxBytes = MAX_BLOB_BYTES,
+): Promise<{ bytes: Buffer; version: string } | undefined> {
+  let resolved: string;
+  try {
+    resolved = await resolveWorkingTreePath(repo, path);
+    if (!(await stat(resolved)).isFile()) return undefined;
+  } catch (error) {
+    if (error instanceof WorkingTreeFileNotFoundError) return undefined;
+    throw error;
+  }
+  const { bytes } = await readFile(resolved, path, maxBytes);
+  return { bytes, version: versionOf(bytes) };
+}
+
+/**
+ * The bytes and permissions of the file at `resolved` (the path `path` leads to); rejects with
+ * `FileTooLargeError` above `maxBytes`.
+ */
+async function readFile(
+  resolved: string,
+  path: string,
+  maxBytes = MAX_BLOB_BYTES,
+): Promise<{ bytes: Buffer; mode: number }> {
   // Not following a link put in its place since it was checked, and not waiting for a writer, as
   // opening a named pipe would: it's no file to read, which is only known once it's open.
   const file = await open(
@@ -92,14 +120,15 @@ async function readFile(resolved: string, path: string): Promise<{ bytes: Buffer
   try {
     const stats = await file.stat();
     if (!stats.isFile()) throw new OutsideRepositoryError(path);
-    if (stats.size > MAX_BLOB_BYTES) throw new FileTooLargeError(stats.size);
+    if (stats.size > maxBytes) throw new FileTooLargeError(stats.size);
     return { bytes: await file.readFile(), mode: stats.mode };
   } finally {
     await file.close();
   }
 }
 
-function versionOf(bytes: Uint8Array): string {
+/** Names `bytes`, the contents of a file in the working tree: what a save checks it still has. */
+export function versionOf(bytes: Uint8Array): string {
   return createHash("sha1").update(bytes).digest("hex");
 }
 
@@ -210,7 +239,7 @@ function toCrlf(text: string): string {
 const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 /** `bytes` as UTF-8; rejects with `NotUtf8Error` if they aren't. */
-function decodeUtf8(bytes: Uint8Array): string {
+export function decodeUtf8(bytes: Uint8Array): string {
   try {
     return utf8.decode(bytes);
   } catch {

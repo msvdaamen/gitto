@@ -31,7 +31,13 @@ describe("parseStatus", () => {
       { path: "src/a file.ts", origPath: null, staged: null, unstaged: "modified" },
       { path: "added.ts", origPath: null, staged: "added", unstaged: null },
       { path: "new name.ts", origPath: "old name.ts", staged: "renamed", unstaged: null },
-      { path: "conflict.ts", origPath: null, staged: "conflicted", unstaged: "conflicted" },
+      {
+        path: "conflict.ts",
+        origPath: null,
+        staged: "conflicted",
+        unstaged: "conflicted",
+        conflict: { xy: "UU", ours: "100644", theirs: "100644" },
+      },
       { path: "untracked file.txt", origPath: null, staged: null, unstaged: "untracked" },
     ]);
   });

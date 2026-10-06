@@ -91,6 +91,7 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
         icon={FilePen}
         files={changes.unstaged()}
         uncounted={changes.uncounted()}
+        markerFree={changes.markerFree()}
         empty="Nothing left to stage."
         bulkLabel="Stage all"
         busy={busy()}
@@ -138,6 +139,8 @@ function FileSection(props: {
   tone?: "mint";
   files: ChangedFile[];
   uncounted: boolean;
+  /** The conflicted files that are ready to be marked resolved, with no markers left. */
+  markerFree?: ReadonlySet<string>;
   /** Marks the list, so it starts at the top again in another repository (see `SCROLL_IDS`). */
   scrollId: ScrollId;
   /** Which side of the uncommitted changes the files are. */
@@ -176,6 +179,7 @@ function FileSection(props: {
           <ChangedFileList
             files={props.files}
             uncounted={props.uncounted}
+            markerFree={props.markerFree}
             scrollElement={scrollElement()}
             action={props.action}
             onOpen={props.opener && ((file) => props.opener?.open(props.source, file))}

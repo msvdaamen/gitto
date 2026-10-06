@@ -11,6 +11,12 @@ export const StatusFileSchema = z.object({
   staged: FileStatusSchema.nullable(),
   /** Change in the working tree relative to the index; `null` when there's nothing unstaged. */
   unstaged: FileStatusSchema.nullable(),
+  /**
+   * How a conflicted file conflicts, as `git status` says: `UU` both modified, `AA` both added,
+   * `UD` and `DU` deleted by them and by us, `AU` and `UA` added by us and by them only, `DD`
+   * deleted by both; with the modes ours and theirs have (`000000` where it's not there).
+   */
+  conflict: z.object({ xy: z.string(), ours: z.string(), theirs: z.string() }).optional(),
 });
 
 export type StatusFile = z.infer<typeof StatusFileSchema>;
@@ -47,6 +53,11 @@ export const WorkingTreeFilesSchema = z.object({
    * has line counts then, binary or not.
    */
   uncounted: z.boolean(),
+  /**
+   * The conflicted text files, changed or added on both sides, that have no conflict markers left:
+   * resolved in the working tree, but not marked resolved (staged) yet.
+   */
+  markerFree: z.array(z.string()),
 });
 
 export type WorkingTreeFiles = z.infer<typeof WorkingTreeFilesSchema>;

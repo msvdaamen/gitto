@@ -49,6 +49,7 @@ describe("staging files", () => {
       staged: [change],
       unstaged: [untrackedFile],
       uncounted: false,
+      markerFree: [],
     });
 
     await unstage(repo, ["a file.txt"]);
@@ -56,6 +57,7 @@ describe("staging files", () => {
       staged: [],
       unstaged: [change, untrackedFile],
       uncounted: false,
+      markerFree: [],
     });
   });
 
@@ -72,6 +74,7 @@ describe("staging files", () => {
       staged: [{ path: "x y.txt", status: "added", origPath: null, additions: 1, deletions: 0 }],
       unstaged: [],
       uncounted: false,
+      markerFree: [],
     });
 
     await unstage(repo, ["x y.txt"]);
@@ -156,7 +159,13 @@ describe("a big working tree", () => {
     await unstageAll(repo);
     expect(await statusFiles(repo)).toEqual([
       { path: "other.txt", origPath: null, staged: null, unstaged: "modified" },
-      { path: "both.txt", origPath: null, staged: "conflicted", unstaged: "conflicted" },
+      {
+        path: "both.txt",
+        origPath: null,
+        staged: "conflicted",
+        unstaged: "conflicted",
+        conflict: { xy: "UU", ours: "100644", theirs: "100644" },
+      },
     ]);
     expect(existsSync(join(path, ".git", "MERGE_HEAD"))).toBe(true);
   });

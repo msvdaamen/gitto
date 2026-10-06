@@ -7,7 +7,6 @@ import Columns2 from "lucide-solid/icons/columns-2";
 import FileCheck from "lucide-solid/icons/file-check";
 import FileWarning from "lucide-solid/icons/file-exclamation-point";
 import FolderGit from "lucide-solid/icons/folder-git-2";
-import GitMerge from "lucide-solid/icons/git-merge";
 import LoaderCircle from "lucide-solid/icons/loader-circle";
 import Minus from "lucide-solid/icons/minus";
 import Plus from "lucide-solid/icons/plus";
@@ -58,6 +57,7 @@ import { useUnsuspendedData } from "@/git/queries/unsuspended";
 import { useDelayed } from "@/hooks/delayed";
 import { useDiffStyle } from "@/hooks/diff-style";
 
+import { prefetchConflict, useConflictResolution } from "./conflict-resolution";
 import { useFileEditing } from "./file-editing";
 import { useFileStaging } from "./file-staging";
 import type * as ViewerModule from "./patch-viewer";
@@ -102,6 +102,10 @@ export function prefetchFileDiff(
   file: ChangedFile,
   uncounted = false,
 ): void {
+  if (file.status === "conflicted" && source.kind === "unstaged") {
+    prefetchConflict(client, repositoryId, diffFileKey(source, file.path), file.path);
+    return;
+  }
   const counts = countsOf(file);
   if (!hasPatch(file, uncounted) || !counts || totalLines(counts) > PREFETCH_DIFF_LINES) return;
   void Promise.all([fetchFilePatch(client, repositoryId, source, file), loadViewer()])
@@ -121,7 +125,7 @@ export function prefetchFileDiff(
  * An uncommitted file can be staged, or unstaged, whole, or its lines a hunk or a selection at a
  * time (see `useFileStaging`), one at a time; an unstaged one can be edited (see
  * `useFileEditing`). Once that leaves it without changes on its side, the next file in its list
- * opens.
+ * opens. A conflicted one shows its conflicts instead, to resolve (see `useConflictResolution`).
  */
 export function FileDiffView(props: {
   repositoryId: string;
@@ -241,8 +245,9 @@ export function FileDiffView(props: {
     (showsPatch() && shownPatch()) || {
       key: fileKey(),
       file: file(),
-      // None to count once it has no changes left on its side.
-      counts: gone() || empty() ? undefined : counts(),
+      // None to count once it has no changes left on its side, nor for a conflict: git counts
+      // them against one side.
+      counts: gone() || empty() || conflict.active() ? undefined : counts(),
     };
   // Whether the whole file is being loaded, to show more of it, and why it couldn't be.
   const [loadingFiles, setLoadingFiles] = createSignal(false);
@@ -253,11 +258,12 @@ export function FileDiffView(props: {
    * text that's there, and not a link.
    */
   const editable = () =>
-    props.source.kind === "unstaged" &&
-    showsPatch() &&
-    shown().key === fileKey() &&
-    file().status !== "deleted" &&
-    !isLink(current()?.patch ?? "");
+    (props.source.kind === "unstaged" &&
+      showsPatch() &&
+      shown().key === fileKey() &&
+      file().status !== "deleted" &&
+      !isLink(current()?.patch ?? "")) ||
+    conflict.editable();
 
   /** Whether the file in the header is another one, still on show while this one's changes load. */
   const showsOther = () => shown().key !== fileKey();
@@ -277,6 +283,17 @@ export function FileDiffView(props: {
     leave: fileEditing.leave,
     open: (target) => props.onOpen(props.source, target),
   });
+  const conflict = useConflictResolution({
+    repositoryId: () => props.repositoryId,
+    file,
+    fileKey,
+    files: lists.files,
+    editing,
+    leave: fileEditing.leave,
+    viewer: fileEditing.viewer,
+    onShown: () => fileEditing.onShown(),
+    open: (side, target) => props.onOpen(side, target),
+  });
 
   let section: HTMLElement | undefined;
   const onKeyDown = (event: KeyboardEvent) => {
@@ -286,9 +303,14 @@ export function FileDiffView(props: {
   };
   onMount(() => {
     // On the window, so it hears Esc after a popover, menu or dialog has (on the document): one
-    // that closes on it marks it handled, and the changes stay open.
+    // that closes on it marks it handled, and the changes stay open. So are the conflicts' keys,
+    // wherever the focus is but in a field.
     window.addEventListener("keydown", onKeyDown);
-    onCleanup(() => window.removeEventListener("keydown", onKeyDown));
+    window.addEventListener("keydown", conflict.onKeyDown);
+    onCleanup(() => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keydown", conflict.onKeyDown);
+    });
   });
   // The focus goes back to what opened the changes, like the file's row, once they close with it
   // inside: it would be lost to the page otherwise.
@@ -333,7 +355,8 @@ export function FileDiffView(props: {
         counts={shown().counts}
         source={props.source}
         busy={busy()}
-        wholeFile={fileStaging.wholeFile()}
+        wholeFile={conflict.active() ? undefined : fileStaging.wholeFile()}
+        conflict={conflict.active() ? <conflict.Controls /> : undefined}
         stagingDisabled={fileStaging.staging() || showsOther()}
         onStageWhole={() => void fileStaging.stageWhole()}
         previous={previous()}
@@ -345,6 +368,9 @@ export function FileDiffView(props: {
       </FileDiffHeader>
       <fileEditing.Banner />
       <fileStaging.Banner />
+      <Show when={conflict.active()}>
+        <conflict.Banner />
+      </Show>
       <Show when={filesError()}>{(message) => <Notice message={message()} />}</Show>
 
       <div class="min-h-0 flex-1">
@@ -358,10 +384,8 @@ export function FileDiffView(props: {
               onOpen={props.onOpen}
             />
           </Match>
-          <Match when={file().status === "conflicted"}>
-            <EmptyState icon={GitMerge} title="This file has conflicts" class="h-full">
-              Resolve them in your editor, then stage the file.
-            </EmptyState>
+          <Match when={conflict.active()}>
+            <conflict.View />
           </Match>
           <Match when={isNestedRepository(file())}>
             <EmptyState icon={FolderGit} title="Another repository" class="h-full">
@@ -471,6 +495,8 @@ function FileDiffHeader(props: {
   wholeFile: "stage" | "unstage" | undefined;
   /** Whether it can't be right now: something's being staged, or another file's on show. */
   stagingDisabled: boolean;
+  /** Resolving the file's conflicts, in place of staging it (see `useConflictResolution`). */
+  conflict?: JSX.Element;
   onStageWhole: () => void;
   /** The files a step away in the list, if there are any. */
   previous: ChangedFile | undefined;
@@ -537,6 +563,10 @@ function FileDiffHeader(props: {
             </>
           )}
         </Show>
+        <Show when={props.conflict}>
+          {props.conflict}
+          <span class="mx-1.5 h-4 w-px bg-border" />
+        </Show>
         <Show when={props.source.kind === "unstaged"}>
           {props.children}
           <span class="mx-1.5 h-4 w-px bg-border" />
@@ -553,19 +583,22 @@ function FileDiffHeader(props: {
           disabled={!props.next}
           onClick={() => props.next && props.onOpen(props.source, props.next)}
         />
-        <span class="mx-1.5 h-4 w-px bg-border" />
-        <IconButton
-          label="Unified"
-          icon={Rows2}
-          active={diffStyle() === "unified"}
-          onClick={() => setDiffStyle("unified")}
-        />
-        <IconButton
-          label="Side by side"
-          icon={Columns2}
-          active={diffStyle() === "split"}
-          onClick={() => setDiffStyle("split")}
-        />
+        {/* Conflicts are shown one way only, ours above theirs. */}
+        <Show when={!props.conflict}>
+          <span class="mx-1.5 h-4 w-px bg-border" />
+          <IconButton
+            label="Unified"
+            icon={Rows2}
+            active={diffStyle() === "unified"}
+            onClick={() => setDiffStyle("unified")}
+          />
+          <IconButton
+            label="Side by side"
+            icon={Columns2}
+            active={diffStyle() === "split"}
+            onClick={() => setDiffStyle("split")}
+          />
+        </Show>
       </span>
     </header>
   );

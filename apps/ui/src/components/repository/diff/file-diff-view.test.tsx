@@ -70,7 +70,7 @@ function setChanges(changes: Partial<WorkingTreeFiles>) {
     ahead: 0,
     behind: 0,
     counts: { files: 0, staged: 0, unstaged: 0, conflicted: 0 },
-    changes: { staged: [], unstaged: [], uncounted: false, ...changes },
+    changes: { staged: [], unstaged: [], uncounted: false, markerFree: [], ...changes },
     version: String(Math.random()),
   };
 }
@@ -325,15 +325,6 @@ describe("an uncommitted file's changes", () => {
     renderView(log, {}, UNSTAGED);
 
     expect(await screen.findByText(/25,000 lines changed/)).toBeInTheDocument();
-  });
-
-  it("doesn't load a conflicted file's patch", async () => {
-    const conflicted = { ...file("both.txt"), status: "conflicted" } as const;
-    setChanges({ unstaged: [conflicted] });
-    renderView(conflicted, {}, UNSTAGED);
-
-    expect(await screen.findByText("This file has conflicts")).toBeInTheDocument();
-    expect(rpc.git.diff.unstagedFilePatch).not.toHaveBeenCalled();
   });
 
   it("stays on the page while they're refetched, so the view keeps its scroll position", async () => {

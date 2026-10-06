@@ -23,7 +23,7 @@ const status: Uncommitted = {
   ahead: 0,
   behind: 0,
   counts: { files: 2, staged: 1, unstaged: 1, conflicted: 0 },
-  changes: { staged: [], unstaged: [], uncounted: false },
+  changes: { staged: [], unstaged: [], uncounted: false, markerFree: [] },
   version: "v1",
 };
 const clean: Uncommitted = {

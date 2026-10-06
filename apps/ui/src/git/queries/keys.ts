@@ -11,6 +11,11 @@ export const gitKeys = {
   /** The patch of a file's unstaged or staged changes, by its path. */
   uncommittedFilePatch: (repositoryId: string, side: "unstaged" | "staged", path: string) =>
     [...gitKeys.uncommitted(repositoryId), "patch", side, path] as const,
+  /** A conflicted file's sides, and its text with the conflict markers, by its path. */
+  conflict: (repositoryId: string, path: string) =>
+    [...gitKeys.uncommitted(repositoryId), "conflict", path] as const,
+  /** The merge, rebase, cherry-pick or revert under way: refetched when the refs change. */
+  operation: (repositoryId: string) => [...gitKeys.repository(repositoryId), "operation"] as const,
   log: (repositoryId: string) => [...gitKeys.repository(repositoryId), "log"] as const,
   refs: (repositoryId: string) => [...gitKeys.repository(repositoryId), "refs"] as const,
   stashes: (repositoryId: string) => [...gitKeys.repository(repositoryId), "stashes"] as const,

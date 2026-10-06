@@ -7,11 +7,13 @@ import { createEffect, createMemo, createSignal, Show, Suspense } from "solid-js
 import { CommitDetails } from "@/components/repository/details/commit-details";
 import { FileDiffView, prefetchFileDiff } from "@/components/repository/diff/file-diff-view";
 import { HistoryTable } from "@/components/repository/history/history-table";
+import { OperationBar } from "@/components/repository/operation-bar";
 import { RefsSidebar } from "@/components/repository/sidebar/refs-sidebar";
 import { RepositoryToolbar } from "@/components/repository/toolbar";
 import { ResizeHandle } from "@/components/ui/resize-handle";
 import { isSameSource, type DiffSource, type FileOpener } from "@/git/diff-source";
 import { useRepositoryWatcher } from "@/git/queries/watch";
+import { WIP_ID } from "@/git/rows";
 import { usePanelWidth } from "@/hooks/panel-width";
 import { useSettled } from "@/hooks/settled";
 
@@ -79,6 +81,21 @@ function RouteComponent() {
   const closeFile = async () => {
     if (await mayLeaveFile()) setOpenFile(undefined);
   };
+  // A conflicted file to open from the operation bar, once the uncommitted changes are the row
+  // the details show: selecting them only reaches the details once the selection settles.
+  const [resolving, setResolving] = createSignal<{ repositoryId: string; file: ChangedFile }>();
+  createEffect(() => {
+    const pending = resolving();
+    if (!pending || pending.repositoryId !== repositoryId()) return;
+    if (detailsId() !== WIP_ID) return;
+    setResolving(undefined);
+    void openFileOf(WIP_ID)({ kind: "unstaged" }, pending.file);
+  });
+  const resolveConflicts = async (file: ChangedFile) => {
+    if (!(await mayLeaveFile())) return;
+    setSelection({ repositoryId: repositoryId(), id: WIP_ID });
+    setResolving({ repositoryId: repositoryId(), file });
+  };
   // Nor is another repository opened, or the home page, before the file's edits are saved.
   // Not on unload, which it would block without asking: Electron doesn't show the prompt, so the
   // window couldn't close (see `useFileEditing` for edits left as it does).
@@ -133,11 +150,17 @@ function RouteComponent() {
         <RefsSidebar repositoryId={repositoryId()} open={sidebarOpen()} />
 
         {/* The history and a file's changes share the column; the history stays underneath, so
-            it's still scrolled to where it was when the changes are closed. */}
-        <div class="grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)]">
+            it's still scrolled to where it was when the changes are closed. What's under way, a
+            merge say, is above both. */}
+        <div class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)]">
+          <OperationBar
+            repositoryId={repositoryId()}
+            onResolve={(file) => void resolveConflicts(file)}
+            beforeAbort={mayLeaveFile}
+          />
           <div
             // Isolated, so its sticky header stays under the changes.
-            class="isolate col-start-1 row-start-1 grid min-h-0 min-w-0"
+            class="isolate col-start-1 row-start-2 grid min-h-0 min-w-0"
             inert={shownFile() ? true : undefined}
           >
             <HistoryTable
@@ -150,7 +173,7 @@ function RouteComponent() {
           </div>
           <Show when={shownFile()}>
             {(open) => (
-              <div class="z-[1] col-start-1 row-start-1 min-h-0 min-w-0 bg-bg">
+              <div class="z-[1] col-start-1 row-start-2 min-h-0 min-w-0 bg-bg">
                 {/* Its own boundary: one around the page would take the page off it while the
                     changes' queries start, even for a moment, and the history would lose its
                     scroll position with it. */}
