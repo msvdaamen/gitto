@@ -11,16 +11,16 @@ import { gitKeys } from "./keys";
 /** Files to stage or unstage: their paths (see `stagingPaths`), or all of them. */
 export type StagingTarget = string[] | "all";
 
-export function useStage(repositoryId: () => string) {
-  return useStagingMutation(repositoryId, (id, target: StagingTarget) =>
+export function useStage() {
+  return useStagingMutation((id, target: StagingTarget) =>
     target === "all"
       ? rpc.git.staging.stageAll({ repositoryId: id })
       : rpc.git.staging.stage({ repositoryId: id, paths: target }),
   );
 }
 
-export function useUnstage(repositoryId: () => string) {
-  return useStagingMutation(repositoryId, (id, target: StagingTarget) =>
+export function useUnstage() {
+  return useStagingMutation((id, target: StagingTarget) =>
     target === "all"
       ? rpc.git.staging.unstageAll({ repositoryId: id })
       : rpc.git.staging.unstage({ repositoryId: id, paths: target }),
@@ -40,41 +40,36 @@ export type DiscardTarget =
  * all of them, untracked files included. Resolves to the paths of the changes kept, as they can't
  * be discarded (see `discardAll`).
  */
-export function useDiscard(repositoryId: () => string) {
-  return useStagingMutation(
-    repositoryId,
-    async (id, target: DiscardTarget): Promise<KeptChange[]> => {
-      if (target === "all") return (await rpc.git.staging.discardAll({ repositoryId: id })).kept;
-      const { file, side, head } = target;
-      await rpc.git.staging.discard({
-        repositoryId: id,
-        path: file.path,
-        origPath: file.origPath,
-        // Checked to still be its status: its list may be out of date.
-        status: file.status,
-        side,
-        head,
-      });
-      return [];
-    },
-  );
+export function useDiscard() {
+  return useStagingMutation(async (id, target: DiscardTarget): Promise<KeptChange[]> => {
+    if (target === "all") return (await rpc.git.staging.discardAll({ repositoryId: id })).kept;
+    const { file, side, head } = target;
+    await rpc.git.staging.discard({
+      repositoryId: id,
+      path: file.path,
+      origPath: file.origPath,
+      // Checked to still be its status: its list may be out of date.
+      status: file.status,
+      side,
+      head,
+    });
+    return [];
+  });
 }
 
-function useStagingMutation<T, R = unknown>(
-  repositoryId: () => string,
-  run: (repositoryId: string, target: T) => Promise<R>,
-) {
+/**
+ * Runs `run` on the repository its variables name, with what it's given: the one it runs on is
+ * the one refetched once it's done, though another may be on show by then.
+ */
+function useStagingMutation<T, R = unknown>(run: (repositoryId: string, target: T) => Promise<R>) {
   const queryClient = useQueryClient();
   return useMutation(() => ({
-    // The repository it runs on, kept for when it's done: another may be on show by then.
-    onMutate: () => ({ id: repositoryId() }),
-    mutationFn: (target: T) => run(repositoryId(), target),
+    mutationFn: ({ repositoryId, target }: { repositoryId: string; target: T }) =>
+      run(repositoryId, target),
     // The watcher would catch this too, but refetching right away feels snappier. Also after a
     // failure, which may have changed some of it.
-    onSettled: (_data, _error, _target, started) =>
-      queryClient.invalidateQueries({
-        queryKey: gitKeys.uncommitted(started?.id ?? repositoryId()),
-      }),
+    onSettled: (_data, _error, { repositoryId }) =>
+      queryClient.invalidateQueries({ queryKey: gitKeys.uncommitted(repositoryId) }),
   }));
 }
 

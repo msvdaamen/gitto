@@ -1208,6 +1208,27 @@ describe("discarding a file's changes", () => {
     );
   });
 
+  it("discards a staged new file whose place a folder took, which isn't written over", async () => {
+    const repo = await createHistoryRepo("discard-staged-new-folder");
+    const path = repo.path;
+    git(path, "add", "new file.txt");
+    rmSync(join(path, "new file.txt"));
+    mkdirSync(join(path, "new file.txt"));
+    writeFileSync(join(path, "new file.txt", "x"), "x\n");
+
+    await discard(repo, { path: "new file.txt", origPath: null, status: "added" }, "staged");
+    expect(contents(path, "new file.txt/x")).toBe("x\n");
+    expect(git(path, "ls-files", "new file.txt")).toBe("");
+  });
+
+  it("deletes an untracked file with a backslash in its name, which is no slash here", async () => {
+    const repo = await createHistoryRepo("discard-backslash");
+    writeFileSync(join(repo.path, "a\\..\\b"), "b\n");
+
+    await discard(repo, { path: "a\\..\\b", origPath: null, status: "untracked" }, "unstaged");
+    expect(contents(repo.path, "a\\..\\b")).toBeNull();
+  });
+
   it("leaves a submodule's changes to be discarded in it", async () => {
     createSubmoduleRepo("discard-submodule");
     const repo = await repos.open("discard-submodule");

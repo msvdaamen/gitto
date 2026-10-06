@@ -22,7 +22,9 @@ export function discardDescription(file: ChangedFile, side: UncommittedSide): st
   // A copy's source is another file, which is left as it is.
   const from = file.status === "renamed" && file.origPath;
   if (from) {
-    return `${file.path} is deleted, and ${from}, which it was renamed from, is put back${side === "staged" ? " as the last commit has it" : ""}. Its changes are lost.`;
+    return side === "staged"
+      ? `${file.path} is deleted, and ${from}, which it was renamed from, is put back as the last commit has it. Its changes are lost.`
+      : `${file.path} is deleted, and ${from}, which it was renamed from, is put back, unless there's a file there again, which is left as it is. Its changes are lost.`;
   }
   if (side === "staged") {
     return file.status === "added" || file.status === "copied"

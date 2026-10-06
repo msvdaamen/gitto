@@ -94,17 +94,24 @@ export function entriesAt(
 
 /**
  * Deletes the files and links at `paths` (as bytes) in the working tree whose root is `root`, a
- * batch at a time, then the folders that leaves empty, as git keeps none. Resolves to the paths it
- * couldn't delete.
+ * batch at a time, then the folders that leaves empty, as git keeps none: not through a link where
+ * one of their folders was, which has nothing of the working tree's. Resolves to the paths it
+ * couldn't delete, a folder at one too.
  */
 export async function deleteFiles(root: string, paths: Buffer[]): Promise<Buffer[]> {
-  const deleted = await inBatches(paths, (path) =>
-    unlink(fullPath(root, path)).then(
+  // Its folders looked at again right before, rather than gone through, if one's been made a link,
+  // to a folder outside, say; a folder isn't a file to delete.
+  const entries = await entriesAt(root, paths);
+  const deleted = await inBatches(paths, async (path) => {
+    const entry = entries[paths.indexOf(path)];
+    if (entry === undefined || entry === "blocked") return true;
+    if (entry === "folder" || entry === "unreadable") return false;
+    return unlink(fullPath(root, path)).then(
       () => true,
       // Gone already, or a file has taken the place of one of its folders since.
       (error: NodeJS.ErrnoException) => error.code === "ENOENT" || error.code === "ENOTDIR",
-    ),
-  );
+    );
+  });
   // The folders they were in, by depth, the deepest first: one empties another.
   const byDepth: Set<string>[] = [];
   for (const path of paths) {

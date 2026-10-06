@@ -44,9 +44,11 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
   // Without Suspense, like the changes: the status is refetched whenever a file is saved, and the
   // details would be taken off the page and put back meanwhile, their lists scrolled to the top.
   const summary = useUnsuspendedData(status);
-  const stage = useStage(() => props.repositoryId);
-  const unstage = useUnstage(() => props.repositoryId);
-  const discard = useDiscard(() => props.repositoryId);
+  const stage = useStage();
+  const unstage = useUnstage();
+  const discard = useDiscard();
+  /** Of the repository on show. */
+  const here = <T,>(target: T) => ({ repositoryId: props.repositoryId, target });
   // Without Suspense, like the status: it's refetched whenever anything changes on disk.
   const operationQuery = useOperationInProgress(() => props.repositoryId);
   const operation = useUnsuspendedData(operationQuery);
@@ -171,12 +173,12 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
         empty="Nothing left to stage."
         bulkLabel="Stage all"
         busy={busy()}
-        onBulk={() => stage.mutate("all")}
+        onBulk={() => stage.mutate(here("all"))}
         action={{
           label: "Stage",
           icon: Plus,
           disabled: busy(),
-          run: (file) => stage.mutate(stagingPaths([file])),
+          run: (file) => stage.mutate(here(stagingPaths([file]))),
         }}
         menu={[discardFile("unstaged")]}
       />
@@ -193,12 +195,12 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
         empty="Stage files to include them in the next commit."
         bulkLabel="Unstage all"
         busy={busy()}
-        onBulk={() => unstage.mutate("all")}
+        onBulk={() => unstage.mutate(here("all"))}
         action={{
           label: "Unstage",
           icon: Minus,
           disabled: busy(),
-          run: (file) => unstage.mutate(stagingPaths([file])),
+          run: (file) => unstage.mutate(here(stagingPaths([file]))),
         }}
         menu={[discardFile("staged")]}
       />
@@ -236,7 +238,7 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
             setPreparing(false);
           }
           if (!saved || id !== props.repositoryId) return;
-          discard.mutate(target, {
+          discard.mutate(here(target), {
             onSuccess: (left) => id === props.repositoryId && setKept(left),
           });
         }}

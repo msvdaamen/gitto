@@ -8,6 +8,7 @@ import {
   DiscardBlockedError,
   GitError,
   LinesNotStageableError,
+  OutsideRepositoryError,
   PatchChangedError,
 } from "../../core/errors";
 import { gitDirs } from "../../core/git-dirs";
@@ -16,7 +17,6 @@ import type { FileStatus } from "../../schema";
 import { refuseConflictMarkers } from "../conflicts/commands";
 import { emptyTree, getStagedFilePatch, getUnstagedFilePatch } from "../diff/commands";
 import { isSubmodule, rawRecords } from "../diff/parse";
-import { checkWorkingTreePath } from "../diff/working-tree";
 import { operationBlocker, underWayBlocker } from "../operation/commands";
 import { linesPatch, type LineAction } from "./lines";
 import type { KeptChange, LineSelection, UncommittedSide } from "./schema";
@@ -251,6 +251,17 @@ async function ownRenameInTheWay(
   return true;
 }
 
+/**
+ * Whether `path` names a file in the working tree, as git names one: no `..` or `.git` folder in it
+ * (of any case, as file systems on macOS and Windows don't tell them apart), and not from the root.
+ * Split on slashes, and backslashes too on Windows only, where they're slashes: elsewhere one can be
+ * in a name. A link on the way is looked for when it's deleted (see `deleteFiles`).
+ */
+function isPlainPath(path: string): boolean {
+  const parts = path.split(process.platform === "win32" ? /[\\/]/ : "/");
+  return parts.every((part) => part !== "" && part !== ".." && part.toLowerCase() !== ".git");
+}
+
 /** Whether two paths differ only in the case of their letters. */
 function sameButCase(path: string, other: string): boolean {
   return path !== other && path.toLowerCase() === other.toLowerCase();
@@ -443,8 +454,9 @@ export async function discard(
   const named = new Set(paths);
   const gitDir = side === "staged" ? (await gitDirs(repo)).gitDir : undefined;
   // Added with `--intent-to-add`: on the staged side, only one listed as deleted can be, over one
-  // HEAD has; on the unstaged side, any can be by now, which `restore` would empty.
-  const mayBeIntended = side === "unstaged" || status === "deleted";
+  // HEAD has; on the unstaged side, any tracked one can be by now, which `restore` would empty. An
+  // untracked one that's been since is caught as out of date anyway, being in the index.
+  const mayBeIntended = side === "unstaged" ? status !== "untracked" : status === "deleted";
   await repo.exclusive(async (run) => {
     // On the command line, which holds them: there are two at most.
     const listed = (args: string[]) => records(run, [...args, "--", ...paths]);
@@ -528,9 +540,21 @@ export async function discard(
         : at(origPath) === "file" || at(origPath) === "link");
     const discarded = copied ? [path] : paths;
     // Put back as HEAD or the index has them, over what's in the working tree.
+    // Staged, but not in HEAD: taken out of the index, and nothing's written in their place.
+    const added =
+      side === "staged"
+        ? await listed([
+            "diff",
+            "--cached",
+            "--name-only",
+            "--no-renames",
+            "--diff-filter=A",
+            source,
+          ])
+        : [];
     const written =
       side === "staged"
-        ? discarded
+        ? discarded.filter((each) => !added.includes(each))
         : discarded.filter((each) => tracked.has(each) && !intended.includes(each));
     // What's there is fine to write over if it's the tracked file's, or one that's as the source
     // has it, like its copy left by `rm --cached`: nothing's lost. Not a folder, nor another file,
@@ -595,8 +619,7 @@ export async function discard(
       if (entry === "folder" || entry === "unreadable") {
         throw inTheWay(each, entry);
       }
-      // oxlint-disable-next-line no-await-in-loop -- two at most.
-      await checkWorkingTreePath(repo, each);
+      if (!isPlainPath(each)) throw new OutsideRepositoryError(each);
     }
     // What's put back first, so a failure there has deleted nothing; but where it's in a folder of
     // the other's name, what's in the way of it goes first.
