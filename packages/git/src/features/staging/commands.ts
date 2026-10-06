@@ -237,8 +237,9 @@ async function ownRenameInTheWay(
   // The folders down to it, and it.
   const inner = path.slice(origPath.length + 1).split("/");
   const own = new Set(inner.map((_, i) => inner.slice(0, i + 1).join(sep)));
-  const held = await readdir(join(repo.path, origPath), { recursive: true });
-  return held.every((each) => own.has(each));
+  // A folder in it that can't be read could hold anything.
+  const held = await readdir(join(repo.path, origPath), { recursive: true }).catch(() => undefined);
+  return held?.every((each) => own.has(each)) ?? false;
 }
 
 /** Why the file at `path` isn't discarded, as `entry` is in the way of it. */

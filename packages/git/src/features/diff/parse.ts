@@ -11,14 +11,6 @@ const CODES: Record<string, FileStatus> = {
   U: "conflicted",
 };
 
-/**
- * Parses `--raw --numstat -z` output: first a raw entry per file, then a numstat entry per file.
- *
- * - raw: `:<mode> <mode> <sha> <sha> <status>\0<path>\0`, or for renames and copies
- *   `:<mode> <mode> <sha> <sha> R<score>\0<origPath>\0<path>\0`
- * - numstat: `<added>\t<deleted>\t<path>\0`, or for renames and copies
- *   `<added>\t<deleted>\t\0<origPath>\0<path>\0`. Binary files report `-` for both counts.
- */
 /** A `--raw` record's fields, `:<mode> <mode> <object> <object> <status>`: the source's first. */
 export function rawFields(record: string) {
   const [srcMode = "", dstMode = "", srcObject = "", dstObject = "", status = ""] = record
@@ -32,6 +24,14 @@ export function isSubmodule({ srcMode, dstMode }: ReturnType<typeof rawFields>):
   return srcMode === "160000" || dstMode === "160000";
 }
 
+/**
+ * Parses `--raw --numstat -z` output: first a raw entry per file, then a numstat entry per file.
+ *
+ * - raw: `:<mode> <mode> <sha> <sha> <status>\0<path>\0`, or for renames and copies
+ *   `:<mode> <mode> <sha> <sha> R<score>\0<origPath>\0<path>\0`
+ * - numstat: `<added>\t<deleted>\t<path>\0`, or for renames and copies
+ *   `<added>\t<deleted>\t\0<origPath>\0<path>\0`. Binary files report `-` for both counts.
+ */
 export function parseDiff(output: string): ChangedFile[] {
   const records = output.split("\0");
   const files = new Map<string, ChangedFile>();

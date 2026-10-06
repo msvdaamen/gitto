@@ -101,7 +101,8 @@ export async function deleteFiles(root: string, paths: Buffer[]): Promise<Buffer
   const deleted = await inBatches(paths, (path) =>
     unlink(fullPath(root, path)).then(
       () => true,
-      (error: NodeJS.ErrnoException) => error.code === "ENOENT",
+      // Gone already, or a file has taken the place of one of its folders since.
+      (error: NodeJS.ErrnoException) => error.code === "ENOENT" || error.code === "ENOTDIR",
     ),
   );
   // The folders they were in, by depth, the deepest first: one empties another.
