@@ -712,6 +712,23 @@ describe("staging lines, in any combination", () => {
   );
 });
 
+/**
+ * A repository, which `repos` opens as `name`, with a submodule (a repository inside it, committed
+ * as one) at `mod`, which has a commit since.
+ */
+function createSubmoduleRepo(name: string): string {
+  const path = createRepo(name);
+  writeFileSync(join(path, "a.txt"), "a\n");
+  const mod = join(path, "mod");
+  mkdirSync(mod);
+  git(mod, "init", "-q");
+  git(mod, "-c", "user.name=T", "-c", "user.email=t@e", "commit", "-q", "--allow-empty", "-m", "1");
+  git(path, "add", ".");
+  git(path, "commit", "-q", "-m", "first");
+  git(mod, "-c", "user.name=T", "-c", "user.email=t@e", "commit", "-q", "--allow-empty", "-m", "2");
+  return path;
+}
+
 /** A file in the repository at `path`, read as text; `null` if there's none. */
 function contents(path: string, file: string): string | null {
   return existsSync(join(path, file)) ? readFileSync(join(path, file), "utf8") : null;
@@ -925,6 +942,27 @@ describe("discarding a file's changes", () => {
     expect(contents(path, "README")).toBe("readme\n");
   });
 
+  it("puts back a file taken out of the index, over its copy that's left untracked", async () => {
+    const repo = await createHistoryRepo("discard-rm-cached");
+    git(repo.path, "rm", "-q", "--cached", "a file.txt");
+
+    await discard(repo, { path: "a file.txt", origPath: null }, "staged");
+    expect(contents(repo.path, "a file.txt")).toBe("a\nmore\n");
+    expect(await statusFiles(repo)).toEqual([
+      { path: "new file.txt", origPath: null, staged: null, unstaged: "untracked" },
+    ]);
+  });
+
+  it("leaves a submodule's changes to be discarded in it", async () => {
+    createSubmoduleRepo("discard-submodule");
+    const repo = await repos.open("discard-submodule");
+
+    const error = await rejection(discard(repo, { path: "mod", origPath: null }, "unstaged"));
+    expect((error as Error).message).toBe(
+      "mod is a submodule, a repository of its own: discard its changes in it.",
+    );
+  });
+
   it("leaves a conflicted file to be resolved, on either side", async () => {
     const path = createMergeConflict("discard-conflict");
     const repo = await repos.open("discard-conflict");
@@ -1006,6 +1044,34 @@ describe("discarding all changes", () => {
     await discardAll(repo);
     expect(contents(path, "d")).toBe("stuff\n");
     expect(contents(path, "other.txt")).toBe("other\n");
+  });
+
+  it("discards the staged files in a folder where a deleted file was, and puts the file back", async () => {
+    const path = createRepo("discard-all-staged-folder");
+    writeFileSync(join(path, "a"), "a\n");
+    git(path, "add", ".");
+    git(path, "commit", "-q", "-m", "first");
+    git(path, "rm", "-q", "a");
+    mkdirSync(join(path, "a"));
+    writeFileSync(join(path, "a", "x"), "x\n");
+    git(path, "add", "a/x");
+    const repo = await repos.open("discard-all-staged-folder");
+
+    expect(await discardAll(repo)).toEqual([]);
+    expect(contents(path, "a")).toBe("a\n");
+    expect(await statusFiles(repo)).toEqual([]);
+  });
+
+  it("says which changes it kept: a submodule's, and a repository's inside this one", async () => {
+    const path = createSubmoduleRepo("discard-all-kept");
+    const nested = join(path, "nested");
+    mkdirSync(nested);
+    git(nested, "init", "-q");
+    writeFileSync(join(path, "a.txt"), "changed\n");
+    const repo = await repos.open("discard-all-kept");
+
+    expect(await discardAll(repo)).toEqual(["mod", "nested/"]);
+    expect(contents(path, "a.txt")).toBe("a\n");
   });
 
   it("puts back a file whose name isn't UTF-8", async () => {

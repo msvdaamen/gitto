@@ -41,6 +41,7 @@ export const StagingContract = {
   /**
    * Discards every uncommitted change, untracked files included; fails with PRECONDITION_FAILED,
    * discarding nothing, while files are conflicted or an operation like a merge is under way.
+   * Returns the paths of the changes it kept, as it can't discard them (see `discardAll`).
    */
-  discardAll: oc.input(RepositoryInput),
+  discardAll: oc.input(RepositoryInput).output(z.object({ kept: z.array(z.string()) })),
 };

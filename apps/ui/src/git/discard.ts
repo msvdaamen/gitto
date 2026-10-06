@@ -31,6 +31,13 @@ export function discardDescription(file: ChangedFile, side: UncommittedSide): st
   return `The changes to ${file.path} that aren't staged are lost; its staged ones stay.`;
 }
 
+/** What's said of the changes discarding them all kept, as it can't discard them: their paths. */
+export function keptMessage(paths: string[]): string {
+  const named = paths.slice(0, 3).join(", ");
+  const more = paths.length > 3 ? ` and ${paths.length - 3} more` : "";
+  return `Kept ${named}${more}: a submodule's or a repository's own changes are discarded in it, and a deleted file isn't put back over what has taken its place.`;
+}
+
 /**
  * Why the changes can't all be discarded, if they can't. Not while an operation is under way,
  * which would go on without them: a merge would be committed without the branch's changes.

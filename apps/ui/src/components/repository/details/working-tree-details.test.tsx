@@ -13,7 +13,10 @@ const rpc = vi.hoisted(() => ({
   git: {
     status: { get: vi.fn(async () => uncommitted) },
     commit: { message: vi.fn(), pushedTo: vi.fn() },
-    staging: { discard: vi.fn(async () => {}), discardAll: vi.fn(async () => {}) },
+    staging: {
+      discard: vi.fn(async () => {}),
+      discardAll: vi.fn(async (): Promise<{ kept: string[] }> => ({ kept: [] })),
+    },
     operation: { get: vi.fn(async (): Promise<Operation | null> => null) },
   },
 }));
@@ -182,6 +185,20 @@ describe("discarding changes", () => {
     expect(await screen.findByRole("alertdialog")).toHaveTextContent("Discard all changes?");
     await user.click(screen.getByRole("button", { name: "Discard" }));
     expect(rpc.git.staging.discardAll).toHaveBeenCalledWith({ repositoryId: "repo" });
+  });
+
+  it("says which changes discarding them all kept", async () => {
+    const user = userEvent.setup();
+    rpc.git.staging.discardAll.mockResolvedValueOnce({ kept: ["mod"] });
+    setChanges([file("a.txt"), file("mod")]);
+    renderDetails();
+
+    await user.click(await screen.findByRole("button", { name: "Discard all changes…" }));
+    await user.click(await screen.findByRole("button", { name: "Discard" }));
+    expect(await screen.findByText(/^Kept mod: /)).toBeInTheDocument();
+    // Once the dialog has closed, which keeps the rest from being used.
+    await user.click(await screen.findByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByText(/^Kept mod: /)).not.toBeInTheDocument();
   });
 
   it("doesn't discard all changes while files are conflicted, and says so", async () => {

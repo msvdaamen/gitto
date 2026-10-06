@@ -13,11 +13,12 @@ import { IconButton, LinkButton } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Mascot } from "@/components/ui/mascot";
+import { Notice } from "@/components/ui/notice";
 import { SectionHeader } from "@/components/ui/section-header";
 import { UpdatingIndicator } from "@/components/ui/updating-indicator";
 import { stagingPaths } from "@/git/changes";
 import { shownPathIn, type FileOpener, type UncommittedSource } from "@/git/diff-source";
-import { canDiscard, discardAllBlocker, discardDescription } from "@/git/discard";
+import { canDiscard, discardAllBlocker, discardDescription, keptMessage } from "@/git/discard";
 import { useWorkingTreeChanges } from "@/git/queries/diff";
 import { useOperationInProgress } from "@/git/queries/progress";
 import { useDiscard, useStage, useUnstage, type DiscardTarget } from "@/git/queries/staging";
@@ -51,11 +52,18 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
   const busy = () => stage.isPending || unstage.isPending || discard.isPending;
   // The changes being asked about discarding.
   const [discarding, setDiscarding] = createSignal<DiscardTarget>();
+  // The changes discarding them all last kept, as it couldn't discard them.
+  const [kept, setKept] = createSignal<string[]>([]);
   // Another repository's changes aren't this one's.
   createEffect(
     on(
       () => props.repositoryId,
-      () => setDiscarding(undefined),
+      () => {
+        setDiscarding(undefined);
+        setKept([]);
+        // Nor did discarding them fail.
+        discard.reset();
+      },
       { defer: true },
     ),
   );
@@ -109,6 +117,12 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
           onClick={() => setDiscarding("all")}
         />
       </div>
+
+      <Show when={kept().length}>
+        <Notice message={keptMessage(kept())}>
+          <LinkButton onClick={() => setKept([])}>Dismiss</LinkButton>
+        </Notice>
+      </Show>
 
       <Show when={changes.query.error ?? stage.error ?? unstage.error ?? discard.error} keyed>
         {(error) => (
@@ -189,7 +203,11 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
         onCancel={() => setDiscarding(undefined)}
         onConfirm={(target) => {
           setDiscarding(undefined);
-          discard.mutate(target);
+          setKept([]);
+          const id = props.repositoryId;
+          discard.mutate(target, {
+            onSuccess: (left) => id === props.repositoryId && setKept(left),
+          });
         }}
       />
     </div>

@@ -32,24 +32,26 @@ export type DiscardTarget = { file: ChangedFile; side: UncommittedSide } | "all"
 
 /**
  * Discards changes, which can't be brought back: a file's (see `discard` in the git package), or
- * all of them, untracked files included.
+ * all of them, untracked files included. Resolves to the paths of the changes kept, as they can't
+ * be discarded (see `discardAll`).
  */
 export function useDiscard(repositoryId: () => string) {
-  return useStagingMutation(repositoryId, (id, target: DiscardTarget) =>
-    target === "all"
-      ? rpc.git.staging.discardAll({ repositoryId: id })
-      : rpc.git.staging.discard({
-          repositoryId: id,
-          path: target.file.path,
-          origPath: target.file.origPath,
-          side: target.side,
-        }),
-  );
+  return useStagingMutation(repositoryId, async (id, target: DiscardTarget): Promise<string[]> => {
+    if (target === "all") return (await rpc.git.staging.discardAll({ repositoryId: id })).kept;
+    const { file, side } = target;
+    await rpc.git.staging.discard({
+      repositoryId: id,
+      path: file.path,
+      origPath: file.origPath,
+      side,
+    });
+    return [];
+  });
 }
 
-function useStagingMutation<T>(
+function useStagingMutation<T, R = unknown>(
   repositoryId: () => string,
-  run: (repositoryId: string, target: T) => Promise<unknown>,
+  run: (repositoryId: string, target: T) => Promise<R>,
 ) {
   const queryClient = useQueryClient();
   return useMutation(() => ({

@@ -31,5 +31,7 @@ export const stagingRouter = os.router({
   discard: os.discard
     .use(withRepo)
     .handler(({ context, input }) => discard(context.repo, input, input.side)),
-  discardAll: os.discardAll.use(withRepo).handler(({ context }) => discardAll(context.repo)),
+  discardAll: os.discardAll
+    .use(withRepo)
+    .handler(async ({ context }) => ({ kept: await discardAll(context.repo) })),
 });

@@ -1,7 +1,7 @@
 import type { ChangedFile, StatusCounts } from "@gitto/git/types";
 import { describe, expect, it } from "vitest";
 
-import { canDiscard, discardAllBlocker, discardDescription } from "./discard";
+import { canDiscard, discardAllBlocker, discardDescription, keptMessage } from "./discard";
 
 function file(path: string, status: ChangedFile["status"]): ChangedFile {
   return { path, status, origPath: null, additions: null, deletions: null };
@@ -54,6 +54,13 @@ describe("discarding a file's changes", () => {
 });
 
 describe("discarding all changes", () => {
+  it("says which changes it kept, the first few by name", () => {
+    expect(keptMessage(["mod"])).toBe(
+      "Kept mod: a submodule's or a repository's own changes are discarded in it, and a deleted file isn't put back over what has taken its place.",
+    );
+    expect(keptMessage(["a", "b", "c", "d", "e"])).toMatch(/^Kept a, b, c and 2 more: /);
+  });
+
   it("waits for conflicts to be resolved, and needs changes", () => {
     expect(discardAllBlocker(counts({ files: 2, unstaged: 2 }), null)).toBeUndefined();
     expect(discardAllBlocker(counts({ files: 2, conflicted: 1 }), null)).toBe(

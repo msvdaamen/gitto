@@ -5,6 +5,7 @@ import { createMemo, Show, type JSX } from "solid-js";
 
 import { Button } from "./button";
 import { DIALOG_BOX, DialogPortal } from "./dialog";
+import { toneClasses } from "./tone";
 
 /**
  * Asks before doing something to `item` that can't be undone, like deleting it; open while there's
@@ -13,6 +14,8 @@ import { DIALOG_BOX, DialogPortal } from "./dialog";
 export function ConfirmDialog<T>(props: {
   item: T | undefined;
   icon: LucideIcon;
+  /** The icon's color: coral for what's lost, amber for a warning. */
+  tone?: "coral" | "amber";
   /** What it asks of the item, e.g. "Delete stash?". */
   title: (item: T) => string;
   /** What's done to the item, and what's lost with it. */
@@ -36,7 +39,12 @@ export function ConfirmDialog<T>(props: {
       <DialogPortal>
         <AlertDialog.Content class={cn(DIALOG_BOX, "max-w-[440px] p-5")}>
           <div class="flex items-start gap-3">
-            <span class="grid size-9 shrink-0 place-items-center rounded-[9px] bg-coral-soft text-coral">
+            <span
+              class={cn(
+                "grid size-9 shrink-0 place-items-center rounded-[9px]",
+                toneClasses[props.tone ?? "coral"],
+              )}
+            >
               <props.icon size={18} strokeWidth={1.9} />
             </span>
             <Show when={item()}>
