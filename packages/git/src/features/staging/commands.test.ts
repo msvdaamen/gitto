@@ -1264,6 +1264,17 @@ describe("discarding a file's changes", () => {
     expect((error as Error).message).toMatch(/changed since its changes were shown/);
   });
 
+  it("discards nothing of a file listed as added with --intent-to-add, staged since", async () => {
+    const repo = await createHistoryRepo("discard-intent-staged-since");
+    git(repo.path, "add", "new file.txt");
+
+    const error = await rejection(
+      discard(repo, { path: "new file.txt", origPath: null, status: "added" }, "unstaged"),
+    );
+    expect((error as Error).message).toMatch(/changed since its changes were shown/);
+    expect(contents(repo.path, "new file.txt")).toBe("new\n");
+  });
+
   it("leaves a submodule's changes to be discarded in it", async () => {
     createSubmoduleRepo("discard-submodule");
     const repo = await repos.open("discard-submodule");

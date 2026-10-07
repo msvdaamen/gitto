@@ -131,11 +131,13 @@ export async function removeEmptyFolders(root: string, paths: Buffer[]): Promise
       (byDepth[depth] ??= new Set()).add(parts.slice(0, depth).join("/"));
     }
   }
+  // Shared by every depth: a deeper folder's removal doesn't change what a shallower one is.
+  const above = new Map<string, Promise<FolderEntry>>();
   for (const folders of byDepth.toReversed()) {
     if (!folders) continue;
     const names = [...folders].map((folder) => Buffer.from(folder, "latin1"));
     // oxlint-disable-next-line no-await-in-loop -- a depth at a time, on purpose.
-    const entries = await entriesAt(root, names);
+    const entries = await inBatches(names, (name) => entryAt(root, name, above));
     // oxlint-disable-next-line no-await-in-loop -- a depth at a time, on purpose.
     await inBatches(
       names.filter((_, i) => entries[i] === "folder"),

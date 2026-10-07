@@ -248,6 +248,13 @@ function sameButCase(path: string, other: string): boolean {
   return path !== other && path.toLowerCase() === other.toLowerCase();
 }
 
+/** Why the file at `path` isn't discarded, as its list is out of date. */
+function changedSince(path: string): DiscardBlockedError {
+  return new DiscardBlockedError(
+    `${path} changed since its changes were shown, so nothing was discarded.`,
+  );
+}
+
 /** Why the file at `path` isn't discarded, as `entry` is in the way of it. */
 function inTheWay(path: string, entry: Entry): DiscardBlockedError {
   let what: string;
@@ -485,9 +492,7 @@ export async function discard(
     if (blocker) throw new DiscardBlockedError(blocker);
     // Its staged changes are against HEAD as it was: a commit made since could have taken them.
     if (side === "staged" && listedHead !== undefined && head !== listedHead) {
-      throw new DiscardBlockedError(
-        `${path} changed since its changes were shown, so nothing was discarded.`,
-      );
+      throw changedSince(path);
     }
     // Only the paths themselves, not what's in a folder of the same name, which is another file's.
     const tracked = new Set<string>();
@@ -515,16 +520,18 @@ export async function discard(
     const inIndex = tracked.has(path) && (side === "unstaged" || !intended.includes(path));
     // And unstaged, added with `--intent-to-add` only if it's listed as one can be: one listed as
     // modified that's been since would be deleted, or emptied.
+    // Not the other way either: one listed as such, as only it can be added, renamed or copied
+    // there, that's been staged since would be put back from the index, rather than deleted.
     const listedIntended = ["added", "deleted", "renamed", "copied"].includes(status);
     const intendedSince = side === "unstaged" && intended.includes(path) && !listedIntended;
-    if (listedThere !== inIndex || intendedSince) {
-      throw new DiscardBlockedError(
-        `${path} changed since its changes were shown, so nothing was discarded.`,
-      );
+    const stagedSince =
+      side === "unstaged" &&
+      ["added", "renamed", "copied"].includes(status) &&
+      !intended.includes(path);
+    if (listedThere !== inIndex || intendedSince || stagedSince) {
+      throw changedSince(path);
     }
     const at = (each: string) => there[paths.indexOf(each)];
-    // A copy's source is still there on this side, unlike a rename's: in the index, or in the
-    // working tree.
     // A copy, as it's listed, leaves its source as it is, which is still there on this side, unlike
     // a rename's: in the index, or in the working tree. Otherwise its list is out of date.
     const copied = status === "copied";
@@ -534,9 +541,7 @@ export async function discard(
         ? tracked.has(origPath)
         : at(origPath) === "file" || at(origPath) === "link");
     if (origPath !== null && copied !== sourceThere) {
-      throw new DiscardBlockedError(
-        `${path} changed since its changes were shown, so nothing was discarded.`,
-      );
+      throw changedSince(path);
     }
     const discarded = copied ? [path] : paths;
     // Put back as HEAD or the index has them, over what's in the working tree.
