@@ -41,6 +41,8 @@ export function ChangedFileList(props: {
   onPrefetch?: (file: ChangedFile) => void;
   /** The conflicted files with no conflict markers left, which are badged as ready. */
   markerFree?: ReadonlySet<string>;
+  /** The path of the file shown as if hovered, e.g. while its menu is open. */
+  highlightedPath?: string;
 }) {
   let hover: ReturnType<typeof setTimeout> | undefined;
   onCleanup(() => clearTimeout(hover));
@@ -53,8 +55,11 @@ export function ChangedFileList(props: {
     >
       {(file) => (
         <div
+          // Marks it for a menu of what can be done with it, if the list has one (see `RowMenu`).
+          data-file={file().path}
           class={cn(
             "group flex h-full w-full items-center rounded-md hover:bg-panel-hover",
+            props.highlightedPath === file().path && "bg-panel-hover",
             props.openPath === file().path && "bg-panel-active hover:bg-panel-active",
           )}
         >

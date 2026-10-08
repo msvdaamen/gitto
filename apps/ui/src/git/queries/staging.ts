@@ -12,7 +12,7 @@ import { gitKeys } from "./keys";
 export type StagingTarget = string[] | "all";
 
 export function useStage(repositoryId: () => string) {
-  return useStagingMutation(repositoryId, (id, target) =>
+  return useStagingMutation(repositoryId, (id, target: StagingTarget) =>
     target === "all"
       ? rpc.git.staging.stageAll({ repositoryId: id })
       : rpc.git.staging.stage({ repositoryId: id, paths: target }),
@@ -20,20 +20,42 @@ export function useStage(repositoryId: () => string) {
 }
 
 export function useUnstage(repositoryId: () => string) {
-  return useStagingMutation(repositoryId, (id, target) =>
+  return useStagingMutation(repositoryId, (id, target: StagingTarget) =>
     target === "all"
       ? rpc.git.staging.unstageAll({ repositoryId: id })
       : rpc.git.staging.unstage({ repositoryId: id, paths: target }),
   );
 }
 
-function useStagingMutation(
+/** Changes to discard: a file's on one side of the uncommitted changes, or all of them. */
+export type DiscardTarget = { side: "staged" | "unstaged"; file: ChangedFile } | "all";
+
+/**
+ * Discards changes, which are lost: a file's unstaged ones, or staged ones and all, by both its
+ * paths if it's renamed; or every change, deleting untracked files too. A file that changed since
+ * its list was read isn't discarded (see `discard`).
+ */
+export function useDiscard(repositoryId: () => string) {
+  return useStagingMutation(repositoryId, (id, target: DiscardTarget) =>
+    target === "all"
+      ? rpc.git.staging.discardAll({ repositoryId: id })
+      : rpc.git.staging.discard({
+          repositoryId: id,
+          path: target.file.path,
+          origPath: target.file.origPath,
+          status: target.file.status,
+          side: target.side,
+        }),
+  );
+}
+
+function useStagingMutation<T>(
   repositoryId: () => string,
-  run: (repositoryId: string, target: StagingTarget) => Promise<unknown>,
+  run: (repositoryId: string, target: T) => Promise<unknown>,
 ) {
   const queryClient = useQueryClient();
   return useMutation(() => ({
-    mutationFn: (target: StagingTarget) => run(repositoryId(), target),
+    mutationFn: (target: T) => run(repositoryId(), target),
     // The watcher would catch this too, but refetching right away feels snappier.
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: gitKeys.uncommitted(repositoryId()) }),

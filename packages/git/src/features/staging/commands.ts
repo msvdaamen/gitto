@@ -7,7 +7,7 @@ import type { LineSelection } from "./schema";
 
 // Paths go to git's stdin, NUL-separated, rather than on the command line, which holds only so
 // many (32k characters on Windows).
-const PATHS_FROM_STDIN = ["--pathspec-from-file=-", "--pathspec-file-nul"];
+export const PATHS_FROM_STDIN = ["--pathspec-from-file=-", "--pathspec-file-nul"];
 
 /**
  * Stages the files at `paths`, whole. A conflicted one is marked resolved by that, so it isn't
@@ -22,14 +22,18 @@ export async function stage(repo: Repo, paths: string[]): Promise<void> {
 
 /** Unstages the files at `paths`, whole; their changes stay in the working tree. */
 export async function unstage(repo: Repo, paths: string[]): Promise<void> {
-  // `restore --staged` resets to HEAD, so it can't run before the first commit.
-  const args = (await repo.hasHead())
-    ? ["restore", "--staged", ...PATHS_FROM_STDIN]
-    : ["rm", "--cached", "-r", "-q", ...PATHS_FROM_STDIN];
-  await repo.write(args, { stdin: nulSeparated(paths) });
+  await repo.write(unstageArgs(await repo.hasHead()), { stdin: nulSeparated(paths) });
 }
 
-function nulSeparated(paths: string[]): string {
+/** The command that unstages the paths given on its stdin. */
+export function unstageArgs(hasHead: boolean): string[] {
+  // `restore --staged` resets to HEAD, so it can't run before the first commit.
+  return hasHead
+    ? ["restore", "--staged", ...PATHS_FROM_STDIN]
+    : ["rm", "--cached", "-r", "-q", ...PATHS_FROM_STDIN];
+}
+
+export function nulSeparated(paths: string[]): string {
   return paths.map((path) => `${path}\0`).join("");
 }
 

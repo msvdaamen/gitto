@@ -5,6 +5,7 @@ import {
   ChangesTooLargeError,
   ConflictChangedError,
   ConflictMarkersError,
+  DiscardBlockedError,
   EditorNeededError,
   FileChangedOnDiskError,
   FileTooLargeError,
@@ -80,7 +81,8 @@ function toApiError(error: unknown): unknown {
     error instanceof ConflictMarkersError ||
     error instanceof NoOperationError ||
     error instanceof EditorNeededError ||
-    error instanceof MergeBlockedError
+    error instanceof MergeBlockedError ||
+    error instanceof DiscardBlockedError
   ) {
     return new ORPCError("PRECONDITION_FAILED", { message: error.message, cause: error });
   }
