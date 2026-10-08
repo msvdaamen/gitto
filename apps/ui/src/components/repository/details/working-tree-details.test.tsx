@@ -126,9 +126,10 @@ describe("discarding changes", () => {
 
     await openMenu(user, "unstaged-files", "a.txt");
     await user.click(await screen.findByRole("menuitem", { name: "Discard changes…" }));
-    expect(await screen.findByRole("alertdialog")).toHaveTextContent(
-      "The unstaged changes to src/a.txt are lost.",
-    );
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent("The unstaged changes to src/a.txt are lost.");
+    // Nothing of it is staged to keep.
+    expect(dialog).not.toHaveTextContent("staged of it");
     expect(rpc.git.staging.discard).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("button", { name: "Discard" }));
@@ -141,6 +142,27 @@ describe("discarding changes", () => {
         side: "unstaged",
       }),
     );
+  });
+
+  it("says what an unstaged change's file is put back as: what's staged, or the last commit", async () => {
+    const user = userEvent.setup();
+    setChanges([file("a.txt"), file("d.txt", "deleted")], [file("a.txt")]);
+    renderDetails();
+
+    await openMenu(user, "unstaged-files", "a.txt");
+    await user.click(await screen.findByRole("menuitem", { name: "Discard changes…" }));
+    expect(await screen.findByRole("alertdialog")).toHaveTextContent(
+      "The unstaged changes to a.txt are lost. What's staged of it is kept.",
+    );
+    await user.keyboard("{Escape}");
+    await vi.waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+
+    await openMenu(user, "unstaged-files", "d.txt");
+    await user.click(await screen.findByRole("menuitem", { name: "Discard changes…" }));
+    expect(await screen.findByRole("alertdialog")).toHaveTextContent(
+      "d.txt is put back as the last commit has it.",
+    );
+    expect(rpc.git.staging.discard).not.toHaveBeenCalled();
   });
 
   it("says an untracked file is deleted, and puts a staged one back as HEAD has it", async () => {

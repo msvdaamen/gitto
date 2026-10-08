@@ -24,16 +24,13 @@ async function statusFiles(repo: Repo) {
   return parseStatus(await repo.read(STATUS_ARGS)).files;
 }
 
-/** A file whose changes are discarded, as its list has it. */
+/** A file's changes to discard, as its list has the file. */
 const discarded = (
+  side: "staged" | "unstaged",
   path: string,
   status: FileStatus = "modified",
   origPath: string | null = null,
-) => ({
-  path,
-  origPath,
-  status,
-});
+) => ({ path, origPath, status, side });
 
 describe("discarding a file's changes", () => {
   it("puts a file back as the index has it, keeping what's staged", async () => {
@@ -46,7 +43,7 @@ describe("discarding a file's changes", () => {
     writeFileSync(join(path, "f.txt"), "three\n");
     const repo = await repos.open("discard-unstaged");
 
-    await discard(repo, discarded("f.txt"), "unstaged");
+    await discard(repo, discarded("unstaged", "f.txt"));
     expect(readFileSync(join(path, "f.txt"), "utf8")).toBe("two\n");
     expect(await statusFiles(repo)).toEqual([
       { path: "f.txt", origPath: null, staged: "modified", unstaged: null },
@@ -60,8 +57,8 @@ describe("discarding a file's changes", () => {
     // Taken as a glob, its name would match the other untracked file too.
     writeFileSync(join(path, "*.txt"), "star\n");
 
-    await discard(repo, discarded("c.txt", "deleted"), "unstaged");
-    await discard(repo, discarded("*.txt", "untracked"), "unstaged");
+    await discard(repo, discarded("unstaged", "c.txt", "deleted"));
+    await discard(repo, discarded("unstaged", "*.txt", "untracked"));
     expect(readFileSync(join(path, "c.txt"), "utf8")).toBe("b\n");
     expect(existsSync(join(path, "*.txt"))).toBe(false);
     expect(await statusFiles(repo)).toEqual([
@@ -78,9 +75,9 @@ describe("discarding a file's changes", () => {
     git(path, "add", "new file.txt");
     git(path, "mv", "c.txt", "d.txt");
 
-    await discard(repo, discarded("a file.txt"), "staged");
-    await discard(repo, discarded("new file.txt", "added"), "staged");
-    await discard(repo, discarded("d.txt", "renamed", "c.txt"), "staged");
+    await discard(repo, discarded("staged", "a file.txt"));
+    await discard(repo, discarded("staged", "new file.txt", "added"));
+    await discard(repo, discarded("staged", "d.txt", "renamed", "c.txt"));
     expect(readFileSync(join(path, "a file.txt"), "utf8")).toBe("a\nmore\n");
     // Added, it's deleted, as HEAD doesn't have it; renamed, it's back where it was.
     expect(existsSync(join(path, "new file.txt"))).toBe(false);
@@ -96,7 +93,7 @@ describe("discarding a file's changes", () => {
     git(path, "add", ".");
     const repo = await repos.open("discard-unborn");
 
-    await discard(repo, discarded("x.txt", "added"), "staged");
+    await discard(repo, discarded("staged", "x.txt", "added"));
     expect(existsSync(join(path, "x.txt"))).toBe(false);
     expect(await statusFiles(repo)).toEqual([
       { path: "y.txt", origPath: null, staged: "added", unstaged: null },
@@ -110,7 +107,7 @@ describe("discarding a file's changes", () => {
     writeFileSync(join(path, "x.log"), "log\n");
     git(path, "add", "-f", "x.log");
 
-    await discard(repo, discarded("x.log", "added"), "staged");
+    await discard(repo, discarded("staged", "x.log", "added"));
     expect(existsSync(join(path, "x.log"))).toBe(false);
   });
 
@@ -125,9 +122,26 @@ describe("discarding a file's changes", () => {
     git(path, "add", "-A");
     const repo = await repos.open("discard-folder");
 
-    await discard(repo, discarded("foo", "added"), "staged");
+    await discard(repo, discarded("staged", "foo", "added"));
     expect(readFileSync(join(path, "foo", "bar.txt"), "utf8")).toBe("bar\n");
     expect(await statusFiles(repo)).toEqual([]);
+  });
+
+  it("deletes the folder a new file leaves empty, but not one with other files in it", async () => {
+    const repo = await createHistoryRepo("discard-empty-folder");
+    const path = repo.path;
+    mkdirSync(join(path, "deep", "er"), { recursive: true });
+    writeFileSync(join(path, "deep", "er", "x.txt"), "x\n");
+    git(path, "add", "deep");
+    mkdirSync(join(path, "shared"));
+    writeFileSync(join(path, "shared", "kept.txt"), "kept\n");
+    writeFileSync(join(path, "shared", "gone.txt"), "gone\n");
+
+    await discard(repo, discarded("staged", "deep/er/x.txt", "added"));
+    await discard(repo, discarded("unstaged", "shared/gone.txt", "untracked"));
+    expect(existsSync(join(path, "deep"))).toBe(false);
+    expect(existsSync(join(path, "shared", "gone.txt"))).toBe(false);
+    expect(readFileSync(join(path, "shared", "kept.txt"), "utf8")).toBe("kept\n");
   });
 
   it("discards nothing of a submodule, nor of a repository inside this one", async () => {
@@ -139,17 +153,17 @@ describe("discarding a file's changes", () => {
     git(path, "update-index", "--add", "--cacheinfo", `160000,${sha},sub`);
     const repo = await repos.open("discard-submodule");
 
-    expect(await rejection(discard(repo, discarded("sub"), "staged"))).toMatchObject({
+    expect(await rejection(discard(repo, discarded("staged", "sub")))).toMatchObject({
       constructor: DiscardBlockedError,
       message:
         "sub is a submodule, so its changes weren't discarded. Discard them in the submodule itself.",
     });
-    expect(await rejection(discard(repo, discarded("sub"), "unstaged"))).toBeInstanceOf(
+    expect(await rejection(discard(repo, discarded("unstaged", "sub")))).toBeInstanceOf(
       DiscardBlockedError,
     );
     expect(git(path, "ls-files", "--stage", "sub")).toMatch(/^160000 /);
     expect(
-      await rejection(discard(repo, discarded("nested/", "untracked"), "unstaged")),
+      await rejection(discard(repo, discarded("unstaged", "nested/", "untracked"))),
     ).toBeInstanceOf(DiscardBlockedError);
   });
 
@@ -159,7 +173,7 @@ describe("discarding a file's changes", () => {
     writeFileSync(join(path, "n.txt"), "content\n");
     git(path, "add", "-N", "n.txt");
 
-    await discard(repo, discarded("n.txt", "added"), "unstaged");
+    await discard(repo, discarded("unstaged", "n.txt", "added"));
     expect(existsSync(join(path, "n.txt"))).toBe(false);
     expect(git(path, "ls-files", "n.txt")).toBe("");
   });
@@ -174,7 +188,7 @@ describe("discarding a file's changes", () => {
     git(path, "add", ".");
     const repo = await repos.open("discard-copy");
 
-    await discard(repo, discarded("copy.txt", "copied", "lib.txt"), "staged");
+    await discard(repo, discarded("staged", "copy.txt", "copied", "lib.txt"));
     expect(existsSync(join(path, "copy.txt"))).toBe(false);
     expect(readFileSync(join(path, "lib.txt"), "utf8")).toBe("lib, changed\n");
     expect(await statusFiles(repo)).toEqual([
@@ -193,13 +207,13 @@ describe("discarding a file's changes", () => {
     const repo = await repos.open("discard-replaced");
 
     // Untracked, then staged as added.
-    expect(await rejection(discard(repo, discarded("foo", "deleted"), "unstaged"))).toMatchObject({
+    expect(await rejection(discard(repo, discarded("unstaged", "foo", "deleted")))).toMatchObject({
       constructor: DiscardBlockedError,
       message:
         "foo's changes weren't discarded: putting it back would also lose what's in the folder foo.",
     });
     git(path, "add", "-A");
-    expect(await rejection(discard(repo, discarded("foo", "deleted"), "staged"))).toBeInstanceOf(
+    expect(await rejection(discard(repo, discarded("staged", "foo", "deleted")))).toBeInstanceOf(
       DiscardBlockedError,
     );
     expect(readFileSync(join(path, "foo", "x"), "utf8")).toBe("x\n");
@@ -213,7 +227,7 @@ describe("discarding a file's changes", () => {
     writeFileSync(join(path, "c.txt"), "another file\n");
 
     expect(
-      await rejection(discard(repo, discarded("d.txt", "renamed", "c.txt"), "staged")),
+      await rejection(discard(repo, discarded("staged", "d.txt", "renamed", "c.txt"))),
     ).toMatchObject({
       constructor: DiscardBlockedError,
       message:
@@ -229,7 +243,7 @@ describe("discarding a file's changes", () => {
     // Shown with unstaged changes, then untracked in a terminal: discarding would delete it.
     git(path, "rm", "-q", "--cached", "a file.txt");
 
-    expect(await rejection(discard(repo, discarded("a file.txt"), "unstaged"))).toMatchObject({
+    expect(await rejection(discard(repo, discarded("unstaged", "a file.txt")))).toMatchObject({
       constructor: RepositoryChangedError,
       message: "a file.txt changed since it was shown, so its changes weren't discarded.",
     });
@@ -249,7 +263,7 @@ describe("discarding a file's changes", () => {
     git(path, "add", "foo");
     const repo = await repos.open("discard-submodule-below");
 
-    expect(await rejection(discard(repo, discarded("foo", "added"), "staged"))).toBeInstanceOf(
+    expect(await rejection(discard(repo, discarded("staged", "foo", "added")))).toBeInstanceOf(
       DiscardBlockedError,
     );
     expect(existsSync(join(path, "foo"))).toBe(true);
@@ -267,10 +281,10 @@ describe("discarding a file's changes", () => {
     const repo = await repos.open("discard-conflicted");
 
     expect(
-      await rejection(discard(repo, discarded("f.txt", "conflicted"), "staged")),
+      await rejection(discard(repo, discarded("staged", "f.txt", "conflicted"))),
     ).toBeInstanceOf(DiscardBlockedError);
     expect(
-      await rejection(discard(repo, discarded("f.txt", "conflicted"), "unstaged")),
+      await rejection(discard(repo, discarded("unstaged", "f.txt", "conflicted"))),
     ).toBeInstanceOf(DiscardBlockedError);
     expect(readFileSync(join(path, "f.txt"), "utf8")).toBe(before);
     expect(git(path, "ls-files", "--unmerged")).not.toBe("");

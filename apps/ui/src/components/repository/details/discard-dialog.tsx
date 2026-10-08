@@ -6,16 +6,22 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import type { DiscardTarget } from "@/git/queries/staging";
 
 /**
+ * What the dialog asks about: the changes to discard and, for a file's unstaged ones, whether it
+ * has staged ones too, `alsoStaged`, which it's put back as; else as the last commit has it.
+ */
+export type DiscardPrompt = "all" | (Exclude<DiscardTarget, "all"> & { alsoStaged: boolean });
+
+/**
  * Asks before discarding changes, `target`, which are lost; open while there are some to ask
  * about. Esc, or clicking outside, cancels.
  */
 export function DiscardDialog(props: {
-  target: DiscardTarget | undefined;
+  target: DiscardPrompt | undefined;
   onCancel: () => void;
   onDiscard: (target: DiscardTarget) => void;
 }) {
   // The last ones asked about, still named while the dialog closes.
-  const target = createMemo((last: DiscardTarget | undefined) => props.target ?? last);
+  const target = createMemo((last: DiscardPrompt | undefined) => props.target ?? last);
   const title = () => {
     const current = target();
     if (current === "all") return "Discard all changes?";
@@ -42,7 +48,7 @@ export function DiscardDialog(props: {
 }
 
 /** What discarding `target` does, as the dialog says it. */
-function describe(target: DiscardTarget | undefined): string {
+function describe(target: DiscardPrompt | undefined): string {
   if (target === undefined) return "";
   if (target === "all") {
     return "Every staged and unstaged change is lost, and untracked files are deleted. Ignored files are kept, and so are submodules' changes.";
@@ -52,10 +58,13 @@ function describe(target: DiscardTarget | undefined): string {
     // Added or renamed, the file was only marked to be added (`add -N`), and isn't staged.
     if (file.status === "untracked") return `${file.path} isn't tracked, so it's deleted.`;
     if (file.status === "added") return `${file.path} isn't staged yet, so it's deleted.`;
+    // What's left of it: what's staged, which is what the last commit has if nothing is.
+    const kept = target.alsoStaged ? "as it's staged" : "as the last commit has it";
     if (file.status === "renamed" && file.origPath) {
-      return `${file.path} is deleted, and ${file.origPath} put back as it's staged.`;
+      return `${file.path} is deleted, and ${file.origPath} put back ${kept}.`;
     }
-    return `The unstaged changes to ${file.path} are lost. What's staged of it is kept.`;
+    if (file.status === "deleted") return `${file.path} is put back ${kept}.`;
+    return `The unstaged changes to ${file.path} are lost.${target.alsoStaged ? " What's staged of it is kept." : ""}`;
   }
   // A copy is new too: the file it's a copy of is left as it is.
   if (file.status === "added" || file.status === "copied") {

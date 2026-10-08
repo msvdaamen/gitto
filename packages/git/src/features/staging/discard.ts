@@ -1,4 +1,4 @@
-import { lstat } from "node:fs/promises";
+import { lstat, rmdir } from "node:fs/promises";
 import { join } from "node:path";
 
 import { DiscardBlockedError, RepositoryChangedError } from "../../core/errors";
@@ -8,12 +8,13 @@ import type { FileStatus } from "../../schema";
 import { OPERATION_NAMES, operationUnderWay } from "../operation/commands";
 import { nulSeparated, PATHS_FROM_STDIN, unstageArgs } from "./commands";
 
-/** A file whose changes are discarded, as its list has it. */
-interface DiscardedFile {
+/** A file's changes to discard: on which side, and the file as its list has it. */
+export interface Discarded {
   path: string;
   /** Its previous path, if it's renamed; a copy's is left alone, as that file is still there. */
   origPath: string | null;
   status: FileStatus;
+  side: "staged" | "unstaged";
 }
 
 /** A file in the index or in HEAD, at one of the paths whose changes are discarded or below it. */
@@ -45,11 +46,8 @@ const DELETED_STATUSES: ReadonlySet<FileStatus> = new Set([
  * `RepositoryChangedError` if it changed since its list was read, so that another file than the
  * user was told would be deleted, or one they weren't told would be.
  */
-export async function discard(
-  repo: Repo,
-  file: DiscardedFile,
-  side: "staged" | "unstaged",
-): Promise<void> {
+export async function discard(repo: Repo, file: Discarded): Promise<void> {
+  const { side } = file;
   // Git lists a repository inside this one as an untracked folder.
   if (file.path.endsWith("/")) {
     throw new DiscardBlockedError(
@@ -106,7 +104,10 @@ export async function discard(
     if (marked.length) await run(["rm", "--cached", "-q", "--", ...marked]);
     // First, as a file deleted here can be in the way of a folder put back. Even if it's ignored:
     // one that was force-added is, once it's unstaged.
-    if (deleted.length) await run(["clean", "-f", "-x", "-q", "--", ...deleted]);
+    if (deleted.length) {
+      await run(["clean", "-f", "-x", "-q", "--", ...deleted]);
+      await removeEmptyFolders(repo.path, deleted);
+    }
     if (kept.length) {
       await run(["restore", "--worktree", ...PATHS_FROM_STDIN], {
         stdin: nulSeparated(kept.map((entry) => entry.path)),
@@ -114,6 +115,27 @@ export async function discard(
       });
     }
   });
+}
+
+/**
+ * Deletes the folders that deleting `paths` left empty, up to the repository's root, as git does
+ * when it deletes a file: it doesn't keep empty folders, so the files were all there was to them.
+ */
+async function removeEmptyFolders(root: string, paths: string[]): Promise<void> {
+  await Promise.all(
+    paths.map(async (path) => {
+      const parts = path.split("/");
+      for (let depth = parts.length - 1; depth > 0; depth--) {
+        try {
+          // oxlint-disable-next-line no-await-in-loop -- each folder once the one in it is gone
+          await rmdir(join(root, ...parts.slice(0, depth)));
+        } catch {
+          // Not empty, or not there: then the folders above it aren't empty either.
+          return;
+        }
+      }
+    }),
+  );
 }
 
 /** The index's files at `paths`, or below them. */

@@ -6,7 +6,7 @@ import Minus from "lucide-solid/icons/minus";
 import Plus from "lucide-solid/icons/plus";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
 import Undo2 from "lucide-solid/icons/undo-2";
-import { createEffect, createSignal, on, Show, type JSX } from "solid-js";
+import { createEffect, createMemo, createSignal, on, Show, type JSX } from "solid-js";
 
 import { Badge } from "@/components/ui/badge";
 import { IconButton, LinkButton } from "@/components/ui/button";
@@ -28,7 +28,7 @@ import type { ScrollId } from "@/lib/scroll";
 
 import { ChangedFileList, type FileAction } from "./changed-file-list";
 import { CommitForm } from "./commit-form";
-import { DiscardDialog } from "./discard-dialog";
+import { DiscardDialog, type DiscardPrompt } from "./discard-dialog";
 import { FileMenu } from "./file-menu";
 
 /**
@@ -74,13 +74,18 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
    * Those changes as their list has them now, which the dialog asks about: what discarding them
    * does can change with the file, as it's staged in a terminal, say. None once it's gone.
    */
-  const discardTarget = (): DiscardTarget | undefined => {
+  const discardTarget = createMemo((): DiscardPrompt | undefined => {
     const target = discarding();
     if (target === undefined || target === "all") return target;
     const list = target.side === "staged" ? changes.staged() : changes.unstaged();
     const file = list.find((listed) => listed.path === target.file.path);
-    return file && { ...target, file };
-  };
+    if (!file) return undefined;
+    // Its unstaged changes discarded, it's put back as it's staged, by either path of a rename.
+    const alsoStaged = changes
+      .staged()
+      .some((staged) => staged.path === file.path || staged.path === file.origPath);
+    return { ...target, file, alsoStaged };
+  });
   // Gone, it isn't asked about again, should it come back.
   createEffect(() => {
     if (discarding() !== undefined && discardTarget() === undefined) setDiscarding(undefined);

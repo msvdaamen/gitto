@@ -14,9 +14,7 @@ export const stagingRouter = os.router({
     .handler(({ context, input }) => unstage(context.repo, input.paths)),
   stageAll: os.stageAll.use(withRepo).handler(({ context }) => stageAll(context.repo)),
   unstageAll: os.unstageAll.use(withRepo).handler(({ context }) => unstageAll(context.repo)),
-  discard: os.discard
-    .use(withRepo)
-    .handler(({ context, input }) => discard(context.repo, input, input.side)),
+  discard: os.discard.use(withRepo).handler(({ context, input }) => discard(context.repo, input)),
   discardAll: os.discardAll.use(withRepo).handler(({ context }) => discardAll(context.repo)),
   stageLines: os.stageLines.use(withRepo).handler(async ({ context, input }) => ({
     patch: await stageLines(context.repo, input, input.patch, input.lines),
