@@ -1,13 +1,16 @@
 // Editing the file on show in the viewer, in place, with the library's editor (see `PatchViewer`'s
 // `editing`): starting from the whole file, and leaving the edits on show once it stops.
 import { parseDiffFromFile, type FileDiffMetadata } from "@pierre/diffs";
-import type * as EditModule from "@pierre/diffs/edit";
 import type { Editor } from "@pierre/diffs/edit";
+
+import { errorMessage } from "@/lib/errors";
 
 import type { HunkButton } from "./line-staging";
 import { carriedExpansion, fitToLines, type Side } from "./patch-files";
 import {
   EXPAND_HIGHLIGHT_WAIT_MS,
+  hasEditorSelection,
+  loadEditor,
   nextEditedDiff,
   type LoadedFile,
   type ViewerFileDiff,
@@ -23,10 +26,6 @@ export interface EditSession {
   /** Whether there's a selection for Esc to collapse, or several to make one, in the editor. */
   hasSelection: () => boolean;
 }
-
-let editorModule: Promise<typeof EditModule> | undefined;
-/** The library's editor, loaded the first time a file's edited. */
-const loadEditor = () => (editorModule ??= import("@pierre/diffs/edit"));
 
 /** What editing needs of the viewer: its diff, what's on show in it, and what to tell of edits. */
 export interface ViewerEditingDeps {
@@ -116,19 +115,12 @@ export function createViewerEditing(deps: ViewerEditingDeps): ViewerEditing {
       deps.onEditing({
         version: whole.version,
         discard: () => void stopEditing(true),
-        hasSelection: () => {
-          const selections = opened.getViewState().selections ?? [];
-          const [first] = selections;
-          if (selections.length !== 1 || !first) return selections.length > 1;
-          return (
-            first.start.line !== first.end.line || first.start.character !== first.end.character
-          );
-        },
+        hasSelection: () => hasEditorSelection(opened),
       });
     } catch (error) {
       if (deps.disposed() || !editing) return;
       editing = false;
-      deps.onEditFailed(error instanceof Error ? error.message : String(error));
+      deps.onEditFailed(errorMessage(error));
     }
   };
 

@@ -556,6 +556,8 @@ describe("merging a branch", () => {
     writeFileSync(gpg, "#!/bin/sh\nexit 1\n");
     chmodSync(gpg, 0o755);
     git(path, "config", "commit.gpgSign", "true");
+    // With gpg, whatever the user's global config signs with (ssh, say): `gpg.program` is gpg's.
+    git(path, "config", "gpg.format", "openpgp");
     git(path, "config", "gpg.program", gpg);
     const repo = await repos.open("merge-unsigned");
 

@@ -5,7 +5,6 @@ import ChevronDown from "lucide-solid/icons/chevron-down";
 import ChevronUp from "lucide-solid/icons/chevron-up";
 import FileCheck from "lucide-solid/icons/file-check";
 import GitMergeConflict from "lucide-solid/icons/git-merge-conflict";
-import LoaderCircle from "lucide-solid/icons/loader-circle";
 import SkipForward from "lucide-solid/icons/skip-forward";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
 import {
@@ -22,7 +21,7 @@ import {
 } from "solid-js";
 
 import { Button, IconButton } from "@/components/ui/button";
-import { EmptyState } from "@/components/ui/empty-state";
+import { EmptyState, LoadingState } from "@/components/ui/empty-state";
 import { Notice } from "@/components/ui/notice";
 import { conflictKind, describeConflict } from "@/git/conflicts";
 import {
@@ -34,7 +33,7 @@ import {
 import { saveWorkingTreeFile } from "@/git/queries/file-diff";
 import { gitKeys } from "@/git/queries/keys";
 import { useUnsuspendedData } from "@/git/queries/unsuspended";
-import { useDelayed } from "@/hooks/delayed";
+import { errorMessage } from "@/lib/errors";
 import { isTyping } from "@/lib/typing";
 
 import { ConflictSides } from "./conflict-sides";
@@ -145,8 +144,7 @@ export function useConflictResolution(props: {
   const [commands, setCommands] = createSignal<ConflictCommands>();
   /** Why the last thing done to the conflict failed, and of which file. */
   const [error, setError] = createSignal<{ key: string; message: string }>();
-  const failed = (key: string, reason: unknown) =>
-    setError({ key, message: reason instanceof Error ? reason.message : String(reason) });
+  const failed = (key: string, reason: unknown) => setError({ key, message: errorMessage(reason) });
 
   const resolveFile = useResolveFile();
   const [resolving, setResolving] = createSignal(false);
@@ -362,7 +360,7 @@ export function useConflictResolution(props: {
     /** The conflicts, or the sides to keep one of. */
     View() {
       return (
-        <Switch fallback={<Loading />}>
+        <Switch fallback={<LoadingState title="Loading the conflict…" class="h-full" />}>
           <Match when={query.error} keyed>
             {(reason) => (
               <EmptyState
@@ -402,7 +400,7 @@ export function useConflictResolution(props: {
                 </EmptyState>
               )}
             >
-              <Suspense fallback={<Loading />}>
+              <Suspense fallback={<LoadingState title="Loading the conflict…" class="h-full" />}>
                 <ConflictViewer
                   fileKey={props.fileKey()}
                   path={path()}
@@ -426,16 +424,6 @@ export function useConflictResolution(props: {
       );
     },
   };
-}
-
-/** Shown while the conflict loads, unless it's quick about it. */
-function Loading() {
-  const shown = useDelayed(() => true, 150);
-  return (
-    <Show when={shown()}>
-      <EmptyState icon={LoaderCircle} loading title="Loading the conflict…" class="h-full" />
-    </Show>
-  );
 }
 
 /**

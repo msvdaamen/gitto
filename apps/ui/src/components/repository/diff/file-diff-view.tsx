@@ -30,7 +30,7 @@ import {
 } from "solid-js";
 
 import { Button, IconButton } from "@/components/ui/button";
-import { EmptyState } from "@/components/ui/empty-state";
+import { EmptyState, LoadingState } from "@/components/ui/empty-state";
 import { FileStatusBadge } from "@/components/ui/file-status-badge";
 import { LineStats } from "@/components/ui/line-stats";
 import { Notice } from "@/components/ui/notice";
@@ -419,7 +419,7 @@ export function FileDiffView(props: {
                 return <DiffError error={error} />;
               }}
             >
-              <Suspense fallback={<Loading />}>
+              <Suspense fallback={<LoadingState title="Loading changes…" class="h-full" />}>
                 <Show
                   // Nor does an error take the editor's place: it's the last one's, from before.
                   // (`null` either way: this is keyed, so `false` would make the viewer anew.)
@@ -430,7 +430,7 @@ export function FileDiffView(props: {
                       // Another file's patch is only kept while it's on show: one isn't started
                       // with it.
                       when={patch() && (patch()!.key === fileKey() || shownPatch()) && patch()}
-                      fallback={<Loading />}
+                      fallback={<LoadingState title="Loading changes…" class="h-full" />}
                     >
                       {(data) => {
                         onCleanup(() => {
@@ -651,15 +651,5 @@ function DiffError(props: { error: Error }) {
     <EmptyState icon={TriangleAlert} title="Couldn't load the changes" tone="error" class="h-full">
       {props.error.message}
     </EmptyState>
-  );
-}
-
-/** Shown while the changes load, unless they're quick about it. */
-function Loading() {
-  const shown = useDelayed(() => true, 150);
-  return (
-    <Show when={shown()}>
-      <EmptyState icon={LoaderCircle} loading title="Loading changes…" class="h-full" />
-    </Show>
   );
 }

@@ -12,6 +12,7 @@ import {
   type HunkExpansionRegion,
   type PostRenderPhase,
 } from "@pierre/diffs";
+import type * as EditModule from "@pierre/diffs/edit";
 import { getOrCreateWorkerPoolSingleton, type WorkerPoolManager } from "@pierre/diffs/worker";
 
 import type { HunkButton } from "./line-staging";
@@ -141,6 +142,21 @@ export function nextEditedDiff(): number {
   return ++editedDiffs;
 }
 
+let editorModule: Promise<typeof EditModule> | undefined;
+
+/** The library's editor, loaded the first time a file's edited: most views never need it. */
+export const loadEditor = () => (editorModule ??= import("@pierre/diffs/edit"));
+
+/** Whether there's a selection for Esc to collapse, or several to make one, in `editor`. */
+export function hasEditorSelection(editor: {
+  getViewState(): EditModule.EditorViewState;
+}): boolean {
+  const selections = editor.getViewState().selections ?? [];
+  const [first] = selections;
+  if (selections.length !== 1 || !first) return selections.length > 1;
+  return first.start.line !== first.end.line || first.start.character !== first.end.character;
+}
+
 /**
  * Drops a patch of a file that's been replaced by a newer one from the highlighting cache, which
  * has room for `CACHED_DIFFS`: an uncommitted file can be saved many times while it's on show.
@@ -236,9 +252,16 @@ export class ViewHighlights {
   }
 }
 
-/** Patches parsed lately, by their cache key, so one prepared ahead isn't parsed again. */
+/**
+ * Patches parsed lately, by their cache key, so one prepared ahead isn't parsed again: at most
+ * `PARSED_PATCHES_KEPT` of them, with `PARSED_PATCHES_CHARS` of patch text between them, besides
+ * the latest. Each is kept with its parsed lines, which take as much again: a patch of 10MB (see
+ * `MAX_PATCH_BYTES`) would be 20MB kept for as long as the app runs, and sixteen of them hundreds.
+ * A long one is parsed again in less than its view waits for its highlighting anyway.
+ */
 const parsedPatches = new Map<string, { patch: string; diff: FileDiffMetadata }>();
 const PARSED_PATCHES_KEPT = 16;
+const PARSED_PATCHES_CHARS = 4 * 1024 * 1024;
 
 /** `parsePatch`, of a patch that may have been parsed lately. */
 export function parsed(patch: string, cacheKey: string): FileDiffMetadata {
@@ -247,10 +270,15 @@ export function parsed(patch: string, cacheKey: string): FileDiffMetadata {
   const diff = parsePatch(patch, cacheKey);
   parsedPatches.delete(cacheKey);
   parsedPatches.set(cacheKey, { patch, diff });
-  // The oldest go first: a map keeps the order things were put in.
-  for (const key of parsedPatches.keys()) {
-    if (parsedPatches.size <= PARSED_PATCHES_KEPT) break;
-    parsedPatches.delete(key);
+  // Newest first: a map keeps the order things were put in. The latest always stays, so the viewer
+  // gets the same diff for the same patch while it's on show (see `PatchViewer`); the older ones go
+  // once there are too many, or too much text among them.
+  let chars = 0;
+  for (const [age, [key, entry]] of [...parsedPatches].toReversed().entries()) {
+    chars += entry.patch.length;
+    if (age >= PARSED_PATCHES_KEPT || (age > 0 && chars > PARSED_PATCHES_CHARS)) {
+      parsedPatches.delete(key);
+    }
   }
   return diff;
 }

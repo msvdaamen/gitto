@@ -2,14 +2,16 @@
 // conflicts left, or whose markers can't be read as conflicts, and one being edited by hand, markers
 // and all, with the library's editor.
 import { VirtualizedFile, Virtualizer, type FileContents, type ThemeTypes } from "@pierre/diffs";
-import type * as EditModule from "@pierre/diffs/edit";
 import type { Editor } from "@pierre/diffs/edit";
 
-import { APP_CSS, HIGHLIGHT_WAIT_MS, THEMES, workerPool } from "./viewer-runtime";
-
-let editorModule: Promise<typeof EditModule> | undefined;
-/** The library's editor, loaded the first time a file's edited. */
-const loadEditor = () => (editorModule ??= import("@pierre/diffs/edit"));
+import {
+  APP_CSS,
+  hasEditorSelection,
+  HIGHLIGHT_WAIT_MS,
+  loadEditor,
+  THEMES,
+  workerPool,
+} from "./viewer-runtime";
 
 /** What the whole file needs of the viewer it's shown in. */
 export interface WholeFileDeps {
@@ -111,14 +113,7 @@ export function createWholeFile(deps: WholeFileDeps): WholeFile {
         ),
     });
     editor = { opened, finish: opened.edit(view.file) };
-    return {
-      hasSelection: () => {
-        const selections = opened.getViewState().selections ?? [];
-        const [first] = selections;
-        if (selections.length !== 1 || !first) return selections.length > 1;
-        return first.start.line !== first.end.line || first.start.character !== first.end.character;
-      },
-    };
+    return { hasSelection: () => hasEditorSelection(opened) };
   };
 
   const stopEditing = (discard: boolean) => {

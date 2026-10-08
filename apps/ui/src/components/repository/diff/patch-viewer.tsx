@@ -5,6 +5,7 @@ import { createEffect, createMemo, onCleanup, on, untrack } from "solid-js";
 import { useConnected } from "@/hooks/connected";
 import type { DiffStyle } from "@/hooks/diff-style";
 import { useTheme } from "@/hooks/theme";
+import { errorMessage } from "@/lib/errors";
 
 import { createLinePicker, type LinePicker, type LineStaging } from "./line-picker";
 import type { HunkButton } from "./line-staging";
@@ -126,7 +127,7 @@ export default function PatchViewer(props: {
       try {
         return (await highlights.loadWhole(diff, props.loadFile)).files;
       } catch (error) {
-        failures.set(diff, error instanceof Error ? error.message : String(error));
+        failures.set(diff, errorMessage(error));
         if (diff === shownDiff) rerender();
         throw error;
       } finally {

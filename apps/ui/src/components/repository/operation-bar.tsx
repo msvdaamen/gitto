@@ -1,12 +1,11 @@
 import type { ChangedFile, Operation } from "@gitto/git/types";
-import { AlertDialog } from "@kobalte/core/alert-dialog";
 import { cn } from "cn";
 import GitMergeConflict from "lucide-solid/icons/git-merge-conflict";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
 import { createMemo, createSignal, Show } from "solid-js";
 
 import { Button } from "@/components/ui/button";
-import { DIALOG_BOX, DialogPortal } from "@/components/ui/dialog";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { FailurePopover } from "@/components/ui/failure-popover";
 import { operationName, operationProgress, operationTitle } from "@/git/conflicts";
 import { useOperationActions, useOperationInProgress } from "@/git/queries/progress";
@@ -155,43 +154,30 @@ function AbortDialog(props: {
 }) {
   // The last one asked about, still named while the dialog closes.
   const operation = createMemo((last: Operation | undefined) => props.operation ?? last);
+  const name = () => {
+    const current = operation();
+    return current ? operationName(current) : "";
+  };
   return (
-    <AlertDialog
+    <ConfirmDialog
       open={props.operation !== undefined}
-      onOpenChange={(open) => !open && props.onCancel()}
-      modal
-      preventScroll
+      icon={TriangleAlert}
+      tone="coral"
+      title={`Abort ${name()}?`}
+      description={
+        <>
+          This puts the repository back as it was before {name()} started. The conflicts you've
+          resolved so far are lost.
+        </>
+      }
+      onCancel={props.onCancel}
     >
-      <DialogPortal>
-        <AlertDialog.Content class={cn(DIALOG_BOX, "max-w-[440px] p-5")}>
-          <div class="flex items-start gap-3">
-            <span class="grid size-9 shrink-0 place-items-center rounded-[9px] bg-coral-soft text-coral">
-              <TriangleAlert size={18} strokeWidth={1.9} />
-            </span>
-            <div class="min-w-0">
-              <AlertDialog.Title class="m-0 text-[15px] font-[680]">
-                Abort {operation() && operationName(operation()!)}?
-              </AlertDialog.Title>
-              <AlertDialog.Description class="m-0 mt-2 text-[12.5px] leading-[1.55] text-text-soft">
-                This puts the repository back as it was before{" "}
-                {operation() && operationName(operation()!)} started. The conflicts you've resolved
-                so far are lost.
-              </AlertDialog.Description>
-            </div>
-          </div>
-          <div class="mt-5 flex justify-end gap-2">
-            <Button variant="ghost" onClick={props.onCancel}>
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              onClick={() => props.operation && props.onAbort(props.operation)}
-            >
-              Abort
-            </Button>
-          </div>
-        </AlertDialog.Content>
-      </DialogPortal>
-    </AlertDialog>
+      <Button variant="ghost" onClick={props.onCancel}>
+        Cancel
+      </Button>
+      <Button variant="primary" onClick={() => props.operation && props.onAbort(props.operation)}>
+        Abort
+      </Button>
+    </ConfirmDialog>
   );
 }

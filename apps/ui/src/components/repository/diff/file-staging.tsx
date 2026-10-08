@@ -8,6 +8,7 @@ import { isUncommitted, type DiffSource } from "@/git/diff-source";
 import { hasHunks, stagedWhole } from "@/git/patch";
 import type { FilePatch } from "@/git/queries/file-diff";
 import { useStageFile, useStageLines } from "@/git/queries/staging";
+import { errorMessage } from "@/lib/errors";
 
 import type { LineStaging } from "./patch-viewer";
 
@@ -60,7 +61,7 @@ export function useFileStaging(props: {
   /** Why the last lines, or the whole file, couldn't be staged, and of which file. */
   const [stagingError, setStagingError] = createSignal<{ key: string; message: string }>();
   const failed = (key: string, error: unknown) =>
-    setStagingError({ key, message: error instanceof Error ? error.message : String(error) });
+    setStagingError({ key, message: errorMessage(error) });
   /**
    * Once the file `key` names has no changes left on its side, on to `target`. Not if another
    * file was opened meanwhile.

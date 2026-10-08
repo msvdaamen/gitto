@@ -1,5 +1,7 @@
 import { createSignal } from "solid-js";
 
+import { errorMessage } from "@/lib/errors";
+
 /** Where saving a file that's being edited is at. */
 export type SaveState =
   | { kind: "saved" }
@@ -48,7 +50,7 @@ export function createAutosave(save: SaveFile, delayMs = AUTOSAVE_DELAY_MS) {
     try {
       version = await save(text, version, overwrite);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       setState(
         isChangedOnDisk(error) ? { kind: "changed-on-disk", message } : { kind: "failed", message },
       );
