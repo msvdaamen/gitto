@@ -182,6 +182,9 @@ export class MergeBlockedError extends MessageError {}
  */
 export class MergeStoppedError extends MessageError {}
 
+/** Changes that can't be discarded, as they're of conflicted files: nothing was discarded. */
+export class DiscardBlockedError extends MessageError {}
+
 /** What's asked of git needs an editor for a message, which Gitto can't open: a rebase's reword. */
 export class EditorNeededError extends MessageError {}
 
