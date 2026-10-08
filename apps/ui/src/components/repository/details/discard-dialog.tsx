@@ -1,10 +1,8 @@
-import { AlertDialog } from "@kobalte/core/alert-dialog";
-import { cn } from "cn";
 import Undo2 from "lucide-solid/icons/undo-2";
 import { createMemo } from "solid-js";
 
 import { Button } from "@/components/ui/button";
-import { DIALOG_BOX, DialogPortal } from "@/components/ui/dialog";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import type { DiscardTarget } from "@/git/queries/staging";
 
 /**
@@ -25,38 +23,21 @@ export function DiscardDialog(props: {
     return `Discard changes to ${path.slice(path.lastIndexOf("/") + 1)}?`;
   };
   return (
-    <AlertDialog
+    <ConfirmDialog
       open={props.target !== undefined}
-      onOpenChange={(open) => !open && props.onCancel()}
-      modal
-      preventScroll
+      icon={Undo2}
+      tone="coral"
+      title={title()}
+      description={describe(target())}
+      onCancel={props.onCancel}
     >
-      <DialogPortal>
-        <AlertDialog.Content class={cn(DIALOG_BOX, "max-w-[440px] p-5")}>
-          <div class="flex items-start gap-3">
-            <span class="grid size-9 shrink-0 place-items-center rounded-[9px] bg-coral-soft text-coral">
-              <Undo2 size={18} strokeWidth={1.9} />
-            </span>
-            <div class="min-w-0">
-              <AlertDialog.Title class="m-0 text-[15px] font-[680] break-words">
-                {title()}
-              </AlertDialog.Title>
-              <AlertDialog.Description class="m-0 mt-2 text-[12.5px] leading-[1.55] break-words text-text-soft">
-                {describe(target())}
-              </AlertDialog.Description>
-            </div>
-          </div>
-          <div class="mt-5 flex justify-end gap-2">
-            <Button variant="ghost" onClick={props.onCancel}>
-              Cancel
-            </Button>
-            <Button variant="primary" onClick={() => props.target && props.onDiscard(props.target)}>
-              Discard
-            </Button>
-          </div>
-        </AlertDialog.Content>
-      </DialogPortal>
-    </AlertDialog>
+      <Button variant="ghost" onClick={props.onCancel}>
+        Cancel
+      </Button>
+      <Button variant="primary" onClick={() => props.target && props.onDiscard(props.target)}>
+        Discard
+      </Button>
+    </ConfirmDialog>
   );
 }
 
