@@ -43,7 +43,7 @@ function cli(...args: string[]) {
 describe("the changelog script", () => {
   it("adds a nightly's changes since the last nightly to its changelog", () => {
     commit("feat: add worktrees (#1)");
-    git("tag", "nightly");
+    git("tag", "v0.0.1-nightly1");
     commit("fix(diff): keep the scroll (#2)");
     commit("Not conventional");
     commit("chore: bump electron (#3)");
@@ -52,13 +52,13 @@ describe("the changelog script", () => {
     };
     writeFileSync(join(repo, "previous.json"), JSON.stringify(previous));
 
-    expect(cli("previous", "0.0.1-nightly2").stdout).toBe("nightly");
+    expect(cli("previous", "0.0.1-nightly2").stdout).toBe("v0.0.1-nightly1");
     const generated = cli(
       "generate",
       "--version",
       "0.0.1-nightly2",
       "--from",
-      "nightly",
+      "v0.0.1-nightly1",
       "--previous",
       "previous.json",
       "--out",
@@ -91,6 +91,15 @@ describe("the changelog script", () => {
     expect(cli("bump").stdout).toBe("minor");
     commit("feat!: drop the old setting");
     expect(cli("bump", "v1.2.3").stdout).toBe("major");
+  });
+
+  it("lists the nightlies past the newest kept", () => {
+    commit("feat: add worktrees");
+    for (const tag of ["v1.2.3", "v1.2.4-nightly1", "v1.2.4-nightly2", "v1.2.4-nightly3"]) {
+      git("tag", tag);
+    }
+    expect(cli("stale", "2").stdout).toBe("v1.2.4-nightly1");
+    expect(cli("stale", "0").status).toBe(1);
   });
 
   it("checks a pull request's title", () => {

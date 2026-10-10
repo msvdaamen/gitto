@@ -1,9 +1,10 @@
 name: Release
 
-# Every night, the rolling "nightly" pre-release is updated to main, if the code changed since the
-# last one. Running it on main by hand builds a nightly now, or releases main with the last
-# release's version bumped (1.2.3 to 1.2.4, 1.3.0 or 2.0.0), and pushing a `v1.2.3` tag publishes
-# Gitto 1.2.3. The version comes from the tags; package.json's stays at 0.0.0 and is set at build.
+# Every night, main is published as a nightly pre-release, tagged like v1.2.4-nightly29853462, if
+# the code changed since the last one; the newest 30 are kept. Running it on main by hand builds a
+# nightly now, or releases main with the last release's version bumped (1.2.3 to 1.2.4, 1.3.0 or
+# 2.0.0), and pushing a `v1.2.3` tag publishes Gitto 1.2.3. The version comes from the tags;
+# package.json's stays at 0.0.0 and is set at build.
 #
 # Each build publishes changelog.json: its changes since the build before it on its channel, from
 # the commits' Conventional Commits titles (see packages/release), added to that build's.
@@ -35,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
-      # The release's tag, or `nightly`.
+      # v<version>, a nightly's too.
       tag: ${{ steps.version.outputs.tag }}
       # A scheduled nightly with no new code since the last one isn't built.
       skip: ${{ steps.version.outputs.skip }}
@@ -97,21 +98,11 @@ jobs:
               exit 1
             fi
           else
-            tag=nightly
-            # Scheduled every night, it's only built when the code changed since the last nightly,
-            # as a merge that only touches docs doesn't need one.
-            if [[ "$EVENT" == schedule ]] && git rev-parse -q --verify refs/tags/nightly > /dev/null \
-              && git diff --quiet nightly HEAD -- apps packages package.json pnpm-lock.yaml \
-                pnpm-workspace.yaml tsconfig.base.json .github/actions .github/workflows/release.yml
-            then
-              echo "Nothing to build: the code is as it was in the last nightly."
-              echo "skip=true" >> "$GITHUB_OUTPUT"
-              exit
-            fi
             # The highest release, merged here or not, so a nightly sorts after every release that's
-            # out. `versionsort.suffix` puts 1.3.0-rc.1 before 1.3.0.
+            # out, leaving out nightlies. `versionsort.suffix` puts 1.3.0-rc.1 before 1.3.0.
             last=$(git -c versionsort.suffix=- tag --list 'v[0-9]*' --sort=-v:refname \
-              | sed 's/^v//' | { grep -E "$semver" || true; } | head -n 1)
+              | sed 's/^v//' | { grep -Ev -- '-nightly[0-9]+$' || true; } \
+              | { grep -E "$semver" || true; } | head -n 1)
             [[ "${last:=0.0.0}" =~ $semver ]]
             # The minutes from 1970 to when it was built, the same in every build's version. They have
             # 8 digits until 2160, so nightlies sort as they were built as text too, as semver and
@@ -125,6 +116,18 @@ jobs:
               # After 1.2.3, 1.2.4-nightly…
               version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))-$nightly"
             fi
+            tag="v$version"
+            # Scheduled every night, it's only built when the code changed since the last nightly,
+            # as a merge that only touches docs doesn't need one.
+            previous=$(node packages/release/src/cli.ts previous "$version")
+            if [[ "$EVENT" == schedule && -n "$previous" ]] \
+              && git diff --quiet "$previous" HEAD -- apps packages package.json pnpm-lock.yaml \
+                pnpm-workspace.yaml tsconfig.base.json .github/actions .github/workflows/release.yml
+            then
+              echo "Nothing to build: the code is as it was in $previous."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit
+            fi
           fi
           echo "Version $version ($tag)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -137,7 +140,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           mkdir changelog
-          # The build its changes are counted from: the last nightly, or the release before.
+          # The build its changes are counted from: the nightly, or the release, before it.
           from=$(node packages/release/src/cli.ts previous "$VERSION")
           previous=()
           if [[ -n "$from" ]]; then
@@ -240,63 +243,68 @@ jobs:
         with:
           name: changelog
           path: changelog
-      # Named as GitHub would name them (spaces become dots), to tell them from what's already up.
+      # Named as GitHub would name them (spaces become dots), as update-darwin-arm64.json links them.
       - run: |
           mkdir upload
           find dist -type f -print0 | while IFS= read -r -d '' file; do
             name=$(basename "$file")
             mv "$file" "upload/${name// /.}"
           done
-      # What Gitto checks for updates (see apps/electron/src/updater.ts), kept apart to be uploaded
-      # after the files they point to: update.json says the version, RELEASES is Squirrel's on
+      # What Gitto updates from (see apps/electron/src/updater.ts): RELEASES is Squirrel's on
       # Windows, and update-darwin-arm64.json is Squirrel.Mac's, which points to the zip. With them,
       # changelog.json, which the next build adds to.
       - run: |
-          mkdir feeds
-          mv upload/RELEASES feeds/
-          cp changelog/changelog.json feeds/
-          jq -n --arg version "$VERSION" '{version: $version}' > feeds/update.json
+          cp changelog/changelog.json upload/
           zip=$(cd upload && ls Gitto-darwin-arm64-*.zip)
           jq -n --arg url "https://github.com/$GH_REPO/releases/download/$TAG/$zip" \
-            --arg name "$VERSION" '{url: $url, name: $name}' > feeds/update-darwin-arm64.json
-      - name: Publish nightly
-        if: needs.version.outputs.tag == 'nightly'
+            --arg name "$VERSION" '{url: $url, name: $name}' > upload/update-darwin-arm64.json
+      - name: Publish
         run: |
-          # Updated in place, so there's always a nightly to download.
-          gh api --method PATCH "repos/$GH_REPO/git/refs/tags/nightly" \
-            -f sha="$GITHUB_SHA" -F force=true --silent \
-            || gh api "repos/$GH_REPO/git/refs" -f ref=refs/tags/nightly -f sha="$GITHUB_SHA" --silent
-          {
-            echo "Built from $GITHUB_SHA on main. Nightly builds aren't tested beyond CI."
-            echo
-            echo "## Since the last nightly"
-            echo
-            cat changelog/notes.md
-          } > notes.md
-          if ! gh release view nightly --json id > /dev/null; then
-            gh release create nightly upload/* feeds/* --verify-tag --prerelease \
-              --title "Gitto Nightly $VERSION" --notes-file notes.md
-            exit
-          fi
-          old=$(gh release view nightly --json assets --jq '.assets[].name')
-          gh release upload nightly upload/* --clobber
-          gh release upload nightly feeds/* --clobber
-          gh release edit nightly --prerelease --title "Gitto Nightly $VERSION" --notes-file notes.md
-          # The last build's files.
-          while IFS= read -r name; do
-            [[ -z "$name" || -e "upload/$name" || -e "feeds/$name" ]] \
-              || gh release delete-asset nightly "$name" --yes
-          done <<< "$old"
-      - name: Publish release
-        if: needs.version.outputs.tag != 'nightly'
-        run: |
-          # A release run by hand is tagged only now that it's built, so a failed build leaves no
-          # tag. Made with this token, the tag doesn't start this workflow again.
-          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+          # A nightly, or a release run by hand, is tagged only now that it's built, so a failed
+          # build leaves no tag. Made with this token, the tag doesn't start this workflow again.
+          if [[ "$GITHUB_EVENT_NAME" != push ]]; then
             gh api "repos/$GH_REPO/git/refs" -f ref="refs/tags/$TAG" -f sha="$GITHUB_SHA" --silent
           fi
-          # A tag like v1.0.0-beta.1 is published as a pre-release.
+          if [[ "$VERSION" == *-nightly* ]]; then
+            title="Gitto Nightly $VERSION"
+            {
+              echo "Built from $GITHUB_SHA on main. Nightly builds aren't tested beyond CI."
+              echo
+              echo "## Since the last nightly"
+              echo
+              cat changelog/notes.md
+            } > notes.md
+          else
+            title="Gitto $VERSION"
+            cp changelog/notes.md notes.md
+          fi
+          # A nightly, or a tag like v1.0.0-beta.1, is published as a pre-release, which GitHub never
+          # takes for the latest release.
           prerelease=$([[ "$VERSION" == *-* ]] && echo --prerelease || true)
-          # Its files are all up before it's published, so update.json never points to a missing one.
-          gh release create "$TAG" upload/* feeds/* $prerelease \
-            --verify-tag --title "Gitto $VERSION" --notes-file changelog/notes.md
+          # Its files are all up before it's published, so the updater never finds one missing.
+          gh release create "$TAG" upload/* $prerelease --verify-tag --title "$title" \
+            --notes-file notes.md
+
+  prune:
+    name: Prune nightlies
+    needs: [version, publish]
+    if: contains(needs.version.outputs.version, '-nightly')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      # The newest 30 are kept, about a month of them; the changelog keeps what they changed.
+      - run: |
+          node packages/release/src/cli.ts stale 30 | while IFS= read -r tag; do
+            echo "Deleting $tag"
+            gh release delete "$tag" --cleanup-tag --yes
+          done

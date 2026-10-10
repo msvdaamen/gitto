@@ -10,6 +10,7 @@ import {
   parseTitle,
   previousTag,
   releaseNotes,
+  staleNightlies,
   type VersionChanges,
 } from "./changelog.ts";
 
@@ -115,11 +116,22 @@ describe("the changelog", () => {
 });
 
 describe("the previous tag", () => {
-  const tags = ["nightly", "v1.2.3", "v1.3.0-rc.1", "v1.3.0", "v1.4.0-beta.1", "other", "v2"];
+  const tags = [
+    "nightly",
+    "v1.2.3",
+    "v1.2.4-nightly29853462",
+    "v1.2.4-nightly29854900",
+    "v1.3.0-rc.1",
+    "v1.3.0",
+    "v1.4.0-beta.1",
+    "other",
+    "v2",
+  ];
 
   it("is the last nightly's for a nightly", () => {
-    expect(previousTag("1.4.1-nightly29853462", tags)).toBe("nightly");
-    expect(previousTag("1.4.1-nightly29853462", ["v1.2.3"])).toBeUndefined();
+    expect(previousTag("1.2.4-nightly29860000", tags)).toBe("v1.2.4-nightly29854900");
+    expect(previousTag("1.4.1-nightly29870000", tags)).toBe("v1.2.4-nightly29854900");
+    expect(previousTag("1.2.4-nightly29853462", tags)).toBeUndefined();
   });
 
   it("is the release before it for a release, leaving out pre-releases", () => {
@@ -128,9 +140,18 @@ describe("the previous tag", () => {
     expect(previousTag("1.2.3", tags)).toBeUndefined();
   });
 
-  it("is the version before it for a pre-release", () => {
+  it("is the version before it for a pre-release, leaving out nightlies", () => {
     expect(previousTag("1.3.0-rc.2", tags)).toBe("v1.3.0-rc.1");
     expect(previousTag("1.4.0-beta.2", tags)).toBe("v1.4.0-beta.1");
+    expect(previousTag("1.2.5-beta.1", tags)).toBe("v1.2.3");
+  });
+});
+
+describe("stale nightlies", () => {
+  it("are the nightlies past the newest kept", () => {
+    const tags = ["v1.2.3", "v1.2.4-nightly3", "v1.2.4-nightly1", "v1.2.4-nightly2", "v1.3.0-rc.1"];
+    expect(staleNightlies(tags, 2)).toEqual(["v1.2.4-nightly1"]);
+    expect(staleNightlies(tags, 30)).toEqual([]);
   });
 });
 

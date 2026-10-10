@@ -41,9 +41,10 @@ The version comes from git tags; `package.json`'s stays at `0.0.0` and is set at
 
 How to install each build is in [Installing Gitto](docs/install.md).
 
-- Every night, the **Gitto Nightly** pre-release is updated to `main`, if the code changed since the
-  last one. Its version follows the highest `v*` tag, then says when it was built, in minutes from
-  1970: `1.2.4-nightly29853462` after `v1.2.3`, and `1.3.0-nightly29853462` after `v1.3.0-rc.1`.
+- Every night, `main` is published as a **Gitto Nightly** pre-release, if the code changed since
+  the last one; the newest 30 are kept. Its version follows the highest release tag, then says when
+  it was built, in minutes from 1970: `1.2.4-nightly29853462` after `v1.2.3`, and
+  `1.3.0-nightly29853462` after `v1.3.0-rc.1`, tagged `v1.2.4-nightly29853462` as releases are.
   Every build has the same version, the Windows installer's package too.
 - Running the **Release** workflow on `main` (Actions → Release → Run workflow) builds a nightly
   now, or releases `main` with the last release's version bumped: `auto` bumps what the commits
@@ -79,10 +80,10 @@ nightly only to the next nightly, a release only to the next release. It checks 
 every hour, downloads a newer version in the background, and offers to restart into it in the footer;
 otherwise it's installed the next time Gitto starts.
 
-Each release has the files it checks:
+It finds the newest on its channel in [GitHub's list of releases](https://api.github.com/repos/msvdaamen/gitto/releases),
+leaving out pre-releases other than nightlies (so a `v1.3.0-beta.1` isn't offered), and updates from
+that release's files:
 
-- `update.json`, with the release's version. A nightly reads the `nightly` release's, a release the
-  latest release's, which GitHub never takes a pre-release for (so a `v1.3.0-beta.1` isn't offered).
 - `RELEASES` and the `.nupkg`, which Squirrel updates from on Windows.
 - `update-darwin-arm64.json`, which points Squirrel.Mac to the zip. Squirrel.Mac only installs a
   code-signed app, so updates on macOS need the builds to be signed.

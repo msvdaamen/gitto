@@ -1,4 +1,4 @@
-import { compareVersions, isPrerelease, SEMVER } from "./version.ts";
+import { channelOf, compareVersions, isPrerelease, SEMVER } from "./version.ts";
 
 /**
  * What a commit's title starts with, as Conventional Commits names them: `feat: add worktrees`,
@@ -132,19 +132,34 @@ export function bumpFor(changes: Change[]): "major" | "minor" | "patch" {
 }
 
 /**
- * The tag a version's changes are counted from: for a nightly, the last nightly's; for a release,
- * the release before it, leaving out pre-releases (1.3.0's changes are since 1.2.3, not since
- * 1.3.0-rc.1); for a pre-release, the version before it, pre-release or not. None for the first.
+ * The tag a version's changes are counted from, the version before it on its channel: for a
+ * nightly, the last nightly; for a release, the release before it, leaving out pre-releases
+ * (1.3.0's changes are since 1.2.3, not since 1.3.0-rc.1); for another pre-release, the version
+ * before it, pre-release or not. Nightlies are left out of releases'. None for the first.
  */
 export function previousTag(version: string, tags: string[]): string | undefined {
-  if (/-nightly\d+$/.test(version)) return tags.includes("nightly") ? "nightly" : undefined;
+  const channel = channelOf(version);
   return tags
     .filter((tag) => tag.startsWith("v") && SEMVER.test(tag.slice(1)))
     .map((tag) => tag.slice(1))
-    .filter((v) => compareVersions(v, version) < 0 && (isPrerelease(version) || !isPrerelease(v)))
+    .filter(
+      (v) =>
+        compareVersions(v, version) < 0 &&
+        channelOf(v) === channel &&
+        (isPrerelease(version) || !isPrerelease(v)),
+    )
     .toSorted(compareVersions)
     .map((v) => `v${v}`)
     .at(-1);
+}
+
+/** The nightlies' tags past the newest `keep`, to be deleted with their releases. */
+export function staleNightlies(tags: string[], keep: number): string[] {
+  return tags
+    .filter((tag) => tag.startsWith("v") && SEMVER.test(tag.slice(1)))
+    .filter((tag) => channelOf(tag.slice(1)) === "nightly")
+    .toSorted((a, b) => compareVersions(b.slice(1), a.slice(1)))
+    .slice(keep);
 }
 
 const SECTIONS: [string, (change: Change) => boolean][] = [

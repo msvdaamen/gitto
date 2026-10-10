@@ -2,6 +2,7 @@
 // nothing installed but Node and git, as Node runs it as it is: `node packages/release/src/cli.ts`.
 //
 //   previous <version>        The tag the version's changes are counted from, if any.
+//   stale <keep>              The nightlies' tags past the newest <keep>, to delete.
 //   bump [<from>]             What a release of the commits since <from> bumps: major, minor or patch.
 //   check-title <title>       Fails unless it's a Conventional Commits title, as a PR's has to be.
 //   generate --version <v> [--from <tag>] [--previous <changelog.json>] --out <changelog.json>
@@ -22,6 +23,7 @@ import {
   parseTitle,
   previousTag,
   releaseNotes,
+  staleNightlies,
 } from "./changelog.ts";
 import { channelOf, SEMVER } from "./version.ts";
 
@@ -34,8 +36,14 @@ switch (command) {
   case "previous": {
     const [version] = args;
     if (!version || !SEMVER.test(version)) fail(`previous: invalid version ${version}`);
-    const tag = previousTag(version, git("tag", "--list").split("\n").filter(Boolean));
+    const tag = previousTag(version, tags());
     if (tag) console.log(tag);
+    break;
+  }
+  case "stale": {
+    const keep = Number(args[0]);
+    if (!Number.isInteger(keep) || keep < 1) fail(`stale: invalid count ${args[0]}`);
+    for (const tag of staleNightlies(tags(), keep)) console.log(tag);
     break;
   }
   case "bump": {
@@ -84,6 +92,10 @@ function changesSince(from: string | undefined): Change[] {
   return parseLog(
     git("log", "--no-merges", `--format=${LOG_FORMAT}`, from ? `${from}..HEAD` : "HEAD"),
   );
+}
+
+function tags() {
+  return git("tag", "--list").split("\n").filter(Boolean);
 }
 
 function git(...gitArgs: string[]) {

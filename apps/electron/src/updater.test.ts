@@ -14,16 +14,32 @@ const { app, autoUpdater, net } = await vi.hoisted(async () => {
 });
 vi.mock("electron", () => ({ app, autoUpdater, net }));
 
-import { releaseUrl, Updater } from "./updater";
+import { newestOn, RELEASES_API, releaseUrl, Updater } from "./updater";
 
-const NIGHTLY = "https://github.com/msvdaamen/gitto/releases/download/nightly";
-const LATEST = "https://github.com/msvdaamen/gitto/releases/latest/download";
+const DOWNLOAD = "https://github.com/msvdaamen/gitto/releases/download";
 const { platform, arch, argv } = process;
 
-describe("versions", () => {
-  it("are updated from the rolling nightly, or the latest release", () => {
-    expect(releaseUrl("nightly")).toBe(NIGHTLY);
-    expect(releaseUrl("release")).toBe(LATEST);
+/** As GitHub lists them, the newest first. */
+function releases(...tags: string[]) {
+  return tags.map((tag_name) => ({ tag_name, draft: false }));
+}
+
+describe("releases", () => {
+  it("are downloaded from their tag", () => {
+    expect(releaseUrl("1.2.4-nightly29853462")).toBe(`${DOWNLOAD}/v1.2.4-nightly29853462`);
+  });
+
+  it("are updated to the channel's newest, leaving out other pre-releases and drafts", () => {
+    const listed = [
+      ...releases("v1.3.0-beta.1", "v1.2.4-nightly29854900", "nightly", "v1.2.4"),
+      ...releases("v1.2.4-nightly29853462", "v1.2.3", "not a tag"),
+      { tag_name: "v1.2.5-nightly29860000", draft: true },
+      { tag_name: "v1.2.5", draft: true },
+    ];
+    expect(newestOn("nightly", listed)).toBe("1.2.4-nightly29854900");
+    expect(newestOn("release", listed)).toBe("1.2.4");
+    expect(newestOn("nightly", releases("v1.2.3"))).toBeNull();
+    expect(() => newestOn("release", { message: "API rate limit exceeded" })).toThrow();
   });
 });
 
@@ -34,9 +50,14 @@ function updater(version: string, os: NodeJS.Platform = "win32", cpu = "x64") {
   return new Updater();
 }
 
-function published(version: unknown) {
-  net.fetch.mockImplementation(async () => Response.json({ version }));
+function published(...tags: string[]) {
+  net.fetch.mockImplementation(async () => Response.json(releases(...tags)));
 }
+
+const FETCHED = [
+  RELEASES_API,
+  { cache: "no-store", headers: { Accept: "application/vnd.github+json" } },
+] as const;
 
 /** The states it emits from now on. */
 function watch(updates: Updater) {
@@ -64,14 +85,16 @@ describe("the updater", () => {
   });
 
   it("checks a nightly's channel, and downloads a newer nightly", async () => {
-    published("1.2.4-nightly29854900");
+    published("v1.2.4", "v1.2.4-nightly29854900", "v1.2.4-nightly29853462");
     const updates = updater("1.2.4-nightly29853462");
     const { states, stop } = watch(updates);
     updates.start();
 
-    expect(autoUpdater.setFeedURL).toHaveBeenCalledWith({ url: NIGHTLY });
-    expect(net.fetch).toHaveBeenCalledWith(`${NIGHTLY}/update.json`, { cache: "no-store" });
+    expect(net.fetch).toHaveBeenCalledWith(...FETCHED);
     await vi.waitFor(() => expect(autoUpdater.checkForUpdates).toHaveBeenCalled());
+    expect(autoUpdater.setFeedURL).toHaveBeenCalledWith({
+      url: `${DOWNLOAD}/v1.2.4-nightly29854900`,
+    });
 
     autoUpdater.emit("update-downloaded");
     await vi.waitFor(() => expect(states).toHaveLength(3));
@@ -95,34 +118,35 @@ describe("the updater", () => {
   });
 
   it("checks a release's channel, and asks Squirrel.Mac for the zip on macOS", async () => {
-    published("1.2.4");
+    published("v1.3.0-beta.1", "v1.2.5-nightly29854900", "v1.2.4", "v1.2.3");
     const updates = updater("1.2.3", "darwin", "arm64");
     updates.start();
 
-    expect(autoUpdater.setFeedURL).toHaveBeenCalledWith({
-      url: `${LATEST}/update-darwin-arm64.json`,
-    });
-    expect(net.fetch).toHaveBeenCalledWith(`${LATEST}/update.json`, { cache: "no-store" });
+    expect(net.fetch).toHaveBeenCalledWith(...FETCHED);
     await vi.waitFor(() => expect(autoUpdater.checkForUpdates).toHaveBeenCalled());
+    expect(autoUpdater.setFeedURL).toHaveBeenCalledWith({
+      url: `${DOWNLOAD}/v1.2.4/update-darwin-arm64.json`,
+    });
   });
 
   it("downloads nothing that isn't newer", async () => {
     const responses = [
-      ...["1.2.3", "1.2.2", "1.2.3-rc.1", "not a version"].map((version) =>
-        Response.json({ version }),
+      ...[["v1.2.3"], ["v1.2.2"], ["v1.2.4-rc.1"], ["v1.2.4-nightly29854900"], []].map((tags) =>
+        Response.json(releases(...tags)),
       ),
-      new Response("Not found", { status: 404 }),
+      Response.json({ message: "API rate limit exceeded" }),
+      new Response("Forbidden", { status: 403 }),
     ];
     for (const response of responses) net.fetch.mockResolvedValueOnce(response);
     net.fetch.mockRejectedValueOnce(new Error("offline"));
-    await Promise.all(Array.from({ length: 6 }, () => updater("1.2.3").check()));
-    expect(net.fetch).toHaveBeenCalledTimes(6);
+    await Promise.all(Array.from({ length: 8 }, () => updater("1.2.3").check()));
+    expect(net.fetch).toHaveBeenCalledTimes(8);
 
     expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
   });
 
   it("downloads one update at a time, and tries again after it failed", async () => {
-    published("1.2.4");
+    published("v1.2.4");
     const updates = updater("1.2.3");
     updates.start();
     await vi.waitFor(() => expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1));
@@ -151,9 +175,11 @@ describe("the updater", () => {
 
   it("waits for the next check on the first run after Squirrel installed it", () => {
     process.argv = ["Gitto.exe", "--squirrel-firstrun"];
-    updater("1.2.3").start();
+    const updates = updater("1.2.3");
+    updates.start();
 
-    expect(autoUpdater.setFeedURL).toHaveBeenCalled();
     expect(net.fetch).not.toHaveBeenCalled();
+    // Listening, for the next check.
+    expect(autoUpdater.listenerCount("update-downloaded")).toBe(1);
   });
 });
