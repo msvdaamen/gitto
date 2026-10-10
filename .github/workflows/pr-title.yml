@@ -1,0 +1,33 @@
+name: PR title
+
+# Pull requests are squashed into one commit titled as they are, and the changelog is made from
+# those titles (see packages/release), so each has to be a Conventional Commits title:
+# `feat: add worktrees`, `fix(diff): keep the scroll`, `feat!: …` for a breaking change.
+on:
+  pull_request:
+    # Edited for a new title; the others so every head commit has the check.
+    types: [opened, edited, reopened, synchronize]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  title:
+    name: Conventional title
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if ! node packages/release/src/cli.ts check-title "$TITLE"; then
+            echo "::error::Title the pull request as <type>: <description>, with feat or fix for what users see. See AGENTS.md."
+            exit 1
+          fi

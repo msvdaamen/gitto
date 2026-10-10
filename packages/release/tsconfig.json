@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2024"],
+    "types": ["node"],
+    // The release workflow runs src/cli.ts with Node as it is, which needs the extensions.
+    "allowImportingTsExtensions": true
+  },
+  "include": ["src", "vitest.config.ts"]
+}

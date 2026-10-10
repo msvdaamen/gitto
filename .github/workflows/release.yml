@@ -1,38 +1,30 @@
 name: Release
 
-# Every merge to main updates the rolling "nightly" pre-release. Running it on main by hand releases
-# main with the last release's version bumped (1.2.3 to 1.2.4, 1.3.0 or 2.0.0), and pushing a
-# `v1.2.3` tag publishes Gitto 1.2.3. The version comes from the tags; package.json's stays at 0.0.0
-# and is set at build.
+# Every night, the rolling "nightly" pre-release is updated to main, if the code changed since the
+# last one. Running it on main by hand builds a nightly now, or releases main with the last
+# release's version bumped (1.2.3 to 1.2.4, 1.3.0 or 2.0.0), and pushing a `v1.2.3` tag publishes
+# Gitto 1.2.3. The version comes from the tags; package.json's stays at 0.0.0 and is set at build.
+#
+# Each build publishes changelog.json: its changes since the build before it on its channel, from
+# the commits' Conventional Commits titles (see packages/release), added to that build's.
 on:
+  schedule:
+    # Off the hour, when GitHub's busiest delaying scheduled runs.
+    - cron: "17 3 * * *"
   push:
-    branches: [main]
     tags: ["v*"]
-    # A merge that only touches docs keeps the last nightly. GitHub doesn't apply paths to tags, so
-    # a release always builds.
-    paths:
-      - "apps/**"
-      - "packages/**"
-      - package.json
-      - pnpm-lock.yaml
-      - pnpm-workspace.yaml
-      - tsconfig.base.json
-      - .github/actions/**
-      - .github/workflows/release.yml
   workflow_dispatch:
     inputs:
-      bump:
-        description: "What goes up: patch for fixes, minor for features, major for breaking changes"
+      build:
+        description: "A nightly, or a release with what goes up: auto from the commits since the last release (feat: minor, fix: patch, !: major), or patch, minor or major"
         type: choice
-        options: [patch, minor, major]
-        default: patch
+        options: [nightly, auto, patch, minor, major]
+        default: nightly
 
 concurrency:
-  # A release run by hand waits for the one before, so it bumps the version that one released.
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
-  # A newer merge makes the running nightly stale, and publishes its own after; a release always
-  # runs to the end.
-  cancel-in-progress: ${{ github.event_name == 'push' && github.ref_type == 'branch' }}
+  # Nightlies, scheduled or run by hand, run one at a time; so do releases run by hand, so each
+  # bumps the version the one before released. Every run goes to the end.
+  group: ${{ github.workflow }}-${{ (github.event_name == 'schedule' || inputs.build == 'nightly') && 'nightly' || github.ref }}
 
 permissions:
   contents: read
@@ -45,31 +37,42 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       # The release's tag, or `nightly`.
       tag: ${{ steps.version.outputs.tag }}
+      # A scheduled nightly with no new code since the last one isn't built.
+      skip: ${{ steps.version.outputs.skip }}
     steps:
       - uses: actions/checkout@v7
         with:
-          # Tags are needed to find the last release.
+          # Tags are needed to find the last release, and history for the changelog.
           fetch-depth: 0
+      # For packages/release/src/cli.ts, which needs no dependencies.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
       - id: version
         env:
           EVENT: ${{ github.event_name }}
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
-          BUMP: ${{ inputs.bump }}
+          BUILD: ${{ inputs.build }}
         run: |
           # A pre-release part has to start with a letter: Squirrel's NuGet won't take `1.0.0-1`.
           semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[A-Za-z][0-9A-Za-z-]*(\.[0-9A-Za-z-]+)*)?$'
-          if [[ "$EVENT" == workflow_dispatch ]]; then
-            if [[ "$REF_TYPE" != branch || "$REF_NAME" != main ]]; then
-              echo "::error::Releases are made from main, not $REF_NAME."
-              exit 1
-            fi
+          if [[ "$EVENT" == workflow_dispatch && ( "$REF_TYPE" != branch || "$REF_NAME" != main ) ]]; then
+            echo "::error::Nightlies and releases are made from main, not $REF_NAME."
+            exit 1
+          fi
+          if [[ "$EVENT" == workflow_dispatch && "$BUILD" != nightly ]]; then
             # The highest release, leaving out pre-releases: after 1.2.3 and 1.3.0-rc.1, a minor
             # release is 1.3.0.
             last=$(git tag --list 'v[0-9]*' --sort=-v:refname | sed 's/^v//' \
               | { grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' || true; } | head -n 1)
+            bump="$BUILD"
+            if [[ "$bump" == auto ]]; then
+              bump=$(node packages/release/src/cli.ts bump ${last:+"v$last"})
+              echo "The commits since ${last:-the first} make it a $bump release."
+            fi
             IFS=. read -r major minor patch <<< "${last:-0.0.0}"
-            case "$BUMP" in
+            case "$bump" in
               major) version="$((major + 1)).0.0" ;;
               minor) version="$major.$((minor + 1)).0" ;;
               patch) version="$major.$minor.$((patch + 1))" ;;
@@ -95,6 +98,16 @@ jobs:
             fi
           else
             tag=nightly
+            # Scheduled every night, it's only built when the code changed since the last nightly,
+            # as a merge that only touches docs doesn't need one.
+            if [[ "$EVENT" == schedule ]] && git rev-parse -q --verify refs/tags/nightly > /dev/null \
+              && git diff --quiet nightly HEAD -- apps packages package.json pnpm-lock.yaml \
+                pnpm-workspace.yaml tsconfig.base.json .github/actions .github/workflows/release.yml
+            then
+              echo "Nothing to build: the code is as it was in the last nightly."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit
+            fi
             # The highest release, merged here or not, so a nightly sorts after every release that's
             # out. `versionsort.suffix` puts 1.3.0-rc.1 before 1.3.0.
             last=$(git -c versionsort.suffix=- tag --list 'v[0-9]*' --sort=-v:refname \
@@ -116,10 +129,45 @@ jobs:
           echo "Version $version ($tag)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Changelog
+        if: steps.version.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir changelog
+          # The build its changes are counted from: the last nightly, or the release before.
+          from=$(node packages/release/src/cli.ts previous "$VERSION")
+          previous=()
+          if [[ -n "$from" ]]; then
+            if ! assets=$(gh release view "$from" --json assets --jq '.assets[].name' 2>&1); then
+              # A tag whose build failed has no release. Any other failure stops here, rather than
+              # start the changelog over.
+              [[ "$assets" == "release not found" ]] || { echo "$assets"; exit 1; }
+              assets=""
+            fi
+            # Its changelog, which this one adds to. One published before there were changelogs
+            # has none, and the changelog starts over.
+            if grep -qx changelog.json <<< "$assets"; then
+              gh release download "$from" --pattern changelog.json --output previous.json
+              previous=(--previous previous.json)
+            fi
+          fi
+          node packages/release/src/cli.ts generate --version "$VERSION" ${from:+--from "$from"} \
+            "${previous[@]}" --out changelog/changelog.json --notes changelog/notes.md
+          cat changelog/notes.md >> "$GITHUB_STEP_SUMMARY"
+      - if: steps.version.outputs.skip != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: changelog
+          path: changelog
+          if-no-files-found: error
 
   build:
     name: Build (${{ matrix.name }})
     needs: version
+    if: needs.version.outputs.skip != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -147,6 +195,7 @@ jobs:
   build-arch:
     name: Build (Arch Linux x64)
     needs: version
+    if: needs.version.outputs.skip != 'true'
     runs-on: ubuntu-latest
     container: archlinux:base-devel
     steps:
@@ -184,8 +233,13 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
+          pattern: gitto-*
           path: dist
           merge-multiple: true
+      - uses: actions/download-artifact@v8
+        with:
+          name: changelog
+          path: changelog
       # Named as GitHub would name them (spaces become dots), to tell them from what's already up.
       - run: |
           mkdir upload
@@ -195,10 +249,12 @@ jobs:
           done
       # What Gitto checks for updates (see apps/electron/src/updater.ts), kept apart to be uploaded
       # after the files they point to: update.json says the version, RELEASES is Squirrel's on
-      # Windows, and update-darwin-arm64.json is Squirrel.Mac's, which points to the zip.
+      # Windows, and update-darwin-arm64.json is Squirrel.Mac's, which points to the zip. With them,
+      # changelog.json, which the next build adds to.
       - run: |
           mkdir feeds
           mv upload/RELEASES feeds/
+          cp changelog/changelog.json feeds/
           jq -n --arg version "$VERSION" '{version: $version}' > feeds/update.json
           zip=$(cd upload && ls Gitto-darwin-arm64-*.zip)
           jq -n --arg url "https://github.com/$GH_REPO/releases/download/$TAG/$zip" \
@@ -210,16 +266,22 @@ jobs:
           gh api --method PATCH "repos/$GH_REPO/git/refs/tags/nightly" \
             -f sha="$GITHUB_SHA" -F force=true --silent \
             || gh api "repos/$GH_REPO/git/refs" -f ref=refs/tags/nightly -f sha="$GITHUB_SHA" --silent
-          notes="Built from $GITHUB_SHA on main. Nightly builds aren't tested beyond CI."
+          {
+            echo "Built from $GITHUB_SHA on main. Nightly builds aren't tested beyond CI."
+            echo
+            echo "## Since the last nightly"
+            echo
+            cat changelog/notes.md
+          } > notes.md
           if ! gh release view nightly --json id > /dev/null; then
             gh release create nightly upload/* feeds/* --verify-tag --prerelease \
-              --title "Gitto Nightly $VERSION" --notes "$notes"
+              --title "Gitto Nightly $VERSION" --notes-file notes.md
             exit
           fi
           old=$(gh release view nightly --json assets --jq '.assets[].name')
           gh release upload nightly upload/* --clobber
           gh release upload nightly feeds/* --clobber
-          gh release edit nightly --prerelease --title "Gitto Nightly $VERSION" --notes "$notes"
+          gh release edit nightly --prerelease --title "Gitto Nightly $VERSION" --notes-file notes.md
           # The last build's files.
           while IFS= read -r name; do
             [[ -z "$name" || -e "upload/$name" || -e "feeds/$name" ]] \
@@ -237,4 +299,4 @@ jobs:
           prerelease=$([[ "$VERSION" == *-* ]] && echo --prerelease || true)
           # Its files are all up before it's published, so update.json never points to a missing one.
           gh release create "$TAG" upload/* feeds/* $prerelease \
-            --verify-tag --title "Gitto $VERSION" --generate-notes
+            --verify-tag --title "Gitto $VERSION" --notes-file changelog/notes.md

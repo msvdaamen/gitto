@@ -1,0 +1,20 @@
+{
+  "name": "@gitto/release",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Gitto's versions and changelog, for the app and the release workflow",
+  "type": "module",
+  "exports": {
+    "./changelog": "./src/changelog.ts",
+    "./version": "./src/version.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "typescript": "^7.0.2",
+    "vitest": "catalog:"
+  }
+}

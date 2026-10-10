@@ -1,5 +1,6 @@
 import { EventEmitter, on } from "node:events";
 
+import { channelOf, compareVersions, SEMVER } from "@gitto/release/version";
 import type { Updates } from "@gitto/system/server";
 import type { UpdateChannel, UpdateState } from "@gitto/system/types";
 import { app, autoUpdater, net } from "electron";
@@ -7,14 +8,6 @@ import { app, autoUpdater, net } from "electron";
 /** Where Gitto is released (see .github/workflows/release.yml). */
 const REPOSITORY = "msvdaamen/gitto";
 const CHECK_EVERY_MS = 60 * 60_000;
-/** As the release workflow takes them: a pre-release part, if any, starts with a letter. */
-const SEMVER =
-  /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[A-Za-z][0-9A-Za-z-]*(\.[0-9A-Za-z-]+)*)?$/;
-
-/** A nightly's version is `nightly` and when it was built, in minutes: 1.2.4-nightly29853462. */
-export function channelOf(version: string): UpdateChannel {
-  return prerelease(version).some((part) => /^nightly\d+$/.test(part)) ? "nightly" : "release";
-}
 
 /**
  * Where the channel's latest build is published, with the files the updaters read: the rolling
@@ -23,40 +16,6 @@ export function channelOf(version: string): UpdateChannel {
 export function releaseUrl(channel: UpdateChannel) {
   const releases = `https://github.com/${REPOSITORY}/releases`;
   return channel === "nightly" ? `${releases}/download/nightly` : `${releases}/latest/download`;
-}
-
-/** Compares two versions by semver's precedence: negative if `a` comes before `b`, positive if after. */
-export function compareVersions(a: string, b: string): number {
-  const [aCore, bCore] = [core(a), core(b)];
-  for (let i = 0; i < 3; i++) {
-    if (aCore[i] !== bCore[i]) return aCore[i]! - bCore[i]!;
-  }
-  const [aPre, bPre] = [prerelease(a), prerelease(b)];
-  // A pre-release comes before its release.
-  if (!aPre.length || !bPre.length) return bPre.length - aPre.length;
-  for (let i = 0; i < Math.min(aPre.length, bPre.length); i++) {
-    const order = compareIdentifiers(aPre[i]!, bPre[i]!);
-    if (order) return order;
-  }
-  return aPre.length - bPre.length;
-}
-
-function core(version: string) {
-  return version.split(/[-+]/, 1)[0]!.split(".").map(Number);
-}
-
-function prerelease(version: string) {
-  const plain = version.split("+", 1)[0]!;
-  const dash = plain.indexOf("-");
-  return dash === -1 ? [] : plain.slice(dash + 1).split(".");
-}
-
-function compareIdentifiers(a: string, b: string) {
-  const [aNumber, bNumber] = [/^\d+$/.test(a), /^\d+$/.test(b)];
-  if (aNumber && bNumber) return Number(a) - Number(b);
-  // Numbers come before words.
-  if (aNumber || bNumber) return aNumber ? -1 : 1;
-  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 /**
