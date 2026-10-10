@@ -237,6 +237,9 @@ importers:
       '@gitto/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@gitto/release':
+        specifier: workspace:*
+        version: link:../../packages/release
       '@gitto/rpc':
         specifier: workspace:*
         version: link:../../packages/rpc
@@ -372,6 +375,18 @@ importers:
       '@orpc/client':
         specifier: 'catalog:'
         version: 1.15.4
+      '@types/node':
+        specifier: ^26.6.3
+        version: 26.6.3
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.2(@types/node@26.6.3)(jsdom@30.1.1)(vite@8.3.1(@types/node@26.6.3)(jiti@2.7.0)(terser@5.51.2))
+
+  packages/release:
+    devDependencies:
       '@types/node':
         specifier: ^26.6.3
         version: 26.6.3

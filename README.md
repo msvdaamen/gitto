@@ -41,21 +41,35 @@ The version comes from git tags; `package.json`'s stays at `0.0.0` and is set at
 
 How to install each build is in [Installing Gitto](docs/install.md).
 
-- Every merge to `main` updates the **Gitto Nightly** pre-release. Its version follows the highest `v*`
-  tag, then says when it was built, in minutes from 1970: `1.2.4-nightly29853462` after `v1.2.3`,
-  and `1.3.0-nightly29853462` after `v1.3.0-rc.1`. Every build has the same version, the Windows
-  installer's package too.
-- Running the **Release** workflow on `main` (Actions → Release → Run workflow) releases it with the
-  last release's version bumped: `patch` for fixes (1.2.3 to 1.2.4), `minor` for features (1.3.0)
-  or `major` for breaking changes (2.0.0). Pre-releases are left out, so after `v1.3.0-rc.1` a
-  `minor` release is still 1.3.0. Once it's built, it's tagged and published with generated notes.
+- Every night, `main` is published as a **Gitto Nightly** pre-release, if the code changed since
+  the last one; the newest 30 are kept. Its version follows the highest release tag, then says when
+  it was built, in minutes from 1970: `1.2.4-nightly29853462` after `v1.2.3`, and
+  `1.3.0-nightly29853462` after `v1.3.0-rc.1`, tagged `v1.2.4-nightly29853462` as releases are.
+  Every build has the same version, the Windows installer's package too.
+- Running the **Release** workflow on `main` (Actions → Release → Run workflow) builds a nightly
+  now, or releases `main` with the last release's version bumped: `auto` bumps what the commits
+  since then call for (a breaking change the major, a `feat` the minor, else the patch), or pick
+  `patch` (1.2.3 to 1.2.4), `minor` (1.3.0) or `major` (2.0.0). Pre-releases are left out, so after
+  `v1.3.0-rc.1` a `minor` release is still 1.3.0. Once it's built, it's tagged and published.
 - Pushing a tag publishes that version, which is how to make a pre-release, like `v1.3.0-beta.1`;
   its pre-release part has to start with a letter.
 
 ```sh
-gh workflow run release.yml -f bump=minor   # or patch, or major
+gh workflow run release.yml -f build=auto   # or nightly, patch, minor or major
 git tag v1.3.0-beta.1 && git push origin v1.3.0-beta.1
 ```
+
+### Changelog
+
+Pull requests are squashed, titled with [Conventional Commits](https://www.conventionalcommits.org):
+`feat: add worktrees`, `fix(diff): keep the scroll`, `feat!: …` for a breaking change. The **PR
+title** workflow checks it. A `Changelog: …` line in the description tells users more than the
+title does.
+
+Each build lists the commits since the build before it on its channel (the last nightly, or the
+release before), adds them to that build's `changelog.json` and publishes it with its files; its
+release notes are the same changes, grouped. `packages/release/src/cli.ts` makes both. Every type
+is kept; Gitto shows users what's new, fixed or faster (`feat`, `fix`, `perf`).
 
 The builds aren't code-signed, so macOS and Windows warn before opening them.
 
@@ -66,10 +80,10 @@ nightly only to the next nightly, a release only to the next release. It checks 
 every hour, downloads a newer version in the background, and offers to restart into it in the footer;
 otherwise it's installed the next time Gitto starts.
 
-Each release has the files it checks:
+It finds the newest on its channel in [GitHub's list of releases](https://api.github.com/repos/msvdaamen/gitto/releases),
+leaving out pre-releases other than nightlies (so a `v1.3.0-beta.1` isn't offered), and updates from
+that release's files:
 
-- `update.json`, with the release's version. A nightly reads the `nightly` release's, a release the
-  latest release's, which GitHub never takes a pre-release for (so a `v1.3.0-beta.1` isn't offered).
 - `RELEASES` and the `.nupkg`, which Squirrel updates from on Windows.
 - `update-darwin-arm64.json`, which points Squirrel.Mac to the zip. Squirrel.Mac only installs a
   code-signed app, so updates on macOS need the builds to be signed.

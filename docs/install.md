@@ -5,9 +5,9 @@ Gitto runs on Windows (x64), macOS (Apple Silicon) and Arch Linux (x86_64). Down
 
 - **A release**, like Gitto 1.3.0, is the version to use. The newest is at
   [releases/latest](https://github.com/msvdaamen/gitto/releases/latest).
-- **Gitto Nightly** is built from every change to `main`, so it has what's newest but may be broken.
-  It's at [releases/tag/nightly](https://github.com/msvdaamen/gitto/releases/tag/nightly), and
-  replaced with each build.
+- **Gitto Nightly** is built every night from `main` when it changed, so it has what's newest but
+  may be broken. Each nightly is a pre-release of its own, like **Gitto Nightly 1.3.1-nightly29853462**,
+  with what changed since the one before; the newest 30 are kept.
 
 Gitto stays on what you installed: a release only updates to a newer release, and Gitto Nightly to
 the next nightly. How to update it is in [Updating](#updating).

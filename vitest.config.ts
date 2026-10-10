@@ -4,6 +4,6 @@ import { defineConfig } from "vitest/config";
 // vitest.config.ts and can also be run on its own with `pnpm --filter <name> test`.
 export default defineConfig({
   test: {
-    projects: ["apps/*", "packages/git"],
+    projects: ["apps/*", "packages/git", "packages/release"],
   },
 });
