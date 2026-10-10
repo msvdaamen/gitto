@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@gitto/git": "workspace:*",
+    "@gitto/release": "workspace:*",
     "@gitto/rpc": "workspace:*",
     "@gitto/system": "workspace:*",
     "@kobalte/core": "^0.13.14",

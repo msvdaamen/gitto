@@ -11,6 +11,8 @@
     "isolatedModules": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    // Imports name their .ts files where Node runs them as they are, as packages/release's CLI.
+    "allowImportingTsExtensions": true
   }
 }

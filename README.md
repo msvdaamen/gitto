@@ -71,6 +71,13 @@ release before), adds them to that build's `changelog.json` and publishes it wit
 release notes are the same changes, grouped. `packages/release/src/cli.ts` makes both. Every type
 is kept; Gitto shows users what's new, fixed or faster (`feat`, `fix`, `perf`).
 
+The builds package their `changelog.json` (`apps/electron/forge.config.ts`). When Gitto starts on a
+newer version than the last one the user saw, **What's new** lists what changed in each version
+since, and clicking Gitto's version in the footer lists every version. The last version seen is in
+`last-seen-version`, in Gitto's user data folder; on the first run there's nothing to show. To try it
+locally, put a `changelog.json` in `apps/electron` (ignored by git) and build with a version, as
+`npm pkg set version=…` there does.
+
 The builds aren't code-signed, so macOS and Windows warn before opening them.
 
 ### Updates

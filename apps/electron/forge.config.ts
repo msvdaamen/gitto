@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { MakerSquirrel } from "@electron-forge/maker-squirrel";
@@ -18,6 +18,9 @@ const { version } = JSON.parse(readFileSync(new URL("package.json", import.meta.
   version: string;
 };
 
+/** Made by the release workflow; a build of one's own has none. */
+const CHANGELOG = "changelog.json";
+
 const config: ForgeConfig = {
   packagerConfig: {
     // Native binaries can't be loaded from inside the archive.
@@ -30,8 +33,9 @@ const config: ForgeConfig = {
     // The executable's version on Windows and the bundle's on macOS, which have to be numbers only,
     // so a nightly's is its release's (1.2.4). The app's own, from package.json, is the full one.
     appVersion: version.split("-")[0],
-    // Copied to Resources/migrations; the main process applies them on startup.
-    extraResource: ["migrations"],
+    // Copied to Resources/migrations; the main process applies them on startup. With them, the
+    // changelog CI builds with (see .github/workflows/release.yml), which says what's new.
+    extraResource: ["migrations", ...(existsSync(CHANGELOG) ? [CHANGELOG] : [])],
   },
   // Prebuilt for Node-API, which Electron supports as is; rebuilding would need a compiler.
   rebuildConfig: { ignoreModules: NATIVE_DEPENDENCIES },

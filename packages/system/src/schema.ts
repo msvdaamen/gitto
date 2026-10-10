@@ -1,3 +1,4 @@
+import { CHANGE_TYPES } from "@gitto/release/changelog";
 import { z } from "zod";
 
 /**
@@ -17,3 +18,27 @@ export const UpdateStateSchema = z.object({
 
 export type UpdateChannel = z.infer<typeof UpdateChannelSchema>;
 export type UpdateState = z.infer<typeof UpdateStateSchema>;
+
+/** A change users see, from its commit's Conventional Commits title (see @gitto/release). */
+export const ChangeSchema = z.object({
+  type: z.enum(CHANGE_TYPES),
+  scope: z.string().optional(),
+  breaking: z.boolean(),
+  /** As it's titled, without the type: `add worktrees`. */
+  description: z.string(),
+  /** What users are told about it beyond its title. */
+  detail: z.string().optional(),
+  pr: z.number().optional(),
+  commit: z.string(),
+});
+
+/** A version, and what changed in it since the one before it on its channel. */
+export const VersionChangesSchema = z.object({
+  version: z.string(),
+  /** When it was built, as YYYY-MM-DD. */
+  date: z.string(),
+  changes: z.array(ChangeSchema),
+});
+
+export type Change = z.infer<typeof ChangeSchema>;
+export type VersionChanges = z.infer<typeof VersionChangesSchema>;

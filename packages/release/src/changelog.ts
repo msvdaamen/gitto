@@ -199,3 +199,25 @@ function noteFor(change: Change, withType: boolean) {
 export function capitalize(text: string) {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
+
+/**
+ * What users see of the versions after `after` up to `upTo`, the newest first: their new, fixed and
+ * faster changes, and breaking ones of any type. Versions with none are left out.
+ */
+export function userFacingChanges(
+  changelog: Changelog,
+  { after, upTo }: { after?: string; upTo: string },
+): VersionChanges[] {
+  return changelog.versions
+    .filter(
+      ({ version }) =>
+        compareVersions(version, upTo) <= 0 && (!after || compareVersions(version, after) > 0),
+    )
+    .toSorted((a, b) => compareVersions(b.version, a.version))
+    .map(({ version, date, changes }) => ({
+      version,
+      date,
+      changes: changes.filter((change) => change.breaking || USER_FACING.includes(change.type)),
+    }))
+    .filter((version) => version.changes.length > 0);
+}

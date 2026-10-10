@@ -11,6 +11,7 @@ import {
   previousTag,
   releaseNotes,
   staleNightlies,
+  userFacingChanges,
   type VersionChanges,
 } from "./changelog.ts";
 
@@ -192,5 +193,36 @@ describe("release notes", () => {
 
   it("say so when nothing changed", () => {
     expect(releaseNotes([])).toBe("Nothing changed since the last build.");
+  });
+});
+
+describe("what users see", () => {
+  const changelog: Changelog = {
+    versions: [
+      { ...at("1.2.4-nightly4"), changes: [change({ type: "chore" })] },
+      { ...at("1.2.4-nightly3"), changes: [change({ type: "fix" }), change({ type: "ci" })] },
+      { ...at("1.2.4-nightly2"), changes: [change({ type: "refactor", breaking: true })] },
+      { ...at("1.2.4-nightly1"), changes: [change({ type: "perf" })] },
+    ],
+  };
+
+  it("is the user-facing changes of the versions since the last seen, up to this one", () => {
+    expect(
+      userFacingChanges(changelog, { after: "1.2.4-nightly1", upTo: "1.2.4-nightly3" }),
+    ).toEqual([
+      { ...at("1.2.4-nightly3"), changes: [change({ type: "fix" })] },
+      { ...at("1.2.4-nightly2"), changes: [change({ type: "refactor", breaking: true })] },
+    ]);
+  });
+
+  it("leaves out versions with none, and is every version without a last seen", () => {
+    expect(userFacingChanges(changelog, { upTo: "1.2.4-nightly4" }).map((v) => v.version)).toEqual([
+      "1.2.4-nightly3",
+      "1.2.4-nightly2",
+      "1.2.4-nightly1",
+    ]);
+    expect(
+      userFacingChanges(changelog, { after: "1.2.4-nightly3", upTo: "1.2.4-nightly4" }),
+    ).toEqual([]);
   });
 });

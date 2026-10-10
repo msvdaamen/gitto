@@ -183,6 +183,13 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           version: ${{ needs.version.outputs.version }}
+      # Packaged with the app, which shows what's new from it (see apps/electron/forge.config.ts).
+      - uses: actions/download-artifact@v8
+        with:
+          name: changelog
+          path: changelog
+      - run: cp changelog/changelog.json apps/electron/
+        shell: bash
       - run: pnpm make
       - uses: actions/upload-artifact@v7
         with:
@@ -208,6 +215,11 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           version: ${{ needs.version.outputs.version }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: changelog
+          path: changelog
+      - run: cp changelog/changelog.json apps/electron/
       - run: pnpm package
       # makepkg won't run as root, and the packaged app is only readable by its owner. The package's
       # dependencies only matter where it's installed.

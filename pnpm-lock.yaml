@@ -270,6 +270,9 @@ importers:
       '@gitto/git':
         specifier: workspace:*
         version: link:../../packages/git
+      '@gitto/release':
+        specifier: workspace:*
+        version: link:../../packages/release
       '@gitto/rpc':
         specifier: workspace:*
         version: link:../../packages/rpc
@@ -455,6 +458,9 @@ importers:
 
   packages/system:
     dependencies:
+      '@gitto/release':
+        specifier: workspace:*
+        version: link:../release
       '@orpc/contract':
         specifier: 'catalog:'
         version: 1.15.4
