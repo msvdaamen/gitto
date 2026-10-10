@@ -200,8 +200,11 @@ describe("discarding changes", () => {
       "true",
     );
     await user.keyboard("{Escape}");
+    // Found once the menu has closed: while it's closing, it hides the rest from queries by role.
     expect(
-      screen.getByRole("button", { name: "Resolve the conflicts before discarding all changes" }),
+      await screen.findByRole("button", {
+        name: "Resolve the conflicts before discarding all changes",
+      }),
     ).toBeDisabled();
   });
 
