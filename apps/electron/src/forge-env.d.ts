@@ -6,3 +6,6 @@ declare module "*?inline" {
   const dataUrl: string;
   export default dataUrl;
 }
+
+// Set by vite.main.config.ts from the SENTRY_DSN Gitto is built with; empty without one.
+declare const SENTRY_DSN: string;

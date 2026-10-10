@@ -6,6 +6,7 @@ import { render } from "solid-js/web";
 
 import { queryClient } from "./lib/query-client";
 import { SCROLL_TO_TOP } from "./lib/scroll";
+import { captureException, initSentry } from "./lib/sentry";
 import { traceLongFrames } from "./lib/trace";
 import { routeTree } from "./routeTree.gen";
 
@@ -16,7 +17,11 @@ const router = createRouter({
   defaultPreload: "intent",
   scrollRestoration: true,
   scrollToTopSelectors: SCROLL_TO_TOP,
+  // A page that failed to render shows the error instead, so it's reported from here.
+  defaultOnCatch: (error) => captureException(error),
 });
+
+initSentry(router);
 
 // Register things for typesafety
 declare module "@tanstack/solid-router" {

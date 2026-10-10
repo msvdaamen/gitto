@@ -23,6 +23,9 @@ export default defineConfig({
       "@": resolve(import.meta.dirname, "src"),
     },
   },
+  // Whether Gitto is built to report to Sentry, which the renderer does through the main process
+  // (see src/lib/sentry.ts).
+  define: { "import.meta.env.SENTRY": JSON.stringify(!!process.env.SENTRY_DSN) },
   build: {
     target: "esnext",
   },

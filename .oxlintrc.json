@@ -11,7 +11,7 @@
     "import/no-unassigned-import": [
       "warn",
       {
-        "allow": ["**/*.css", "@testing-library/jest-dom/vitest"]
+        "allow": ["**/*.css", "@testing-library/jest-dom/vitest", "@sentry/electron/preload"]
       }
     ],
     "typescript/consistent-type-imports": "error",
