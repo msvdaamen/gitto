@@ -54,8 +54,15 @@ export function SidebarRow(
     active?: boolean;
     /** Shown as if hovered, e.g. while its menu is open. */
     highlighted?: boolean;
+    /**
+     * A small icon after the label, saying `label` to assistive tech, e.g. that a branch is
+     * checked out in a worktree.
+     */
+    tag?: { icon: LucideIcon; label: string };
     count?: number;
     meta?: string;
+    /** Shown faded, e.g. a worktree whose folder is gone. */
+    faded?: boolean;
     onDblClick?: () => void;
   },
 ) {
@@ -66,19 +73,25 @@ export function SidebarRow(
     "depth",
     "active",
     "highlighted",
+    "tag",
     "count",
     "meta",
+    "faded",
     "onDblClick",
   ]);
   return (
     <button
       {...others}
       class={cn(
-        "grid w-full cursor-pointer grid-cols-[16px_minmax(0,1fr)_auto_auto] items-center gap-[5px] rounded-[5px] border-0 bg-transparent pr-[7px] text-left text-muted hover:bg-panel-hover hover:text-text-soft focus-ring-inset",
+        // Icon, label, tag, meta and count, each in its own column whether or not the ones before
+        // it are there. The meta takes what it needs, up to half the row: a worktree's branch can
+        // be long.
+        "grid w-full cursor-pointer grid-cols-[16px_minmax(0,1fr)_auto_fit-content(50%)_auto] items-center gap-[5px] rounded-[5px] border-0 bg-transparent pr-[7px] text-left text-muted hover:bg-panel-hover hover:text-text-soft focus-ring-inset",
         // The active one stands out already.
         local.active
           ? "bg-primary-soft text-text [&>svg]:text-primary-strong"
           : local.highlighted && "bg-panel-hover text-text-soft",
+        local.faded && "opacity-60",
       )}
       style={{
         height: ROW_BOX,
@@ -88,13 +101,23 @@ export function SidebarRow(
       // Read on each double-click: Solid binds a handler once.
       onDblClick={() => local.onDblClick?.()}
     >
-      <local.icon size={13} />
-      <span class="truncate text-[12.5px]">{local.label}</span>
-      {local.meta && <small class="text-[10.5px] text-blue">{local.meta}</small>}
+      <local.icon size={13} class="col-start-1" />
+      <span class="col-start-2 truncate text-[12.5px]">{local.label}</span>
+      {local.tag && (
+        <local.tag.icon
+          size={11}
+          class="col-start-3 text-faint"
+          aria-label={local.tag.label}
+          role="img"
+        />
+      )}
+      {local.meta && (
+        <small class="col-start-4 truncate text-[10.5px] text-blue">{local.meta}</small>
+      )}
       {local.count !== undefined && (
         <em
           class={cn(
-            "min-w-[17px] rounded-lg px-1 py-0.5 text-center text-[10.5px] not-italic",
+            "col-start-5 min-w-[17px] rounded-lg px-1 py-0.5 text-center text-[10.5px] not-italic",
             toneClasses.neutral,
           )}
         >

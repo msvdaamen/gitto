@@ -13,6 +13,7 @@ import { statusRouter } from "./features/status/handler";
 import { userRouter } from "./features/user/handler";
 import { versionRouter } from "./features/version/handler";
 import { watchRouter } from "./features/watch/handler";
+import { worktreeRouter } from "./features/worktree/handler";
 
 /** Every git feature's router, matching `GitContract`. */
 export const gitRouter = {
@@ -25,6 +26,7 @@ export const gitRouter = {
   commit: commitRouter,
   remote: remoteRouter,
   stash: stashRouter,
+  worktree: worktreeRouter,
   conflicts: conflictsRouter,
   operation: operationRouter,
   overview: overviewRouter,

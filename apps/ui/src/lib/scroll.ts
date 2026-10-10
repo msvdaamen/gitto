@@ -12,6 +12,7 @@ export const SCROLL_IDS = [
   "sidebar-remotes",
   "sidebar-tags",
   "sidebar-stashes",
+  "sidebar-worktrees",
 ] as const;
 
 export type ScrollId = (typeof SCROLL_IDS)[number];

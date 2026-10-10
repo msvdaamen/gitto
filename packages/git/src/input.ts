@@ -9,6 +9,9 @@ export const FileInput = RepositoryInput.extend({
   origPath: z.string().nullable(),
 });
 
+/** A local or remote branch, by its full ref name. */
+export const BranchRef = z.string().regex(/^refs\/(heads|remotes)\/./, "Not a branch.");
+
 /** A full or abbreviated commit SHA. */
 export const Sha = z.string().regex(/^[0-9a-f]{4,64}$/);
 

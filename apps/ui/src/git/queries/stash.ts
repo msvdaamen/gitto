@@ -4,7 +4,7 @@ import { rpc } from "@/lib/rpc";
 
 import { useChangedFiles, type FilesFetcher } from "./diff";
 import { gitKeys } from "./keys";
-import { useRepositoryOperation } from "./operation";
+import { oneAtATime, reloading, useRepositoryOperation } from "./operation";
 
 /** The stashes, newest first. */
 export function useStashes(repositoryId: () => string) {
@@ -38,42 +38,28 @@ export function useStashFiles(repositoryId: () => string, sha: () => string) {
  */
 export function useStashActions(repositoryId: () => string) {
   const queryClient = useQueryClient();
-  /** Runs `action`, then reloads the repository, also after a failure: a pop can conflict. */
-  const reloading = async (id: string, action: Promise<unknown>) => {
-    try {
-      await action;
-    } finally {
-      await queryClient.invalidateQueries({ queryKey: gitKeys.repository(id) });
-    }
-  };
+  // Each reloads the repository after, also after a failure: a pop can conflict.
   const popping = (id: string, sha: string) =>
-    reloading(id, rpc.git.stash.pop({ repositoryId: id, sha }));
+    reloading(queryClient, id, rpc.git.stash.pop({ repositoryId: id, sha }));
   const operations = [
     useRepositoryOperation("stash", repositoryId, (id) =>
-      reloading(id, rpc.git.stash.push({ repositoryId: id })),
+      reloading(queryClient, id, rpc.git.stash.push({ repositoryId: id })),
     ),
     useRepositoryOperation("pop", repositoryId, popping),
     useRepositoryOperation("pop-picked", repositoryId, popping),
     useRepositoryOperation("drop-stash", repositoryId, (id, sha: string) =>
-      reloading(id, rpc.git.stash.drop({ repositoryId: id, sha })),
+      reloading(queryClient, id, rpc.git.stash.drop({ repositoryId: id, sha })),
     ),
   ] as const;
   const isPending = () => operations.some((operation) => operation.isPending());
-  /** `operation`, which doesn't run while any of them is. */
-  const oneAtATime = <T>(operation: ReturnType<typeof useRepositoryOperation<T>>) => ({
-    ...operation,
-    run: (input: T, options?: { onSuccess?: () => void }) => {
-      if (!isPending()) operation.run(input, options);
-    },
-  });
   const [stash, pop, popPicked, drop] = operations;
   return {
-    stash: oneAtATime(stash),
+    stash: oneAtATime(stash, isPending),
     /** Pops the newest stash, by its SHA. */
-    pop: oneAtATime(pop),
+    pop: oneAtATime(pop, isPending),
     /** Pops the stash picked in a list, the newest or an older one. */
-    popPicked: oneAtATime(popPicked),
-    drop: oneAtATime(drop),
+    popPicked: oneAtATime(popPicked, isPending),
+    drop: oneAtATime(drop, isPending),
     /** Whether any of them is running. */
     isPending,
   };

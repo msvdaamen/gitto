@@ -2,13 +2,14 @@ import { Popover } from "@kobalte/core/popover";
 import { cn } from "cn";
 import Check from "lucide-solid/icons/check";
 import Cloud from "lucide-solid/icons/cloud";
+import FolderGit2 from "lucide-solid/icons/folder-git-2";
 import Laptop from "lucide-solid/icons/laptop";
 import Tag from "lucide-solid/icons/tag";
 import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 
 import { describeRefLabel, refLabelMatches, type RefLabel } from "@/git/ref-labels";
 
-import { useBranchMenuOpenFor } from "../branch-menu";
+import { useBranchMenuOpenFor, useOpenWorktreeFromBranch } from "../branch-menu";
 
 /** A ref pill's shape, border and text, in its lane's colour (`--lane`). */
 const PILL =
@@ -17,8 +18,10 @@ const PILL =
 /**
  * The commit's branches and tags, tinted in its lane's colour like GitKraken: the first one, with
  * a count of the rest, which hovering it lists. A branch shows whether it's local (laptop), on a
- * remote (cloud) or both. While searching (`search`, lowercase), a label the search matches comes
- * first, so the row shows why it matched. Double-clicking a branch switches to it, and
+ * remote (cloud) or both, and whether it's checked out in another worktree (folder), as does a
+ * worktree checked out at the commit with no branch. While searching (`search`, lowercase), a
+ * label the search matches comes first, so the row shows why it matched. Double-clicking a branch
+ * switches to it, or opens the worktree it's checked out in, as git won't switch to it here; and
  * right-clicking one opens its menu (see `BranchMenu`), like in the sidebar.
  */
 export function HistoryRefLabels(props: {
@@ -102,15 +105,21 @@ function MoreLabels(props: { labels: RefLabel[]; color: string; onSwitch: (ref: 
 function RefPill(props: { label: RefLabel; onSwitch: (ref: string) => void }) {
   const branch = () => (props.label.kind === "branch" ? props.label : undefined);
   const menuFor = useBranchMenuOpenFor();
+  const openWorktree = useOpenWorktreeFromBranch();
   // Only a branch that isn't checked out says it can be switched to; `onSwitch` skips the other.
-  const title = () =>
-    branch() && !branch()!.current
-      ? `${describeRefLabel(props.label)}\nDouble-click to switch to it`
-      : describeRefLabel(props.label);
+  const title = () => {
+    const label = branch();
+    const described = describeRefLabel(props.label);
+    if (!label || label.current) return described;
+    if (label.worktree) return `${described}\nDouble-click to open that worktree`;
+    return `${described}\nDouble-click to switch to it`;
+  };
 
   function onDblClick() {
     const label = branch();
-    if (label) props.onSwitch(label.ref);
+    if (!label) return;
+    if (label.worktree) openWorktree(label.worktree.path);
+    else props.onSwitch(label.ref);
   }
 
   return (
@@ -134,12 +143,25 @@ function RefPill(props: { label: RefLabel; onSwitch: (ref: string) => void }) {
       <Show when={props.label.kind === "tag"}>
         <Tag size={9} strokeWidth={2.4} />
       </Show>
+      <Show when={props.label.kind === "worktree"}>
+        <FolderGit2 size={9} strokeWidth={2.4} role="img" aria-label="Worktree" />
+      </Show>
       <span class="truncate">{props.label.name}</span>
       <Show when={branch()?.local}>
         <Laptop size={9} strokeWidth={2.4} aria-label="Local" />
       </Show>
       <Show when={branch()?.remotes.length}>
         <Cloud size={9} strokeWidth={2.4} aria-label={`On ${branch()!.remotes.join(", ")}`} />
+      </Show>
+      <Show when={branch()?.worktree} keyed>
+        {(worktree) => (
+          <FolderGit2
+            size={9}
+            strokeWidth={2.4}
+            role="img"
+            aria-label={`Checked out in ${worktree.name}`}
+          />
+        )}
       </Show>
     </span>
   );

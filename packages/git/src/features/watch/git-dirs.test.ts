@@ -29,6 +29,22 @@ describe("classify", () => {
     expect(classify(dirs, at(dirs.commonDir, "config"))).toBe("refs");
   });
 
+  it("takes the other worktrees' folders, HEADs, locks and gitdir files for the shared ones", () => {
+    expect(classify(dirs, at(dirs.commonDir, "worktrees"))).toBe("refs");
+    expect(classify(dirs, at(dirs.commonDir, "worktrees", "other"))).toBe("refs");
+    expect(classify(dirs, at(dirs.commonDir, "worktrees", "other", "HEAD"))).toBe("refs");
+    expect(classify(dirs, at(dirs.commonDir, "worktrees", "other", "gitdir"))).toBe("refs");
+    expect(classify(dirs, at(dirs.commonDir, "worktrees", "other", "locked"))).toBe("refs");
+    // Another worktree's index, and what it's doing, aren't shown.
+    expect(classify(dirs, at(dirs.commonDir, "worktrees", "other", "index"))).toBeUndefined();
+    expect(classify(dirs, at(dirs.commonDir, "worktrees", "other", "MERGE_HEAD"))).toBeUndefined();
+    expect(
+      classify(dirs, at(dirs.commonDir, "worktrees", "other", "rebase-merge", "done")),
+    ).toBeUndefined();
+    // This worktree's own index is its own.
+    expect(classify(dirs, at(dirs.gitDir, "index"))).toBe("index");
+  });
+
   it("ignores lock files, objects, logs and files outside both directories", () => {
     expect(classify(dirs, at(dirs.gitDir, "index.lock"))).toBeUndefined();
     expect(classify(dirs, at(dirs.commonDir, "refs", "heads", "main.lock"))).toBeUndefined();

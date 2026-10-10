@@ -3,7 +3,7 @@ import type { Commit, Stash } from "@gitto/git/types";
 import { avatarColor, initials } from "@/lib/format";
 
 import { computeGraph, type GraphCommit, type GraphRow } from "./graph";
-import { toRefLabels, type RefLabel } from "./ref-labels";
+import { NO_CHECKOUTS, toRefLabels, type Checkouts, type RefLabel } from "./ref-labels";
 
 /** Row id of the uncommitted changes, shown above the history when there are any. */
 export const WIP_ID = "wip";
@@ -138,18 +138,20 @@ export function historyGraph(
 /**
  * Turns a repository's commits and stashes, plus the uncommitted changes if there are any, into
  * history table rows, with their rows of `graph`: the graph `historyGraph` laid out for the same
- * `entries` and `hasChanges`.
+ * `entries` and `hasChanges`. The commits' labels say where the other worktrees are checked out
+ * (`others`).
  */
 export function toHistoryRows(
   repositoryId: string,
   entries: HistoryEntry[],
   hasChanges: boolean,
   graph: GraphRow[],
+  others: Checkouts = NO_CHECKOUTS,
 ): HistoryRow[] {
   const offset = hasChanges ? 1 : 0;
   const rows = entries.map((entry, index) =>
     entry.kind === "commit"
-      ? toCommitRow(repositoryId, entry.commit, graph[index + offset])
+      ? toCommitRow(repositoryId, entry.commit, graph[index + offset], others)
       : toStashRow(repositoryId, entry.stash, graph[index + offset]),
   );
   if (!hasChanges) return rows;
@@ -168,7 +170,13 @@ function toStashRow(repositoryId: string, stash: Stash, graph: GraphRow | undefi
   };
 }
 
-export function toCommitRow(repositoryId: string, commit: Commit, graph?: GraphRow): CommitRow {
+/** A commit's row; its labels say where the other worktrees are checked out (`others`). */
+export function toCommitRow(
+  repositoryId: string,
+  commit: Commit,
+  graph?: GraphRow,
+  others: Checkouts = NO_CHECKOUTS,
+): CommitRow {
   return {
     kind: "commit",
     id: commit.sha,
@@ -181,6 +189,6 @@ export function toCommitRow(repositoryId: string, commit: Commit, graph?: GraphR
     initials: initials(commit.authorName),
     avatarColor: avatarColor(commit.authorEmail),
     committedAt: commit.committedAt,
-    labels: toRefLabels(commit.refs),
+    labels: toRefLabels(commit.refs, commit.sha, others),
   };
 }

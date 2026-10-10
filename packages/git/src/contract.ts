@@ -13,6 +13,7 @@ import { StatusContract } from "./features/status/contract";
 import { UserContract } from "./features/user/contract";
 import { VersionContract } from "./features/version/contract";
 import { WatchContract } from "./features/watch/contract";
+import { WorktreeContract } from "./features/worktree/contract";
 
 /** Every git feature's contract; the renderer calls these as `rpc.git.<feature>.<procedure>`. */
 export const GitContract = {
@@ -25,6 +26,7 @@ export const GitContract = {
   commit: CommitContract,
   remote: RemoteContract,
   stash: StashContract,
+  worktree: WorktreeContract,
   conflicts: ConflictsContract,
   operation: OperationContract,
   overview: OverviewContract,
