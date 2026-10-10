@@ -23,6 +23,8 @@ allowBuilds:
   esbuild: true
   # Only builds from source when asked to; the prebuilt binaries come as optional dependencies.
   "@parcel/watcher": false
+  # Its binary comes as an optional dependency too; the script only downloads one that's missing.
+  "@sentry/cli": false
 
 overrides:
   # Forge 7 depends on @electron/rebuild@3, which pulls node-gyp from a git repo

@@ -9,6 +9,7 @@ import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, protocol, shell 
 
 import iconDataUrl from "../assets/icon.png?inline";
 import { resolveRendererPath } from "./renderer-path";
+import { initSentry, instrumentRpcCall } from "./sentry";
 import { handleSquirrelEvent } from "./squirrel";
 import { Updater } from "./updater";
 import { Changes, readChangelog } from "./whats-new";
@@ -34,6 +35,8 @@ const squirrelRun = handleSquirrelEvent();
 if (!squirrelRun && !app.requestSingleInstanceLock()) {
   app.exit(0);
 }
+
+if (!squirrelRun) initSentry();
 
 app.on("second-instance", () => {
   const win = BrowserWindow.getAllWindows()[0];
@@ -101,7 +104,7 @@ async function selectFolder() {
 }
 
 function registerRpc(updates: Updater) {
-  const handler = createRpcHandler();
+  const handler = createRpcHandler({ instrument: instrumentRpcCall });
   const context = createContainer(openDatabase(), {
     selectFolder,
     updates,

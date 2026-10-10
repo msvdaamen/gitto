@@ -33,6 +33,35 @@ history URLs.
 | `pnpm lint`      | Lint with oxlint                                            |
 | `pnpm format`    | Format with oxfmt                                           |
 
+## Error reporting
+
+Gitto reports to [Sentry](https://sentry.io) when it's built with a `SENTRY_DSN`; a build without
+one, like `pnpm dev`'s, reports nothing. It sends:
+
+- **Crashes and errors**: native crashes, uncaught errors in the main process and the UI, pages that
+  failed to render, and RPC calls that failed in a way nothing expected (`INTERNAL_SERVER_ERROR`;
+  a conflict or a missing repository is expected).
+- **Logs**: the warnings and errors either process logs.
+- **Metrics**: `rpc.duration`, how long each RPC call took, by procedure and outcome.
+- **Traces**: Gitto's startup up to its first page, page loads and clicks in the UI, and each RPC
+  call in the main process.
+- **Release health**: sessions, so Sentry can say how many runs of each version crashed.
+
+The UI's are sent through the main process (`apps/electron/src/sentry.ts`, `apps/ui/src/lib/sentry.ts`).
+No IP address or local variables are sent, so file contents, paths and commit messages in
+variables stay on the user's machine; error messages and stack traces are sent as they are.
+
+The release workflow builds with these, set in the repository's Actions settings:
+
+| Name                | Kind     | What it is                                                      |
+| ------------------- | -------- | --------------------------------------------------------------- |
+| `SENTRY_DSN`        | Variable | The Sentry project's DSN (Settings → Projects → Client Keys)    |
+| `SENTRY_ORG`        | Variable | The organization's slug                                         |
+| `SENTRY_PROJECT`    | Variable | The project's slug                                              |
+| `SENTRY_AUTH_TOKEN` | Secret   | An organization auth token, to upload source maps (not shipped) |
+
+To try it locally, build with `SENTRY_DSN` set, e.g. `SENTRY_DSN=… pnpm package`.
+
 ## Releases
 
 `.github/workflows/release.yml` builds Gitto for Windows (Squirrel installer), macOS (zip) and Arch

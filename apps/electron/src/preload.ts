@@ -1,3 +1,6 @@
+// Lets the renderer's Sentry send what it reports through the main process (see src/sentry.ts).
+// Sentry would add it by itself, but can't find its file once the main process is bundled.
+import "@sentry/electron/preload";
 import { RPC_CONNECT_CHANNEL } from "@gitto/rpc";
 import { contextBridge, ipcRenderer } from "electron";
 

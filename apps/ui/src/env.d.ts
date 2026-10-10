@@ -9,3 +9,8 @@ interface Window {
     };
   };
 }
+
+interface ImportMetaEnv {
+  /** Set by vite.config.ts: whether Gitto is built to report to Sentry. */
+  readonly SENTRY: boolean;
+}

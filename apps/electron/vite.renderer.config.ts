@@ -3,9 +3,10 @@ import { resolve } from "node:path";
 import { mergeConfig } from "vite";
 
 import uiConfig from "../ui/vite.config.ts";
+import { sentrySourceMaps } from "./vite.sentry.ts";
 
 // The renderer is the standalone UI app in apps/ui, built into this app's .vite folder.
-export default mergeConfig(uiConfig, {
+export default mergeConfig(mergeConfig(uiConfig, sentrySourceMaps()), {
   root: resolve(import.meta.dirname, "../ui"),
   // Absolute asset paths so nested routes work when served from the app:// protocol.
   base: "/",

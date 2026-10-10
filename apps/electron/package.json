@@ -30,6 +30,8 @@
     "@gitto/release": "workspace:*",
     "@gitto/rpc": "workspace:*",
     "@gitto/system": "workspace:*",
+    "@sentry/electron": "8.1.0",
+    "@sentry/vite-plugin": "5.4.1",
     "@types/node": "^26.6.3",
     "drizzle-kit": "catalog:",
     "electron": "^44.4.5",
