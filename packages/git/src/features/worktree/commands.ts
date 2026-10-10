@@ -114,7 +114,9 @@ async function listed(
   // Git lists the linked ones as it finds their folders, in no set order.
   linked.sort((a, b) => a.path.localeCompare(b.path));
   const sorted = [main, ...linked];
-  const [here, ...paths] = await Promise.all([root, ...sorted.map((w) => w.path)].map(realPath));
+  const [here, ...paths] = await Promise.all(
+    [root, ...sorted.map((worktree) => worktree.path)].map(realPath),
+  );
   for (const [i, worktree] of sorted.entries()) worktree.current = paths[i] === here;
   return { worktrees: sorted, paths };
 }

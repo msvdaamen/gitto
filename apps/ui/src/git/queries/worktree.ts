@@ -21,7 +21,10 @@ export function useWorktrees(repositoryId: () => string) {
   });
 }
 
-/** What a worktree is added with: the folder, the branch (by its full ref name), and a new branch's name, if one is made from it. */
+/**
+ * What a worktree is added with: the folder, the branch (by its full ref name), and a new
+ * branch's name, if one is made from it.
+ */
 export interface AddWorktreeInput {
   path: string;
   branch: string;

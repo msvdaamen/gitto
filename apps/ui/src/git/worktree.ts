@@ -42,7 +42,10 @@ export function checkedOutIn(
   return local && worktreeOn(worktrees, local.fullName);
 }
 
-/** Whether a worktree can be opened: not the one on show, a bare one, which has no files, nor one whose folder is gone. */
+/**
+ * Whether a worktree can be opened: not the one on show, a bare one, which has no files, nor one
+ * whose folder is gone.
+ */
 export function canOpenWorktree(worktree: Worktree): boolean {
   return !worktree.current && !worktree.bare && worktree.prunable === null;
 }

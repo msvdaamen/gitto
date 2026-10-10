@@ -54,7 +54,10 @@ export function SidebarRow(
     active?: boolean;
     /** Shown as if hovered, e.g. while its menu is open. */
     highlighted?: boolean;
-    /** A small icon after the label, saying `label` to assistive tech, e.g. that a branch is checked out in a worktree. */
+    /**
+     * A small icon after the label, saying `label` to assistive tech, e.g. that a branch is
+     * checked out in a worktree.
+     */
     tag?: { icon: LucideIcon; label: string };
     count?: number;
     meta?: string;

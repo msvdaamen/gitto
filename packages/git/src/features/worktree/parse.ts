@@ -2,7 +2,10 @@ import { basename } from "node:path";
 
 import type { Worktree } from "./schema";
 
-/** How `worktree list --porcelain -z` is read: every line ends in a NUL, and an empty line ends each worktree. */
+/**
+ * How `worktree list --porcelain -z` is read: every line ends in a NUL, and an empty line ends
+ * each worktree.
+ */
 export const WORKTREE_LIST_ARGS = ["worktree", "list", "--porcelain", "-z"];
 
 /**
@@ -19,7 +22,7 @@ export function parseWorktreeList(output: string): Worktree[] {
       const line = lines.find(
         (candidate) => candidate === name || candidate.startsWith(`${name} `),
       );
-      return line === null || line === undefined ? null : line.slice(name.length + 1);
+      return line === undefined ? null : line.slice(name.length + 1);
     };
     worktrees.push({
       path,

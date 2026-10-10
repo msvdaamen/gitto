@@ -19,8 +19,8 @@ import { rpc } from "@/lib/rpc";
  * branch, and can be typed or picked. The branch is checked out there (for a remote one, the
  * local branch tracking it, or a new one that does), unless that's checked out in a worktree
  * already (here, say): then a new branch, which has to be named, is made from it and checked out
- * there instead; one can be named either way. The worktrees' section in the
- * sidebar shows it running, and why it failed; the folder and name are kept to fix.
+ * there instead; one can be named either way. The worktrees' section in the sidebar shows it
+ * running, and why it failed; the folder and name are kept to fix.
  */
 export function AddWorktreeDialog(props: {
   repositoryId: string;

@@ -16,7 +16,10 @@ export const WorktreeSchema = z.object({
   bare: z.boolean(),
   /** Whether it's the one the repository was opened as, so the one on show. */
   current: z.boolean(),
-  /** Why it's locked, which keeps it from being pruned or removed; `""` without a reason, `null` if it isn't. */
+  /**
+   * Why it's locked, which keeps it from being pruned or removed; `""` without a reason, `null`
+   * if it isn't.
+   */
   locked: z.string().nullable(),
   /** Why it can be pruned, e.g. its folder is gone; `null` if it can't. */
   prunable: z.string().nullable(),

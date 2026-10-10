@@ -17,7 +17,7 @@ export interface WorktreeSectionFeedback {
   ref: (element: HTMLElement) => void;
   /** Whether a worktree is being added, opened or removed. */
   busy: () => boolean;
-  /** Opens a worktree in Gitto: the one on show, say, when its row is double-clicked. */
+  /** Opens a worktree in Gitto, e.g. the one whose row was double-clicked (see `WorktreeMenu`). */
   open: (worktree: Worktree) => void;
 }
 

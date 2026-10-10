@@ -136,7 +136,8 @@ export function RefList(props: { repositoryId: string }) {
               ? `↓${branch().behind}`
               : undefined
         }
-        // The toolbar shows a switch running, and why it failed; the worktrees' section an opening.
+        // The toolbar shows a switch running, and why it failed; the worktrees' section, opening
+        // the worktree.
         onDblClick={() => {
           const there = worktree();
           if (!there) switchBranch.run(branch().fullName);
