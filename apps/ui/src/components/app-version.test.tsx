@@ -5,7 +5,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AppVersion } from "./app-version";
 
-const rpc = vi.hoisted(() => ({ system: { update: { watch: vi.fn(), install: vi.fn() } } }));
+const rpc = vi.hoisted(() => ({
+  system: {
+    update: { watch: vi.fn(), install: vi.fn() },
+    changelog: { all: vi.fn(), unseen: vi.fn(), seen: vi.fn() },
+  },
+}));
 
 vi.mock("@/lib/rpc", () => ({ rpc }));
 
@@ -38,7 +43,7 @@ describe("the app's version", () => {
 
     expect(await screen.findByText("Downloading update…")).toBeInTheDocument();
     expect(screen.getByText("Gitto")).toBeInTheDocument();
-    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Restart/ })).not.toBeInTheDocument();
   });
 
   it("restarts into an update that's ready", async () => {
@@ -51,5 +56,16 @@ describe("the app's version", () => {
     await user.click(await screen.findByRole("button", { name: "Restart to update to 1.2.4" }));
     expect(rpc.system.update.install).toHaveBeenCalled();
     expect(screen.queryByText("Downloading update…")).not.toBeInTheDocument();
+  });
+
+  it("opens what's new in every version", async () => {
+    const user = userEvent.setup();
+    rpc.system.changelog.all.mockResolvedValue([]);
+    renderWith({ version: "1.2.3", channel: "release", update: null });
+
+    const version = await screen.findByRole("button", { name: /^Gitto\s*v1\.2\.3$/ });
+    expect(version).toHaveAttribute("title", "What's new");
+    await user.click(version);
+    expect(rpc.system.changelog.all).toHaveBeenCalled();
   });
 });

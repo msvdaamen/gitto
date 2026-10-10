@@ -11,6 +11,7 @@ import iconDataUrl from "../assets/icon.png?inline";
 import { resolveRendererPath } from "./renderer-path";
 import { handleSquirrelEvent } from "./squirrel";
 import { Updater } from "./updater";
+import { Changes, readChangelog } from "./whats-new";
 
 // Production builds are served from a custom protocol instead of file:// so the UI can use
 // regular browser history routing (e.g. app://gitto/about).
@@ -78,6 +79,19 @@ function openDatabase() {
   return db;
 }
 
+function openChangelog() {
+  // Packaged builds ship it as an extra resource (see forge.config.ts); in development, it's read
+  // from apps/electron if one's been made there.
+  const path = app.isPackaged
+    ? join(process.resourcesPath, "changelog.json")
+    : resolve(app.getAppPath(), "changelog.json");
+  return new Changes(
+    app.getVersion(),
+    readChangelog(path),
+    join(app.getPath("userData"), "last-seen-version"),
+  );
+}
+
 async function selectFolder() {
   // The picker is opened from a click, so the focused window is the one that asked.
   const win = BrowserWindow.getFocusedWindow();
@@ -88,7 +102,11 @@ async function selectFolder() {
 
 function registerRpc(updates: Updater) {
   const handler = createRpcHandler();
-  const context = createContainer(openDatabase(), { selectFolder, updates });
+  const context = createContainer(openDatabase(), {
+    selectFolder,
+    updates,
+    changelog: openChangelog(),
+  });
 
   // Each renderer connection sends one end of a MessageChannel (see the preload).
   ipcMain.on(RPC_CONNECT_CHANNEL, (event) => {
