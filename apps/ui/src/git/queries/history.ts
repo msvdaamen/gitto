@@ -2,6 +2,7 @@ import type { Commit } from "@gitto/git/types";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/solid-query";
 import { createMemo } from "solid-js";
 
+import { checkouts } from "@/git/ref-labels";
 import { historyGraph, toCommitRow, toHistoryRows, withStashes } from "@/git/rows";
 import { hasUncommittedChanges } from "@/git/status";
 import { rpc } from "@/lib/rpc";
@@ -9,6 +10,7 @@ import { rpc } from "@/lib/rpc";
 import { gitKeys } from "./keys";
 import { useStashes } from "./stash";
 import { useHeadSha, useStatus } from "./status";
+import { useWorktrees } from "./worktree";
 
 /** A repository's log, as `useLog` loads it. */
 interface Log {
@@ -41,10 +43,12 @@ export function useHistory(repositoryId: () => string, selectedId: () => string 
   const log = useLog(repositoryId);
   const status = useStatus(repositoryId);
   const stashes = useStashes(repositoryId);
+  const worktrees = useWorktrees(repositoryId);
 
   // The layout only depends on the log, the stashes, whether there are changes and HEAD; not on the
-  // rest of the status, which is refetched whenever a file changes. The log and the stashes are
-  // reconciled when they're refetched, so they only change when there's something new.
+  // rest of the status, which is refetched whenever a file changes. The log, the stashes and the
+  // worktrees are reconciled when they're refetched, so they only change when there's something
+  // new.
   const hasChanges = createMemo(() => hasUncommittedChanges(status.data));
   const head = useHeadSha(() => status.data);
   // Without the stashes until they've loaded, rather than holding up the history for them (reading
@@ -53,8 +57,13 @@ export function useHistory(repositoryId: () => string, selectedId: () => string 
     log.data ? withStashes(log.data.commits, stashes.isSuccess ? stashes.data : []) : [],
   );
   const graph = createMemo(() => historyGraph(entries(), hasChanges(), head()));
+  // Where the other worktrees are checked out, for the labels; without them until they've loaded,
+  // and if they couldn't be, as with the stashes.
+  const others = createMemo(() => checkouts(worktrees.isSuccess ? worktrees.data : []));
   const rows = createMemo(() =>
-    log.data ? toHistoryRows(log.data.repositoryId, entries(), hasChanges(), graph()) : [],
+    log.data
+      ? toHistoryRows(log.data.repositoryId, entries(), hasChanges(), graph(), others())
+      : [],
   );
   const selected = createMemo(() => rows().find((row) => row.id === selectedId()) ?? rows()[0]);
 

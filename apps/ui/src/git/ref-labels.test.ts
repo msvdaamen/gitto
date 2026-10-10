@@ -1,6 +1,36 @@
+import type { Worktree } from "@gitto/git/types";
 import { describe, expect, it } from "vitest";
 
-import { describeRefLabel, refLabelMatches, toRefLabels } from "./ref-labels";
+import { checkouts, describeRefLabel, refLabelMatches, toRefLabels } from "./ref-labels";
+
+function worktree(
+  name: string,
+  branch: string | null,
+  head: string | null = "e5",
+  extra: Partial<Worktree> = {},
+): Worktree {
+  return {
+    path: `/w/${name}`,
+    name,
+    head,
+    branch,
+    main: false,
+    bare: false,
+    current: false,
+    locked: null,
+    prunable: null,
+    ...extra,
+  };
+}
+
+/** The other worktrees: one on `feature`, one detached at `e5`, besides the current one on `main`. */
+const OTHERS = checkouts([
+  worktree("repo", "refs/heads/main", "e5", { main: true, current: true }),
+  worktree("repo-feature", "refs/heads/feature"),
+  worktree("repo-check", null),
+  worktree("repo-old", null, "a1"),
+  worktree("bare.git", null, null, { bare: true }),
+]);
 
 describe("toRefLabels", () => {
   it("merges a local branch with its remote copies and puts the checked-out one first", () => {
@@ -134,6 +164,58 @@ describe("toRefLabels", () => {
         current: false,
       },
     ]);
+  });
+});
+
+describe("toRefLabels with other worktrees", () => {
+  it("says which worktree a branch is checked out in, and names the ones detached at the commit", () => {
+    expect(
+      toRefLabels(
+        [
+          { kind: "local", name: "main", fullName: "refs/heads/main", current: true },
+          { kind: "local", name: "feature", fullName: "refs/heads/feature" },
+          { kind: "remote", name: "origin/feature", fullName: "refs/remotes/origin/feature" },
+        ],
+        "e5",
+        OTHERS,
+      ),
+    ).toEqual([
+      expect.objectContaining({ kind: "branch", name: "main", current: true }),
+      expect.objectContaining({
+        kind: "branch",
+        name: "feature",
+        worktree: { name: "repo-feature", path: "/w/repo-feature" },
+      }),
+      { kind: "worktree", name: "repo-check", path: "/w/repo-check" },
+    ]);
+    expect(toRefLabels([], "a1", OTHERS)).toEqual([
+      { kind: "worktree", name: "repo-old", path: "/w/repo-old" },
+    ]);
+    expect(toRefLabels([], "b2", OTHERS)).toEqual([]);
+  });
+
+  it("leaves out the worktree on show, and a bare one", () => {
+    expect(OTHERS.branches.has("refs/heads/main")).toBe(false);
+    expect([...OTHERS.detached.values()].flat().map((at) => at.name)).toEqual([
+      "repo-check",
+      "repo-old",
+    ]);
+  });
+
+  it("matches and describes them", () => {
+    const [, feature, check] = toRefLabels(
+      [
+        { kind: "local", name: "main", fullName: "refs/heads/main", current: true },
+        { kind: "local", name: "feature", fullName: "refs/heads/feature" },
+      ],
+      "e5",
+      OTHERS,
+    );
+    expect(refLabelMatches(check!, "repo-ch")).toBe(true);
+    expect(refLabelMatches(feature!, "repo-feat")).toBe(true);
+    expect(refLabelMatches(feature!, "head")).toBe(false);
+    expect(describeRefLabel(check!)).toBe("repo-check (worktree, detached)");
+    expect(describeRefLabel(feature!)).toBe("feature (local; checked out in repo-feature)");
   });
 });
 

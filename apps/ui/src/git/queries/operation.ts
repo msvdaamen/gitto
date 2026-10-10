@@ -1,6 +1,8 @@
 import { useMutation, useQueryClient, type QueryClient } from "@tanstack/solid-query";
 import { createStore, produce } from "solid-js/store";
 
+import { gitKeys } from "./keys";
+
 type Operations = Record<string, { running: boolean; error: Error | null }>;
 
 /**
@@ -52,6 +54,38 @@ export function useRepositoryOperation<T = void, R = unknown>(
       );
     },
     ...state,
+  };
+}
+
+/**
+ * Runs `action` on the repository `id`, then reloads the repository, also after a failure: the
+ * action may have changed it partway, e.g. a pop that conflicts.
+ */
+export async function reloading(
+  queryClient: QueryClient,
+  id: string,
+  action: Promise<unknown>,
+): Promise<void> {
+  try {
+    await action;
+  } finally {
+    await queryClient.invalidateQueries({ queryKey: gitKeys.repository(id) });
+  }
+}
+
+/**
+ * `operation`, which doesn't run while `busy()` says one of its group is: for operations that
+ * are shown together, like the stashes', so what's on show is never from before another.
+ */
+export function oneAtATime<T, R>(
+  operation: ReturnType<typeof useRepositoryOperation<T, R>>,
+  busy: () => boolean,
+) {
+  return {
+    ...operation,
+    run: (input: T, options?: { onSuccess?: (result: R) => void }) => {
+      if (!busy()) operation.run(input, options);
+    },
   };
 }
 

@@ -122,10 +122,24 @@ async function switchArgs(
   ref: string,
   target: { kind: RefKind; name: string },
 ): Promise<string[]> {
-  const { name } = target;
   // `--no-guess`: never a new branch made from a remote one of the same name.
-  if (target.kind !== "remote") return ["switch", "--no-guess", "--", name];
+  if (target.kind !== "remote") return ["switch", "--no-guess", "--", target.name];
+  const tracking = await trackingBranch(run, ref, target.name);
+  if ("existing" in tracking) return ["switch", "--no-guess", "--", tracking.existing];
+  return ["switch", `--create=${tracking.local}`, "--track", "--", ref];
+}
 
+/**
+ * The local branch for the remote branch `ref` (its full name), named `name` (e.g.
+ * `origin/feature`): the one tracking it (the current one, or the one named after it, if several
+ * do), as `existing`; or, when none does, the name for a new one that would, as `local`: the
+ * branch's name without the remote (`feature`).
+ */
+export async function trackingBranch(
+  run: GitCommand,
+  ref: string,
+  name: string,
+): Promise<{ existing: string } | { local: string }> {
   // With NUL-separated fields: ref names can't contain one.
   const [locals, remotes] = await Promise.all([
     run(["for-each-ref", "--format=%(refname:lstrip=2)%00%(upstream)%00%(HEAD)", "refs/heads/"]),
@@ -147,8 +161,7 @@ async function switchArgs(
     tracking.find(([, , head]) => head === "*") ??
     tracking.find(([candidate]) => candidate === local) ??
     tracking[0];
-  if (branch) return ["switch", "--no-guess", "--", branch[0]!];
-  return ["switch", `--create=${local}`, "--track", "--", ref];
+  return branch ? { existing: branch[0]! } : { local };
 }
 
 /**

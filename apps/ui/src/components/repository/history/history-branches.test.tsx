@@ -1,6 +1,7 @@
-import type { CommitRef, Ref } from "@gitto/git/types";
+import type { CommitRef, Ref, Worktree } from "@gitto/git/types";
 import { fireEvent, render, screen, within } from "@solidjs/testing-library";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
+import type * as SolidRouter from "@tanstack/solid-router";
 import userEvent from "@testing-library/user-event";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -31,6 +32,10 @@ function ref(fullName: string, kind: Ref["kind"]): Ref {
 }
 
 const rpc = vi.hoisted(() => ({
+  repository: {
+    list: async () => [{ id: "repo", name: "repo", path: "/w/repo" }],
+    add: vi.fn(),
+  },
   git: {
     history: { log: vi.fn() },
     status: { get: vi.fn() },
@@ -39,10 +44,19 @@ const rpc = vi.hoisted(() => ({
     refs: { list: vi.fn() },
     branch: { switch: vi.fn(), create: vi.fn(), merge: vi.fn() },
     operation: { get: vi.fn() },
+    worktree: { list: vi.fn(), add: vi.fn(), remove: vi.fn() },
   },
 }));
 
 vi.mock("@/lib/rpc", () => ({ rpc }));
+
+/** Where the router was sent, e.g. to the worktree opened. */
+const navigate = vi.hoisted(() => vi.fn());
+
+vi.mock("@tanstack/solid-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof SolidRouter>()),
+  useNavigate: () => navigate,
+}));
 
 beforeEach(() => {
   // jsdom has no layout: give the history room for its rows.
@@ -81,6 +95,7 @@ beforeEach(() => {
   rpc.git.branch.create.mockResolvedValue(undefined);
   rpc.git.branch.merge.mockResolvedValue("merged");
   rpc.git.operation.get.mockResolvedValue(null);
+  rpc.git.worktree.list.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -260,5 +275,103 @@ describe("branches in the history", () => {
 
     await createFrom(user, await screen.findByTitle("feature"));
     expect(await screen.findByRole("textbox", { name: "Name" })).toHaveValue("topic");
+  });
+});
+
+function worktree(path: string, branch: string | null, extra: Partial<Worktree> = {}): Worktree {
+  return {
+    path,
+    name: path.slice(path.lastIndexOf("/") + 1),
+    head: "e5",
+    branch,
+    main: false,
+    bare: false,
+    current: false,
+    locked: null,
+    prunable: null,
+    ...extra,
+  };
+}
+
+describe("worktrees in the history", () => {
+  beforeEach(() => {
+    rpc.git.worktree.list.mockResolvedValue([
+      worktree("/w/repo", "refs/heads/main", { main: true, current: true }),
+      worktree("/w/repo-feature", "refs/heads/feature"),
+      worktree("/w/repo-check", null),
+    ]);
+  });
+
+  it("marks a branch checked out in another worktree, and names one detached at the commit", async () => {
+    const user = userEvent.setup();
+    await renderHistory();
+
+    // The worktree is a label of its own, after the branches.
+    await user.hover(await screen.findByText("+4"));
+    const feature = (await screen.findByText("feature")).closest("[data-branch]")!;
+    expect(
+      within(feature as HTMLElement).getByRole("img", { name: "Checked out in repo-feature" }),
+    ).toBeInTheDocument();
+    expect(feature).toHaveAttribute(
+      "title",
+      "feature (local; checked out in repo-feature)\nDouble-click to open that worktree",
+    );
+    const check = (await screen.findByText("repo-check")).parentElement!;
+    expect(within(check).getByRole("img", { name: "Worktree" })).toBeInTheDocument();
+    expect(check).toHaveAttribute("title", "repo-check (worktree, detached)");
+    expect(check).not.toHaveAttribute("data-branch");
+  });
+
+  it("opens the worktree a branch is checked out in when its label is double-clicked", async () => {
+    const user = userEvent.setup();
+    await renderHistory();
+    rpc.repository.add.mockResolvedValue({
+      id: "b",
+      name: "repo-feature",
+      path: "/w/repo-feature",
+    });
+
+    await user.hover(await screen.findByText("+4"));
+    await user.dblClick(await screen.findByText("feature"));
+    expect(rpc.git.branch.switch).not.toHaveBeenCalled();
+    expect(rpc.repository.add).toHaveBeenCalledWith({ path: "/w/repo-feature" });
+    await vi.waitFor(() =>
+      expect(navigate).toHaveBeenCalledWith({ to: "/$repoId", params: { repoId: "b" } }),
+    );
+  });
+
+  it("opens the worktree a branch is checked out in from its menu", async () => {
+    const user = userEvent.setup();
+    await renderHistory();
+    rpc.repository.add.mockResolvedValue({
+      id: "b",
+      name: "repo-feature",
+      path: "/w/repo-feature",
+    });
+
+    await user.hover(await screen.findByText("+4"));
+    await user.pointer({ keys: "[MouseRight]", target: await screen.findByText("feature") });
+    await user.click(await screen.findByRole("menuitem", { name: "Open worktree repo-feature" }));
+    expect(rpc.repository.add).toHaveBeenCalledWith({ path: "/w/repo-feature" });
+    await vi.waitFor(() =>
+      expect(navigate).toHaveBeenCalledWith({ to: "/$repoId", params: { repoId: "b" } }),
+    );
+  });
+
+  it("adds a worktree for a branch from its menu", async () => {
+    const user = userEvent.setup();
+    await renderHistory();
+    rpc.git.worktree.add.mockResolvedValue(undefined);
+
+    await user.pointer({ keys: "[MouseRight]", target: await screen.findByText("main") });
+    await user.click(await screen.findByRole("menuitem", { name: "Add worktree…" }));
+    await user.type(await screen.findByRole("textbox", { name: /^New branch$/ }), "topic");
+    await user.click(screen.getByRole("button", { name: "Add worktree with new branch" }));
+    expect(rpc.git.worktree.add).toHaveBeenCalledWith({
+      repositoryId: "repo",
+      path: "/w/repo-main",
+      branch: "refs/heads/main",
+      newBranch: "topic",
+    });
   });
 });

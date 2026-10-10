@@ -10,9 +10,11 @@ import type { GitDirChange } from "./schema";
 const WORKTREE_STATE = /^([A-Z_]*HEAD|(rebase-merge|rebase-apply|sequencer|reftable)(\/.*)?)$/;
 /**
  * Files in the shared git directory: branches, tags and remotes (as files, packed, or in a
- * reftable), and the config (upstreams).
+ * reftable), the config (upstreams), and the other worktrees: each one's folder, which comes and
+ * goes with it, its HEAD, where its folder is, and whether it's locked; not its index.
  */
-const SHARED_STATE = /^((refs|reftable)(\/.*)?|packed-refs|config)$/;
+const SHARED_STATE =
+  /^((refs|reftable)(\/.*)?|packed-refs|config|worktrees(\/[^/]+(\/(HEAD|gitdir|locked))?)?)$/;
 
 /** What a change to `path`, in the git directory, means for the UI; `undefined` if nothing. */
 export function classify(dirs: GitDirs, path: string): GitDirChange | undefined {

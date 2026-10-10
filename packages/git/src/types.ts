@@ -11,3 +11,4 @@ export * from "./features/staging/schema";
 export * from "./features/stash/schema";
 export * from "./features/status/schema";
 export * from "./features/watch/schema";
+export * from "./features/worktree/schema";

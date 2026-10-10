@@ -185,6 +185,12 @@ export class MergeStoppedError extends MessageError {}
 /** Changes that can't be discarded, as they're of conflicted files: nothing was discarded. */
 export class DiscardBlockedError extends MessageError {}
 
+/**
+ * A worktree that can't be removed: the main one, which the others share their git directory
+ * with, or the one open here. Nothing was done.
+ */
+export class WorktreeRemovalBlockedError extends MessageError {}
+
 /** What's asked of git needs an editor for a message, which Gitto can't open: a rebase's reword. */
 export class EditorNeededError extends MessageError {}
 

@@ -28,6 +28,7 @@ import {
   StashConflictError,
   UnsupportedGitError,
   WorkingTreeFileNotFoundError,
+  WorktreeRemovalBlockedError,
 } from "./errors";
 import type { GitRepos } from "./repo";
 import type { GitVersion } from "./version";
@@ -82,7 +83,8 @@ function toApiError(error: unknown): unknown {
     error instanceof NoOperationError ||
     error instanceof EditorNeededError ||
     error instanceof MergeBlockedError ||
-    error instanceof DiscardBlockedError
+    error instanceof DiscardBlockedError ||
+    error instanceof WorktreeRemovalBlockedError
   ) {
     return new ORPCError("PRECONDITION_FAILED", { message: error.message, cause: error });
   }
