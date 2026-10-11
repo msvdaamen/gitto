@@ -9,7 +9,7 @@ import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, protocol, shell 
 
 import iconDataUrl from "../assets/icon.png?inline";
 import { resolveRendererPath } from "./renderer-path";
-import { initSentry, instrumentRpcCall } from "./sentry";
+import { initSentry, reportRpcCall } from "./sentry";
 import { handleSquirrelEvent } from "./squirrel";
 import { Updater } from "./updater";
 import { Changes, readChangelog } from "./whats-new";
@@ -32,11 +32,14 @@ const squirrelRun = handleSquirrelEvent();
 
 // A second instance would contend for the same profile locks and take ~4s to show anything,
 // so hand off to the running instance instead.
-if (!squirrelRun && !app.requestSingleInstanceLock()) {
+const firstInstance = !squirrelRun && app.requestSingleInstanceLock();
+if (!squirrelRun && !firstInstance) {
   app.exit(0);
 }
 
-if (!squirrelRun) initSentry();
+// Not in the instance that's exiting, which would take the running one's place in Sentry's
+// session, as `app.exit` doesn't stop what comes after it.
+if (firstInstance) initSentry();
 
 app.on("second-instance", () => {
   const win = BrowserWindow.getAllWindows()[0];
@@ -104,7 +107,7 @@ async function selectFolder() {
 }
 
 function registerRpc(updates: Updater) {
-  const handler = createRpcHandler({ instrument: instrumentRpcCall });
+  const handler = createRpcHandler({ onCallEnd: reportRpcCall });
   const context = createContainer(openDatabase(), {
     selectFolder,
     updates,

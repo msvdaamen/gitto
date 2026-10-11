@@ -39,12 +39,12 @@ Gitto reports to [Sentry](https://sentry.io) when it's built with a `SENTRY_DSN`
 one, like `pnpm dev`'s, reports nothing. It sends:
 
 - **Crashes and errors**: native crashes, uncaught errors in the main process and the UI, pages that
-  failed to render, and RPC calls that failed in a way nothing expected (`INTERNAL_SERVER_ERROR`;
-  a conflict or a missing repository is expected).
+  failed to render, and RPC calls, streams included, that failed in a way nothing expected
+  (`INTERNAL_SERVER_ERROR`; a conflict or a missing repository is expected, and isn't sent).
 - **Logs**: the warnings and errors either process logs.
-- **Metrics**: `rpc.duration`, how long each RPC call took, by procedure and outcome.
-- **Traces**: Gitto's startup up to its first page, page loads and clicks in the UI, and each RPC
-  call in the main process.
+- **Metrics**: `rpc.duration`, how long each RPC call took, by procedure and outcome. Calls come
+  in bursts whenever a repository changes, too many to trace each one.
+- **Traces**: Gitto's startup up to its first page, and page loads and clicks in the UI.
 - **Release health**: sessions, so Sentry can say how many runs of each version crashed.
 
 The UI's are sent through the main process (`apps/electron/src/sentry.ts`, `apps/ui/src/lib/sentry.ts`).
