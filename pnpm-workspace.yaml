@@ -4,9 +4,10 @@ packages:
 
 # Versions shared across packages (oRPC must stay in lockstep); packages reference these with "catalog:".
 catalog:
-  "@orpc/client": "^1.15.4"
-  "@orpc/contract": "^1.15.4"
-  "@orpc/server": "^1.15.4"
+  "@orpc/client": "^1.15.5"
+  "@orpc/contract": "^1.15.5"
+  "@orpc/server": "^1.15.5"
+  "@orpc/shared": "^1.15.5"
   zod: "^4.6.5"
   drizzle-orm: "1.0.0-rc.4"
   drizzle-kit: "1.0.0-rc.4"

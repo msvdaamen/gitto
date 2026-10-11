@@ -27,7 +27,7 @@ export interface RpcCall {
 }
 
 export interface RpcHandlerOptions {
-  /** Wraps every call, to trace it or report its failure; `next` makes the call. */
+  /** Wraps every call, to time it or report its failure; `next` makes the call. */
   instrument?: <T>(call: RpcCall, next: () => Promise<T>) => Promise<T>;
 }
 
