@@ -1,3 +1,4 @@
+import "@gitto/telemetry-ui";
 /* @refresh reload */
 import "./index.css";
 import { QueryClientProvider } from "@tanstack/solid-query";

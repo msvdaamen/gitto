@@ -1,3 +1,4 @@
+import "@gitto/telemetry-electron/main";
 import { stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
