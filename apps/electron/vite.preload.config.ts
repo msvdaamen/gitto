@@ -1,6 +1,8 @@
-import { defineConfig } from "vite";
+import { mergeConfig } from "vite";
 
-export default defineConfig({
+import { sentrySourceMaps } from "./vite.sentry";
+
+export default mergeConfig(sentrySourceMaps(), {
   build: {
     target: "node24",
     rollupOptions: {

@@ -1,4 +1,3 @@
-import "@gitto/telemetry-electron/main";
 import { stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -6,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { createDb } from "@gitto/db";
 import { RPC_CONNECT_CHANNEL } from "@gitto/rpc";
 import { createContainer, createRpcHandler } from "@gitto/rpc/server";
+import { initSentry } from "@gitto/telemetry-electron/main";
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, protocol, shell } from "electron";
 
 import iconDataUrl from "../assets/icon.png?inline";
@@ -32,8 +32,18 @@ const squirrelRun = handleSquirrelEvent();
 
 // A second instance would contend for the same profile locks and take ~4s to show anything,
 // so hand off to the running instance instead.
-if (!squirrelRun && !app.requestSingleInstanceLock()) {
+const firstInstance = !squirrelRun && app.requestSingleInstanceLock();
+if (!squirrelRun && !firstInstance) {
   app.exit(0);
+}
+
+if (firstInstance) {
+  initSentry({
+    dsn: process.env.SENTRY_DSN,
+    version: app.getVersion(),
+    isPackaged: app.isPackaged,
+    debug: true,
+  });
 }
 
 app.on("second-instance", () => {

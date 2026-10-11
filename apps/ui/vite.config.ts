@@ -23,6 +23,7 @@ export default defineConfig({
       "@": resolve(import.meta.dirname, "src"),
     },
   },
+  define: { "import.meta.env.SENTRY": JSON.stringify(!!process.env.SENTRY_DSN) },
   build: {
     target: "esnext",
   },

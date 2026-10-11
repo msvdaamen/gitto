@@ -6,3 +6,4 @@ declare module "*?inline" {
   const dataUrl: string;
   export default dataUrl;
 }
+declare const SENTRY_DSN: string;
