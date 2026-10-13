@@ -1,10 +1,11 @@
 import type { Commit } from "@gitto/git/types";
-import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/solid-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/solid-query";
 import { createMemo } from "solid-js";
 
 import { checkouts } from "@/git/ref-labels";
 import { historyGraph, toCommitRow, toHistoryRows, withStashes } from "@/git/rows";
 import { hasUncommittedChanges } from "@/git/status";
+import { useResetOn } from "@/hooks/reset-on";
 import { rpc } from "@/lib/rpc";
 
 import { gitKeys } from "./keys";
@@ -12,27 +13,84 @@ import { useStashes } from "./stash";
 import { useHeadSha, useStatus } from "./status";
 import { useWorktrees } from "./worktree";
 
-/** A repository's log, as `useLog` loads it. */
+/** How many commits the history loads first: a few screenfuls, so it shows quickly. */
+const FIRST_PAGE = 200;
+
+/** How many more it loads at a time as the end of what's loaded comes into view. */
+const NEXT_PAGE = 1000;
+
+/**
+ * The most commits the history reloads as the repository changes, which is the most the log hands
+ * over at once (see `HistoryContract.log`). Past that, it starts over from the first page: the
+ * graph has to be laid out again, and the commits sent over, for every one of them.
+ */
+const RELOAD_LIMIT = 10_000;
+
+/** A repository's log, as `useLog` loads it: its newest commits, and those loaded after them. */
 interface Log {
   repositoryId: string;
   commits: Commit[];
+  /** Whether that's all of the history: the last page loaded was short of its limit. */
+  complete: boolean;
 }
 
+/**
+ * A repository's log: the first `FIRST_PAGE` commits, then `NEXT_PAGE` more each time `more` is
+ * run. A refetch, as the repository changes, reloads as many as were loaded in one go, so the
+ * history keeps its place; git walks the whole history to sort it anyway, so that takes little
+ * longer than the first page (220ms for 6,200 commits of vscode, against 150ms for 200). Past
+ * `RELOAD_LIMIT`, it's back to the first page.
+ */
 export function useLog(repositoryId: () => string) {
-  return useQuery(() => {
+  const queryClient = useQueryClient();
+  const query = useQuery(() => {
     const id = repositoryId();
     return {
       queryKey: gitKeys.log(id),
       // Tagged with its repository, so every row knows where its commit lives (see `toHistoryRows`).
-      queryFn: async ({ signal }): Promise<Log> => ({
-        repositoryId: id,
-        commits: await rpc.git.history.log({ repositoryId: id }, { signal }),
-      }),
+      queryFn: async ({ signal }): Promise<Log> => {
+        const loaded = queryClient.getQueryData<Log>(gitKeys.log(id))?.commits.length ?? 0;
+        const limit = loaded > RELOAD_LIMIT ? FIRST_PAGE : Math.max(FIRST_PAGE, loaded);
+        const commits = await rpc.git.history.log({ repositoryId: id, skip: 0, limit }, { signal });
+        return { repositoryId: id, commits, complete: commits.length < limit };
+      },
       // Merged into the previous log, commit by commit, so a refetch that brings nothing new
       // (the refs changed elsewhere, say) doesn't lay out and render the history again.
       reconcile: "sha",
     };
   });
+
+  const more = useMutation(() => ({
+    mutationFn: async (id: string) => {
+      const key = gitKeys.log(id);
+      const log = queryClient.getQueryData<Log>(key);
+      if (!log || log.complete) return;
+      const updatedAt = queryClient.getQueryState(key)?.dataUpdatedAt;
+      const commits = await rpc.git.history.log({
+        repositoryId: id,
+        skip: log.commits.length,
+        limit: NEXT_PAGE,
+      });
+      // Reloaded meanwhile: this one may not follow on from what was reloaded.
+      if (queryClient.getQueryState(key)?.dataUpdatedAt !== updatedAt) return;
+      // Each commit only once: the history may have moved since the commits before were loaded,
+      // until the refetch that follows the move.
+      const listed = new Set(log.commits.map((commit) => commit.sha));
+      queryClient.setQueryData<Log>(key, {
+        ...log,
+        commits: [...log.commits, ...commits.filter((commit) => !listed.has(commit.sha))],
+        complete: commits.length < NEXT_PAGE,
+      });
+    },
+  }));
+  // Whether loading more failed, or is still under way, is of the log as it was: not of another
+  // repository's, nor of the one reloaded since.
+  useResetOn(
+    () => [repositoryId(), query.dataUpdatedAt],
+    () => more.reset(),
+  );
+
+  return { query, more };
 }
 
 /**
@@ -40,7 +98,7 @@ export function useLog(repositoryId: () => string) {
  * it. `selectedId` picks the selected row; it defaults to the first one.
  */
 export function useHistory(repositoryId: () => string, selectedId: () => string | undefined) {
-  const log = useLog(repositoryId);
+  const { query: log, more } = useLog(repositoryId);
   const status = useStatus(repositoryId);
   const stashes = useStashes(repositoryId);
   const worktrees = useWorktrees(repositoryId);
@@ -67,7 +125,14 @@ export function useHistory(repositoryId: () => string, selectedId: () => string 
   );
   const selected = createMemo(() => rows().find((row) => row.id === selectedId()) ?? rows()[0]);
 
-  return { log, rows, selected };
+  // Whether there's more of the log to load, once it's loaded.
+  const hasMore = () => log.data?.complete === false;
+  /** Loads more of the log, unless it's loading, or reloading, which would leave that unused. */
+  const loadMore = () => {
+    if (hasMore() && !log.isFetching && !more.isPending) more.mutate(repositoryId());
+  };
+
+  return { log, more, hasMore, loadMore, rows, selected };
 }
 
 /**
