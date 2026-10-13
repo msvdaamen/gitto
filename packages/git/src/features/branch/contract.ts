@@ -24,6 +24,14 @@ export const BranchContract = {
    */
   switch: oc.input(RepositoryInput.extend({ ref: BranchRef })),
   /**
+   * Deletes a branch, by its full ref name, with the commits only it has. A local branch is deleted
+   * here only. A remote branch is deleted on its remote (or only here, if the remote's gone), and so
+   * are the local branches tracking it. That fails with PRECONDITION_FAILED, deleting nothing, if
+   * one of them is checked out, or being rebased or bisected, or the remote's fetch settings don't
+   * fetch the branch from one there.
+   */
+  delete: oc.input(RepositoryInput.extend({ ref: BranchRef })),
+  /**
    * Merges a branch, by its full ref name, into the checked-out one, `into`, as the user saw it:
    * says whether it was up to date, fast-forwarded, merged, or stopped at conflicts, left to resolve.
    * Fails with PRECONDITION_FAILED, doing nothing, while HEAD is detached or an operation or

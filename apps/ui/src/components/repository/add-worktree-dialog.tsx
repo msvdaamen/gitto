@@ -95,7 +95,7 @@ export function AddWorktreeDialog(props: {
 
   function submit(event: Event) {
     event.preventDefault();
-    if (!valid() || add.isPending()) return;
+    if (!valid() || add.isBlocked()) return;
     const ref = branch()!;
     const path = folder().trim();
     const made = newBranch().trim();
@@ -147,7 +147,7 @@ export function AddWorktreeDialog(props: {
                 type="submit"
                 variant="primary"
                 icon={FolderPlus}
-                disabled={!valid() || add.isPending()}
+                disabled={!valid() || add.isBlocked()}
                 class="h-8 flex-1 gap-[7px] rounded-[7px] text-[12.5px] font-[680] shadow-none"
               >
                 <Show when={newBranch().trim()} fallback="Add worktree">

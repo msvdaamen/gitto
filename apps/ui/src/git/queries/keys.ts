@@ -18,6 +18,8 @@ export const gitKeys = {
   operation: (repositoryId: string) => [...gitKeys.repository(repositoryId), "operation"] as const,
   log: (repositoryId: string) => [...gitKeys.repository(repositoryId), "log"] as const,
   refs: (repositoryId: string) => [...gitKeys.repository(repositoryId), "refs"] as const,
+  /** The remotes' names: refetched when the refs change, as the config does. */
+  remotes: (repositoryId: string) => [...gitKeys.repository(repositoryId), "remotes"] as const,
   stashes: (repositoryId: string) => [...gitKeys.repository(repositoryId), "stashes"] as const,
   /** The worktrees: refetched when the refs change, as the git directory's `worktrees` folder does. */
   worktrees: (repositoryId: string) => [...gitKeys.repository(repositoryId), "worktrees"] as const,

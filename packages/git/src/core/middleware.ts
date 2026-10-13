@@ -1,6 +1,7 @@
 import { ORPCError, os } from "@orpc/server";
 
 import {
+  BranchDeletionBlockedError,
   ChangesStashedError,
   ChangesTooLargeError,
   ConflictChangedError,
@@ -84,7 +85,8 @@ function toApiError(error: unknown): unknown {
     error instanceof EditorNeededError ||
     error instanceof MergeBlockedError ||
     error instanceof DiscardBlockedError ||
-    error instanceof WorktreeRemovalBlockedError
+    error instanceof WorktreeRemovalBlockedError ||
+    error instanceof BranchDeletionBlockedError
   ) {
     return new ORPCError("PRECONDITION_FAILED", { message: error.message, cause: error });
   }
