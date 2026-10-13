@@ -23,6 +23,8 @@ import {
   OutsideRepositoryError,
   PatchChangedError,
   PullInterruptedError,
+  PushBlockedError,
+  PushRejectedError,
   RepositoryChangedError,
   RepositoryNotFoundError,
   StashConflictError,
@@ -76,8 +78,17 @@ function toApiError(error: unknown): unknown {
   if (error instanceof LinesNotStageableError) {
     return new ORPCError("UNPROCESSABLE_CONTENT", { message: error.message, cause: error });
   }
+  if (error instanceof PushRejectedError) {
+    // Codes of their own, so the renderer can offer to force-push, or to pull.
+    return new ORPCError(error.forcible ? "PUSH_REWRITTEN" : "PUSH_BEHIND", {
+      status: 409,
+      message: error.message,
+      cause: error,
+    });
+  }
   if (
     error instanceof NoUpstreamError ||
+    error instanceof PushBlockedError ||
     error instanceof UnsupportedGitError ||
     error instanceof ConflictMarkersError ||
     error instanceof NoOperationError ||

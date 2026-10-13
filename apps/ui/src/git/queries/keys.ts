@@ -26,6 +26,9 @@ export const gitKeys = {
   /** Which remote branch has a commit: refetched when the refs change, e.g. after a push. */
   pushedTo: (repositoryId: string, sha: string) =>
     [...gitKeys.repository(repositoryId), "pushed-to", sha] as const,
+  /** Where the Push button pushes, and how many commits: refetched when the refs or config change. */
+  pushTarget: (repositoryId: string) =>
+    [...gitKeys.repository(repositoryId), "push-target"] as const,
   /** A commit never changes, so it and its files are kept outside `repository(id)`. */
   commit: (repositoryId: string, sha: string) => ["git-commit", repositoryId, sha] as const,
   commitFiles: (repositoryId: string, sha: string) =>

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { GitError, NoUpstreamError, RepositoryChangedError } from "../../core/errors";
 import { gitDirs, type GitDirs } from "../../core/git-dirs";
 import { currentBranch, refExists, resolveRef, type GitCommand, type Repo } from "../../core/repo";
+import { noUpstream } from "./blockers";
 import {
   FALSE,
   makesMergeCommit,
@@ -11,10 +12,9 @@ import {
   rebases,
   rebaseSetting,
   remotesToFetch,
-  type PullConfig,
+  type RemoteConfig,
 } from "./config";
-import { inProgress, interruption, progress, rebaseState } from "./progress";
-import { NO_BRANCH, noUpstream, REBASING } from "./pull-blocker";
+import { inProgress, interruption, progress, whyDetached } from "./progress";
 
 /**
  * Fetches every remote, and drops remote-tracking branches whose branch was deleted on the remote,
@@ -149,12 +149,10 @@ interface Upstream {
 async function readBranch(
   run: GitCommand,
   dirs: Promise<GitDirs>,
-): Promise<{ branch: string; upstream: Upstream; config: PullConfig }> {
+): Promise<{ branch: string; upstream: Upstream; config: RemoteConfig }> {
   const [branch, config] = await Promise.all([currentBranch(run), readConfig(run)]);
   if (branch === null) {
-    // HEAD is detached while a rebase stops: it's that to finish, not a branch to check out.
-    const rebasing = (await rebaseState((await dirs).gitDir)).rebasing;
-    throw new NoUpstreamError(rebasing ? REBASING : NO_BRANCH);
+    throw new NoUpstreamError(await whyDetached((await dirs).gitDir, "pull"));
   }
   // From the config: a branch without commits yet has no ref to ask for its upstream. A remote
   // given as a URL, rather than one with a name (and so a URL setting), has no remote-tracking
@@ -298,7 +296,7 @@ function trackingBranch(run: GitCommand, branch: string): Promise<string | null>
  * interactively, which would open an editor with no one to use it.
  */
 function integrateArgs(
-  config: PullConfig,
+  config: RemoteConfig,
   branch: string,
   tracking: string,
   fetched: Fetched | null,

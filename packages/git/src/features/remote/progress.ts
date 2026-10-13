@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import { PullInterruptedError, type GitError } from "../../core/errors";
 import { hasConflicts, refExists, succeeds, type GitCommand } from "../../core/repo";
+import { detachedHead } from "./blockers";
 
 // What a merge, rebase or `git am` left unfinished in a repository, and what to tell the user
 // about a pull that stopped at it.
@@ -42,6 +43,14 @@ export async function rebaseState(
     ),
   );
   return { rebasing: !!rebaseMerge || (!!rebaseApply && !applying), applying: !!applying };
+}
+
+/**
+ * Why HEAD, detached in the worktree whose git directory is `gitDir`, can't be pulled into or
+ * pushed: a rebase may have stopped there.
+ */
+export async function whyDetached(gitDir: string, action: "pull" | "push"): Promise<string> {
+  return detachedHead(action, (await rebaseState(gitDir)).rebasing);
 }
 
 /** What's unfinished in the repository, read at once. */

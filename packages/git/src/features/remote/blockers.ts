@@ -1,10 +1,20 @@
-// Shared with the renderer, which disables pulling for the same reasons, so this imports nothing.
+// Why a pull or push can't start. Shared with the renderer, which disables pulling for the same
+// reasons, so this imports nothing.
+
+/**
+ * Why HEAD can't be pulled into or pushed while it's detached: `rebasing` when that's as a rebase
+ * stopped, which is to finish rather than a branch to check out.
+ */
+export function detachedHead(action: "pull" | "push", rebasing: boolean): string {
+  if (rebasing) return `A rebase is under way. Continue or abort it, then ${action}.`;
+  return `HEAD is detached: check out a branch to ${action === "pull" ? "pull into" : "push"} it.`;
+}
 
 /** Why a detached HEAD can't be pulled into, when no rebase is under way. */
-export const NO_BRANCH = "HEAD is detached: check out a branch to pull into it.";
+export const NO_BRANCH = detachedHead("pull", false);
 
 /** Why HEAD can't be pulled into while a rebase is stopped, which detaches it. */
-export const REBASING = "A rebase is under way. Continue or abort it, then pull.";
+export const REBASING = detachedHead("pull", true);
 
 /**
  * Why a detached HEAD can't be pulled into, when it's not known whether a rebase is under way:

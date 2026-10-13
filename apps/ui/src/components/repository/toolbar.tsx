@@ -7,7 +7,6 @@ import Redo2 from "lucide-solid/icons/redo-2";
 import RefreshCw from "lucide-solid/icons/refresh-cw";
 import Settings from "lucide-solid/icons/settings";
 import Undo2 from "lucide-solid/icons/undo-2";
-import Upload from "lucide-solid/icons/upload";
 import { createEffect, createSignal, on, Suspense } from "solid-js";
 
 import { IconButton } from "@/components/ui/button";
@@ -22,6 +21,7 @@ import { useRepository } from "@/hooks/repositories";
 
 import { BranchButton } from "./branch-button";
 import { PullButton } from "./pull-button";
+import { PushButton } from "./push-button";
 import { StashButtons } from "./stash-buttons";
 import { ToolbarButton } from "./toolbar-button";
 
@@ -50,7 +50,7 @@ export function RepositoryToolbar(props: {
         <ToolbarButton icon={Redo2} label="Redo" hideBelow="lg" />
         <Divider class="h-6" />
         <PullButton repositoryId={props.repositoryId} />
-        <ToolbarButton icon={Upload} label="Push" />
+        <PushButton repositoryId={props.repositoryId} />
         <BranchButton repositoryId={props.repositoryId} />
         <StashButtons repositoryId={props.repositoryId} />
         <FetchButton repositoryId={props.repositoryId} />

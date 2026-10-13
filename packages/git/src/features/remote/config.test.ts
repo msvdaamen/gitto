@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { makesMergeCommit, parseConfig, rebases, remotesToFetch } from "./config";
+import { makesMergeCommit, mapRef, parseConfig, rebases, remotesToFetch } from "./config";
 
 /** `git config -z --get-regexp`'s output for `entries`, each a key and a value, or a key alone. */
 function output(...entries: [key: string, value?: string][]): string {
@@ -64,5 +64,29 @@ describe("remotesToFetch", () => {
     );
     expect(remotesToFetch(config, "origin")).toEqual(["fork", "other"]);
     expect(remotesToFetch(config, "none")).toEqual(["origin", "fork", "other"]);
+  });
+});
+
+describe("mapRef", () => {
+  it("maps a ref through fetch refspecs, as git does", () => {
+    const fetch = ["+refs/heads/*:refs/remotes/origin/*"];
+    expect(mapRef(fetch, "refs/heads/main")).toBe("refs/remotes/origin/main");
+    expect(mapRef(fetch, "refs/tags/v1")).toBeUndefined();
+    expect(
+      mapRef(["refs/heads/main:refs/remotes/origin/main"], "refs/heads/feature"),
+    ).toBeUndefined();
+    // Left out by a negative refspec, wherever it is.
+    expect(mapRef([...fetch, "^refs/heads/wip/*"], "refs/heads/wip/x")).toBeUndefined();
+    // Without a destination, a fetch keeps it nowhere.
+    expect(mapRef(["refs/heads/main"], "refs/heads/main")).toBeUndefined();
+  });
+
+  it("maps the branch checked out through push refspecs, as git does", () => {
+    expect(mapRef(["refs/heads/*:refs/for/*"], "refs/heads/main", true)).toBe("refs/for/main");
+    expect(mapRef(["HEAD:refs/for/main"], "refs/heads/x", true)).toBe("refs/for/main");
+    expect(mapRef(["main:trunk"], "refs/heads/main", true)).toBe("refs/heads/trunk");
+    expect(mapRef(["refs/heads/main"], "refs/heads/main", true)).toBe("refs/heads/main");
+    expect(mapRef([":"], "refs/heads/x", true)).toBe("refs/heads/x");
+    expect(mapRef(["refs/heads/main:refs/heads/main"], "refs/heads/x", true)).toBeUndefined();
   });
 });

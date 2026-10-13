@@ -65,6 +65,23 @@ export class ChangesStashedError extends MessageError {}
 /** There's nothing to pull from: HEAD isn't on a branch, or the branch doesn't track one. */
 export class NoUpstreamError extends MessageError {}
 
+/** There's nothing to push: HEAD isn't on a branch, the branch has no commits, or there's no remote. */
+export class PushBlockedError extends MessageError {}
+
+/**
+ * A push turned down as the remote branch has commits the branch doesn't. `forcible` when they're
+ * ones the branch had, as before a rebase or an amend, which force-pushing would replace; not when
+ * it never had them, as someone else pushed them.
+ */
+export class PushRejectedError extends MessageError {
+  constructor(
+    message: string,
+    readonly forcible: boolean,
+  ) {
+    super(message);
+  }
+}
+
 /** Git isn't installed, or is older than Gitto works with (see `GitVersion`). */
 export class UnsupportedGitError extends MessageError {
   constructor(install: { version: string | null; required: string }) {
