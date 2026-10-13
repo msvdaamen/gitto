@@ -1,6 +1,15 @@
 import { createVirtualizer, defaultRangeExtractor, type Range } from "@tanstack/solid-virtual";
 import { cn } from "cn";
-import { createEffect, createMemo, createSignal, For, onCleanup, Show, type JSX } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  onCleanup,
+  Show,
+  untrack,
+  type JSX,
+} from "solid-js";
 
 import { useConnected } from "@/hooks/connected";
 import type { ScrollId } from "@/lib/scroll";
@@ -85,6 +94,13 @@ export function VirtualRows<T>(props: {
   gap?: number;
   /** The element that scrolls the rows, along with whatever is above and below them. */
   scrollElement: HTMLElement | undefined;
+  /**
+   * Told whether the rows in view have come within `nearEnd` rows of the last one, and again
+   * whenever that changes: to load more as the end comes near, say.
+   */
+  onNearEndChange?: (near: boolean) => void;
+  /** How many rows from the last one count as near the end. */
+  nearEnd?: number;
   /** Renders the item at `index`; the item can change, as rows are rendered by position. */
   children: (item: () => T, index: number) => JSX.Element;
 }) {
@@ -142,6 +158,17 @@ export function VirtualRows<T>(props: {
         return [...indexes, index].toSorted((a, b) => a - b);
       };
     },
+  });
+
+  // Going by the last row rendered for being in view, or near it; not the one with focus, which is
+  // rendered wherever it is.
+  const nearEnd = createMemo(() => {
+    const last = virtualizer.getVirtualItems().findLast((row) => row.index !== focused());
+    return last !== undefined && last.index >= props.items.length - 1 - (props.nearEnd ?? 0);
+  });
+  createEffect(() => {
+    const near = nearEnd();
+    untrack(() => props.onNearEndChange?.(near));
   });
 
   return (

@@ -2,7 +2,16 @@ import { cn } from "cn";
 import LoaderCircle from "lucide-solid/icons/loader-circle";
 import Search from "lucide-solid/icons/search";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
-import { createEffect, createMemo, createSignal, Match, Show, Suspense, Switch } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  Match,
+  Show,
+  Suspense,
+  Switch,
+  type JSX,
+} from "solid-js";
 
 import { EmptyState } from "@/components/ui/empty-state";
 import { UpdatingIndicator } from "@/components/ui/updating-indicator";
@@ -22,6 +31,12 @@ import { graphWidth } from "./history-graph";
 import { optionId } from "./history-option";
 import { HistoryStashRow } from "./stash-row";
 import { HistoryWipRow } from "./wip-row";
+
+/**
+ * How many rows from the end of the history loaded so far the rows in view come before more is
+ * loaded: a few screenfuls, so it's usually there before it's scrolled to.
+ */
+const LOAD_AHEAD = 100;
 
 export function HistoryTable(props: {
   repositoryId: string;
@@ -79,6 +94,21 @@ function HistoryHeader(props: { updating?: boolean; ref?: (el: HTMLDivElement) =
   );
 }
 
+/** A line below the rows, about loading more of them. */
+function HistoryFooter(props: { tone?: "error"; children: JSX.Element }) {
+  return (
+    <div
+      class={cn(
+        "flex items-center justify-center px-3 text-[11.5px] text-faint",
+        props.tone === "error" && "text-coral",
+      )}
+      style={{ height: `${ROW_HEIGHT}px` }}
+    >
+      {props.children}
+    </div>
+  );
+}
+
 /**
  * The header and the rows. The header is rendered here, not in `HistoryTable`, so both are sized
  * to the graph's lanes as soon as the history is loaded.
@@ -115,6 +145,19 @@ function HistoryRows(props: {
   const visibleRows = createMemo(() =>
     needle() ? history.rows().filter((row) => matchesSearch(row, needle())) : history.rows(),
   );
+
+  // More of the history is loaded as its end comes into view, a page at a time. Not while
+  // searching, which only goes through what's loaded: a search that finds little would have it
+  // load page after page. Nor while it's being reloaded, which reloads every page loaded so far
+  // anyway, and would be cancelled. A page that couldn't be loaded isn't tried again until it is.
+  const [nearEnd, setNearEnd] = createSignal(false);
+  createEffect(() => {
+    const log = history.log;
+    if (!nearEnd() || needle() || !log.hasNextPage) return;
+    if (log.isFetching || log.isFetchNextPageError) return;
+    void log.fetchNextPage();
+  });
+  const loadingMore = useDelayed(() => history.log.isFetchingNextPage);
 
   let header: HTMLDivElement | undefined;
   let list: HTMLDivElement | undefined;
@@ -177,7 +220,7 @@ function HistoryRows(props: {
           onFocusIn={(event) => event.target !== list && list?.focus({ preventScroll: true })}
         >
           <Show
-            when={!history.log.error}
+            when={!history.log.error || history.log.isFetchNextPageError}
             fallback={
               <EmptyState icon={TriangleAlert} title="Couldn't load history" tone="error">
                 {history.log.error?.message}
@@ -198,6 +241,8 @@ function HistoryRows(props: {
                 items={visibleRows()}
                 rowHeight={ROW_HEIGHT}
                 scrollElement={props.scrollElement}
+                nearEnd={LOAD_AHEAD}
+                onNearEndChange={setNearEnd}
               >
                 {(row, index) => {
                   // The row as each kind; the last one of that kind while the row turns into
@@ -252,6 +297,18 @@ function HistoryRows(props: {
             </Show>
           </Show>
         </div>
+        <Switch>
+          <Match when={history.log.isFetchNextPageError}>
+            <HistoryFooter tone="error">
+              Couldn't load more history: {history.log.error?.message}
+            </HistoryFooter>
+          </Match>
+          <Match when={loadingMore()}>
+            <HistoryFooter>
+              <UpdatingIndicator label="Loading more commits…" />
+            </HistoryFooter>
+          </Match>
+        </Switch>
       </div>
     </BranchMenu>
   );

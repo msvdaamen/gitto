@@ -56,11 +56,17 @@ describe("VirtualList", () => {
   });
 });
 
-function renderRows() {
+function renderRows(onNearEndChange?: (near: boolean) => void) {
   const [scroller, setScroller] = createSignal<HTMLDivElement>();
   render(() => (
     <div ref={setScroller}>
-      <VirtualRows items={ITEMS} rowHeight={10} scrollElement={scroller()}>
+      <VirtualRows
+        items={ITEMS}
+        rowHeight={10}
+        scrollElement={scroller()}
+        nearEnd={20}
+        onNearEndChange={onNearEndChange}
+      >
         {(item, index) => <button data-row={index}>{item()}</button>}
       </VirtualRows>
     </div>
@@ -104,5 +110,22 @@ describe("VirtualRows", () => {
     // Once focus moves elsewhere, it goes like the others.
     row.blur();
     await vi.waitFor(() => expect(screen.queryByText("Row 0")).not.toBeInTheDocument());
+  });
+
+  it("says when the rows in view come near the end, and when they leave it", async () => {
+    const onNearEndChange = vi.fn();
+    const scroller = renderRows(onNearEndChange);
+    await screen.findByText("Row 0");
+    expect(onNearEndChange).toHaveBeenLastCalledWith(false);
+
+    // Rows 60 to 69 in view, and ten more rendered past them: within 20 of the last.
+    scrollTop = 600;
+    scroller()!.dispatchEvent(new Event("scroll"));
+    await vi.waitFor(() => expect(onNearEndChange).toHaveBeenLastCalledWith(true));
+    expect(onNearEndChange).toHaveBeenCalledTimes(2);
+
+    scrollTop = 0;
+    scroller()!.dispatchEvent(new Event("scroll"));
+    await vi.waitFor(() => expect(onNearEndChange).toHaveBeenLastCalledWith(false));
   });
 });
