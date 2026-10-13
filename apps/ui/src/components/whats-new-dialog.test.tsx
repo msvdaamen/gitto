@@ -59,7 +59,7 @@ describe("what's new", () => {
     expect(screen.getByRole("heading", { name: /^Gitto 1\.2\.3/ })).toBeInTheDocument();
     const items = screen.getAllByRole("listitem").map((item) => item.textContent);
     expect(items).toEqual([
-      "NewAdd worktrees#74Open one by double-clicking it.",
+      "NewAdd worktreesOpen one by double-clicking it.",
       "FixedDiff: Keep the scroll",
       "BreakingLoad faster",
     ]);

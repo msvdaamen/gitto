@@ -7,12 +7,10 @@ import Sparkles from "lucide-solid/icons/sparkles";
 import { For, onMount, Show } from "solid-js";
 
 import { Badge } from "@/components/ui/badge";
-import { Button, LinkButton } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import { DIALOG_BOX, DialogPortal } from "@/components/ui/dialog";
 import type { Tone } from "@/components/ui/tone";
 import { whatsNew } from "@/hooks/whats-new";
-
-const PULL_REQUESTS = "https://github.com/msvdaamen/gitto/pull";
 
 /** How a change is marked: breaking ones first, whatever their type. */
 function kindOf(change: Change): { label: string; tone: Tone } {
@@ -41,19 +39,12 @@ function formatDate(date: string) {
  * once Gitto has updated, and from its version in the footer. Closing it marks them as seen.
  */
 export function WhatsNewDialog() {
-  let content: HTMLDivElement | undefined;
   onMount(() => void whatsNew.showUnseen());
 
   return (
     <Dialog open={!!whatsNew.shown()} onOpenChange={(open) => !open && whatsNew.close()} modal>
       <DialogPortal>
         <Dialog.Content
-          ref={(el) => (content = el)}
-          // The dialog itself, not its first link, a pull request's: there's nothing to answer.
-          onOpenAutoFocus={(event) => {
-            event.preventDefault();
-            content?.focus();
-          }}
           class={cn(DIALOG_BOX, "flex max-h-[80vh] max-w-[520px] flex-col p-5 outline-none")}
         >
           <div class="flex items-start gap-3">
@@ -129,16 +120,6 @@ function VersionSection(props: { version: VersionChanges }) {
                   </Show>
                   {capitalize(change.description)}
                 </span>
-                <Show when={change.pr}>
-                  {(pr) => (
-                    <LinkButton
-                      class="ml-1.5 align-baseline"
-                      onClick={() => window.open(`${PULL_REQUESTS}/${pr()}`, "_blank")}
-                    >
-                      #{pr()}
-                    </LinkButton>
-                  )}
-                </Show>
                 <Show when={change.detail}>
                   {(detail) => <p class="m-0 mt-0.5 text-text-soft">{detail()}</p>}
                 </Show>
