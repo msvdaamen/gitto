@@ -97,6 +97,19 @@ that release's files:
 
 On Linux, Gitto doesn't update itself: pacman does, once it's on the AUR.
 
+### Error reports
+
+A release or nightly sends its errors, crashes and how long it took to start to Sentry
+(`packages/telemetry`), unless the user turns it off in Settings. The renderer's go through the main
+process, which leaves out the home folder's path (it becomes `~`), the user and password in URLs,
+IP addresses, local variables' values and native crash dumps. The release workflow builds
+`SENTRY_DSN` in, from the repository's Actions variables `SENTRY_DSN`, `SENTRY_ORG` and
+`SENTRY_PROJECT`, and uploads source maps with the `SENTRY_AUTH_TOKEN` secret; a build without a
+`SENTRY_DSN` sends nothing.
+
+Startup is traced from when the process starts until the first screen has what it asked the main
+process for: a fifth of releases' startups, and every nightly's.
+
 ## Adding routes
 
 Create a file in `apps/ui/src/routes/`. The TanStack Router Vite plugin regenerates

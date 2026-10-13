@@ -1,17 +1,21 @@
 import Bell from "lucide-solid/icons/bell";
 import Moon from "lucide-solid/icons/moon";
 import Search from "lucide-solid/icons/search";
+import Settings from "lucide-solid/icons/settings";
 import Sun from "lucide-solid/icons/sun";
+import { createSignal } from "solid-js";
 
 import { useTheme } from "@/hooks/theme";
 
 import { Profile } from "./profile";
+import { SettingsDialog } from "./settings-dialog";
 import { Tabs } from "./tabs";
 import { IconButton } from "./ui/button";
 import { TextInput } from "./ui/text-input";
 
 export function Header() {
   const { theme, toggleTheme } = useTheme();
+  const [settingsOpen, setSettingsOpen] = createSignal(false);
   return (
     <header class="flex min-w-0 items-stretch border-b border-border bg-[color-mix(in_srgb,var(--bg-soft)_92%,var(--primary)_8%)]">
       <Tabs />
@@ -26,8 +30,10 @@ export function Header() {
           <IconButton label="Notifications" icon={Bell} />
           <i class="pointer-events-none absolute top-1.25 right-1.25 size-1.25 rounded-full bg-coral shadow-[0_0_0_2px_var(--bg-soft)]" />
         </span>
+        <IconButton label="Settings" icon={Settings} onClick={() => setSettingsOpen(true)} />
         <Profile />
       </div>
+      <SettingsDialog open={settingsOpen()} onOpenChange={setSettingsOpen} />
     </header>
   );
 }

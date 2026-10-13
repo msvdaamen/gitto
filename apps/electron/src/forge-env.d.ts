@@ -6,4 +6,6 @@ declare module "*?inline" {
   const dataUrl: string;
   export default dataUrl;
 }
+
+/** Where to send error reports, from SENTRY_DSN when it's built (see vite.main.config.ts); or "". */
 declare const SENTRY_DSN: string;

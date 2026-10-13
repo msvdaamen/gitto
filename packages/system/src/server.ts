@@ -1,13 +1,14 @@
 import { implement } from "@orpc/server";
 
 import { SystemContract } from "./contract";
-import type { UpdateState, VersionChanges } from "./schema";
+import type { TelemetryState, UpdateState, VersionChanges } from "./schema";
 
 /** Native OS capabilities, provided by the Electron main process. */
 export interface SystemContext {
   selectFolder(): Promise<string | null>;
   updates: Updates;
   changelog: WhatsNew;
+  telemetry: Telemetry;
 }
 
 /** Gitto's own updates. */
@@ -28,6 +29,13 @@ export interface WhatsNew {
   seen(): Promise<void>;
 }
 
+/** The user's setting for sending error reports and how long Gitto takes to start. */
+export interface Telemetry {
+  state(): TelemetryState;
+  /** Saves it; turning it off stops sending at once. */
+  setEnabled(enabled: boolean): Promise<TelemetryState>;
+}
+
 const os = implement(SystemContract).$context<SystemContext>();
 
 export const systemRouter = os.router({
@@ -40,5 +48,11 @@ export const systemRouter = os.router({
     unseen: os.changelog.unseen.handler(({ context }) => context.changelog.unseen()),
     all: os.changelog.all.handler(({ context }) => context.changelog.all()),
     seen: os.changelog.seen.handler(({ context }) => context.changelog.seen()),
+  },
+  telemetry: {
+    get: os.telemetry.get.handler(({ context }) => context.telemetry.state()),
+    set: os.telemetry.set.handler(({ context, input }) =>
+      context.telemetry.setEnabled(input.enabled),
+    ),
   },
 });

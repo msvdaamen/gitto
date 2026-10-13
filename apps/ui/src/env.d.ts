@@ -11,6 +11,6 @@ interface Window {
 }
 
 interface ImportMetaEnv {
-  /** Set by vite.config.ts: whether Gitto is built to report to Sentry. */
+  /** Set by vite.config.ts: whether Gitto's built to send error reports, with a SENTRY_DSN. */
   readonly SENTRY: boolean;
 }

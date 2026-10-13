@@ -1,7 +1,7 @@
 import { eventIterator, oc } from "@orpc/contract";
 import * as z from "zod";
 
-import { UpdateStateSchema, VersionChangesSchema } from "./schema";
+import { TelemetryStateSchema, UpdateStateSchema, VersionChangesSchema } from "./schema";
 
 export const SystemContract = {
   /** Opens the native folder picker; resolves to `null` when the user cancels. */
@@ -22,5 +22,11 @@ export const SystemContract = {
     all: oc.output(z.array(VersionChangesSchema)),
     /** Remembers this version as the last one the user saw what changed in. */
     seen: oc.output(z.void()),
+  },
+  telemetry: {
+    /** Whether Gitto sends error reports and how long it takes to start. */
+    get: oc.output(TelemetryStateSchema),
+    /** Lets it, or stops it at once; the state it's in then. */
+    set: oc.input(z.object({ enabled: z.boolean() })).output(TelemetryStateSchema),
   },
 };

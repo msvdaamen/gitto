@@ -1,3 +1,2 @@
-// Exposes IPC to the renderer's Sentry SDK, which otherwise falls back to fetch over the
-// sentry-ipc:// protocol, and its browser tracing records every envelope it sends as a span.
+// Exposes IPC to the renderer's Sentry SDK, which sends its reports through the main process's.
 import "@sentry/electron/preload";

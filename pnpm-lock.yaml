@@ -174,8 +174,11 @@ catalogs:
       specifier: ^1.15.4
       version: 1.15.4
     '@sentry/electron':
-      specifier: ^8.1.0
+      specifier: 8.1.0
       version: 8.1.0
+    '@sentry/solid':
+      specifier: 11.4.0
+      version: 11.4.0
     drizzle-kit:
       specifier: 1.0.0-rc.4
       version: 1.0.0-rc.4
@@ -494,16 +497,30 @@ importers:
     dependencies:
       '@sentry/electron':
         specifier: 'catalog:'
-        version: 8.1.0(@babel/core@7.29.7(supports-color@8.1.1))(webpack@5.111.1(esbuild@0.25.12)(lightningcss@1.33.0)(postcss@8.5.28))
+        version: 8.1.0(@babel/core@7.29.7(supports-color@8.1.1))(webpack@5.111.1(lightningcss@1.33.0)(postcss@8.5.28))
+    devDependencies:
+      '@types/node':
+        specifier: ^26.6.3
+        version: 26.6.3
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@26.6.3)(jsdom@30.1.1)(vite@8.3.1(@types/node@26.6.3)(jiti@2.7.0)(terser@5.51.2))
 
   packages/telemetry/ui:
     dependencies:
       '@sentry/electron':
         specifier: 'catalog:'
-        version: 8.1.0(@babel/core@7.29.7(supports-color@8.1.1))(webpack@5.111.1(esbuild@0.25.12)(lightningcss@1.33.0)(postcss@8.5.28))
+        version: 8.1.0(@babel/core@7.29.7(supports-color@8.1.1))(webpack@5.111.1(lightningcss@1.33.0)(postcss@8.5.28))
       '@sentry/solid':
-        specifier: 11.4.0
+        specifier: 'catalog:'
         version: 11.4.0(@tanstack/solid-router@1.170.37(solid-js@1.9.15))(solid-js@1.9.15)
+    devDependencies:
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
 
 packages:
 
@@ -5932,7 +5949,7 @@ snapshots:
       - encoding
       - supports-color
 
-  '@sentry/bundler-plugins@11.4.0(@babel/core@7.29.7(supports-color@8.1.1))(webpack@5.111.1(esbuild@0.25.12)(lightningcss@1.33.0)(postcss@8.5.28))':
+  '@sentry/bundler-plugins@11.4.0(@babel/core@7.29.7(supports-color@8.1.1))(webpack@5.111.1(lightningcss@1.33.0)(postcss@8.5.28))':
     dependencies:
       '@sentry/core': 11.4.0
       dotenv: 17.4.2
@@ -6003,12 +6020,12 @@ snapshots:
     dependencies:
       '@sentry/conventions': 0.25.0
 
-  '@sentry/electron@8.1.0(@babel/core@7.29.7(supports-color@8.1.1))(webpack@5.111.1(esbuild@0.25.12)(lightningcss@1.33.0)(postcss@8.5.28))':
+  '@sentry/electron@8.1.0(@babel/core@7.29.7(supports-color@8.1.1))(webpack@5.111.1(lightningcss@1.33.0)(postcss@8.5.28))':
     dependencies:
       '@sentry/browser': 11.4.0
       '@sentry/conventions': 0.23.0
       '@sentry/core': 11.4.0
-      '@sentry/node': 11.4.0(@babel/core@7.29.7(supports-color@8.1.1))(webpack@5.111.1(esbuild@0.25.12)(lightningcss@1.33.0)(postcss@8.5.28))
+      '@sentry/node': 11.4.0(@babel/core@7.29.7(supports-color@8.1.1))(webpack@5.111.1(lightningcss@1.33.0)(postcss@8.5.28))
       '@sentry/server-utils': 11.4.0
     transitivePeerDependencies:
       - '@babel/core'
@@ -6019,10 +6036,10 @@ snapshots:
     dependencies:
       '@sentry/core': 11.4.0
 
-  '@sentry/node@11.4.0(@babel/core@7.29.7(supports-color@8.1.1))(webpack@5.111.1(esbuild@0.25.12)(lightningcss@1.33.0)(postcss@8.5.28))':
+  '@sentry/node@11.4.0(@babel/core@7.29.7(supports-color@8.1.1))(webpack@5.111.1(lightningcss@1.33.0)(postcss@8.5.28))':
     dependencies:
       '@opentelemetry/api': 1.9.1
-      '@sentry/bundler-plugins': 11.4.0(@babel/core@7.29.7(supports-color@8.1.1))(webpack@5.111.1(esbuild@0.25.12)(lightningcss@1.33.0)(postcss@8.5.28))
+      '@sentry/bundler-plugins': 11.4.0(@babel/core@7.29.7(supports-color@8.1.1))(webpack@5.111.1(lightningcss@1.33.0)(postcss@8.5.28))
       '@sentry/conventions': 0.25.0
       '@sentry/core': 11.4.0
       '@sentry/opentelemetry': 11.4.0(@opentelemetry/api@1.9.1)

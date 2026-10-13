@@ -5,12 +5,18 @@ import { pathToFileURL } from "node:url";
 import { createDb } from "@gitto/db";
 import { RPC_CONNECT_CHANNEL } from "@gitto/rpc";
 import { createContainer, createRpcHandler } from "@gitto/rpc/server";
-import { initSentry } from "@gitto/telemetry-electron/main";
+import {
+  captureException,
+  initTelemetry,
+  stopTelemetry,
+  traceStartup,
+} from "@gitto/telemetry-electron/main";
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, protocol, shell } from "electron";
 
 import iconDataUrl from "../assets/icon.png?inline";
 import { resolveRendererPath } from "./renderer-path";
 import { handleSquirrelEvent } from "./squirrel";
+import { readTelemetrySetting, TelemetrySetting } from "./telemetry";
 import { Updater } from "./updater";
 import { Changes, readChangelog } from "./whats-new";
 
@@ -37,14 +43,13 @@ if (!squirrelRun && !firstInstance) {
   app.exit(0);
 }
 
-if (firstInstance) {
-  initSentry({
-    dsn: process.env.SENTRY_DSN,
-    version: app.getVersion(),
-    isPackaged: app.isPackaged,
-    debug: true,
-  });
-}
+// Sentry has to start before the app's ready, so the setting's read from a file, not the database.
+const SETTINGS_FILE = join(app.getPath("userData"), "settings.json");
+const telemetryEnabled = readTelemetrySetting(SETTINGS_FILE);
+const telemetrySending =
+  firstInstance &&
+  telemetryEnabled &&
+  initTelemetry({ dsn: SENTRY_DSN, version: app.getVersion(), isPackaged: app.isPackaged });
 
 app.on("second-instance", () => {
   const win = BrowserWindow.getAllWindows()[0];
@@ -112,11 +117,20 @@ async function selectFolder() {
 }
 
 function registerRpc(updates: Updater) {
-  const handler = createRpcHandler();
-  const context = createContainer(openDatabase(), {
+  const handler = createRpcHandler({
+    reportError: (error, path) => captureException(error, { tags: { "rpc.path": path } }),
+  });
+  const context = createContainer(traceStartup("open database", openDatabase), {
     selectFolder,
     updates,
     changelog: openChangelog(),
+    telemetry: new TelemetrySetting(
+      SETTINGS_FILE,
+      !!SENTRY_DSN,
+      telemetryEnabled,
+      telemetrySending,
+      stopTelemetry,
+    ),
   });
 
   // Each renderer connection sends one end of a MessageChannel (see the preload).
@@ -192,6 +206,6 @@ app.on("ready", () => {
   registerAppProtocol();
   const updater = new Updater();
   registerRpc(updater);
-  createWindow();
+  traceStartup("create window", createWindow);
   updater.start();
 });

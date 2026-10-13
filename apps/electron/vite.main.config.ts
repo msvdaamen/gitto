@@ -1,6 +1,6 @@
 import { defineConfig, mergeConfig, type Plugin } from "vite";
 
-import { sentrySourceMaps } from "./vite.sentry";
+import { sentrySourceMaps } from "./vite.sentry.ts";
 
 export default defineConfig(({ command }) =>
   mergeConfig(sentrySourceMaps(), {
@@ -11,6 +11,8 @@ export default defineConfig(({ command }) =>
       // Native modules can't be bundled; they're loaded from node_modules (see forge.config.ts).
       rollupOptions: { external: ["@parcel/watcher"] },
     },
+    // Built in, as the installed app has no SENTRY_DSN of its own to read.
+    define: { SENTRY_DSN: JSON.stringify(process.env.SENTRY_DSN ?? "") },
     plugins: command === "serve" ? [restartOnRebuild()] : [],
   }),
 );

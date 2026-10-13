@@ -11,6 +11,9 @@
   },
   "dependencies": {
     "@sentry/electron": "catalog:",
-    "@sentry/solid": "11.4.0"
+    "@sentry/solid": "catalog:"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
   }
 }

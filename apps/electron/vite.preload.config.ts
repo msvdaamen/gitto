@@ -1,6 +1,6 @@
 import { mergeConfig } from "vite";
 
-import { sentrySourceMaps } from "./vite.sentry";
+import { sentrySourceMaps } from "./vite.sentry.ts";
 
 export default mergeConfig(sentrySourceMaps(), {
   build: {

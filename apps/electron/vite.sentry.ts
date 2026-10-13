@@ -24,7 +24,7 @@ export function sentrySourceMaps(): UserConfig {
         authToken: SENTRY_AUTH_TOKEN,
         org: SENTRY_ORG,
         project: SENTRY_PROJECT,
-        // The release the main process reports as, by default (see src/sentry.ts).
+        // The release Sentry's Electron SDK reports as by default: the app's name and version.
         release: { name: `Gitto@${version}` },
         telemetry: false,
       }),
