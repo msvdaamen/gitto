@@ -1,3 +1,4 @@
+import { patchVersion } from "@gitto/git/patch-version";
 import type { ChangedFile, Uncommitted, WorkingTreeFiles } from "@gitto/git/types";
 import { render, screen } from "@solidjs/testing-library";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
@@ -448,7 +449,7 @@ describe("staging lines", () => {
       path: "a.txt",
       origPath: null,
       untracked: false,
-      patch: changedLine("a.txt", "new a.txt"),
+      version: patchVersion(changedLine("a.txt", "new a.txt")),
       lines: LINES,
     });
     expect(await screen.findByText(/\+left/)).toBeInTheDocument();
@@ -482,7 +483,7 @@ describe("staging lines", () => {
       repositoryId: "repo",
       path: "a.txt",
       origPath: null,
-      patch: "the patch",
+      version: patchVersion("the patch"),
       lines: LINES,
     });
     expect(await screen.findByText(/\+still staged/)).toBeInTheDocument();

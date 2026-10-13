@@ -1,38 +1,6 @@
 import { ORPCError, os } from "@orpc/server";
 
-import {
-  BranchDeletionBlockedError,
-  ChangesStashedError,
-  ChangesTooLargeError,
-  ConflictChangedError,
-  ConflictMarkersError,
-  DiscardBlockedError,
-  EditorNeededError,
-  FileChangedOnDiskError,
-  FileTooLargeError,
-  FolderNotFoundError,
-  GitError,
-  HeadMovedError,
-  IndexLockedError,
-  LinesNotStageableError,
-  MergeBlockedError,
-  MergeStoppedError,
-  NoOperationError,
-  NoUpstreamError,
-  NotARepositoryError,
-  NotUtf8Error,
-  OutsideRepositoryError,
-  PatchChangedError,
-  PullInterruptedError,
-  PushBlockedError,
-  PushRejectedError,
-  RepositoryChangedError,
-  RepositoryNotFoundError,
-  StashConflictError,
-  UnsupportedGitError,
-  WorkingTreeFileNotFoundError,
-  WorktreeRemovalBlockedError,
-} from "./errors";
+import { isApiFailure } from "./errors";
 import type { GitRepos } from "./repo";
 import type { GitVersion } from "./version";
 
@@ -57,66 +25,16 @@ export const withRepo = os
     }
   });
 
-/** The one place that decides how each git error reaches the renderer. */
+/**
+ * The error as it reaches the renderer: with the code the git package's error says (see `ApiCode`
+ * in `errors.ts`). Any other error is a bug, which oRPC reports as such.
+ */
 function toApiError(error: unknown): unknown {
-  if (
-    error instanceof RepositoryNotFoundError ||
-    error instanceof FolderNotFoundError ||
-    error instanceof WorkingTreeFileNotFoundError ||
-    error instanceof NotARepositoryError
-  ) {
-    return new ORPCError("NOT_FOUND", { message: error.message, cause: error });
-  }
-  if (error instanceof FileTooLargeError || error instanceof ChangesTooLargeError) {
-    return new ORPCError("PAYLOAD_TOO_LARGE", { message: error.message, cause: error });
-  }
-  if (error instanceof OutsideRepositoryError) {
-    return new ORPCError("FORBIDDEN", { message: error.message, cause: error });
-  }
-  if (error instanceof NotUtf8Error) {
-    return new ORPCError("UNSUPPORTED_MEDIA_TYPE", { message: error.message, cause: error });
-  }
-  if (error instanceof LinesNotStageableError) {
-    return new ORPCError("UNPROCESSABLE_CONTENT", { message: error.message, cause: error });
-  }
-  if (error instanceof PushRejectedError) {
-    // Codes of their own, so the renderer can offer to force-push, or to pull.
-    return new ORPCError(error.forcible ? "PUSH_REWRITTEN" : "PUSH_BEHIND", {
-      status: 409,
-      message: error.message,
-      cause: error,
-    });
-  }
-  if (
-    error instanceof NoUpstreamError ||
-    error instanceof PushBlockedError ||
-    error instanceof UnsupportedGitError ||
-    error instanceof ConflictMarkersError ||
-    error instanceof NoOperationError ||
-    error instanceof EditorNeededError ||
-    error instanceof MergeBlockedError ||
-    error instanceof DiscardBlockedError ||
-    error instanceof WorktreeRemovalBlockedError ||
-    error instanceof BranchDeletionBlockedError
-  ) {
-    return new ORPCError("PRECONDITION_FAILED", { message: error.message, cause: error });
-  }
-  if (
-    error instanceof IndexLockedError ||
-    error instanceof HeadMovedError ||
-    error instanceof ChangesStashedError ||
-    error instanceof PullInterruptedError ||
-    error instanceof MergeStoppedError ||
-    error instanceof RepositoryChangedError ||
-    error instanceof StashConflictError ||
-    error instanceof FileChangedOnDiskError ||
-    error instanceof PatchChangedError ||
-    error instanceof ConflictChangedError
-  ) {
-    return new ORPCError("CONFLICT", { message: error.message, cause: error });
-  }
-  if (error instanceof GitError) {
-    return new ORPCError("INTERNAL_SERVER_ERROR", { message: error.message, cause: error });
-  }
-  return error;
+  if (!isApiFailure(error)) return error;
+  const { code, status } = error.api;
+  return new ORPCError(code, {
+    ...(status === undefined ? {} : { status }),
+    message: error.message,
+    cause: error,
+  });
 }

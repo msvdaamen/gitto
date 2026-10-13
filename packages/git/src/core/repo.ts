@@ -60,13 +60,37 @@ export interface Repo {
    * didn't get one.
    */
   shownStatus(): Promise<string | undefined>;
+  /**
+   * What a feature keeps for the repository while the app runs, by `slot`: made the first time
+   * it's asked for, the same thing every time after. E.g. the versions of the files it saved.
+   */
+  keep<T>(slot: RepoSlot<T>): T;
 }
 
 export type GitCommand = (args: string[], options?: RunOptions) => Promise<string>;
 
+/** Names something a feature keeps for each repository (see `Repo.keep`), and makes it. */
+export interface RepoSlot<T> {
+  readonly make: () => T;
+}
+
+export function repoSlot<T>(make: () => T): RepoSlot<T> {
+  return { make };
+}
+
 /** Opens the repositories that have been added to Gitto. */
 export interface GitRepos {
   open(repositoryId: string): Promise<Repo>;
+}
+
+/** What's kept for one repository, by its path, while the app runs (see `GitReposImpl.open`). */
+class RepoState {
+  /** Whether git has to sort its log (see `Repo.sortsLog`). */
+  sortsLog = false;
+  /** What the features keep for it (see `Repo.keep`). */
+  readonly kept = new Map<RepoSlot<unknown>, unknown>();
+  /** The repository as the commands get it, made once. */
+  repo: Repo | undefined;
 }
 
 export class GitReposImpl implements GitRepos {
@@ -75,11 +99,15 @@ export class GitReposImpl implements GitRepos {
   private readonly commitGraphs = new CommitGraphs();
   private readonly shownStatuses = new ShownStatuses();
   private readonly indexRefreshes = new IndexRefreshes(this.writes);
-  /** The repositories whose log git has to sort (see `Repo.sortsLog`). */
-  private readonly sortedLogs = new Set<string>();
+  /** Each repository's state, by its path: the same path is the same repository, whatever its id. */
+  private readonly states = new Map<string, RepoState>();
 
   constructor(private readonly repositories: RepositoryService) {}
 
+  /**
+   * The repository, looked up by its id and checked to be a folder every time: one that's removed
+   * from Gitto, or whose folder is gone, is refused with why. What's kept for it is made once.
+   */
   async open(repositoryId: string): Promise<Repo> {
     const repository = await this.repositories.getRepository(repositoryId);
     if (!repository) throw new RepositoryNotFoundError(repositoryId);
@@ -93,6 +121,16 @@ export class GitReposImpl implements GitRepos {
     );
     if (!isFolder) throw new FolderNotFoundError(path);
 
+    let state = this.states.get(path);
+    if (!state) {
+      state = new RepoState();
+      this.states.set(path, state);
+    }
+    return (state.repo ??= this.repoAt(path, state));
+  }
+
+  /** The repository at `path`, with `state` kept for it. A plain object: tests make their own from it. */
+  private repoAt(path: string, state: RepoState): Repo {
     const run: GitCommand = (args, options) => {
       const result = runGit(path, args, options);
       if (options?.rewritesFiles) {
@@ -115,13 +153,17 @@ export class GitReposImpl implements GitRepos {
       fetching,
       exclusive: (task) => this.writes.run(path, () => task(run)),
       statusTook: (ms) => this.indexRefreshes.statusTook(path, ms),
-      sortsLog: () => this.sortedLogs.has(path),
-      sortLog: () => void this.sortedLogs.add(path),
+      sortsLog: () => state.sortsLog,
+      sortLog: () => void (state.sortsLog = true),
       // Any failure is taken for no HEAD, as callers have always had it.
       hasHead: () => refExists(run, "HEAD").catch(() => false),
       updateCommitGraph: () => this.commitGraphs.update(path),
       showStatus: (snapshot) => this.shownStatuses.set(path, snapshot),
       shownStatus: () => this.shownStatuses.get(path),
+      keep: <T>(slot: RepoSlot<T>): T => {
+        if (!state.kept.has(slot)) state.kept.set(slot, slot.make());
+        return state.kept.get(slot) as T;
+      },
     };
   }
 }

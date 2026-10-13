@@ -14,12 +14,43 @@ import { describe, expect, it } from "vitest";
 
 import { IndexLockedError, LinesNotStageableError, PatchChangedError } from "../../core/errors";
 import type { Repo } from "../../core/repo";
-import { createHistoryRepo, createRepo, git, rejection, repos } from "../../test/fixtures";
+import {
+  createHistoryRepo,
+  createRepo,
+  git,
+  nonUtf8Names,
+  rejection,
+  repos,
+} from "../../test/fixtures";
 import { getStagedFilePatch, getUnstagedFilePatch } from "../diff/commands";
 import { getStatus } from "../status/commands";
 import { parseStatus, STATUS_ARGS } from "../status/parse";
-import { stage, stageAll, stageLines, unstage, unstageAll, unstageLines } from "./commands";
+import {
+  stage,
+  stageAll,
+  stageLines as stageLinesOf,
+  unstage,
+  unstageAll,
+  unstageLines as unstageLinesOf,
+} from "./commands";
+import { patchVersion } from "./patch-version";
 import type { LineSelection } from "./schema";
+
+/** `stageLines`, given the patch the lines were picked from, `shown`, rather than its version. */
+const stageLines = (
+  repo: Repo,
+  file: Parameters<typeof stageLinesOf>[1],
+  shown: string,
+  selection: LineSelection,
+) => stageLinesOf(repo, file, patchVersion(shown), selection);
+
+/** `unstageLines`, given the patch the lines were picked from, `shown`, rather than its version. */
+const unstageLines = (
+  repo: Repo,
+  file: Parameters<typeof unstageLinesOf>[1],
+  shown: string,
+  selection: LineSelection,
+) => unstageLinesOf(repo, file, patchVersion(shown), selection);
 
 /** Each changed file, with whether its change is staged and unstaged. */
 async function statusFiles(repo: Repo) {
@@ -196,7 +227,7 @@ describe("a big working tree", () => {
     expect(readFileSync(join(path, "thing", "inner.txt"), "utf8")).toBe("now a folder\n");
   });
 
-  it("unstages a file whose name isn't UTF-8", async () => {
+  it.skipIf(!nonUtf8Names)("unstages a file whose name isn't UTF-8", async () => {
     const path = createRepo("all-latin1");
     // "café.txt" in Latin-1: read as UTF-8, its é doesn't come back as the byte it was.
     const name = Buffer.concat([Buffer.from("caf"), Buffer.from([0xe9]), Buffer.from(".txt")]);

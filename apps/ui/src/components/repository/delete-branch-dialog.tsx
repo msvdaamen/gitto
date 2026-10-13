@@ -1,9 +1,9 @@
 import Trash from "lucide-solid/icons/trash";
-import { createMemo } from "solid-js";
 
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { branchName } from "@/git/status";
+import { useLingering } from "@/hooks/lingering";
 
 /** A branch, by its short name, with how many commits it has that its remote one doesn't. */
 export interface Unpushed {
@@ -87,8 +87,7 @@ export function DeleteBranchDialog(props: {
   onCancel: () => void;
   onDelete: (deletion: BranchDeletion) => void;
 }) {
-  // The last one asked about, still named while the dialog closes.
-  const deletion = createMemo((last: BranchDeletion | undefined) => props.deletion ?? last);
+  const deletion = useLingering(() => props.deletion);
   return (
     <ConfirmDialog
       open={props.deletion !== undefined}

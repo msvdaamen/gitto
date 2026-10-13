@@ -1,55 +1,35 @@
+import { patchVersion } from "@gitto/git/patch-version";
 import type { ChangedFile } from "@gitto/git/types";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
 import { createSignal, Show } from "solid-js";
 
 import { Notice } from "@/components/ui/notice";
 import { isNestedRepository } from "@/git/changes";
-import { isUncommitted, type DiffSource } from "@/git/diff-source";
+import { isUncommitted } from "@/git/diff-source";
 import { hasHunks, stagedWhole } from "@/git/patch";
-import type { FilePatch } from "@/git/queries/file-diff";
 import { useStageFile, useStageLines } from "@/git/queries/staging";
 import { errorMessage } from "@/lib/errors";
 
 import type { LineStaging } from "./patch-viewer";
+import type { ShownFile } from "./shown-file";
 
 /**
- * Staging and unstaging an uncommitted file from its diff: whole, or its lines a hunk or a
- * selection at a time (see `PatchViewer`); one at a time. Once that leaves it without changes on
- * its side, the next file in its list opens.
+ * Staging and unstaging an uncommitted file from its diff, `view`: whole, or its lines a hunk or
+ * a selection at a time (see `PatchViewer`); one at a time. Once that leaves it without changes
+ * on its side, the next file in its list opens.
  */
-export function useFileStaging(props: {
-  repositoryId: () => string;
-  /** Where the file's changes are from; its side is the one they're staged from, or unstaged to. */
-  source: () => DiffSource;
-  /** Names the file on show in its source (see `diffFileKey`). */
-  fileKey: () => string;
-  /** The file, as it's kept while it's edited. */
-  file: () => ChangedFile;
-  /** The file as its list has it now. */
-  liveFile: () => ChangedFile;
-  /** Whether the file is still in its list. */
-  listed: () => boolean;
-  /** The patch of this file, if it's loaded. */
-  current: () => FilePatch | undefined;
-  /** The patch on show, if one is: the last file's, while this one's loads. */
-  shownPatch: () => string | undefined;
-  /** Whether the file in the header is another one, still on show while this one's changes load. */
-  showsOther: () => boolean;
-  editing: () => boolean;
-  /** Whether the file's changes are shown as a patch, rather than said to be binary, say. */
-  showsPatch: () => boolean;
-  /**
-   * The file to open once this one has no changes left on its side: the next in its list, or the
-   * one before the last, as one would stage them one after the other.
-   */
-  target: () => ChangedFile | undefined;
-  /** Saves the file's edits and stops editing it; resolves to whether it did (`useFileEditing`). */
-  leave: () => Promise<boolean>;
-  /** Opens another file of the same source's: the one to move on to. */
-  open: (file: ChangedFile) => void;
-}) {
+export function useFileStaging(
+  view: ShownFile,
+  props: {
+    repositoryId: () => string;
+    /** Saves the file's edits and stops editing it; resolves to whether it did (`useFileEditing`). */
+    leave: () => Promise<boolean>;
+    /** Opens another file of the same source's: the one to move on to. */
+    open: (file: ChangedFile) => void;
+  },
+) {
   /** What's done with the file's changes: staged, or unstaged, by the side they're on. */
-  const stagingAction = () => (props.source().kind === "staged" ? "unstage" : "stage");
+  const stagingAction = () => (view.source().kind === "staged" ? "unstage" : "stage");
   const stageLines = useStageLines();
   const stageFile = useStageFile();
   /** The whole file is being staged, from saving its edits on. */
@@ -67,12 +47,12 @@ export function useFileStaging(props: {
    * file was opened meanwhile.
    */
   const moveOn = (key: string, target: ChangedFile | undefined) => {
-    if (target && key === props.fileKey()) props.open(target);
+    if (target && key === view.fileKey()) props.open(target);
   };
 
   const lineStaging = (): LineStaging | undefined => {
-    const data = props.current();
-    if (!isUncommitted(props.source()) || props.editing() || !props.showsPatch() || !data) {
+    const data = view.current();
+    if (!isUncommitted(view.source()) || view.editing() || !view.showsPatch() || !data) {
       return undefined;
     }
     if (stagedWhole(data.patch)) return undefined;
@@ -80,17 +60,19 @@ export function useFileStaging(props: {
     const last = stagedFrom();
     return {
       action,
-      busy: staging() || (last !== undefined && props.shownPatch() === last && data.patch !== last),
+      busy:
+        staging() ||
+        (last !== undefined && view.shownPatch()?.patch === last && data.patch !== last),
       onStage: async (from, picked) => {
-        const key = props.fileKey();
+        const key = view.fileKey();
         setStagingError(undefined);
         let left: string;
         try {
           left = await stageLines.mutateAsync({
             repositoryId: props.repositoryId(),
             action,
-            file: props.file(),
-            patch: from,
+            file: view.file(),
+            version: patchVersion(from),
             lines: picked,
           });
         } catch (error) {
@@ -100,7 +82,7 @@ export function useFileStaging(props: {
         // The patch staged from stays on show until the one they leave is highlighted; once there
         // are none left, so does this file's until the next one's is in.
         setStagedFrom(from);
-        if (!hasHunks(left)) moveOn(key, props.target());
+        if (!hasHunks(left)) moveOn(key, view.target());
       },
     };
   };
@@ -110,7 +92,7 @@ export function useFileStaging(props: {
    * but not a repository inside this one, which would be added as a submodule without its URL.
    */
   const wholeFile = () =>
-    isUncommitted(props.source()) && props.listed() && !isNestedRepository(props.file())
+    isUncommitted(view.source()) && view.listed() && !isNestedRepository(view.file())
       ? stagingAction()
       : undefined;
   /**
@@ -119,19 +101,19 @@ export function useFileStaging(props: {
    */
   const stageWhole = async () => {
     const action = wholeFile();
-    if (!action || staging() || props.showsOther()) return;
-    const key = props.fileKey();
+    if (!action || staging() || view.showsOther()) return;
+    const key = view.fileKey();
     setStagingWhole(true);
     try {
-      if (!(await props.leave()) || key !== props.fileKey()) return;
+      if (!(await props.leave()) || key !== view.fileKey()) return;
       // Picked while the file's still in its list: it's staged before the list is refetched.
-      const target = props.target();
+      const target = view.target();
       setStagingError(undefined);
       try {
         await stageFile.mutateAsync({
           repositoryId: props.repositoryId(),
           action,
-          file: props.liveFile(),
+          file: view.liveFile(),
         });
       } catch (error) {
         failed(key, error);
@@ -152,7 +134,7 @@ export function useFileStaging(props: {
     /** Why the last lines, or the whole file, couldn't be staged, while that file's on show. */
     Banner() {
       return (
-        <Show when={stagingError()?.key === props.fileKey() && stagingError()}>
+        <Show when={stagingError()?.key === view.fileKey() && stagingError()}>
           {(error) => <Notice role="alert" icon={TriangleAlert} message={error().message} />}
         </Show>
       );

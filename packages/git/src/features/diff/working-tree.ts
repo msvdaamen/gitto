@@ -10,7 +10,7 @@ import {
   OutsideRepositoryError,
   WorkingTreeFileNotFoundError,
 } from "../../core/errors";
-import type { Repo } from "../../core/repo";
+import { repoSlot, type Repo } from "../../core/repo";
 import { WriteQueue } from "../../core/runner";
 import { MAX_BLOB_BYTES } from "./limits";
 
@@ -179,15 +179,17 @@ export function versionOf(bytes: Uint8Array): string {
 }
 
 /** Saves to the same file, one after the other: a later one checks the file an earlier one wrote. */
-const saves = new WriteQueue();
+const SAVES = repoSlot(() => new WriteQueue());
 
 /**
  * The version each file was at when Gitto last saved over it, and the one it saved, by its path
  * on disk: a save over the first is one over the second, as long as nothing else wrote the file
  * since. The last edits are sent as the window closes, without waiting for the version a save
- * under way will leave the file at, which the window won't be there to get.
+ * under way will leave the file at, which the window won't be there to get. The latest
+ * `MAX_SAVED_VERSIONS` files are kept: only a file saved again needs its last save remembered.
  */
-const savedVersions = new Map<string, { from: string; to: string }>();
+const SAVED_VERSIONS = repoSlot(() => new Map<string, { from: string; to: string }>());
+const MAX_SAVED_VERSIONS = 1000;
 
 /**
  * Saves `contents` as the file at `path` in the working tree, which has to be as it was read
@@ -206,8 +208,9 @@ export async function saveWorkingTreeFile(
   contents: string,
   expected: { version: string; overwrite: boolean },
 ): Promise<string> {
+  const savedVersions = repo.keep(SAVED_VERSIONS);
   // In the order they're asked for, by the path they're asked for.
-  return saves.run(`${repo.path}\0${path}`, async () => {
+  return repo.keep(SAVES).run(path, async () => {
     // Not following a link at its end, which is refused below.
     const target = await confine(repo, path, false);
     const before = await readExisting(target, path);
@@ -225,7 +228,13 @@ export async function saveWorkingTreeFile(
     const bytes = Buffer.from(hasCrlfLineEnds(text) ? toCrlf(contents) : contents, "utf8");
     await replaceFile(target, bytes, before?.mode);
     const written = versionOf(bytes);
+    // Newest last: a map keeps the order things were put in.
+    savedVersions.delete(target);
     savedVersions.set(target, { from: expected.version, to: written });
+    for (const key of savedVersions.keys()) {
+      if (savedVersions.size <= MAX_SAVED_VERSIONS) break;
+      savedVersions.delete(key);
+    }
     return written;
   });
 }

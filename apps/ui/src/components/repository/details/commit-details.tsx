@@ -14,6 +14,7 @@ import type { DiffSource, FileOpener } from "@/git/diff-source";
 import { useCommitFiles } from "@/git/queries/diff";
 import { useCommitDetails } from "@/git/queries/history";
 import { stashSha, WIP_ID, type CommitRow } from "@/git/rows";
+import { useLingering } from "@/hooks/lingering";
 import { useRelativeTime } from "@/hooks/relative-time";
 import type { ScrollId } from "@/lib/scroll";
 
@@ -47,7 +48,7 @@ export function CommitDetails(props: {
   const stash = () => stashSha(selectedId());
   // The selected stash; the last one once another row is selected, rather than a <Match>'s narrowed
   // value, which would throw if read by the stash's details before they're removed.
-  const shownStash = createMemo((last: string | undefined) => stash() ?? last, undefined);
+  const shownStash = useLingering(stash);
   return (
     <Show
       when={props.selectedId}

@@ -1,10 +1,10 @@
 import type { Worktree } from "@gitto/git/types";
 import FolderX from "lucide-solid/icons/folder-x";
-import { createMemo } from "solid-js";
 
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { branchName } from "@/git/status";
+import { useLingering } from "@/hooks/lingering";
 
 /**
  * Asks before removing the worktree `worktree`, whose folder is deleted with any uncommitted
@@ -15,8 +15,7 @@ export function RemoveWorktreeDialog(props: {
   onCancel: () => void;
   onRemove: (worktree: Worktree) => void;
 }) {
-  // The last one asked about, still named while the dialog closes.
-  const worktree = createMemo((last: Worktree | undefined) => props.worktree ?? last);
+  const worktree = useLingering(() => props.worktree);
   const branch = () => {
     const ref = worktree()?.branch;
     return ref ? ` The branch ${branchName(ref)} is kept.` : "";

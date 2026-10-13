@@ -6,16 +6,7 @@ import FolderPlus from "lucide-solid/icons/folder-plus";
 import GitBranchPlus from "lucide-solid/icons/git-branch-plus";
 import GitMerge from "lucide-solid/icons/git-merge";
 import Trash from "lucide-solid/icons/trash";
-import {
-  createContext,
-  createEffect,
-  createSignal,
-  on,
-  Show,
-  useContext,
-  type Accessor,
-  type JSX,
-} from "solid-js";
+import { createContext, createSignal, Show, useContext, type Accessor, type JSX } from "solid-js";
 
 import { ContextMenuItem } from "@/components/ui/context-menu";
 import { useBranchesChanging, useDeleteBranch, useMergeBranch } from "@/git/queries/branch";
@@ -28,6 +19,7 @@ import { useUnsuspendedData } from "@/git/queries/unsuspended";
 import { useOpenWorktree, useWorktrees } from "@/git/queries/worktree";
 import { branchName, headLabel, isCheckedOut } from "@/git/status";
 import { canOpenWorktree, trackingBranches, worktreeOn } from "@/git/worktree";
+import { useResetOn } from "@/hooks/reset-on";
 
 import { AddWorktreeDialog } from "./add-worktree-dialog";
 import { CreateBranchDialog } from "./create-branch-dialog";
@@ -86,16 +78,13 @@ export function BranchMenuProvider(props: {
   const [worktreeFor, setWorktreeFor] = createSignal<string>();
   // The branch being asked about deleting.
   const [deletion, setDeletion] = createSignal<BranchDeletion>();
-  createEffect(
-    on(
-      () => props.repositoryId,
-      () => {
-        setFrom(undefined);
-        setWorktreeFor(undefined);
-        setDeletion(undefined);
-      },
-      { defer: true },
-    ),
+  useResetOn(
+    () => props.repositoryId,
+    () => {
+      setFrom(undefined);
+      setWorktreeFor(undefined);
+      setDeletion(undefined);
+    },
   );
 
   const merge = async (ref: string, into: string) => {

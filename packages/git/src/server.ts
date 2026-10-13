@@ -12,6 +12,6 @@ export {
   WorktreeRemovalBlockedError,
 } from "./core/errors";
 export type { GitContext } from "./core/middleware";
-export { GitReposImpl, type GitRepos, type Repo } from "./core/repo";
+export { GitReposImpl, repoSlot, type GitRepos, type Repo, type RepoSlot } from "./core/repo";
 export { GitVersion, MIN_GIT_VERSION } from "./core/version";
 export { gitRouter } from "./router";

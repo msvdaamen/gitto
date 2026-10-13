@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/solid-query";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
 import Upload from "lucide-solid/icons/upload";
-import { createMemo, Show, Suspense } from "solid-js";
+import { Show, Suspense } from "solid-js";
 
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -10,6 +10,7 @@ import { pushTitle } from "@/git/push";
 import { pushRejection, pushTargetQuery, usePull, usePush } from "@/git/queries/remote";
 import { useStatus } from "@/git/queries/status";
 import { headPullBlocker } from "@/git/status";
+import { useLingering } from "@/hooks/lingering";
 
 import { ToolbarButton } from "./toolbar-button";
 
@@ -92,11 +93,7 @@ function PushRejectedDialog(props: {
   onPull: () => void;
   onForcePush: () => void;
 }) {
-  // The last one, still shown while the dialog closes.
-  const rejection = createMemo<Rejection>((last) => props.rejection ?? last, {
-    kind: "behind",
-    message: "",
-  });
+  const rejection = useLingering<Rejection>(() => props.rejection, { kind: "behind", message: "" });
   const rewritten = () => rejection().kind === "rewritten";
   return (
     <ConfirmDialog

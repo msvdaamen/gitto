@@ -40,6 +40,7 @@ import { ConflictSides } from "./conflict-sides";
 import type * as ViewerModule from "./conflict-viewer";
 import type { ConflictCommands, ConflictProgress, Resolution } from "./conflict-viewer";
 import { MarkersDialog } from "./markers-dialog";
+import type { ShownFile } from "./shown-file";
 import type { EditSession } from "./viewer-editing";
 
 let viewerModule: Promise<typeof ViewerModule> | undefined;
@@ -69,7 +70,7 @@ export function prefetchConflict(
 }
 
 /**
- * Resolving a conflicted file in its view: conflict by conflict when both sides changed it as text
+ * Resolving the conflicted file on show, `view`, in its view: conflict by conflict when both sides changed it as text
  * (see `ConflictViewer`), or by keeping one side whole, and then marking it resolved, which stages
  * it. Only once it has no conflict markers left; never by itself. Once it's resolved, the next
  * conflicted file opens, or this one's staged changes if it was the last.
@@ -77,30 +78,25 @@ export function prefetchConflict(
  * In the view, `[` and `]` step through the conflicts, `O`, `T` and `B` keep ours, theirs or both
  * of the current one, `N` opens the next conflicted file, and ⌘↵ marks the file resolved.
  */
-export function useConflictResolution(props: {
-  repositoryId: () => string;
-  /** The file on show, as its list has it now. */
-  file: () => ChangedFile;
-  /** Names it among the files on show (see `diffFileKey`). */
-  fileKey: () => string;
-  /** The files in its list, to step to the next conflicted one. */
-  files: () => ChangedFile[];
-  /** Whether it's being edited by hand (see `useFileEditing`). */
-  editing: () => boolean;
-  /** What the viewer tells of editing (see `useFileEditing`'s `viewer`). */
-  viewer: {
-    onEditing: (session: EditSession | undefined) => void;
-    onEdit: (text: string) => void;
-    onEditFailed: (message: string) => void;
-  };
-  /** The file read last is on show, e.g. to edit it again after a reload. */
-  onShown: () => void;
-  /** Opens another uncommitted file: the next conflicted one, or this one's staged changes. */
-  open: (source: { kind: "unstaged" | "staged" }, file: ChangedFile) => void;
-}) {
+export function useConflictResolution(
+  view: ShownFile,
+  props: {
+    repositoryId: () => string;
+    /** What the viewer tells of editing (see `useFileEditing`'s `viewer`). */
+    viewer: {
+      onEditing: (session: EditSession | undefined) => void;
+      onEdit: (text: string) => void;
+      onEditFailed: (message: string) => void;
+    };
+    /** The file read last is on show, e.g. to edit it again after a reload. */
+    onShown: () => void;
+    /** Opens another uncommitted file: the next conflicted one, or this one's staged changes. */
+    open: (source: { kind: "unstaged" | "staged" }, file: ChangedFile) => void;
+  },
+) {
   const queryClient = useQueryClient();
-  const active = () => props.file().status === "conflicted";
-  const path = () => props.file().path;
+  const active = view.conflicted;
+  const path = () => view.file().path;
   const query = useConflict(props.repositoryId, path, active);
   // Without Suspense: it's refetched while it's on show (see `useUnsuspendedData`).
   const data = useUnsuspendedData(query);
@@ -114,7 +110,7 @@ export function useConflictResolution(props: {
   const [readSince, setReadSince] = createSignal(0);
   createEffect(
     on(
-      props.editing,
+      view.editing,
       (now, was) => {
         if (!was || now) return;
         setReadSince(Date.now());
@@ -127,7 +123,7 @@ export function useConflictResolution(props: {
   // one's.
   const disk = createMemo(() => {
     const current = kind();
-    if (props.editing() || current?.kind !== "text" || query.isPlaceholderData) return undefined;
+    if (view.editing() || current?.kind !== "text" || query.isPlaceholderData) return undefined;
     if (query.dataUpdatedAt < readSince()) return undefined;
     return { contents: current.contents, version: current.version };
   });
@@ -139,7 +135,7 @@ export function useConflictResolution(props: {
    */
   const shownProgress = () => {
     const shown = progress();
-    return kind()?.kind === "text" && shown?.fileKey === props.fileKey() ? shown : undefined;
+    return kind()?.kind === "text" && shown?.fileKey === view.fileKey() ? shown : undefined;
   };
   const [commands, setCommands] = createSignal<ConflictCommands>();
   /** Why the last thing done to the conflict failed, and of which file. */
@@ -153,14 +149,14 @@ export function useConflictResolution(props: {
   // edited: it's resolved as the edits leave it, which is only known once editing stops.
   const busy = () =>
     resolving() ||
-    props.editing() ||
+    view.editing() ||
     query.isPlaceholderData ||
     (kind()?.kind === "text" &&
       (!shownProgress() || shownProgress()!.saving || !shownProgress()!.version));
 
   /** The next conflicted file in the list after this one, or the first before it. */
   const nextConflicted = () => {
-    const files = props.files();
+    const files = view.lists.files();
     const at = files.findIndex((file) => file.path === path());
     const ordered = at === -1 ? files : [...files.slice(at + 1), ...files.slice(0, at)];
     return ordered.find((file) => file.status === "conflicted" && file.path !== path());
@@ -183,8 +179,8 @@ export function useConflictResolution(props: {
    */
   const resolveWhole = async (resolution: ConflictResolution) => {
     if (busy()) return;
-    const key = props.fileKey();
-    const file = props.file();
+    const key = view.fileKey();
+    const file = view.file();
     setResolving(true);
     try {
       // Picked while the file's still in its list: it goes once it's resolved.
@@ -200,7 +196,7 @@ export function useConflictResolution(props: {
         failed(key, reason);
         return;
       }
-      if (key !== props.fileKey()) return;
+      if (key !== view.fileKey()) return;
       if (target) props.open({ kind: "unstaged" }, target);
       else props.open({ kind: "staged" }, { ...file, status: "modified" });
     } finally {
@@ -236,7 +232,7 @@ export function useConflictResolution(props: {
   };
 
   const onKeyDown = (event: KeyboardEvent) => {
-    if (!active() || event.defaultPrevented || props.editing() || isTyping(event)) return;
+    if (!active() || event.defaultPrevented || view.editing() || isTyping(event)) return;
     // Not for what's behind a dialog or a menu that has the keys.
     if (inOverlay(event)) return;
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
@@ -287,13 +283,13 @@ export function useConflictResolution(props: {
             <IconButton
               label="Previous conflict ([)"
               icon={ChevronUp}
-              disabled={!left() || props.editing()}
+              disabled={!left() || view.editing()}
               onClick={() => commands()?.previous()}
             />
             <IconButton
               label="Next conflict (])"
               icon={ChevronDown}
-              disabled={!left() || props.editing()}
+              disabled={!left() || view.editing()}
               onClick={() => commands()?.next()}
             />
           </Show>
@@ -340,7 +336,7 @@ export function useConflictResolution(props: {
               </Notice>
             )}
           </Show>
-          <Show when={error()?.key === props.fileKey() && error()}>
+          <Show when={error()?.key === view.fileKey() && error()}>
             {(shown) => <Notice role="alert" icon={TriangleAlert} message={shown().message} />}
           </Show>
           <MarkersDialog
@@ -402,18 +398,18 @@ export function useConflictResolution(props: {
             >
               <Suspense fallback={<LoadingState title="Loading the conflict…" class="h-full" />}>
                 <ConflictViewer
-                  fileKey={props.fileKey()}
+                  fileKey={view.fileKey()}
                   path={path()}
                   disk={disk()}
                   save={save}
-                  editing={props.editing()}
+                  editing={view.editing()}
                   onEditing={props.viewer.onEditing}
                   onEdit={props.viewer.onEdit}
                   onEditFailed={props.viewer.onEditFailed}
                   onProgress={setProgress}
                   onCommands={setCommands}
                   onError={(message) =>
-                    message === undefined ? setError(undefined) : failed(props.fileKey(), message)
+                    message === undefined ? setError(undefined) : failed(view.fileKey(), message)
                   }
                   onShown={props.onShown}
                 />
