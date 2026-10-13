@@ -1,6 +1,7 @@
 import { remoteOf } from "@gitto/git/remote-name";
 import type { ChangedFile, Uncommitted } from "@gitto/git/types";
 import { useQueryClient } from "@tanstack/solid-query";
+import Download from "lucide-solid/icons/download";
 import FolderOpen from "lucide-solid/icons/folder-open";
 import FolderPlus from "lucide-solid/icons/folder-plus";
 import GitBranchPlus from "lucide-solid/icons/git-branch-plus";
@@ -13,7 +14,7 @@ import { useBranchesChanging, useDeleteBranch, useMergeBranch } from "@/git/quer
 import { gitKeys } from "@/git/queries/keys";
 import { useOperationInProgress } from "@/git/queries/progress";
 import { useRefs } from "@/git/queries/refs";
-import { useRemotes } from "@/git/queries/remote";
+import { usePull, usePullBranch, useRemotes } from "@/git/queries/remote";
 import { firstToResolve, selectConflicted, useStatus } from "@/git/queries/status";
 import { useUnsuspendedData } from "@/git/queries/unsuspended";
 import { useOpenWorktree, useWorktrees } from "@/git/queries/worktree";
@@ -32,6 +33,13 @@ interface BranchActions {
   createFrom: (from: string) => void;
   /** Merges a branch, by its full ref name, into the checked-out one, `into`. */
   merge: (ref: string, into: string) => void;
+  /**
+   * Pulls a local branch, by its full ref name: the checked-out one as the Pull button does, any
+   * other by fast-forwarding it to its upstream.
+   */
+  pull: (ref: string, checkedOut: boolean) => void;
+  /** Whether the checked-out branch is being pulled, or with `checkedOut` false, another. */
+  pulling: (checkedOut: boolean) => boolean;
   /** Begins deleting a branch, asking first. */
   deleteBranch: (deletion: BranchDeletion) => void;
   /** Begins adding a worktree for a branch, by its full ref name, asking where to put it. */
@@ -53,9 +61,9 @@ const OpenFor = createContext<Accessor<string | undefined>>(() => undefined);
 /**
  * What the branch menus in `children` (see `BranchMenu`) share: the dialog naming a branch to
  * create, so a name kept to fix after a failure is there whichever menu it's opened from again,
- * the dialog placing a worktree, likewise, merging, the dialog asking before deleting a branch, and
- * opening a worktree. A merge that stops at conflicts opens the first conflicted file to resolve
- * them.
+ * the dialog placing a worktree, likewise, merging, pulling, the dialog asking before deleting a
+ * branch, and opening a worktree. A merge that stops at conflicts opens the first conflicted file
+ * to resolve them.
  */
 export function BranchMenuProvider(props: {
   repositoryId: string;
@@ -72,6 +80,9 @@ export function BranchMenuProvider(props: {
   const merging = useMergeBranch(() => props.repositoryId);
   const opening = useOpenWorktree(() => props.repositoryId);
   const deleting = useDeleteBranch(() => props.repositoryId);
+  const pullingHead = usePull(() => props.repositoryId);
+  // The toolbar shows it running, and why it failed, as for a merge.
+  const pullingBranch = usePullBranch(() => props.repositoryId);
   // The branch a new one is being named to be created from, by its full ref name.
   const [from, setFrom] = createSignal<string>();
   // The branch a worktree is being placed for, by its full ref name.
@@ -110,6 +121,9 @@ export function BranchMenuProvider(props: {
       value={{
         createFrom: setFrom,
         merge: (ref, into) => void merge(ref, into),
+        pull: (ref, checkedOut) =>
+          checkedOut ? pullingHead.pull() : pullingBranch.run(branchName(ref)),
+        pulling: (checkedOut) => (checkedOut ? pullingHead.isPending() : pullingBranch.isPending()),
         deleteBranch: setDeletion,
         addWorktreeFor: setWorktreeFor,
         openWorktree: (path) => opening.run(path),
@@ -161,9 +175,12 @@ export function useOpenWorktreeFromBranch(): (path: string) => void {
  * The menu of what can be done with a branch, opened by right-clicking an element in `children`
  * marked with its full ref name as `data-branch`, like a row in the sidebar or a label in the
  * history (see `RowMenu`): creating a branch from it, merging it into the checked-out one, which
- * isn't offered for that one itself, checking it out in a new worktree, or opening the one it's
- * checked out in, and deleting it, asking first. Deleting a local branch deletes it here only;
- * deleting a remote one deletes it on its remote, and the local branches tracking it with it.
+ * isn't offered for that one itself, pulling a local one that tracks another, unless it's checked
+ * out in another worktree (where it's pulled), checking it out in a new worktree, or opening the
+ * one it's checked out in, and deleting it, asking first. One that isn't checked out is pulled
+ * without checking it out, by fast-forwarding it, which fails if it diverged from its upstream.
+ * Deleting a local branch deletes it here only; deleting a remote one deletes it on its remote,
+ * and the local branches tracking it with it.
  * None of creating, merging or deleting is possible while another change of the branches (a
  * switch, a merge, a deletion…) is running. Merging is also disabled while HEAD is detached, or an
  * operation (a merge, a rebase…) or conflicts are under way, and deleting while the branch, or for
@@ -195,11 +212,22 @@ export function BranchMenu(props: { repositoryId: string; children: JSX.Element 
   const mayMerge = () =>
     into() !== undefined && !status()?.counts.conflicted && operation() === null && !busy();
 
-  /** Whether the local branch `ref` is checked out, here or in another worktree. */
-  const checkedOut = (ref: string) => {
+  /** Whether the local branch `ref` is checked out here. */
+  const checkedOutHere = (ref: string) => {
     const head = status()?.head;
-    return (!!head && isCheckedOut(head, ref)) || worktreeOn(worktrees(), ref) !== undefined;
+    return !!head && isCheckedOut(head, ref);
   };
+  /**
+   * Whether the local branch `ref` can be pulled from here: it tracks another, and is checked out
+   * here or in no worktree.
+   */
+  const pullable = (ref: string) =>
+    !!refs()?.some((candidate) => candidate.fullName === ref && candidate.upstream) &&
+    (checkedOutHere(ref) || worktreeOn(worktrees(), ref) === undefined);
+
+  /** Whether the local branch `ref` is checked out, here or in another worktree. */
+  const checkedOut = (ref: string) =>
+    checkedOutHere(ref) || worktreeOn(worktrees(), ref) !== undefined;
   /**
    * What deleting the branch `ref` deletes with it, or keeps (see `BranchDeletion`); `undefined`
    * if git won't delete it, as it, or a local branch tracking it, is checked out, or until that's
@@ -264,6 +292,14 @@ export function BranchMenu(props: { repositoryId: string; children: JSX.Element 
                   />
                 </Show>
               )}
+            </Show>
+            <Show when={pullable(branch())}>
+              <ContextMenuItem
+                icon={Download}
+                label={`Pull ${branchName(branch())}`}
+                disabled={actions.pulling(checkedOutHere(branch()))}
+                onSelect={() => actions.pull(branch(), checkedOutHere(branch()))}
+              />
             </Show>
             <Show
               when={worktreeOf(branch())}

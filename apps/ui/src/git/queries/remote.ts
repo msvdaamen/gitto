@@ -4,7 +4,7 @@ import { hasCode } from "@/lib/errors";
 import { rpc } from "@/lib/rpc";
 
 import { gitKeys } from "./keys";
-import { useRepositoryOperation } from "./operation";
+import { reloading, useRepositoryOperation, useRepositoryOperationState } from "./operation";
 
 /** The remotes, by name. */
 export function useRemotes(repositoryId: () => string) {
@@ -49,6 +49,26 @@ export function usePull(repositoryId: () => string) {
     error: pull.error,
     dismiss: pull.dismiss,
   };
+}
+
+const PULL_BRANCH = "pull-branch";
+
+/**
+ * Pulls a local branch that isn't checked out, by its short name, fast-forwarding it to its
+ * upstream without touching the working tree; whether that's running, and why it last failed. It
+ * counts as running until the repository has reloaded, also after a failure: its remote was
+ * fetched all the same.
+ */
+export function usePullBranch(repositoryId: () => string) {
+  const queryClient = useQueryClient();
+  return useRepositoryOperation(PULL_BRANCH, repositoryId, (id, branch: string) =>
+    reloading(queryClient, id, rpc.git.remote.pull({ repositoryId: id, branch })),
+  );
+}
+
+/** Whether a branch that isn't checked out is being pulled (see `usePullBranch`), and why that last failed. */
+export function usePullBranchState(repositoryId: () => string) {
+  return useRepositoryOperationState(PULL_BRANCH, repositoryId);
 }
 
 /**

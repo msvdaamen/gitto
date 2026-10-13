@@ -22,7 +22,7 @@ const rpc = vi.hoisted(() => ({
     branch: { switch: vi.fn(), create: vi.fn(), merge: vi.fn(), delete: vi.fn() },
     operation: { get: vi.fn() },
     worktree: { list: vi.fn(), add: vi.fn(), remove: vi.fn() },
-    remote: { list: vi.fn() },
+    remote: { list: vi.fn(), pull: vi.fn() },
   },
 }));
 
@@ -632,6 +632,79 @@ describe("merging from the branch menu", () => {
 
     finish();
     await vi.waitFor(() => expect(busy()).not.toBeInTheDocument());
+  });
+});
+
+/** `name`, a local branch, tracking `origin/<name>`. */
+const tracking = (name: string, current = false): Ref => ({
+  ...branch(name, current),
+  upstream: `origin/${name}`,
+});
+
+describe("pulling from the branch menu", () => {
+  beforeEach(() => {
+    rpc.git.refs.list.mockResolvedValue([
+      tracking("main", true),
+      tracking("feature"),
+      branch("lonely"),
+      branch("origin/feature", false, "remote"),
+    ]);
+  });
+
+  it("pulls a branch that isn't checked out, showing it running", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+    let finish!: () => void;
+    rpc.git.remote.pull.mockReturnValue(new Promise<void>((resolve) => (finish = resolve)));
+
+    await user.click(await menuItem(user, "feature", "Pull feature"));
+    expect(rpc.git.remote.pull).toHaveBeenCalledWith({ repositoryId: "a", branch: "feature" });
+    await vi.waitFor(() => expect(busy()).toBeInTheDocument());
+
+    const refsCalls = rpc.git.refs.list.mock.calls.length;
+    finish();
+    await vi.waitFor(() => expect(busy()).not.toBeInTheDocument());
+    // The repository was reloaded.
+    expect(rpc.git.refs.list.mock.calls.length).toBeGreaterThan(refsCalls);
+  });
+
+  it("pulls the checked-out branch as the Pull button does", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+    rpc.git.remote.pull.mockResolvedValue(undefined);
+
+    await user.click(await menuItem(user, "main", "Pull main"));
+    expect(rpc.git.remote.pull).toHaveBeenCalledWith({ repositoryId: "a" });
+  });
+
+  it("says why a branch couldn't be pulled", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+    const message = "feature and origin/feature have diverged. Switch to feature to pull it.";
+    rpc.git.remote.pull.mockRejectedValue(new Error(message));
+
+    await user.click(await menuItem(user, "feature", "Pull feature"));
+    expect(await screen.findByText(message)).toBeInTheDocument();
+  });
+
+  // One that tracks none, a remote one, and one checked out in another worktree.
+  it.each(["lonely", "origin/feature", "feature"])("isn't offered for %s", async (name) => {
+    const user = userEvent.setup();
+    rpc.git.worktree.list.mockResolvedValue(WORKTREES);
+    renderSidebar();
+
+    await user.pointer({ keys: "[MouseRight]", target: await branchRow(name) });
+    await screen.findByRole("menuitem", { name: "Create branch…" });
+    expect(screen.queryByRole("menuitem", { name: /^Pull/ })).not.toBeInTheDocument();
+  });
+
+  it("is offered for the branch checked out in the worktree on show", async () => {
+    const user = userEvent.setup();
+    rpc.git.worktree.list.mockResolvedValue(WORKTREES);
+    renderSidebar();
+
+    await user.pointer({ keys: "[MouseRight]", target: await branchRow("main") });
+    expect(await screen.findByRole("menuitem", { name: "Pull main" })).toBeInTheDocument();
   });
 });
 
