@@ -4,6 +4,7 @@ import { useNavigate } from "@tanstack/solid-router";
 import { REPOSITORIES_KEY, type Repository } from "@/hooks/repositories";
 import { rpc } from "@/lib/rpc";
 
+import { ADD_WORKTREE, useBranchesChanging } from "./branch";
 import { gitKeys } from "./keys";
 import { oneAtATime, reloading, useRepositoryOperation } from "./operation";
 
@@ -51,14 +52,18 @@ export function useOpenWorktree(repositoryId: () => string) {
 /**
  * Adds a worktree, and removes one; whether each is running, and why it last failed. Each counts
  * as running until the repository has reloaded, so the worktrees on show are never ones from
- * before it. One runs at a time (`isPending`), nor while one is being opened. A worktree that was
- * opened in Gitto is removed from its repositories too, as its folder is gone.
+ * before it. One runs at a time (`isPending`), nor while one is being opened. Adding one is also a
+ * change of the branches, as it checks one out: it doesn't run while another runs (a switch, a
+ * deletion…), nor they while it does (see `useBranchesChanging`); whether it can't run now is
+ * `add.isBlocked`. A worktree that was opened in Gitto is removed from its repositories too, as
+ * its folder is gone.
  */
 export function useWorktreeActions(repositoryId: () => string) {
   const queryClient = useQueryClient();
   const opening = useOpenWorktree(repositoryId);
+  const branchesChanging = useBranchesChanging(repositoryId);
   const operations = [
-    useRepositoryOperation("add-worktree", repositoryId, (id, input: AddWorktreeInput) =>
+    useRepositoryOperation(ADD_WORKTREE, repositoryId, (id, input: AddWorktreeInput) =>
       reloading(queryClient, id, rpc.git.worktree.add({ repositoryId: id, ...input })),
     ),
     useRepositoryOperation("remove-worktree", repositoryId, (id, path: string) =>
@@ -78,8 +83,9 @@ export function useWorktreeActions(repositoryId: () => string) {
   const isPending = () =>
     opening.isPending() || operations.some((operation) => operation.isPending());
   const [add, remove] = operations;
+  const addBlocked = () => isPending() || branchesChanging();
   return {
-    add: oneAtATime(add, isPending),
+    add: { ...oneAtATime(add, addBlocked), isBlocked: addBlocked },
     remove: oneAtATime(remove, isPending),
     open: oneAtATime(opening, isPending),
     /** Whether any of them is running. */

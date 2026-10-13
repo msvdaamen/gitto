@@ -6,6 +6,8 @@ import { currentBranch, resolveRef, succeeds, type GitCommand, type Repo } from 
 import type { RunOptions } from "../../core/runner";
 import { parseRefName } from "../refs/parse";
 import type { RefKind } from "../refs/schema";
+import { listRemotes } from "../remote/commands";
+import { remoteOf } from "../remote/remote-name";
 import { popNewest, stashChanges } from "../stash/commands";
 
 /**
@@ -140,28 +142,36 @@ export async function trackingBranch(
   ref: string,
   name: string,
 ): Promise<{ existing: string } | { local: string }> {
-  // With NUL-separated fields: ref names can't contain one.
-  const [locals, remotes] = await Promise.all([
-    run(["for-each-ref", "--format=%(refname:lstrip=2)%00%(upstream)%00%(HEAD)", "refs/heads/"]),
-    run(["remote"]),
-  ]);
-  // The remote is the longest one the name starts with, as a remote's name can have a slash in it;
-  // else (the remote's gone, its branches left) the name's first part.
-  const remote = remotes
-    .split("\n")
-    .filter((candidate) => candidate && name.startsWith(`${candidate}/`))
-    .reduce((longest, candidate) => (candidate.length > longest.length ? candidate : longest), "");
+  const [tracking, remotes] = await Promise.all([trackingLocals(run, ref), listRemotes(run)]);
+  // Without the remote, or (the remote's gone, its branches left) the name's first part.
+  const remote = remoteOf(remotes, name);
   const local = name.slice((remote ? remote.length : name.indexOf("/")) + 1);
+  const branch =
+    tracking.find((candidate) => candidate.current) ??
+    tracking.find((candidate) => candidate.name === local) ??
+    tracking[0];
+  return branch ? { existing: branch.name } : { local };
+}
 
-  const tracking = locals
+/**
+ * The local branches tracking the remote branch `ref` (its full name), by their short names; the
+ * one checked out here is `current`.
+ */
+export async function trackingLocals(
+  run: GitCommand,
+  ref: string,
+): Promise<{ name: string; current: boolean }[]> {
+  // With NUL-separated fields: ref names can't contain one.
+  const locals = await run([
+    "for-each-ref",
+    "--format=%(refname:lstrip=2)%00%(upstream)%00%(HEAD)",
+    "refs/heads/",
+  ]);
+  return locals
     .split("\n")
     .map((line) => line.split("\0"))
-    .filter(([, upstream]) => upstream === ref);
-  const branch =
-    tracking.find(([, , head]) => head === "*") ??
-    tracking.find(([candidate]) => candidate === local) ??
-    tracking[0];
-  return branch ? { existing: branch[0]! } : { local };
+    .filter(([, upstream]) => upstream === ref)
+    .map(([name, , head]) => ({ name: name!, current: head === "*" }));
 }
 
 /**

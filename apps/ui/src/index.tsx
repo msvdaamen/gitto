@@ -1,5 +1,6 @@
 /* @refresh reload */
 import "./index.css";
+import { captureException, initTelemetry } from "@gitto/telemetry-ui";
 import { QueryClientProvider } from "@tanstack/solid-query";
 import { RouterProvider, createRouter } from "@tanstack/solid-router";
 import { render } from "solid-js/web";
@@ -9,6 +10,9 @@ import { SCROLL_TO_TOP } from "./lib/scroll";
 import { traceLongFrames } from "./lib/trace";
 import { routeTree } from "./routeTree.gen";
 
+// Before anything else, to catch its errors.
+initTelemetry({ enabled: import.meta.env.SENTRY });
+
 if (import.meta.env.DEV) traceLongFrames();
 
 const router = createRouter({
@@ -16,6 +20,7 @@ const router = createRouter({
   defaultPreload: "intent",
   scrollRestoration: true,
   scrollToTopSelectors: SCROLL_TO_TOP,
+  defaultOnCatch: (error) => captureException(error),
 });
 
 // Register things for typesafety

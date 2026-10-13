@@ -208,6 +208,12 @@ export class DiscardBlockedError extends MessageError {}
  */
 export class WorktreeRemovalBlockedError extends MessageError {}
 
+/**
+ * A remote branch that can't be deleted with the local branches tracking it, as one of those is
+ * checked out, here or in another worktree. Nothing was deleted.
+ */
+export class BranchDeletionBlockedError extends MessageError {}
+
 /** What's asked of git needs an editor for a message, which Gitto can't open: a rebase's reword. */
 export class EditorNeededError extends MessageError {}
 

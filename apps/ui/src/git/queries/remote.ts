@@ -1,10 +1,21 @@
-import { queryOptions, useMutation, useQueryClient } from "@tanstack/solid-query";
+import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/solid-query";
 
 import { hasCode } from "@/lib/errors";
 import { rpc } from "@/lib/rpc";
 
 import { gitKeys } from "./keys";
 import { useRepositoryOperation } from "./operation";
+
+/** The remotes, by name. */
+export function useRemotes(repositoryId: () => string) {
+  return useQuery(() => {
+    const id = repositoryId();
+    return {
+      queryKey: gitKeys.remotes(id),
+      queryFn: ({ signal }) => rpc.git.remote.list({ repositoryId: id }, { signal }),
+    };
+  });
+}
 
 /**
  * Fetches every remote of the repository whose id is passed to `mutate`. The id is the mutation's

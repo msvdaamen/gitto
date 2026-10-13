@@ -1,4 +1,4 @@
-import { Link, useNavigate, useParams } from "@tanstack/solid-router";
+import { Link, useLocation, useNavigate, useParams } from "@tanstack/solid-router";
 import { cn } from "cn";
 import GitBranch from "lucide-solid/icons/git-branch";
 import Plus from "lucide-solid/icons/plus";
@@ -13,21 +13,26 @@ import { GittoIcon } from "./ui/gitto-icon";
 
 const HOME_TAB = "home";
 
-/** A tab per repository, after the home tab. The open route decides which one is selected. */
+/**
+ * A tab per repository, after the home tab. The open route decides which one is selected: none, on
+ * a page of its own like the settings.
+ */
 export function Tabs() {
   const params = useParams({ strict: false });
+  const location = useLocation();
   const navigate = useNavigate();
   const repositories = useRepositories();
   const openRepository = useOpenRepository();
   const removeRepository = useRemoveRepository();
-  const selectedTab = () => params().repoId ?? HOME_TAB;
+  const selectedTab = () => params().repoId ?? (location().pathname === "/" ? HOME_TAB : undefined);
 
   // Measure the selected tab so the underline can slide to it.
   const tabElements = new Map<string, HTMLElement>();
   const [underline, setUnderline] = createSignal<{ left: number; width: number }>();
 
   function updateUnderline() {
-    const el = tabElements.get(selectedTab());
+    const selected = selectedTab();
+    const el = selected && tabElements.get(selected);
     setUnderline(el ? { left: el.offsetLeft, width: el.offsetWidth } : undefined);
   }
 

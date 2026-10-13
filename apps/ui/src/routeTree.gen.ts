@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as mainRouteRouteImport } from './routes/(main)/route'
 import { Route as mainIndexRouteImport } from './routes/(main)/index'
 import { Route as mainRepoIdRouteImport } from './routes/(main)/$repoId'
+import { Route as mainSettingsRouteImport } from './routes/(main)/settings'
 
 const mainRouteRoute = mainRouteRouteImport.update({
   id: '/(main)',
@@ -27,27 +28,36 @@ const mainRepoIdRoute = mainRepoIdRouteImport.update({
   path: '/$repoId',
   getParentRoute: () => mainRouteRoute,
 } as any)
+const mainSettingsRoute = mainSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => mainRouteRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/$repoId': typeof mainRepoIdRoute
+  '/settings': typeof mainSettingsRoute
   '/': typeof mainIndexRoute
 }
 export interface FileRoutesByTo {
   '/$repoId': typeof mainRepoIdRoute
+  '/settings': typeof mainSettingsRoute
   '/': typeof mainIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/(main)': typeof mainRouteRouteWithChildren
   '/(main)/$repoId': typeof mainRepoIdRoute
+  '/(main)/settings': typeof mainSettingsRoute
   '/(main)/': typeof mainIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/$repoId' | '/'
+  fullPaths: '/$repoId' | '/settings' | '/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/$repoId' | '/'
-  id: '__root__' | '/(main)' | '/(main)/$repoId' | '/(main)/'
+  to: '/$repoId' | '/settings' | '/'
+  id:
+    '__root__' | '/(main)' | '/(main)/$repoId' | '/(main)/settings' | '/(main)/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -77,16 +87,25 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof mainRepoIdRouteImport
       parentRoute: typeof mainRouteRoute
     }
+    '/(main)/settings': {
+      id: '/(main)/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof mainSettingsRouteImport
+      parentRoute: typeof mainRouteRoute
+    }
   }
 }
 
 interface mainRouteRouteChildren {
   mainRepoIdRoute: typeof mainRepoIdRoute
+  mainSettingsRoute: typeof mainSettingsRoute
   mainIndexRoute: typeof mainIndexRoute
 }
 
 const mainRouteRouteChildren: mainRouteRouteChildren = {
   mainRepoIdRoute: mainRepoIdRoute,
+  mainSettingsRoute: mainSettingsRoute,
   mainIndexRoute: mainIndexRoute,
 }
 

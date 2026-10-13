@@ -16,6 +16,11 @@ import {
 } from "./config";
 import { inProgress, interruption, progress, whyDetached } from "./progress";
 
+/** The remotes, by name, as `run` lists them. */
+export async function listRemotes(run: GitCommand, signal?: AbortSignal): Promise<string[]> {
+  return (await run(["remote"], { signal })).split("\n").filter(Boolean);
+}
+
 /**
  * Fetches every remote, and drops remote-tracking branches whose branch was deleted on the remote,
  * so the sidebar and history show the remotes as they are.
