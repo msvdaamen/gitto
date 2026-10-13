@@ -1,8 +1,6 @@
-import { useMatchRoute, useNavigate } from "@tanstack/solid-router";
 import Bell from "lucide-solid/icons/bell";
 import Moon from "lucide-solid/icons/moon";
 import Search from "lucide-solid/icons/search";
-import Settings from "lucide-solid/icons/settings";
 import Sun from "lucide-solid/icons/sun";
 
 import { useTheme } from "@/hooks/theme";
@@ -14,8 +12,6 @@ import { TextInput } from "./ui/text-input";
 
 export function Header() {
   const { theme, toggleTheme } = useTheme();
-  const navigate = useNavigate();
-  const matchRoute = useMatchRoute();
   return (
     <header class="flex min-w-0 items-stretch border-b border-border bg-[color-mix(in_srgb,var(--bg-soft)_92%,var(--primary)_8%)]">
       <Tabs />
@@ -30,13 +26,10 @@ export function Header() {
           <IconButton label="Notifications" icon={Bell} />
           <i class="pointer-events-none absolute top-1.25 right-1.25 size-1.25 rounded-full bg-coral shadow-[0_0_0_2px_var(--bg-soft)]" />
         </span>
-        <IconButton
-          label="Settings"
-          icon={Settings}
-          active={!!matchRoute({ to: "/settings" })}
-          onClick={() => void navigate({ to: "/settings" })}
-        />
-        <Profile />
+        {/* Wrapped, so it's not hidden with the buttons on narrow windows: Settings is in its menu. */}
+        <span class="flex">
+          <Profile />
+        </span>
       </div>
     </header>
   );
