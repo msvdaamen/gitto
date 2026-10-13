@@ -1,11 +1,17 @@
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { useNavigate } from "@tanstack/solid-router";
 import type { LucideIcon } from "lucide-solid";
+import Moon from "lucide-solid/icons/moon";
 import Settings from "lucide-solid/icons/settings";
+import Sun from "lucide-solid/icons/sun";
+import { Dynamic } from "solid-js/web";
+
+import { useTheme } from "@/hooks/theme";
 
 /** The user's avatar, which opens a menu of what's Gitto's own rather than a repository's. */
 export function Profile() {
   const navigate = useNavigate();
+  const { theme, toggleTheme } = useTheme();
 
   return (
     <DropdownMenu>
@@ -19,6 +25,11 @@ export function Profile() {
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content class="z-50 min-w-[180px] animate-toast-in rounded-lg border border-border bg-panel-raised p-1 text-text shadow-app outline-none motion-reduce:animate-none">
+          <ProfileMenuItem
+            icon={theme() === "dark" ? Sun : Moon}
+            label={theme() === "dark" ? "Light theme" : "Dark theme"}
+            onSelect={toggleTheme}
+          />
           <ProfileMenuItem
             icon={Settings}
             label="Settings"
@@ -37,7 +48,7 @@ function ProfileMenuItem(props: { icon: LucideIcon; label: string; onSelect: () 
       // Read on each choice: Kobalte binds a handler once.
       onSelect={() => props.onSelect()}
     >
-      <props.icon size={13} class="shrink-0" />
+      <Dynamic component={props.icon} size={13} class="shrink-0" />
       <DropdownMenu.ItemLabel class="truncate">{props.label}</DropdownMenu.ItemLabel>
     </DropdownMenu.Item>
   );
