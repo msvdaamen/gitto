@@ -7,6 +7,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   GitError,
   NoUpstreamError,
+  PullBlockedError,
   PullInterruptedError,
   RepositoryChangedError,
 } from "../../core/errors";
@@ -22,7 +23,7 @@ import {
   root,
 } from "../../test/fixtures";
 import { NO_BRANCH, REBASING } from "./blockers";
-import { fetchAll, pull } from "./commands";
+import { fetchAll, pull, pullBranch } from "./commands";
 
 /** Writes `content` to `file` in `path` and commits it with `message`. */
 function commit(path: string, file: string, content: string, message: string) {
@@ -633,5 +634,99 @@ describe("pull", () => {
 
     git(path, "checkout", "-q", "--detach");
     await expect(pull(repo)).rejects.toEqual(new NoUpstreamError(NO_BRANCH));
+  });
+});
+
+/** A clone with `feature`, tracking the upstream's, checked out on `main`. */
+function featureClone(name: string) {
+  const { upstream, path } = createClone(name);
+  git(upstream, "branch", "feature");
+  git(path, "fetch", "-q");
+  git(path, "branch", "-q", "--track", "feature", "origin/feature");
+  return { upstream, path };
+}
+
+describe("pullBranch", () => {
+  afterEach(async () => {
+    await Promise.all([...paths.keys()].map(async (id) => fetchesDone(await repos.open(id))));
+  });
+
+  it("fast-forwards a branch that isn't checked out, leaving the working tree", async () => {
+    const { upstream, path } = featureClone("ff-other");
+    git(upstream, "checkout", "-q", "feature");
+    commit(upstream, "a.txt", "a\nb\n", "second");
+    writeFileSync(join(path, "a.txt"), "uncommitted\n");
+    await pullBranch(await repos.open("ff-other"), "feature");
+    expect(subjects(path)).toEqual(["first"]);
+    expect(git(path, "log", "--format=%s", "feature").split("\n")).toEqual(["second", "first"]);
+    expect(git(path, "rev-parse", "feature")).toBe(git(path, "rev-parse", "origin/feature"));
+    expect(readFileSync(join(path, "a.txt"), "utf8")).toBe("uncommitted\n");
+  });
+
+  it("pulls the checked-out branch as pull does", async () => {
+    const { upstream, path } = createClone("ff-current");
+    commit(upstream, "a.txt", "a\nb\n", "second");
+    await pullBranch(await repos.open("ff-current"), "main");
+    expect(subjects(path)).toEqual(["second", "first"]);
+    expect(readFileSync(join(path, "a.txt"), "utf8")).toBe("a\nb\n");
+  });
+
+  it("leaves a branch that's ahead of its upstream as it is", async () => {
+    const { path } = featureClone("ff-ahead");
+    git(path, "checkout", "-q", "feature");
+    commit(path, "b.txt", "b\n", "ours");
+    git(path, "checkout", "-q", "main");
+    const before = git(path, "rev-parse", "feature");
+    await pullBranch(await repos.open("ff-ahead"), "feature");
+    expect(git(path, "rev-parse", "feature")).toBe(before);
+  });
+
+  it("refuses a branch that diverged from its upstream", async () => {
+    const { upstream, path } = featureClone("ff-diverged");
+    git(upstream, "checkout", "-q", "feature");
+    commit(upstream, "theirs.txt", "theirs\n", "theirs");
+    git(path, "checkout", "-q", "feature");
+    commit(path, "ours.txt", "ours\n", "ours");
+    git(path, "checkout", "-q", "main");
+    const before = git(path, "rev-parse", "feature");
+    await expect(pullBranch(await repos.open("ff-diverged"), "feature")).rejects.toEqual(
+      new PullBlockedError(
+        "feature and origin/feature have diverged. Switch to feature to pull it.",
+      ),
+    );
+    expect(git(path, "rev-parse", "feature")).toBe(before);
+    // Fetched all the same.
+    expect(git(path, "log", "-1", "--format=%s", "origin/feature")).toBe("theirs");
+  });
+
+  it("refuses a branch checked out in another worktree", async () => {
+    const { upstream, path } = featureClone("ff-worktree");
+    git(upstream, "checkout", "-q", "feature");
+    commit(upstream, "a.txt", "a\nb\n", "second");
+    const worktree = join(root, "ff-worktree-feature");
+    git(path, "worktree", "add", "-q", worktree, "feature");
+    const before = git(path, "rev-parse", "feature");
+    await expect(pullBranch(await repos.open("ff-worktree"), "feature")).rejects.toEqual(
+      new PullBlockedError(
+        `feature is checked out in ${worktree}, so it wasn't pulled. Switch to another branch there first.`,
+      ),
+    );
+    expect(git(path, "rev-parse", "feature")).toBe(before);
+  });
+
+  it("needs a branch that tracks another", async () => {
+    const { path } = createClone("ff-untracked");
+    git(path, "branch", "lonely");
+    await expect(pullBranch(await repos.open("ff-untracked"), "lonely")).rejects.toEqual(
+      new NoUpstreamError("lonely doesn't track a remote branch."),
+    );
+  });
+
+  it("fast-forwards to a local upstream", async () => {
+    const { path } = createClone("ff-local");
+    git(path, "branch", "-q", "--track", "feature", "main");
+    commit(path, "b.txt", "b\n", "second");
+    await pullBranch(await repos.open("ff-local"), "feature");
+    expect(git(path, "rev-parse", "feature")).toBe(git(path, "rev-parse", "main"));
   });
 });

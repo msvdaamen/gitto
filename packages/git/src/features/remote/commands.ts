@@ -1,9 +1,22 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { GitError, NoUpstreamError, RepositoryChangedError } from "../../core/errors";
+import {
+  GitError,
+  NoUpstreamError,
+  PullBlockedError,
+  RepositoryChangedError,
+} from "../../core/errors";
 import { gitDirs, type GitDirs } from "../../core/git-dirs";
-import { currentBranch, refExists, resolveRef, type GitCommand, type Repo } from "../../core/repo";
+import {
+  currentBranch,
+  refExists,
+  resolveRef,
+  succeeds,
+  type GitCommand,
+  type Repo,
+} from "../../core/repo";
+import { branchesInUse } from "../branch/in-use";
 import { noUpstream } from "./blockers";
 import {
   FALSE,
@@ -86,6 +99,72 @@ export async function pull(repo: Repo): Promise<void> {
 }
 
 /**
+ * Pulls the local branch `branch` (by its short name): as `pull` does if it's checked out, and
+ * otherwise by fetching its upstream and fast-forwarding it there, without checking it out, as
+ * `git fetch origin main:main` would; whatever the config says about merging or rebasing, which
+ * needs a working tree. Nothing changes if it has every commit of its upstream already. Rejects,
+ * changing nothing, if it has commits its upstream doesn't, which only merging or rebasing it,
+ * checked out, brings together, or if it's checked out in another worktree, or being rebased or
+ * bisected in one. Every remote is fetched too, as `pull` does.
+ */
+export async function pullBranch(repo: Repo, branch: string): Promise<void> {
+  const [current, config] = await Promise.all([currentBranch(repo.read), readConfig(repo.read)]);
+  if (current === branch) return pull(repo);
+  const upstream = await readUpstream(repo.read, branch, config);
+  const { gitDir } = await gitDirs(repo);
+  await fetchUpstream(repo, gitDir, upstream, false);
+
+  try {
+    await fastForward(repo, branch, upstream);
+  } finally {
+    fetchAfterPull(repo, remotesToFetch(config, upstream.remote));
+  }
+}
+
+/**
+ * Moves `branch`, which isn't checked out, to its upstream's commit, as one write; rejects if
+ * that isn't a fast-forward, the branch is in use (see `branchesInUse`), or the branch or its
+ * upstream changed while fetching.
+ */
+async function fastForward(repo: Repo, branch: string, upstream: Upstream): Promise<void> {
+  const ref = `refs/heads/${branch}`;
+  await repo.exclusive(async (run) => {
+    // As for `integrate`, read again now that no other write can change them.
+    const [inUse, config, before] = await Promise.all([
+      branchesInUse(run),
+      readConfig(run),
+      resolveRef(run, ref),
+    ]);
+    const use = inUse.get(ref);
+    if (use) throw new PullBlockedError(`${branch} ${use.state}, so it wasn't pulled. ${use.fix}`);
+    if (before === null) {
+      throw new RepositoryChangedError(`${branch} was deleted while pulling it.`);
+    }
+    if (
+      config.get(`branch.${branch}.remote`) !== upstream.remote ||
+      config.get(`branch.${branch}.merge`) !== upstream.merge
+    ) {
+      throw new RepositoryChangedError(
+        `${branch}'s upstream changed while pulling it. Pull again.`,
+      );
+    }
+    // A branch that isn't checked out has commits, so `for-each-ref` named its tracking branch.
+    const tracking = upstream.tracking!;
+    const after = await resolveRef(run, tracking);
+    if (after === null) throw new NoUpstreamError(noUpstream(branch));
+    // Up to date, or only ahead: nothing to bring in.
+    if (await succeeds(run, ["merge-base", "--is-ancestor", after, before])) return;
+    if (!(await succeeds(run, ["merge-base", "--is-ancestor", before, after]))) {
+      throw new PullBlockedError(
+        `${branch} and ${tracking.replace(/^refs\/(heads|remotes)\//, "")} have diverged. Switch to ${branch} to pull it.`,
+      );
+    }
+    // Only if it's still where it was, as a write from a terminal could have moved it.
+    await run(["update-ref", "-m", "pull: Fast-forward", ref, after, before]);
+  });
+}
+
+/**
  * Merges what `fetchUpstream` fetched into `branch`, or rebases onto it, as one write; rejects if
  * that stopped partway, or the branch or its upstream changed while fetching.
  */
@@ -159,6 +238,15 @@ async function readBranch(
   if (branch === null) {
     throw new NoUpstreamError(await whyDetached((await dirs).gitDir, "pull"));
   }
+  return { branch, upstream: await readUpstream(run, branch, config), config };
+}
+
+/** The upstream `branch` pulls from, as `config` has it; rejects if there isn't one. */
+async function readUpstream(
+  run: GitCommand,
+  branch: string,
+  config: RemoteConfig,
+): Promise<Upstream> {
   // From the config: a branch without commits yet has no ref to ask for its upstream. A remote
   // given as a URL, rather than one with a name (and so a URL setting), has no remote-tracking
   // branches.
@@ -184,7 +272,7 @@ async function readBranch(
   const line = listed.split("\n").find((entry) => entry.startsWith(`${ref}\0`));
   const tracking = line === undefined ? null : line.slice(ref.length + 1);
   if (tracking === "") throw new NoUpstreamError(noUpstream(branch));
-  return { branch, upstream: { remote, merge, tracking }, config };
+  return { remote, merge, tracking };
 }
 
 /** What a pull fetched, to merge. */

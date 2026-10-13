@@ -119,6 +119,12 @@ export class ChangesStashedError extends messageError(CONFLICT) {}
 /** There's nothing to pull from: HEAD isn't on a branch, or the branch doesn't track one. */
 export class NoUpstreamError extends messageError(PRECONDITION_FAILED) {}
 
+/**
+ * A branch that isn't checked out but can't be pulled without being checked out: it diverged from
+ * its upstream, or is in use in a worktree. Nothing was done.
+ */
+export class PullBlockedError extends messageError(PRECONDITION_FAILED) {}
+
 /** There's nothing to push: HEAD isn't on a branch, the branch has no commits, or there's no remote. */
 export class PushBlockedError extends messageError(PRECONDITION_FAILED) {}
 
