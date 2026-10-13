@@ -24,6 +24,7 @@ export function initTelemetry({ dsn, version, isPackaged }: Init): boolean {
   Sentry.init({
     dsn,
     environment,
+    tracesSampleRate: TRACES_SAMPLE_RATES[environment],
     // A native crash's minidump is a copy of the crashed process's memory, which can hold what's in
     // the user's files. Without it, a crashed renderer or GPU process is still reported.
     // LocalVariables(Async) would send local variables' values, which can be too.
@@ -50,7 +51,20 @@ export async function stopTelemetry() {
   await Sentry.close();
 }
 
-function environmentOf(version: string, isPackaged: boolean) {
+type Environment = "development" | "nightly" | "production";
+
+/**
+ * The share of traces each build keeps: every one of a build of one's own, which only sends any when
+ * it's made with a SENTRY_DSN, and a bit more of nightlies than releases, as they're run by fewer
+ * people and see newer code.
+ */
+const TRACES_SAMPLE_RATES: Record<Environment, number> = {
+  development: 1,
+  nightly: 0.3,
+  production: 0.2,
+};
+
+function environmentOf(version: string, isPackaged: boolean): Environment {
   if (!isPackaged) return "development";
   return version.includes("-nightly") ? "nightly" : "production";
 }

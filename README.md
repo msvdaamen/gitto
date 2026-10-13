@@ -106,6 +106,9 @@ and native crash dumps. The release workflow builds `SENTRY_DSN` in, from the re
 variables `SENTRY_DSN`, `SENTRY_ORG` and `SENTRY_PROJECT`, and uploads source maps with the
 `SENTRY_AUTH_TOKEN` secret; a build without a `SENTRY_DSN` sends nothing.
 
+To try it in development, run `SENTRY_DSN=<dsn> pnpm dev`, which keeps every trace; nightlies keep
+30% of traces and releases 20%.
+
 ## Adding routes
 
 Create a file in `apps/ui/src/routes/`. The TanStack Router Vite plugin regenerates
