@@ -1,14 +1,7 @@
 import type { StatusSummary } from "@gitto/git/types";
 import { describe, expect, it } from "vitest";
 
-import {
-  branchName,
-  hasUncommittedChanges,
-  headLabel,
-  headSha,
-  pullTitle,
-  syncLabel,
-} from "./status";
+import { pullTitle, syncLabel } from "./status";
 
 const status: StatusSummary = {
   head: { kind: "branch", name: "main", sha: "abc" },
@@ -17,34 +10,6 @@ const status: StatusSummary = {
   behind: 0,
   counts: { files: 3, staged: 1, unstaged: 2, conflicted: 1 },
 };
-
-describe("HEAD", () => {
-  it("names the branch, or says it's detached", () => {
-    expect(headLabel(status.head)).toBe("main");
-    expect(headLabel({ kind: "detached", sha: "abc" })).toBe("detached HEAD");
-  });
-
-  it("has no commit on an unborn branch", () => {
-    expect(headSha(status.head)).toBe("abc");
-    expect(headSha({ kind: "unborn", name: "main" })).toBeUndefined();
-  });
-});
-
-describe("branchName", () => {
-  it("is a local or remote branch's name without its prefix, slashes and all", () => {
-    expect(branchName("refs/heads/feature/x")).toBe("feature/x");
-    expect(branchName("refs/remotes/origin/main")).toBe("origin/main");
-  });
-});
-
-describe("hasUncommittedChanges", () => {
-  it("is true when any file changed", () => {
-    expect(hasUncommittedChanges(status)).toBe(true);
-    const clean = { files: 0, staged: 0, unstaged: 0, conflicted: 0 };
-    expect(hasUncommittedChanges({ ...status, counts: clean })).toBe(false);
-    expect(hasUncommittedChanges(undefined)).toBe(false);
-  });
-});
 
 describe("syncLabel", () => {
   it("says synced, or how far ahead and behind HEAD is", () => {

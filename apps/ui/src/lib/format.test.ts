@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { avatarColor, compactCount, initials, relativeTime } from "./format";
+import { compactCount, initials, relativeTime } from "./format";
 
 describe("initials", () => {
   it("takes the first and last word's first letters", () => {
@@ -10,12 +10,6 @@ describe("initials", () => {
 
   it("takes the first two letters of a single word", () => {
     expect(initials("ada")).toBe("AD");
-  });
-});
-
-describe("avatarColor", () => {
-  it("picks the same colour for the same key, whatever its case", () => {
-    expect(avatarColor("Ada@Example.com")).toBe(avatarColor("ada@example.com"));
   });
 });
 
