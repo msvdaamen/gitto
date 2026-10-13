@@ -1,12 +1,13 @@
 import type { Worktree } from "@gitto/git/types";
 import FolderOpen from "lucide-solid/icons/folder-open";
 import FolderX from "lucide-solid/icons/folder-x";
-import { createEffect, createSignal, on, type JSX } from "solid-js";
+import { createSignal, type JSX } from "solid-js";
 
 import { ContextMenuItem } from "@/components/ui/context-menu";
 import { FailurePopover } from "@/components/ui/failure-popover";
 import { useWorktreeActions, useWorktrees } from "@/git/queries/worktree";
 import { canOpenWorktree } from "@/git/worktree";
+import { useResetOn } from "@/hooks/reset-on";
 
 import { RowMenu } from "../row-menu";
 import { RemoveWorktreeDialog } from "./remove-worktree-dialog";
@@ -42,12 +43,9 @@ export function WorktreeMenu(props: {
   const [removing, setRemoving] = createSignal<Worktree>();
   const [section, setSection] = createSignal<HTMLElement>();
   // A worktree of one repository isn't one of another.
-  createEffect(
-    on(
-      () => props.repositoryId,
-      () => setRemoving(undefined),
-      { defer: true },
-    ),
+  useResetOn(
+    () => props.repositoryId,
+    () => setRemoving(undefined),
   );
 
   const open = (worktree: Worktree) => {

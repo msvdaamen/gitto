@@ -6,7 +6,7 @@ import Minus from "lucide-solid/icons/minus";
 import Plus from "lucide-solid/icons/plus";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
 import Undo2 from "lucide-solid/icons/undo-2";
-import { createEffect, createMemo, createSignal, on, Show, type JSX } from "solid-js";
+import { createEffect, createMemo, createSignal, Show, type JSX } from "solid-js";
 
 import { Badge } from "@/components/ui/badge";
 import { IconButton, LinkButton } from "@/components/ui/button";
@@ -24,6 +24,7 @@ import { useHeadSha, useStatus } from "@/git/queries/status";
 import { useUnsuspendedData } from "@/git/queries/unsuspended";
 import { headLabel } from "@/git/status";
 import { useDelayed } from "@/hooks/delayed";
+import { useResetOn } from "@/hooks/reset-on";
 import type { ScrollId } from "@/lib/scroll";
 
 import { ChangedFileList, type FileAction } from "./changed-file-list";
@@ -91,12 +92,9 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
     if (discarding() !== undefined && discardTarget() === undefined) setDiscarding(undefined);
   });
   // Another repository's changes aren't this one's.
-  createEffect(
-    on(
-      () => props.repositoryId,
-      () => setDiscarding(undefined),
-      { defer: true },
-    ),
+  useResetOn(
+    () => props.repositoryId,
+    () => setDiscarding(undefined),
   );
   const lastCommit = useHeadSha(summary);
   // Read once: in JSX, `summary() && headLabel(summary().head)` would check a memo of whether

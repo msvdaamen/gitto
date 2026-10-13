@@ -9,7 +9,7 @@ import {
   NotUtf8Error,
   OutsideRepositoryError,
 } from "../../core/errors";
-import type { GitCommand, Repo } from "../../core/repo";
+import { repoSlot, type GitCommand, type Repo } from "../../core/repo";
 import { MAX_BLOB_BYTES } from "../diff/limits";
 import { decodeUtf8, readWorkingTreeBytes, scanWorkingTreeFile } from "../diff/working-tree";
 import { BINARY_CHECK_BYTES, ConflictCounter, isBinary } from "./markers";
@@ -282,10 +282,12 @@ async function stampOf(repo: Repo, path: string): Promise<string | undefined> {
 }
 
 /**
- * Each repository's conflicted files as `markerFree` last read them, by their paths: whether they
+ * The repository's conflicted files as `markerFree` last read them, by their paths: whether they
  * had markers left, and when they last changed then. Only the ones asked about last are kept.
  */
-const markerChecks = new Map<string, Map<string, { stamp: string; free: boolean }>>();
+const MARKER_CHECKS = repoSlot(() => ({
+  last: new Map<string, { stamp: string; free: boolean }>(),
+}));
 
 /**
  * Which of the conflicted text files at `paths` have no conflict markers left: resolved in the
@@ -294,11 +296,12 @@ const markerChecks = new Map<string, Map<string, { stamp: string; free: boolean 
  * (see `getStatus`), so a file is only read again once it changed since.
  */
 export async function markerFree(repo: Repo, paths: string[]): Promise<string[]> {
-  const last = markerChecks.get(repo.path);
+  const kept = repo.keep(MARKER_CHECKS);
+  const last = kept.last;
   const checks = new Map<string, { stamp: string; free: boolean }>();
   const free = await readAtOnce(paths, async (path) => {
     const stamp = await stampOf(repo, path);
-    const known = stamp === undefined ? undefined : last?.get(path);
+    const known = stamp === undefined ? undefined : last.get(path);
     const isFree =
       known !== undefined && known.stamp === stamp
         ? known.free
@@ -306,6 +309,6 @@ export async function markerFree(repo: Repo, paths: string[]): Promise<string[]>
     if (stamp !== undefined) checks.set(path, { stamp, free: isFree });
     return isFree ? path : undefined;
   });
-  markerChecks.set(repo.path, checks);
+  kept.last = checks;
   return free.filter((path) => path !== undefined);
 }

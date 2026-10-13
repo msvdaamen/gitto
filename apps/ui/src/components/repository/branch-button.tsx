@@ -1,11 +1,12 @@
 import { Popover } from "@kobalte/core/popover";
 import GitBranch from "lucide-solid/icons/git-branch";
-import { createEffect, createSignal, on, Suspense } from "solid-js";
+import { createSignal, Suspense } from "solid-js";
 
 import { FailurePopover } from "@/components/ui/failure-popover";
 import { useCreateBranch } from "@/git/queries/branch";
 import { useStatus } from "@/git/queries/status";
 import { branchSource, hasUncommittedChanges } from "@/git/status";
+import { useResetOn } from "@/hooks/reset-on";
 
 import { BranchForm } from "./branch-form";
 import { ToolbarButton } from "./toolbar-button";
@@ -32,15 +33,12 @@ function Branch(props: { repositoryId: string }) {
     hasUncommittedChanges(status.data) ? ", with your uncommitted changes." : ".";
 
   // The popover names a branch for the repository it was opened in.
-  createEffect(
-    on(
-      () => props.repositoryId,
-      () => {
-        setOpen(false);
-        setName("");
-      },
-      { defer: true },
-    ),
+  useResetOn(
+    () => props.repositoryId,
+    () => {
+      setOpen(false);
+      setName("");
+    },
   );
 
   function toggle(isOpen: boolean) {

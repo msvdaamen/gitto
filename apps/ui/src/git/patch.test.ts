@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { hasHunks, isLink, patchVersion, stagedWhole, summarizePatch } from "./patch";
+import { hasHunks, isLink, stagedWhole, summarizePatch } from "./patch";
 
 const header = [
   "diff --git a/a.txt b/a.txt",
@@ -48,15 +48,6 @@ describe("summarizePatch", () => {
 
   it("counts a last line without a newline", () => {
     expect(summarizePatch(`${header}\n@@ -0,0 +1 @@\n+only`)).toMatchObject({ additions: 1 });
-  });
-});
-
-describe("patchVersion", () => {
-  it("changes with the object names or the length, and not otherwise", () => {
-    const patch = `${header}\n@@ -1 +1 @@\n-a\n+b\n`;
-    expect(patchVersion(patch)).toBe(patchVersion(`${patch}`));
-    expect(patchVersion(patch)).not.toBe(patchVersion(patch.replace("2222", "3333")));
-    expect(patchVersion(patch)).not.toBe(patchVersion(`${patch}+c\n`));
   });
 });
 

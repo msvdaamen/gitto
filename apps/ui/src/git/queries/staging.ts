@@ -85,12 +85,15 @@ export function useStageFile() {
   }));
 }
 
-/** Lines of a file's changes to stage or unstage, picked from `patch`, its patch on show. */
+/**
+ * Lines of a file's changes to stage or unstage, picked from its patch on show, named by its
+ * `version` (see `patchVersion`).
+ */
 export interface LinesToStage {
   repositoryId: string;
   action: "stage" | "unstage";
   file: ChangedFile;
-  patch: string;
+  version: string;
   lines: LineSelection;
 }
 
@@ -105,8 +108,8 @@ export interface LinesToStage {
 export function useStageLines() {
   const queryClient = useQueryClient();
   return useMutation(() => ({
-    mutationFn: async ({ repositoryId, action, file, patch, lines }: LinesToStage) => {
-      const input = { repositoryId, path: file.path, origPath: file.origPath, patch, lines };
+    mutationFn: async ({ repositoryId, action, file, version, lines }: LinesToStage) => {
+      const input = { repositoryId, path: file.path, origPath: file.origPath, version, lines };
       const left =
         action === "stage"
           ? await rpc.git.staging.stageLines({ ...input, untracked: file.status === "untracked" })

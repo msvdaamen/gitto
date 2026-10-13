@@ -44,15 +44,6 @@ function isBinary(header: string): boolean {
   return /^(Binary files .* differ|GIT binary patch)$/m.test(header);
 }
 
-/**
- * Names `patch` by what's in it, among other patches of the same file: its header (with the object
- * names of both sides on its `index` line, which git hashes the working tree's side for) and its
- * length.
- */
-export function patchVersion(patch: string): string {
-  return `${patch.length}:${patchHeader(patch)}`;
-}
-
 /** Whether `patch` has lines to stage or unstage left, rather than none, or a mode change. */
 export function hasHunks(patch: string): boolean {
   return patch.includes("\n@@ ");

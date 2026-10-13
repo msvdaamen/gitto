@@ -7,6 +7,7 @@
     "./contract": "./src/contract.ts",
     "./remote-blockers": "./src/features/remote/blockers.ts",
     "./remote-name": "./src/features/remote/remote-name.ts",
+    "./patch-version": "./src/features/staging/patch-version.ts",
     "./server": "./src/server.ts",
     "./types": "./src/types.ts"
   },

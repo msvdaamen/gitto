@@ -2,7 +2,7 @@ import type { ChangedFile, Operation } from "@gitto/git/types";
 import { cn } from "cn";
 import GitMergeConflict from "lucide-solid/icons/git-merge-conflict";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
-import { createMemo, createSignal, Show } from "solid-js";
+import { createSignal, Show } from "solid-js";
 
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -11,6 +11,7 @@ import { operationName, operationProgress, operationTitle } from "@/git/conflict
 import { useOperationActions, useOperationInProgress } from "@/git/queries/progress";
 import { firstToResolve, useConflictedFiles } from "@/git/queries/status";
 import { useUnsuspendedData } from "@/git/queries/unsuspended";
+import { useLingering } from "@/hooks/lingering";
 
 /**
  * What's under way in the repository, above the history and a file's changes: a merge, a rebase,
@@ -152,8 +153,7 @@ function AbortDialog(props: {
   onCancel: () => void;
   onAbort: (operation: Operation) => void;
 }) {
-  // The last one asked about, still named while the dialog closes.
-  const operation = createMemo((last: Operation | undefined) => props.operation ?? last);
+  const operation = useLingering(() => props.operation);
   const name = () => {
     const current = operation();
     return current ? operationName(current) : "";

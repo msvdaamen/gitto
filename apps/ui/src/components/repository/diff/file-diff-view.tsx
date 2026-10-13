@@ -16,7 +16,6 @@ import {
   children,
   createEffect,
   createMemo,
-  createSignal,
   ErrorBoundary,
   lazy,
   Match,
@@ -37,25 +36,14 @@ import { Notice } from "@/components/ui/notice";
 import {
   countsOf,
   hasPatch,
-  isKnownBinary,
-  isNestedRepository,
   sourceLabel,
   totalLines,
   unchangedReason,
   type LineCounts,
 } from "@/git/changes";
-import { diffFileKey, isSameSource, isUncommitted, type DiffSource } from "@/git/diff-source";
-import { isLink, patchVersion, summarizePatch } from "@/git/patch";
+import { diffFileKey, type DiffSource } from "@/git/diff-source";
 import { fetchBlob } from "@/git/queries/diff";
-import {
-  fetchFilePatch,
-  fetchWorkingTreeFile,
-  useDiffSourceFiles,
-  useFilePatch,
-  type FilePatch,
-} from "@/git/queries/file-diff";
-import { useUnsuspendedData } from "@/git/queries/unsuspended";
-import { useDelayed } from "@/hooks/delayed";
+import { fetchFilePatch, fetchWorkingTreeFile } from "@/git/queries/file-diff";
 import { useDiffStyle } from "@/hooks/diff-style";
 import { isTyping } from "@/lib/typing";
 
@@ -63,6 +51,7 @@ import { prefetchConflict, useConflictResolution } from "./conflict-resolution";
 import { useFileEditing } from "./file-editing";
 import { useFileStaging } from "./file-staging";
 import type * as ViewerModule from "./patch-viewer";
+import { createShownFile, patchCacheKey } from "./shown-file";
 
 let viewerModule: Promise<typeof ViewerModule> | undefined;
 /** The viewer's module, loaded once, the first time it's needed: it brings Shiki. */
@@ -70,24 +59,10 @@ const loadViewer = () => (viewerModule ??= import("./patch-viewer"));
 const PatchViewer = lazy(loadViewer);
 
 /**
- * Changed lines above which a file's changes are only shown when asked: reading and parsing them
- * takes a noticeable moment, and such a change is rarely read line by line (a lockfile, say).
- */
-const LARGE_DIFF_LINES = 20_000;
-
-/**
  * Changed lines above which a file's changes aren't loaded ahead (see `prefetchFileDiff`): parsing
  * them on the main thread starts to take a while, for a file that may not be opened after all.
  */
 const PREFETCH_DIFF_LINES = 5_000;
-
-/**
- * Names a file's patch in the highlighting cache. A commit's or a stash's never changes, so its
- * file's name will do; an uncommitted one's is named by what's in it too (see `patchVersion`).
- */
-function patchCacheKey(source: DiffSource, data: FilePatch): string {
-  return isUncommitted(source) ? `${data.key}:${patchVersion(data.patch)}` : data.key;
-}
 
 /**
  * Loads and highlights a file's changes ahead of opening them, e.g. when it's pointed at, so they
@@ -144,153 +119,30 @@ export function FileDiffView(props: {
 }) {
   const { diffStyle } = useDiffStyle();
   const queryClient = useQueryClient();
-  // The same source, as one object, for as long as it is: a list's is made anew whenever it's read.
-  const source = createMemo(() => props.source, undefined, { equals: isSameSource });
-  const lists = useDiffSourceFiles(() => props.repositoryId, source);
-  const fileKey = () => diffFileKey(props.source, props.file.path);
-  const found = createMemo(() => lists.files().findIndex((file) => file.path === props.file.path));
-  // Where the file was in its list, after it's gone from it: the files around it stay a step away.
-  // Only this file's place: another one opened that isn't in its list has none.
-  const lastPlace = createMemo(
-    (last: { key: string; index: number }) =>
-      found() !== -1
-        ? { key: fileKey(), index: found() }
-        : last.key === fileKey()
-          ? last
-          : { key: fileKey(), index: -1 },
-    { key: "", index: -1 },
-  );
-  const place = () => lastPlace().index;
-  const previous = () => (place() > 0 ? lists.files()[place() - 1] : undefined);
-  const next = () =>
-    place() === -1 ? undefined : lists.files()[found() === -1 ? place() : place() + 1];
-
-  /**
-   * The file as its list has it now: uncommitted changes change on disk, and are listed anew. As
-   * it was opened if it's gone from the list.
-   */
-  const liveFile = () => (isUncommitted(props.source) && lists.files()[found()]) || props.file;
   const fileEditing = useFileEditing({
     repositoryId: () => props.repositoryId,
     path: () => props.file.path,
   });
-  const editing = fileEditing.editing;
   props.onGuard?.(fileEditing.leave);
   onCleanup(() => props.onGuard?.(undefined));
-  // While it's edited, the file stays as it was when that started: saving the edits changes it,
-  // and could take it from its list, or leave it without changes, which isn't shown in the editor.
-  const file = createMemo((last: ChangedFile | undefined) =>
-    editing() && last ? last : liveFile(),
-  );
-  // Whether the file has gone from its list: it's been staged in full, say.
-  const gone = () => !editing() && isUncommitted(props.source) && lists.loaded() && found() === -1;
-
-  // The large file the user asked to see anyway.
-  const [shownLarge, setShownLarge] = createSignal<string>();
-  const fetches = () => {
-    const counts = countsOf(file());
-    if (!hasPatch(file(), lists.uncounted())) return false;
-    return !counts || totalLines(counts) <= LARGE_DIFF_LINES || shownLarge() === fileKey();
-  };
-  // What the patch's query is of, changing only when that does: an uncommitted file's list is
-  // replaced whenever anything in the working tree changes, and the query's options are set again
-  // (and its resource refetched) whenever they're read anew.
-  const patchFile = createMemo(file, undefined, {
-    equals: (a, b) => a.path === b.path && a.origPath === b.origPath && a.status === b.status,
-  });
-  // Not refetched while it's edited, as each save would: the view keeps the patch editing started
-  // from (see `file`), and gets the last one once editing stops.
-  const patchEnabled = createMemo(() => !editing() && !gone() && fetches());
-  const patchQuery = useFilePatch(() => props.repositoryId, source, patchFile, patchEnabled);
-  // Without Suspense: an uncommitted file's patch is refetched while it's on show.
-  const livePatch = useUnsuspendedData(patchQuery);
-  const patch = createMemo((last: FilePatch | undefined) =>
-    editing() && last ? last : livePatch(),
-  );
-  /** The patch of this file, rather than of the last one, still on show while it loads. */
-  const current = () => (patch()?.key === fileKey() ? patch() : undefined);
-  // What the patch says of the changes: an uncommitted file's line counts can be older than its
-  // patch, and some files have none at all.
-  const summaryOf = (data: FilePatch) =>
-    isUncommitted(props.source) || data.file.additions === null
-      ? summarizePatch(data.patch)
-      : undefined;
-  const summary = createMemo(() => {
-    const data = current();
-    return data && summaryOf(data);
-  });
-  const empty = () => current()?.patch === "";
-  const binary = () => isKnownBinary(file(), lists.uncounted()) || summary()?.binary === true;
-  /** How many lines changed; `undefined` until the patch says, for a file without counts. */
-  const counts = () => (summary() && !summary()!.binary ? summary() : countsOf(file()));
-  const lines = () => (counts() ? totalLines(counts()!) : undefined);
-  const large = () => (lines() ?? 0) > LARGE_DIFF_LINES && shownLarge() !== fileKey();
-  const showsPatch = () =>
-    !gone() &&
-    !empty() &&
-    file().status !== "conflicted" &&
-    !isNestedRepository(file()) &&
-    !binary() &&
-    lines() !== 0 &&
-    !large();
-
-  // The file whose patch is on show. Going to another, the last one stays on show, header and
-  // all, until the new one's is loaded and highlighted: they're swapped at once, without flicker.
-  const [shownPatch, setShownPatch] = createSignal<{
-    key: string;
-    file: ChangedFile;
-    patch: string;
-    counts: LineCounts | undefined;
-  }>();
-  /** The file on show: the one asked for, or the last one, while its patch is on its way. */
-  const shown = () =>
-    (showsPatch() && shownPatch()) || {
-      key: fileKey(),
-      file: file(),
-      // None to count once it has no changes left on its side, nor for a conflict: git counts
-      // them against one side.
-      counts: gone() || empty() || conflict.active() ? undefined : counts(),
-    };
-  // Whether the whole file is being loaded, to show more of it, and why it couldn't be.
-  const [loadingFiles, setLoadingFiles] = createSignal(false);
-  const [filesError, setFilesError] = createSignal<string>();
-  const busy = useDelayed(() => shown().key !== fileKey() || loadingFiles());
-  /**
-   * Whether the file on show can be edited: an unstaged one's new side, the file on disk, if it's
-   * text that's there, and not a link.
-   */
-  const editable = () =>
-    (props.source.kind === "unstaged" &&
-      showsPatch() &&
-      shown().key === fileKey() &&
-      file().status !== "deleted" &&
-      !isLink(current()?.patch ?? "")) ||
-    conflict.editable();
-
-  /** Whether the file in the header is another one, still on show while this one's changes load. */
-  const showsOther = () => shown().key !== fileKey();
-  const fileStaging = useFileStaging({
+  // What's shown of the file: the one place staging, editing and resolving conflicts read it from.
+  const view = createShownFile({
     repositoryId: () => props.repositoryId,
     source: () => props.source,
-    fileKey,
-    file,
-    liveFile,
-    listed: () => found() !== -1,
-    current,
-    shownPatch: () => shownPatch()?.patch,
-    showsOther,
-    editing,
-    showsPatch,
-    target: () => next() ?? previous(),
+    file: () => props.file,
+    editing: fileEditing.editing,
+  });
+  const { fileKey, file, shown, previous, next } = view;
+  /** Whether the file on show can be edited: its patch (see `editablePatch`), or its conflicts. */
+  const editable = () => view.editablePatch() || conflict.editable();
+
+  const fileStaging = useFileStaging(view, {
+    repositoryId: () => props.repositoryId,
     leave: fileEditing.leave,
     open: (target) => props.onOpen(props.source, target),
   });
-  const conflict = useConflictResolution({
+  const conflict = useConflictResolution(view, {
     repositoryId: () => props.repositoryId,
-    file,
-    fileKey,
-    files: lists.files,
-    editing,
     viewer: fileEditing.viewer,
     onShown: () => fileEditing.onShown(),
     open: (side, target) => props.onOpen(side, target),
@@ -327,13 +179,19 @@ export function FileDiffView(props: {
   // The files a step away are loaded ahead once another one's on show, so stepping to them shows
   // them at once. Not again when the same one's patch is refetched, as an uncommitted file's is
   // whenever the working tree changes: theirs are refetched once they're opened.
-  const shownKey = createMemo(() => shownPatch()?.key);
+  const shownKey = createMemo(() => view.shownPatch()?.key);
   createEffect(
     on(shownKey, (key) => {
       if (!key) return;
       for (const near of [previous(), next()]) {
         if (near) {
-          prefetchFileDiff(queryClient, props.repositoryId, props.source, near, lists.uncounted());
+          prefetchFileDiff(
+            queryClient,
+            props.repositoryId,
+            props.source,
+            near,
+            view.lists.uncounted(),
+          );
         }
       }
     }),
@@ -355,10 +213,10 @@ export function FileDiffView(props: {
         file={shown().file}
         counts={shown().counts}
         source={props.source}
-        busy={busy()}
+        busy={view.busy()}
         wholeFile={conflict.active() ? undefined : fileStaging.wholeFile()}
         conflict={conflict.active() ? <conflict.Controls /> : undefined}
-        stagingDisabled={fileStaging.staging() || showsOther()}
+        stagingDisabled={fileStaging.staging() || view.showsOther()}
         onStageWhole={() => void fileStaging.stageWhole()}
         previous={previous()}
         next={next()}
@@ -372,42 +230,42 @@ export function FileDiffView(props: {
       <Show when={conflict.active()}>
         <conflict.Banner />
       </Show>
-      <Show when={filesError()}>{(message) => <Notice message={message()} />}</Show>
+      <Show when={view.filesError()}>{(message) => <Notice message={message()} />}</Show>
 
       <div class="min-h-0 flex-1">
         <Switch>
-          <Match when={gone() || empty()}>
+          <Match when={view.gone() || view.empty()}>
             <NoLongerChanged
               source={props.source}
               file={props.file}
-              staged={lists.staged()}
-              unstaged={lists.unstaged()}
+              staged={view.lists.staged()}
+              unstaged={view.lists.unstaged()}
               onOpen={props.onOpen}
             />
           </Match>
           <Match when={conflict.active()}>
             <conflict.View />
           </Match>
-          <Match when={isNestedRepository(file())}>
+          <Match when={view.nested()}>
             <EmptyState icon={FolderGit} title="Another repository" class="h-full">
               This folder is a git repository of its own, so its files aren't listed here.
             </EmptyState>
           </Match>
-          <Match when={binary()}>
+          <Match when={view.binary()}>
             <EmptyState icon={FileCheck} title="Binary file" class="h-full">
               Its changes can't be shown as text.
             </EmptyState>
           </Match>
-          <Match when={lines() === 0}>
+          <Match when={view.lines() === 0}>
             <EmptyState icon={FileCheck} title="No changed lines" class="h-full">
               {unchangedReason(file())}
             </EmptyState>
           </Match>
-          <Match when={large()}>
+          <Match when={view.large()}>
             <EmptyState icon={FileWarning} title="Large change" class="h-full">
               <span class="flex flex-col items-center gap-3">
-                {lines()!.toLocaleString()} lines changed. Showing them may take a moment.
-                <Button onClick={() => setShownLarge(fileKey())}>Show anyway</Button>
+                {view.lines()!.toLocaleString()} lines changed. Showing them may take a moment.
+                <Button onClick={view.showLarge}>Show anyway</Button>
               </span>
             </EmptyState>
           </Match>
@@ -423,21 +281,23 @@ export function FileDiffView(props: {
                 <Show
                   // Nor does an error take the editor's place: it's the last one's, from before.
                   // (`null` either way: this is keyed, so `false` would make the viewer anew.)
-                  when={editing() ? null : patchQuery.error}
+                  when={view.editing() ? null : view.patchQuery.error}
                   keyed
                   fallback={
                     <Show
                       // Another file's patch is only kept while it's on show: one isn't started
                       // with it.
-                      when={patch() && (patch()!.key === fileKey() || shownPatch()) && patch()}
+                      when={
+                        view.patch() &&
+                        (view.patch()!.key === fileKey() || view.shownPatch()) &&
+                        view.patch()
+                      }
                       fallback={<LoadingState title="Loading changes…" class="h-full" />}
                     >
                       {(data) => {
                         onCleanup(() => {
                           fileEditing.cancelReload();
-                          setShownPatch(undefined);
-                          setLoadingFiles(false);
-                          setFilesError(undefined);
+                          view.patchLeft();
                         });
                         return (
                           <PatchViewer
@@ -447,20 +307,15 @@ export function FileDiffView(props: {
                             diffStyle={diffStyle()}
                             loadFile={loadFile(data().file.path)}
                             onShown={() => {
-                              setShownPatch({
-                                key: data().key,
-                                file: data().file,
-                                patch: data().patch,
-                                counts: summaryOf(data()) ?? countsOf(data().file),
-                              });
+                              view.patchShown(data());
                               fileEditing.onShown();
                             }}
-                            editing={editing()}
+                            editing={view.editing()}
                             onEditing={fileEditing.viewer.onEditing}
                             onEdit={fileEditing.viewer.onEdit}
                             onEditFailed={fileEditing.viewer.onEditFailed}
-                            onLoadingFiles={setLoadingFiles}
-                            onFilesError={setFilesError}
+                            onLoadingFiles={view.setLoadingFiles}
+                            onFilesError={view.setFilesError}
                             staging={fileStaging.lineStaging()}
                           />
                         );

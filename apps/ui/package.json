@@ -17,7 +17,7 @@
     "@gitto/system": "workspace:*",
     "@gitto/telemetry-ui": "workspace:*",
     "@kobalte/core": "^0.13.14",
-    "@pierre/diffs": "^1.5.1",
+    "@pierre/diffs": "1.5.1",
     "@tanstack/solid-query": "^5.104.0",
     "@tanstack/solid-router": "^1.170.37",
     "@tanstack/solid-virtual": "^3.13.40",

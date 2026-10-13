@@ -1,7 +1,7 @@
 // Real repositories in a temp directory, for tests that run git. Each test file gets its own
 // directory (Vitest loads this module once per file), removed once the file's tests are done.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -11,7 +11,24 @@ import { afterAll, expect } from "vitest";
 
 import { GitReposImpl, type Repo } from "../core/repo";
 
-export const root = mkdtempSync(join(tmpdir(), "gitto-git-"));
+// Where it really is: git lists worktrees by their real paths, and macOS puts the temp folder
+// under a symlink.
+export const root = realpathSync(mkdtempSync(join(tmpdir(), "gitto-git-")));
+
+/**
+ * Whether the file system takes a file name that isn't UTF-8, as Linux's do: macOS's APFS refuses
+ * one, so the tests of such names are skipped there.
+ */
+export const nonUtf8Names = (() => {
+  const probe = Buffer.concat([Buffer.from(`${root}/probe-`), Buffer.from([0xe9])]);
+  try {
+    writeFileSync(probe, "");
+    rmSync(probe);
+    return true;
+  } catch {
+    return false;
+  }
+})();
 
 afterAll(() => {
   rmSync(root, { recursive: true, force: true });

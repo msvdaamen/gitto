@@ -1,9 +1,9 @@
 import Undo2 from "lucide-solid/icons/undo-2";
-import { createMemo } from "solid-js";
 
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import type { DiscardTarget } from "@/git/queries/staging";
+import { useLingering } from "@/hooks/lingering";
 
 /**
  * What the dialog asks about: the changes to discard and, for a file's unstaged ones, whether it
@@ -20,8 +20,7 @@ export function DiscardDialog(props: {
   onCancel: () => void;
   onDiscard: (target: DiscardTarget) => void;
 }) {
-  // The last ones asked about, still named while the dialog closes.
-  const target = createMemo((last: DiscardPrompt | undefined) => props.target ?? last);
+  const target = useLingering(() => props.target);
   const title = () => {
     const current = target();
     if (current === "all") return "Discard all changes?";

@@ -7,8 +7,11 @@ import { LineSelectionSchema } from "./schema";
 
 const PathsInput = RepositoryInput.extend({ paths: z.array(z.string().min(1)).min(1) });
 
-/** Lines of a file's changes, picked from `patch`, its patch as it was on show. */
-const LinesInput = FileInput.extend({ patch: z.string(), lines: LineSelectionSchema });
+/**
+ * Lines of a file's changes, picked from the patch on show, named by its `version` (see
+ * `patchVersion`) rather than sent back whole: it can be megabytes.
+ */
+const LinesInput = FileInput.extend({ version: z.string(), lines: LineSelectionSchema });
 
 /** The file's patch on the same side, once the lines are staged or unstaged. */
 const LinesOutput = z.object({ patch: z.string() });
@@ -42,8 +45,8 @@ export const StagingContract = {
    */
   discardAll: oc.input(RepositoryInput),
   /**
-   * Stages some lines of a file's unstaged changes; fails with CONFLICT if `patch` isn't its
-   * unstaged changes' patch any more, and with UNPROCESSABLE_CONTENT if they can't be staged by
+   * Stages some lines of a file's unstaged changes; fails with CONFLICT if `version` isn't its
+   * unstaged changes' patch's any more, and with UNPROCESSABLE_CONTENT if they can't be staged by
    * line, e.g. as the file is binary. Returns the unstaged changes' patch they leave.
    */
   stageLines: oc.input(LinesInput.extend({ untracked: z.boolean() })).output(LinesOutput),

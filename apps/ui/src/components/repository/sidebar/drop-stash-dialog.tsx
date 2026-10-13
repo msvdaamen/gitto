@@ -1,9 +1,9 @@
 import type { Stash } from "@gitto/git/types";
 import Trash from "lucide-solid/icons/trash";
-import { createMemo } from "solid-js";
 
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { useLingering } from "@/hooks/lingering";
 
 /**
  * Asks before deleting the stash `stash`, whose changes are lost with it; open while there's one.
@@ -14,8 +14,7 @@ export function DropStashDialog(props: {
   onCancel: () => void;
   onDrop: (stash: Stash) => void;
 }) {
-  // The last one asked about, still named while the dialog closes.
-  const stash = createMemo((last: Stash | undefined) => props.stash ?? last);
+  const stash = useLingering(() => props.stash);
   return (
     <ConfirmDialog
       open={props.stash !== undefined}

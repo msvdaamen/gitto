@@ -1,11 +1,13 @@
 import { Dialog } from "@kobalte/core/dialog";
 import { cn } from "cn";
-import { createEffect, createMemo, createSignal, on } from "solid-js";
+import { createEffect, createSignal, on } from "solid-js";
 
 import { DIALOG_BOX, DialogPortal } from "@/components/ui/dialog";
 import { useCreateBranchFrom } from "@/git/queries/branch";
 import { useStatus } from "@/git/queries/status";
 import { branchName, hasUncommittedChanges, isCheckedOut } from "@/git/status";
+import { useLingering } from "@/hooks/lingering";
+import { useResetOn } from "@/hooks/reset-on";
 
 import { BranchForm } from "./branch-form";
 
@@ -23,8 +25,7 @@ export function CreateBranchDialog(props: {
   const status = useStatus(() => props.repositoryId);
   const create = useCreateBranchFrom(() => props.repositoryId);
   const [name, setName] = createSignal("");
-  // The last one while it closes, rather than none.
-  const from = createMemo<string | undefined>((last) => props.from ?? last);
+  const from = useLingering(() => props.from);
 
   /** Where the uncommitted changes go: from another commit than HEAD, they can conflict with it. */
   const changes = () => {
@@ -35,12 +36,9 @@ export function CreateBranchDialog(props: {
   };
 
   // A name typed in one repository isn't for another.
-  createEffect(
-    on(
-      () => props.repositoryId,
-      () => setName(""),
-      { defer: true },
-    ),
+  useResetOn(
+    () => props.repositoryId,
+    () => setName(""),
   );
   // Out of the way of the name, which is kept after a failure to fix it.
   createEffect(

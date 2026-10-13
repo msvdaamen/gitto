@@ -1,13 +1,14 @@
 import type { Stash } from "@gitto/git/types";
 import ArchiveRestore from "lucide-solid/icons/archive-restore";
 import Trash from "lucide-solid/icons/trash";
-import { createEffect, createSignal, on, type JSX } from "solid-js";
+import { createSignal, type JSX } from "solid-js";
 
 import { ContextMenuItem } from "@/components/ui/context-menu";
 import { FailurePopover } from "@/components/ui/failure-popover";
 import { useStashActions, useStashes } from "@/git/queries/stash";
 import { useStatus } from "@/git/queries/status";
 import { canPop } from "@/git/stash";
+import { useResetOn } from "@/hooks/reset-on";
 
 import { RowMenu } from "../row-menu";
 import { DropStashDialog } from "./drop-stash-dialog";
@@ -39,12 +40,9 @@ export function StashMenu(props: {
   const [dropping, setDropping] = createSignal<Stash>();
   const [section, setSection] = createSignal<HTMLElement>();
   // A stash of one repository isn't one of another.
-  createEffect(
-    on(
-      () => props.repositoryId,
-      () => setDropping(undefined),
-      { defer: true },
-    ),
+  useResetOn(
+    () => props.repositoryId,
+    () => setDropping(undefined),
   );
 
   // One at a time, the deletion's first: both can have failed, one after the other.

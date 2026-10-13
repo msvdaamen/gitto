@@ -1,7 +1,7 @@
 import { Dialog } from "@kobalte/core/dialog";
 import { cn } from "cn";
 import FolderPlus from "lucide-solid/icons/folder-plus";
-import { createEffect, createMemo, createSignal, on, Show } from "solid-js";
+import { createEffect, createSignal, on, Show } from "solid-js";
 
 import { Button } from "@/components/ui/button";
 import { DIALOG_BOX, DialogPortal } from "@/components/ui/dialog";
@@ -10,7 +10,9 @@ import { useRefs } from "@/git/queries/refs";
 import { useWorktreeActions, useWorktrees } from "@/git/queries/worktree";
 import { branchName } from "@/git/status";
 import { checkedOutIn, suggestWorktreeFolder } from "@/git/worktree";
+import { useLingering } from "@/hooks/lingering";
 import { useRepository } from "@/hooks/repositories";
+import { useResetOn } from "@/hooks/reset-on";
 import { rpc } from "@/lib/rpc";
 
 /**
@@ -33,8 +35,7 @@ export function AddWorktreeDialog(props: {
   const { add } = useWorktreeActions(() => props.repositoryId);
   const [folder, setFolder] = createSignal("");
   const [newBranch, setNewBranch] = createSignal("");
-  // The last one while it closes, rather than none.
-  const branch = createMemo<string | undefined>((last) => props.branch ?? last);
+  const branch = useLingering(() => props.branch);
   const name = () => branchName(branch() ?? "");
   /**
    * Where the branch (for a remote one, the local branch tracking it) is checked out already, if
@@ -58,15 +59,12 @@ export function AddWorktreeDialog(props: {
   };
 
   // A folder and a name typed in one repository aren't for another.
-  createEffect(
-    on(
-      () => props.repositoryId,
-      () => {
-        setFolder("");
-        setNewBranch("");
-      },
-      { defer: true },
-    ),
+  useResetOn(
+    () => props.repositoryId,
+    () => {
+      setFolder("");
+      setNewBranch("");
+    },
   );
   // The folder last suggested, which a folder that was typed instead is kept over.
   let suggested = "";

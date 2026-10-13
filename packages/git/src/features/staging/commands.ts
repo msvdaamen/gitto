@@ -3,6 +3,7 @@ import type { Repo } from "../../core/repo";
 import { refuseConflictMarkers } from "../conflicts/commands";
 import { getStagedFilePatch, getUnstagedFilePatch } from "../diff/commands";
 import { linesPatch, type LineAction } from "./lines";
+import { patchVersion } from "./patch-version";
 import type { LineSelection } from "./schema";
 
 // Paths go to git's stdin, NUL-separated, rather than on the command line, which holds only so
@@ -86,17 +87,18 @@ interface LinesFile {
 
 /**
  * Stages the lines `selection` picks from a file's unstaged changes, which the user picked them
- * from in `shown`, their patch (see `getUnstagedFilePatch`). Rejects with `PatchChangedError` if
- * those aren't the file's unstaged changes any more: the lines picked could be others by now.
- * Resolves to the unstaged changes' patch the lines leave, to show in its place.
+ * from in the patch named `version` (see `patchVersion`, and `getUnstagedFilePatch`). Rejects
+ * with `PatchChangedError` if that isn't the file's unstaged changes' patch any more: the lines
+ * picked could be others by now. Resolves to the unstaged changes' patch the lines leave, to show
+ * in its place.
  */
 export function stageLines(
   repo: Repo,
   file: LinesFile & { untracked: boolean },
-  shown: string,
+  version: string,
   selection: LineSelection,
 ): Promise<string> {
-  return applyLines(repo, shown, selection, "stage", (binary) =>
+  return applyLines(repo, version, selection, "stage", (binary) =>
     // In the index once lines of it are staged, an untracked file is compared to that.
     getUnstagedFilePatch(repo, { ...file, untracked: file.untracked && binary }, { binary }),
   );
@@ -109,10 +111,10 @@ export function stageLines(
 export function unstageLines(
   repo: Repo,
   file: LinesFile,
-  shown: string,
+  version: string,
   selection: LineSelection,
 ): Promise<string> {
-  return applyLines(repo, shown, selection, "unstage", (binary) =>
+  return applyLines(repo, version, selection, "unstage", (binary) =>
     getStagedFilePatch(repo, file, { binary }),
   );
 }
@@ -121,15 +123,16 @@ export function unstageLines(
 const INDEX_CHANGED = /patch does not apply|does not exist in index|already exists in index/;
 
 /**
- * Applies the patch that stages or unstages the lines picked from `shown`, built from the file's
- * patch as git has it now, `read`: as one write, so no other one changes the index in between.
- * The patch is read again as bytes, which go back to git as they came, also for a file that isn't
- * UTF-8: one whose lines don't survive being read as it, as the user's were. Resolves to the patch
- * read once they're applied, as text, which saves the UI asking for it.
+ * Applies the patch that stages or unstages the lines picked from the patch named `version`, built
+ * from the file's patch as git has it now, `read`: as one write, so no other one changes the index
+ * in between. The patch is read again as bytes, which go back to git as they came, also for a file
+ * that isn't UTF-8: one whose lines don't survive being read as it, as the user's were; it's named
+ * as the UI got it, as text. Resolves to the patch read once they're applied, as text, which saves
+ * the UI asking for it.
  */
 function applyLines(
   repo: Repo,
-  shown: string,
+  version: string,
   selection: LineSelection,
   action: LineAction,
   read: (binary: boolean) => Promise<string>,
@@ -137,7 +140,9 @@ function applyLines(
   const verb = action === "stage" ? "staged" : "unstaged";
   return repo.exclusive(async (run) => {
     const patch = await read(true);
-    if (Buffer.from(patch, "latin1").toString("utf8") !== shown) throw new PatchChangedError(verb);
+    if (patchVersion(Buffer.from(patch, "latin1").toString("utf8")) !== version) {
+      throw new PatchChangedError(verb);
+    }
     const lines = linesPatch(patch, selection, action);
     if (lines === undefined) {
       throw new LinesNotStageableError(`None of the selected lines are changes to be ${verb}.`);
