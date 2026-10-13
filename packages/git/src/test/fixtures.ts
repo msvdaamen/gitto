@@ -48,6 +48,19 @@ export function cloneRepo(name: string, from: string): string {
   return register(name);
 }
 
+/**
+ * An upstream repository with one commit, `first` (adding `a.txt`), and a clone of it that `repos`
+ * opens as `name`. The upstream takes pushes to the branch it has checked out, as a remote would.
+ */
+export function createClone(name: string): { upstream: string; path: string } {
+  const upstream = createRepo(`${name}-upstream`);
+  writeFileSync(join(upstream, "a.txt"), "a\n");
+  git(upstream, "add", "a.txt");
+  git(upstream, "commit", "-qm", "first");
+  git(upstream, "config", "receive.denyCurrentBranch", "updateInstead");
+  return { upstream, path: cloneRepo(name, upstream) };
+}
+
 /** Sets up the repository `name` in `root` for tests, which `repos` then opens as `name`. */
 function register(name: string): string {
   const path = join(root, name);

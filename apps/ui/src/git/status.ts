@@ -1,4 +1,4 @@
-import { pullBlocker } from "@gitto/git/pull-blocker";
+import { pullBlocker } from "@gitto/git/remote-blockers";
 import type { Head, StatusSummary } from "@gitto/git/types";
 
 /** What to call HEAD: the branch name, or "detached HEAD". */

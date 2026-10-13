@@ -11,23 +11,24 @@ import {
   RepositoryChangedError,
 } from "../../core/errors";
 import type { Repo } from "../../core/repo";
-import { cloneRepo, createRepo, git, paths, rejection, repos, root } from "../../test/fixtures";
+import {
+  cloneRepo,
+  createClone,
+  createRepo,
+  git,
+  paths,
+  rejection,
+  repos,
+  root,
+} from "../../test/fixtures";
+import { NO_BRANCH, REBASING } from "./blockers";
 import { fetchAll, pull } from "./commands";
-import { NO_BRANCH, REBASING } from "./pull-blocker";
 
 /** Writes `content` to `file` in `path` and commits it with `message`. */
 function commit(path: string, file: string, content: string, message: string) {
   writeFileSync(join(path, file), content);
   git(path, "add", file);
   git(path, "commit", "-qm", message);
-}
-
-/** An upstream repository with one commit, and a clone of it that `repos` opens as `name`. */
-function createClone(name: string) {
-  const upstream = createRepo(`${name}-upstream`);
-  commit(upstream, "a.txt", "a\n", "first");
-  const path = cloneRepo(name, upstream);
-  return { upstream, path };
 }
 
 const subjects = (path: string) => git(path, "log", "--format=%s").split("\n");

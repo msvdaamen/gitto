@@ -6,7 +6,15 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { GitVersion } from "./core/version";
 import { gitRouter } from "./router";
-import { apiError, createHistoryRepo, createRepo, paths, repos } from "./test/fixtures";
+import {
+  apiError,
+  cloneRepo,
+  createHistoryRepo,
+  createRepo,
+  git,
+  paths,
+  repos,
+} from "./test/fixtures";
 
 describe("the router", () => {
   // Procedures only take UUIDv7 repository ids.
@@ -14,6 +22,7 @@ describe("the router", () => {
     history: "01920000-0000-7000-8000-000000000001",
     locked: "01920000-0000-7000-8000-000000000002",
     missing: "01920000-0000-7000-8000-000000000003",
+    amended: "01920000-0000-7000-8000-000000000004",
   };
   const context = { gitRepos: repos, gitVersion: new GitVersion() };
   const merge = (ref: string, into: string) =>
@@ -65,6 +74,12 @@ describe("the router", () => {
       code: "PRECONDITION_FAILED",
       message: "main doesn't track a remote branch.",
     });
+
+    expect(
+      await apiError(
+        call(gitRouter.remote.push, { repositoryId: ids.history, force: false }, { context }),
+      ),
+    ).toMatchObject({ code: "PRECONDITION_FAILED", message: "There's no remote to push to." });
 
     expect(
       await apiError(
@@ -146,5 +161,21 @@ describe("the router", () => {
     expect(
       await call(gitRouter.status.get, { ...input, since: "an older version" }, { context }),
     ).toEqual(status);
+  });
+
+  it("tells the renderer a push it can force apart from other failures", async () => {
+    const remote = createRepo("amended-remote");
+    git(remote, "commit", "-q", "--allow-empty", "-m", "first");
+    const path = cloneRepo("amended", remote);
+    git(path, "commit", "-q", "--amend", "--allow-empty", "-m", "reworded");
+    paths.set(ids.amended, path);
+    expect(
+      await apiError(
+        call(gitRouter.remote.push, { repositoryId: ids.amended, force: false }, { context }),
+      ),
+    ).toMatchObject({
+      code: "PUSH_REWRITTEN",
+      message: "origin/main still has main's commits from before a rebase or amend.",
+    });
   });
 });

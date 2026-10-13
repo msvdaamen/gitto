@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { noUpstream, pullBlocker } from "./pull-blocker";
+import { noUpstream, pullBlocker } from "./blockers";
 
 describe("pullBlocker", () => {
   it("is why a branch can't be pulled into, going by the status", () => {

@@ -1,6 +1,6 @@
 import { createSignal } from "solid-js";
 
-import { errorMessage } from "@/lib/errors";
+import { errorMessage, hasCode } from "@/lib/errors";
 
 /** Where saving a file that's being edited is at. */
 export type SaveState =
@@ -126,5 +126,5 @@ export function createAutosave(save: SaveFile, delayMs = AUTOSAVE_DELAY_MS) {
  * process's error for that (see `toApiError`), which an overwrite doesn't get.
  */
 function isChangedOnDisk(error: unknown): boolean {
-  return (error as { code?: unknown } | null)?.code === "CONFLICT";
+  return hasCode(error, "CONFLICT");
 }
