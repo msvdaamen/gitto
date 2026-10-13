@@ -35,4 +35,7 @@ export const repositoryRouter = os.router({
   remove: os.remove.handler(({ context, input }) =>
     context.repositoryService.removeRepository(input.id),
   ),
+  reorder: os.reorder.handler(({ context, input }) =>
+    context.repositoryService.reorderRepositories(input.ids),
+  ),
 });

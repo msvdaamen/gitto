@@ -12,6 +12,7 @@ export interface RepositoryService {
   getRepository(id: string): Promise<Repository | undefined>;
   addRepository(path: string): Promise<Repository>;
   removeRepository(id: string): Promise<void>;
+  reorderRepositories(ids: string[]): Promise<void>;
 }
 
 export class RepositoryServiceImpl implements RepositoryService {
@@ -45,6 +46,10 @@ export class RepositoryServiceImpl implements RepositoryService {
 
   async removeRepository(id: string): Promise<void> {
     await listed("update", this.store.delete(id));
+  }
+
+  async reorderRepositories(ids: string[]): Promise<void> {
+    await listed("update", this.store.reorder(ids));
   }
 }
 
