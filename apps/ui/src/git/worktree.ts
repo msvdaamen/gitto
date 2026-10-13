@@ -10,6 +10,12 @@ export function worktreeOn(
   return worktrees?.find((worktree) => worktree.branch === ref);
 }
 
+/** The local branches, among `refs`, tracking the remote branch `ref` (a full ref name). */
+export function trackingBranches(refs: readonly Ref[], ref: string): Ref[] {
+  const name = branchName(ref);
+  return refs.filter((candidate) => candidate.kind === "local" && candidate.upstream === name);
+}
+
 /**
  * The local branch switching to the remote branch `ref` (a full ref name) switches to, among
  * `refs`: the one tracking it, the current one or the one named after it if several do (as
@@ -17,9 +23,7 @@ export function worktreeOn(
  */
 export function trackingBranch(refs: readonly Ref[], ref: string): Ref | undefined {
   const name = branchName(ref);
-  const tracking = refs.filter(
-    (candidate) => candidate.kind === "local" && candidate.upstream === name,
-  );
+  const tracking = trackingBranches(refs, ref);
   return (
     tracking.find((candidate) => candidate.current) ??
     tracking.find((candidate) => name.endsWith(`/${candidate.name}`)) ??

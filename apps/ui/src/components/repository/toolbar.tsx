@@ -14,7 +14,11 @@ import { IconButton } from "@/components/ui/button";
 import { Divider } from "@/components/ui/divider";
 import { FailurePopover } from "@/components/ui/failure-popover";
 import { TextInput } from "@/components/ui/text-input";
-import { useMergeBranchState, useSwitchBranchState } from "@/git/queries/branch";
+import {
+  useDeleteBranchState,
+  useMergeBranchState,
+  useSwitchBranchState,
+} from "@/git/queries/branch";
 import { useFetch } from "@/git/queries/remote";
 import { useStatus } from "@/git/queries/status";
 import { headLabel } from "@/git/status";
@@ -98,25 +102,30 @@ function FetchButton(props: { repositoryId: string }) {
 
 /**
  * The repository's name and current branch. A spinner takes the branch icon's place while switching
- * branches or merging one into it (from a branch's menu), and a popover under it says why that
- * failed.
+ * branches, merging one into it or deleting one (from a branch's menu), and a popover under it says
+ * why that failed.
  */
 function CurrentBranch(props: { repositoryId: string }) {
   const switching = useSwitchBranchState(() => props.repositoryId);
   const merging = useMergeBranchState(() => props.repositoryId);
-  const busy = () => switching.isPending() || merging.isPending();
+  const deleting = useDeleteBranchState(() => props.repositoryId);
+  const busy = () => switching.isPending() || merging.isPending() || deleting.isPending();
   const failures = {
     merge: { title: "Merge", error: merging.error, dismiss: () => merging.dismiss() },
     switch: { title: "Switch branch", error: switching.error, dismiss: () => switching.dismiss() },
+    delete: { title: "Delete branch", error: deleting.error, dismiss: () => deleting.dismiss() },
   };
-  // Which failed last: both can have failed, one after the other, and are shown one at a time.
-  const [latest, setLatest] = createSignal<keyof typeof failures>("merge");
-  createEffect(on(merging.error, (error) => error && setLatest("merge")));
-  createEffect(on(switching.error, (error) => error && setLatest("switch")));
+  type Failed = keyof typeof failures;
+  // Which failed, the last first: each can have failed, one after the other, and they're shown
+  // one at a time.
+  const [order, setOrder] = createSignal<Failed[]>(["merge", "switch", "delete"]);
+  const failed = (name: Failed) => (error: Error | null) =>
+    error && setOrder((names) => [name, ...names.filter((other) => other !== name)]);
+  createEffect(on(merging.error, failed("merge")));
+  createEffect(on(switching.error, failed("switch")));
+  createEffect(on(deleting.error, failed("delete")));
   const failure = () => {
-    const last = failures[latest()];
-    const other = failures[latest() === "merge" ? "switch" : "merge"];
-    const shown = last.error() ? last : other;
+    const shown = failures[order().find((name) => failures[name].error()) ?? "merge"];
     return { title: shown.title, error: shown.error(), dismiss: shown.dismiss };
   };
 

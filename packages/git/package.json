@@ -6,6 +6,7 @@
   "exports": {
     "./contract": "./src/contract.ts",
     "./pull-blocker": "./src/features/remote/pull-blocker.ts",
+    "./remote-name": "./src/features/remote/remote-name.ts",
     "./server": "./src/server.ts",
     "./types": "./src/types.ts"
   },

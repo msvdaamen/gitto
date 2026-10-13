@@ -19,9 +19,10 @@ const rpc = vi.hoisted(() => ({
     status: { get: vi.fn() },
     refs: { list: vi.fn() },
     stash: { list: vi.fn(), pop: vi.fn(), drop: vi.fn() },
-    branch: { switch: vi.fn(), create: vi.fn(), merge: vi.fn() },
+    branch: { switch: vi.fn(), create: vi.fn(), merge: vi.fn(), delete: vi.fn() },
     operation: { get: vi.fn() },
     worktree: { list: vi.fn(), add: vi.fn(), remove: vi.fn() },
+    remote: { list: vi.fn() },
   },
 }));
 
@@ -126,6 +127,7 @@ beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(200);
   rpc.repository.list.mockResolvedValue([{ id: "a", name: "repo", path: "/w/repo" }]);
   rpc.git.worktree.list.mockResolvedValue([]);
+  rpc.git.remote.list.mockResolvedValue(["origin"]);
   rpc.git.status.get.mockResolvedValue(status);
   rpc.git.refs.list.mockResolvedValue([
     branch("main", true),
@@ -1161,5 +1163,309 @@ describe("worktrees from the branch menu", () => {
     );
     // Out of the way of the folder.
     expect(screen.queryByText(message)).not.toBeInTheDocument();
+  });
+});
+
+/** Right-clicks the branch `name`'s row, and chooses to delete it, which asks first. */
+async function deleteFrom(user: ReturnType<typeof userEvent.setup>, name: string) {
+  const item = await menuItem(user, name, `Delete ${name}…`);
+  // Enabled once the status and the refs have loaded.
+  await vi.waitFor(() => expect(item).toHaveAttribute("aria-disabled", "false"));
+  await user.click(item);
+}
+
+describe("deleting from the branch menu", () => {
+  it("deletes a local branch, asking first, showing it running", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+    let finish!: () => void;
+    rpc.git.branch.delete.mockReturnValue(new Promise<void>((resolve) => (finish = resolve)));
+
+    await deleteFrom(user, "feature");
+    expect(await screen.findByText("Delete branch?")).toBeInTheDocument();
+    expect(
+      screen.getByText("feature is deleted, with any commits only it has."),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+    expect(rpc.git.branch.delete).toHaveBeenCalledWith({
+      repositoryId: "a",
+      ref: "refs/heads/feature",
+    });
+    await vi.waitFor(() => expect(busy()).toBeInTheDocument());
+
+    // Nor another one, or a merge, meanwhile.
+    expect(await menuItem(user, "origin/feature", "Delete origin/feature…")).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(
+      screen.getByRole("menuitem", { name: "Merge origin/feature into main" }),
+    ).toHaveAttribute("aria-disabled", "true");
+    await user.keyboard("{Escape}");
+
+    const refsCalls = rpc.git.refs.list.mock.calls.length;
+    finish();
+    await vi.waitFor(() => expect(busy()).not.toBeInTheDocument());
+    // The repository was reloaded.
+    expect(rpc.git.refs.list.mock.calls.length).toBeGreaterThan(refsCalls);
+  });
+
+  it("says a local branch's remote one is kept", async () => {
+    const user = userEvent.setup();
+    rpc.git.refs.list.mockResolvedValue([
+      branch("main", true),
+      { ...branch("feature"), upstream: "origin/feature" },
+      branch("origin/feature", false, "remote"),
+    ]);
+    renderSidebar();
+
+    await deleteFrom(user, "feature");
+    expect(
+      await screen.findByText(
+        "feature is deleted, with any commits only it has. origin/feature is kept on the remote.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("deletes a remote branch, saying the local branches tracking it go with it", async () => {
+    const user = userEvent.setup();
+    rpc.git.refs.list.mockResolvedValue([
+      branch("main", true),
+      { ...branch("feature"), upstream: "origin/feature" },
+      { ...branch("feature-copy"), upstream: "origin/feature" },
+      branch("origin/feature", false, "remote"),
+    ]);
+    renderSidebar();
+    rpc.git.branch.delete.mockResolvedValue(undefined);
+
+    await deleteFrom(user, "origin/feature");
+    expect(await screen.findByText("Delete remote branch?")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "origin/feature is deleted on the remote, for everyone, with any commits only it has. So are the local branches feature and feature-copy, which track it.",
+      ),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+    expect(rpc.git.branch.delete).toHaveBeenCalledWith({
+      repositoryId: "a",
+      ref: "refs/remotes/origin/feature",
+    });
+  });
+
+  it("says which commits of the local branches tracking it were never pushed to it", async () => {
+    const user = userEvent.setup();
+    rpc.git.refs.list.mockResolvedValue([
+      branch("main", true),
+      { ...branch("feature"), upstream: "origin/feature", ahead: 3 },
+      { ...branch("feature-copy"), upstream: "origin/feature" },
+      { ...branch("feature-fix"), upstream: "origin/feature", ahead: 1 },
+      branch("origin/feature", false, "remote"),
+    ]);
+    renderSidebar();
+
+    await deleteFrom(user, "origin/feature");
+    expect(
+      await screen.findByText(
+        "origin/feature is deleted on the remote, for everyone, with any commits only it has. So are the local branches feature, feature-copy and feature-fix, which track it. feature has 3 commits and feature-fix has 1 commit that origin/feature doesn't, which are lost unless another branch has them.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("says so of a single commit never pushed", async () => {
+    const user = userEvent.setup();
+    rpc.git.refs.list.mockResolvedValue([
+      branch("main", true),
+      { ...branch("feature"), upstream: "origin/feature", ahead: 1 },
+      branch("origin/feature", false, "remote"),
+    ]);
+    renderSidebar();
+
+    await deleteFrom(user, "origin/feature");
+    expect(
+      await screen.findByText(
+        /feature has 1 commit that origin\/feature doesn't, which is lost unless another branch has it\.$/,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("says which commits of a local branch its remote one doesn't have", async () => {
+    const user = userEvent.setup();
+    rpc.git.refs.list.mockResolvedValue([
+      branch("main", true),
+      { ...branch("feature"), upstream: "origin/feature", ahead: 2 },
+      branch("origin/feature", false, "remote"),
+    ]);
+    renderSidebar();
+
+    await deleteFrom(user, "feature");
+    expect(
+      await screen.findByText(
+        "feature is deleted, with any commits only it has. origin/feature is kept on the remote. feature has 2 commits that origin/feature doesn't.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("says a branch of a remote that's gone is only deleted here", async () => {
+    const user = userEvent.setup();
+    rpc.git.refs.list.mockResolvedValue([
+      branch("main", true),
+      branch("old/feature", false, "remote"),
+    ]);
+    renderSidebar();
+
+    await deleteFrom(user, "old/feature");
+    expect(
+      await screen.findByText("old/feature is deleted here: its remote is gone."),
+    ).toBeInTheDocument();
+  });
+
+  it("doesn't switch branches, nor merge, while it runs", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+    let finish!: () => void;
+    rpc.git.branch.delete.mockReturnValue(new Promise<void>((resolve) => (finish = resolve)));
+
+    await deleteFrom(user, "origin/feature");
+    await user.click(await screen.findByRole("button", { name: "Delete" }));
+    await vi.waitFor(() => expect(busy()).toBeInTheDocument());
+    await user.dblClick(await row("feature"));
+    expect(rpc.git.branch.switch).not.toHaveBeenCalled();
+
+    finish();
+    await vi.waitFor(() => expect(busy()).not.toBeInTheDocument());
+    await user.dblClick(await row("feature"));
+    expect(rpc.git.branch.switch).toHaveBeenCalled();
+  });
+
+  it("isn't offered until it's known what goes with it, and whether it's checked out", async () => {
+    const user = userEvent.setup();
+    let loadWorktrees!: (worktrees: Worktree[]) => void;
+    rpc.git.worktree.list.mockReturnValue(new Promise((resolve) => (loadWorktrees = resolve)));
+    renderSidebar();
+
+    const item = await menuItem(user, "origin/feature", "Delete origin/feature…");
+    // The status and the branches have loaded by now, as the merge it offers shows.
+    await vi.waitFor(() =>
+      expect(
+        screen.getByRole("menuitem", { name: "Merge origin/feature into main" }),
+      ).toHaveAttribute("aria-disabled", "false"),
+    );
+    expect(item).toHaveAttribute("aria-disabled", "true");
+
+    loadWorktrees([]);
+    await vi.waitFor(() => expect(item).toHaveAttribute("aria-disabled", "false"));
+  });
+
+  it("doesn't run while a worktree is being added, which checks out a branch, nor that while it runs", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+    let added!: () => void;
+    rpc.git.worktree.add.mockReturnValue(new Promise<void>((resolve) => (added = resolve)));
+    let deleted!: () => void;
+    rpc.git.branch.delete.mockReturnValue(new Promise<void>((resolve) => (deleted = resolve)));
+
+    await user.pointer({ keys: "[MouseRight]", target: await row("feature") });
+    await user.click(await screen.findByRole("menuitem", { name: "Add worktree…" }));
+    await user.click(await screen.findByRole("button", { name: "Add worktree" }));
+    await vi.waitFor(() => expect(busySection()).toHaveTextContent("Worktrees"));
+    expect(await menuItem(user, "origin/feature", "Delete origin/feature…")).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    await user.keyboard("{Escape}");
+
+    added();
+    await vi.waitFor(() => expect(busySection()).not.toBeInTheDocument());
+    await deleteFrom(user, "origin/feature");
+    await user.click(await screen.findByRole("button", { name: "Delete" }));
+    await vi.waitFor(() => expect(busy()).toBeInTheDocument());
+    expect(await menuItem(user, "feature", "Add worktree…")).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    await user.keyboard("{Escape}");
+
+    deleted();
+    await vi.waitFor(() => expect(busy()).not.toBeInTheDocument());
+  });
+
+  it("says a remote branch no local one tracks is deleted on its own", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+
+    await deleteFrom(user, "origin/feature");
+    expect(
+      await screen.findByText(
+        "origin/feature is deleted on the remote, for everyone, with any commits only it has.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("doesn't delete it when the dialog is cancelled", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+
+    await deleteFrom(user, "feature");
+    await user.click(await screen.findByRole("button", { name: "Cancel" }));
+    await vi.waitFor(() => expect(screen.queryByText("Delete branch?")).not.toBeInTheDocument());
+    expect(rpc.git.branch.delete).not.toHaveBeenCalled();
+  });
+
+  it("isn't offered for a branch checked out, here or in another worktree, nor a remote one tracked by it", async () => {
+    const user = userEvent.setup();
+    rpc.git.worktree.list.mockResolvedValue(WORKTREES);
+    rpc.git.refs.list.mockResolvedValue([
+      { ...branch("main", true), upstream: "origin/main" },
+      { ...branch("feature"), upstream: "origin/feature" },
+      branch("topic"),
+      branch("origin/main", false, "remote"),
+      branch("origin/feature", false, "remote"),
+    ]);
+    renderSidebar();
+
+    // Enabled for another, once everything has loaded.
+    const topic = await menuItem(user, "topic", "Delete topic…");
+    await vi.waitFor(() => expect(topic).toHaveAttribute("aria-disabled", "false"));
+    await user.keyboard("{Escape}");
+    for (const name of ["main", "origin/main", "origin/feature"]) {
+      // oxlint-disable-next-line no-await-in-loop -- one menu at a time.
+      expect(await menuItem(user, name, `Delete ${name}…`)).toHaveAttribute(
+        "aria-disabled",
+        "true",
+      );
+      // oxlint-disable-next-line no-await-in-loop -- one menu at a time.
+      await user.keyboard("{Escape}");
+    }
+    await user.pointer({ keys: "[MouseRight]", target: await branchRow("feature") });
+    expect(await screen.findByRole("menuitem", { name: "Delete feature…" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+
+  it("says why a branch couldn't be deleted, until that's dismissed", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+    const message = "! [remote rejected] feature (protected branch hook declined)";
+    rpc.git.branch.delete.mockRejectedValue(new Error(message));
+
+    await deleteFrom(user, "origin/feature");
+    await user.click(await screen.findByRole("button", { name: "Delete" }));
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.getByText("Delete branch")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Dismiss" }));
+    await vi.waitFor(() => expect(screen.queryByText(message)).not.toBeInTheDocument());
+  });
+
+  it("forgets the branch it was asking about deleting in another repository", async () => {
+    const user = userEvent.setup();
+    const [repositoryId, setRepositoryId] = createSignal("a");
+    renderSidebar(repositoryId);
+
+    await deleteFrom(user, "feature");
+    expect(await screen.findByText("Delete branch?")).toBeInTheDocument();
+    setRepositoryId("b");
+    await vi.waitFor(() => expect(screen.queryByText("Delete branch?")).not.toBeInTheDocument());
   });
 });
