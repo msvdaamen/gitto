@@ -5,8 +5,14 @@ import Plus from "lucide-solid/icons/plus";
 import X from "lucide-solid/icons/x";
 import { createEffect, createSignal, For, onCleanup, Show, Suspense, type JSX } from "solid-js";
 
-import { useOpenRepository, useRemoveRepository, useRepositories } from "@/hooks/repositories";
+import {
+  type Repository,
+  useOpenRepository,
+  useRemoveRepository,
+  useRepositories,
+} from "@/hooks/repositories";
 
+import { RemoveRepositoryDialog } from "./remove-repository-dialog";
 import { IconButton } from "./ui/button";
 import { FailurePopover } from "./ui/failure-popover";
 import { GittoIcon } from "./ui/gitto-icon";
@@ -51,6 +57,9 @@ export function Tabs() {
 
   createEffect(updateUnderline);
 
+  /** The repository whose tab's close button was clicked, asked about before it's removed. */
+  const [removing, setRemoving] = createSignal<Repository>();
+
   function remove(id: string) {
     removeRepository.mutate(id, {
       onSuccess: () => {
@@ -79,7 +88,7 @@ export function Tabs() {
                 id={repository.id}
                 name={repository.name}
                 active={selectedTab() === repository.id}
-                onRemove={() => remove(repository.id)}
+                onRemove={() => setRemoving(repository)}
               />
             </FailurePopover>
           )}
@@ -103,6 +112,15 @@ export function Tabs() {
           />
         )}
       </Show>
+
+      <RemoveRepositoryDialog
+        repository={removing()}
+        onCancel={() => setRemoving(undefined)}
+        onRemove={(repository) => {
+          setRemoving(undefined);
+          remove(repository.id);
+        }}
+      />
     </div>
   );
 }
