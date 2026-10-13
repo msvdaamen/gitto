@@ -1,24 +1,13 @@
 import type { ChangedFile } from "@gitto/git/types";
-import { cn } from "cn";
 import Check from "lucide-solid/icons/check";
 import Copy from "lucide-solid/icons/copy";
 import Ellipsis from "lucide-solid/icons/ellipsis";
 import GitCommitHorizontal from "lucide-solid/icons/git-commit-horizontal";
 import LoaderCircle from "lucide-solid/icons/loader-circle";
-import {
-  createMemo,
-  createSignal,
-  createUniqueId,
-  Match,
-  onCleanup,
-  onMount,
-  Show,
-  Suspense,
-  Switch,
-} from "solid-js";
+import { createMemo, createSignal, Match, onCleanup, Show, Suspense, Switch } from "solid-js";
 
 import { Avatar } from "@/components/ui/avatar";
-import { IconButton, LinkButton } from "@/components/ui/button";
+import { IconButton } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { lineTotals } from "@/git/changes";
 import type { DiffSource, FileOpener } from "@/git/diff-source";
@@ -171,66 +160,18 @@ function CommitSummary(props: {
         </div>
       </div>
       <h2 class="mt-3.5 mb-1.5 text-sm leading-[1.35] tracking-[-.2px]">{props.commit.message}</h2>
-      {props.commit.description && <CommitDescription text={props.commit.description} />}
+      {/* Scrolls on its own past a few lines, so a long one doesn't push the files out of sight. */}
+      {props.commit.description && (
+        <p class="m-0 max-h-[9.3em] overflow-y-auto text-[12px] leading-[1.55] break-words whitespace-pre-wrap text-muted">
+          {props.commit.description}
+        </p>
+      )}
       <div class="mt-3 flex w-max items-center overflow-hidden rounded-[5px] border border-border-soft">
         <code class="bg-bg px-[7px] py-1 text-[11px] text-text-soft">{props.commit.shortSha}</code>
         <CopyShaButton sha={props.commit.id} />
       </div>
       <FileTotals count={props.fileCount} totals={props.totals} />
     </div>
-  );
-}
-
-/**
- * The commit's description, cut off at a few lines so a long one doesn't push its files out of
- * sight, with a button to show the rest when it's cut off.
- */
-function CommitDescription(props: { text: string }) {
-  const [expanded, setExpanded] = createSignal(false);
-  const [overflows, setOverflows] = createSignal(false);
-  const id = createUniqueId();
-  let description!: HTMLParagraphElement;
-
-  // Only measured while it's cut off: expanded, it's never taller than it shows.
-  function measure() {
-    if (!expanded()) setOverflows(description.scrollHeight > description.clientHeight);
-  }
-
-  // Remeasured as the details are resized, which wraps the description onto more or fewer lines.
-  onMount(() => {
-    measure();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(description);
-    onCleanup(() => observer.disconnect());
-  });
-
-  return (
-    <>
-      <p
-        ref={(p) => (description = p)}
-        id={id}
-        class={cn(
-          "m-0 text-[12px] leading-[1.55] break-words whitespace-pre-wrap text-muted",
-          !expanded() && "max-h-[9.3em] overflow-hidden",
-          !expanded() &&
-            overflows() &&
-            "[mask-image:linear-gradient(to_bottom,black_60%,transparent)]",
-        )}
-      >
-        {props.text}
-      </p>
-      <Show when={overflows()}>
-        <LinkButton
-          class="mt-1"
-          controls={id}
-          expanded={expanded()}
-          onClick={() => setExpanded(!expanded())}
-        >
-          {expanded() ? "Show less" : "Show more"}
-        </LinkButton>
-      </Show>
-    </>
   );
 }
 
