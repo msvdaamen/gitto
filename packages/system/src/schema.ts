@@ -19,6 +19,18 @@ export const UpdateStateSchema = z.object({
 export type UpdateChannel = z.infer<typeof UpdateChannelSchema>;
 export type UpdateState = z.infer<typeof UpdateStateSchema>;
 
+/** Whether Gitto sends error reports, as the user's set it to. */
+export const TelemetryStateSchema = z.object({
+  /** Whether this build sends them at all: one built without a place to send them to doesn't. */
+  available: z.boolean(),
+  /** Whether the user lets it. */
+  enabled: z.boolean(),
+  /** Whether it's sending them now. Once turned on, it only starts when Gitto restarts. */
+  sending: z.boolean(),
+});
+
+export type TelemetryState = z.infer<typeof TelemetryStateSchema>;
+
 /** A change users see, from its commit's Conventional Commits title (see @gitto/release). */
 export const ChangeSchema = z.object({
   type: z.enum(CHANGE_TYPES),

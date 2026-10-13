@@ -1,6 +1,7 @@
 packages:
   - apps/*
   - packages/*
+  - packages/telemetry/*
 
 # Versions shared across packages (oRPC must stay in lockstep); packages reference these with "catalog:".
 catalog:
@@ -11,6 +12,10 @@ catalog:
   drizzle-orm: "1.0.0-rc.4"
   drizzle-kit: "1.0.0-rc.4"
   vitest: "^5.0.2"
+  # @sentry/electron is built on one version of Sentry's JavaScript SDKs (11.4.0 for 8.1.0), which
+  # @sentry/solid has to match: they share one client. Upgrade them together.
+  "@sentry/electron": "8.1.0"
+  "@sentry/solid": "11.4.0"
 
 # pnpm's default, set explicitly so Electron Forge's package manager check passes.
 # The Electron app is bundled by Vite (Forge only packages the .vite folder); the few
@@ -23,6 +28,8 @@ allowBuilds:
   esbuild: true
   # Only builds from source when asked to; the prebuilt binaries come as optional dependencies.
   "@parcel/watcher": false
+  # Downloads the binary @sentry/vite-plugin uploads source maps with.
+  "@sentry/cli": true
 
 overrides:
   # Forge 7 depends on @electron/rebuild@3, which pulls node-gyp from a git repo

@@ -1,0 +1,19 @@
+{
+  "name": "@gitto/telemetry-ui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@sentry/electron": "catalog:",
+    "@sentry/solid": "catalog:"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
+}

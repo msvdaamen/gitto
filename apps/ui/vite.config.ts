@@ -23,6 +23,8 @@ export default defineConfig({
       "@": resolve(import.meta.dirname, "src"),
     },
   },
+  // Whether to catch errors for the main process to send, when the app's built to send them.
+  define: { "import.meta.env.SENTRY": JSON.stringify(!!process.env.SENTRY_DSN) },
   build: {
     target: "esnext",
   },

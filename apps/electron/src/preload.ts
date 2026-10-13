@@ -1,3 +1,4 @@
+import "@gitto/telemetry-electron/preload";
 import { RPC_CONNECT_CHANNEL } from "@gitto/rpc";
 import { contextBridge, ipcRenderer } from "electron";
 

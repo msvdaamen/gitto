@@ -26,7 +26,10 @@ export function Header() {
           <IconButton label="Notifications" icon={Bell} />
           <i class="pointer-events-none absolute top-1.25 right-1.25 size-1.25 rounded-full bg-coral shadow-[0_0_0_2px_var(--bg-soft)]" />
         </span>
-        <Profile />
+        {/* Wrapped, so it's not hidden with the buttons on narrow windows: Settings is in its menu. */}
+        <span class="flex">
+          <Profile />
+        </span>
       </div>
     </header>
   );
