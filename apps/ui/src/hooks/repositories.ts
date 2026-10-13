@@ -9,7 +9,7 @@ export const REPOSITORIES_KEY = ["repositories"] as const;
 /** A repository added to Gitto. */
 export type Repository = Awaited<ReturnType<typeof rpc.repository.list>>[number];
 
-/** The repositories added to Gitto (name and path), in the order they were added. */
+/** The repositories added to Gitto (name and path), in the order of their tabs. */
 export function useRepositories() {
   return useQuery(() => ({
     queryKey: REPOSITORIES_KEY,
@@ -72,5 +72,15 @@ export function useRemoveRepository() {
     mutationFn: (id: string) => rpc.repository.remove({ id }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: REPOSITORIES_KEY }),
     onError: (error) => console.error("Couldn't remove the repository", error),
+  }));
+}
+
+/** Puts the repositories' tabs in the order of the ids it's given. */
+export function useReorderRepositories() {
+  const queryClient = useQueryClient();
+  return useMutation(() => ({
+    mutationFn: (ids: string[]) => rpc.repository.reorder({ ids }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: REPOSITORIES_KEY }),
+    onError: (error) => console.error("Couldn't reorder the repositories", error),
   }));
 }
