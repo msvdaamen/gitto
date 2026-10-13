@@ -3,7 +3,7 @@ import { render, screen } from "@solidjs/testing-library";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { SettingsDialog } from "./settings-dialog";
+import { TelemetrySetting } from "./telemetry-setting";
 
 const rpc = vi.hoisted(() => ({
   system: { telemetry: { get: vi.fn(), set: vi.fn() } },
@@ -13,14 +13,14 @@ vi.mock("@/lib/rpc", () => ({ rpc }));
 
 function renderWith(state: TelemetryState) {
   rpc.system.telemetry.get.mockResolvedValue(state);
-  render(() => <SettingsDialog open onOpenChange={() => {}} />);
+  render(() => <TelemetrySetting />);
 }
 
 afterEach(() => {
   vi.resetAllMocks();
 });
 
-describe("the settings", () => {
+describe("the error reports setting", () => {
   it("turns error reports off", async () => {
     const user = userEvent.setup();
     renderWith({ available: true, enabled: true, sending: true });
