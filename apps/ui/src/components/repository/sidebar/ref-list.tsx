@@ -4,6 +4,7 @@ import Cloud from "lucide-solid/icons/cloud";
 import FolderGit2 from "lucide-solid/icons/folder-git-2";
 import GitBranch from "lucide-solid/icons/git-branch";
 import Inbox from "lucide-solid/icons/inbox";
+import LoaderCircle from "lucide-solid/icons/loader-circle";
 import Tag from "lucide-solid/icons/tag";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
 import { createMemo, createSignal, Match, Show, Switch } from "solid-js";
@@ -13,6 +14,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { useSwitchBranch } from "@/git/queries/branch";
 import { useRefs } from "@/git/queries/refs";
 import { useStashes } from "@/git/queries/stash";
+import { useUnsuspendedData } from "@/git/queries/unsuspended";
 import { useWorktrees } from "@/git/queries/worktree";
 import { buildRefTree, flattenRefTree } from "@/git/ref-tree";
 import type { RefFolder, RefLeaf, RefTreeRow } from "@/git/ref-tree";
@@ -38,8 +40,12 @@ import { WorktreeMenu } from "./worktree-menu";
  */
 export function RefList(props: { repositoryId: string }) {
   const refs = useRefs(() => props.repositoryId);
-  const stashes = useStashes(() => props.repositoryId);
-  const worktrees = useWorktrees(() => props.repositoryId);
+  // Without Suspense: they're reloaded while they're on show, after a pull or a switch, say, and
+  // the sections would be taken off the page and put back meanwhile, their lists scrolled to the
+  // top but still showing the rows from where they were scrolled to (see `useUnsuspendedData`).
+  const refList = useUnsuspendedData(refs);
+  const stashes = useUnsuspendedData(useStashes(() => props.repositoryId));
+  const worktrees = useUnsuspendedData(useWorktrees(() => props.repositoryId));
   const switchBranch = useSwitchBranch(() => props.repositoryId);
   const ago = useRelativeTime();
   // The stash whose menu is open.
@@ -47,7 +53,7 @@ export function RefList(props: { repositoryId: string }) {
   // The worktree whose menu is open.
   const [worktreeMenuFor, setWorktreeMenuFor] = createSignal<string>();
 
-  const ofKind = (kind: Ref["kind"]) => (refs.data ?? []).filter((ref) => ref.kind === kind);
+  const ofKind = (kind: Ref["kind"]) => (refList() ?? []).filter((ref) => ref.kind === kind);
   const localBranches = createMemo(() => ofKind("local"));
   const remoteBranches = createMemo(() => ofKind("remote"));
   const tags = createMemo(() => ofKind("tag"));
@@ -57,7 +63,7 @@ export function RefList(props: { repositoryId: string }) {
   const collapsed = useCollapsed(() => props.repositoryId, { tags: true, stashes: true });
   // The worktrees other than the one on show, whose files are these.
   const otherWorktrees = createMemo(() =>
-    (worktrees.isSuccess ? worktrees.data : []).filter((worktree) => !worktree.current),
+    (worktrees() ?? []).filter((worktree) => !worktree.current),
   );
   const localRows = createMemo(() =>
     flattenRefTree(buildRefTree(localBranches()), collapsed.isCollapsed),
@@ -169,97 +175,104 @@ export function RefList(props: { repositoryId: string }) {
           </EmptyState>
         )}
       </Show>
-      <BranchMenu repositoryId={props.repositoryId}>
-        <SidebarSection
-          title="Local branches"
-          scrollId="sidebar-local-branches"
-          icon={GitBranch}
-          count={localBranches().length}
-          {...collapsible("local")}
-          items={localRows()}
-        >
-          {(row) => treeRow(row, branchRow)}
-        </SidebarSection>
-        <SidebarSection
-          title="Remotes"
-          scrollId="sidebar-remotes"
-          icon={Cloud}
-          count={remoteBranches().length}
-          {...collapsible("remotes")}
-          items={remoteRows()}
-        >
-          {(row) => treeRow(row, branchRow)}
-        </SidebarSection>
-        <SidebarSection
-          title="Tags"
-          scrollId="sidebar-tags"
-          icon={Tag}
-          count={tags().length}
-          {...collapsible("tags")}
-          items={tags()}
-        >
-          {(tag) => <SidebarRow icon={Tag} label={tag().name} />}
-        </SidebarSection>
-      </BranchMenu>
-      <StashMenu repositoryId={props.repositoryId} onOpenFor={setMenuFor}>
-        {(section) => (
+      <Show
+        when={!refs.isPending}
+        fallback={
+          <EmptyState icon={LoaderCircle} loading title="Loading branches…" class="h-[150px]" />
+        }
+      >
+        <BranchMenu repositoryId={props.repositoryId}>
           <SidebarSection
-            ref={section.ref}
-            title="Stashes"
-            scrollId="sidebar-stashes"
-            icon={Inbox}
-            busy={section.busy()}
-            count={stashes.data?.length ?? 0}
-            {...collapsible("stashes")}
-            items={stashes.data ?? []}
+            title="Local branches"
+            scrollId="sidebar-local-branches"
+            icon={GitBranch}
+            count={localBranches().length}
+            {...collapsible("local")}
+            items={localRows()}
           >
-            {(stash) => (
-              <SidebarRow
-                data-stash={stash().sha}
-                icon={Archive}
-                label={stash().message}
-                title={`${stash().message}\nStashed ${ago(stash().createdAt).toLowerCase()}`}
-                highlighted={menuFor() === stash().sha}
-              />
-            )}
+            {(row) => treeRow(row, branchRow)}
           </SidebarSection>
-        )}
-      </StashMenu>
-      <WorktreeMenu repositoryId={props.repositoryId} onOpenFor={setWorktreeMenuFor}>
-        {(section) => (
           <SidebarSection
-            ref={section.ref}
-            title="Worktrees"
-            scrollId="sidebar-worktrees"
-            icon={FolderGit2}
-            busy={section.busy()}
-            count={worktrees.data?.length ?? 0}
-            {...collapsible("worktrees")}
-            items={worktrees.data ?? []}
+            title="Remotes"
+            scrollId="sidebar-remotes"
+            icon={Cloud}
+            count={remoteBranches().length}
+            {...collapsible("remotes")}
+            items={remoteRows()}
           >
-            {(worktree) => (
-              <SidebarRow
-                data-worktree={worktree().path}
-                icon={FolderGit2}
-                label={worktree().name}
-                title={describeWorktree(worktree())}
-                active={worktree().current}
-                highlighted={worktreeMenuFor() === worktree().path}
-                faded={worktree().prunable !== null}
-                meta={
-                  worktree().branch
-                    ? branchName(worktree().branch!)
-                    : worktree().bare
-                      ? "bare"
-                      : "detached"
-                }
-                // The section shows it running, and why it failed.
-                onDblClick={() => section.open(worktree())}
-              />
-            )}
+            {(row) => treeRow(row, branchRow)}
           </SidebarSection>
-        )}
-      </WorktreeMenu>
+          <SidebarSection
+            title="Tags"
+            scrollId="sidebar-tags"
+            icon={Tag}
+            count={tags().length}
+            {...collapsible("tags")}
+            items={tags()}
+          >
+            {(tag) => <SidebarRow icon={Tag} label={tag().name} />}
+          </SidebarSection>
+        </BranchMenu>
+        <StashMenu repositoryId={props.repositoryId} onOpenFor={setMenuFor}>
+          {(section) => (
+            <SidebarSection
+              ref={section.ref}
+              title="Stashes"
+              scrollId="sidebar-stashes"
+              icon={Inbox}
+              busy={section.busy()}
+              count={stashes()?.length ?? 0}
+              {...collapsible("stashes")}
+              items={stashes() ?? []}
+            >
+              {(stash) => (
+                <SidebarRow
+                  data-stash={stash().sha}
+                  icon={Archive}
+                  label={stash().message}
+                  title={`${stash().message}\nStashed ${ago(stash().createdAt).toLowerCase()}`}
+                  highlighted={menuFor() === stash().sha}
+                />
+              )}
+            </SidebarSection>
+          )}
+        </StashMenu>
+        <WorktreeMenu repositoryId={props.repositoryId} onOpenFor={setWorktreeMenuFor}>
+          {(section) => (
+            <SidebarSection
+              ref={section.ref}
+              title="Worktrees"
+              scrollId="sidebar-worktrees"
+              icon={FolderGit2}
+              busy={section.busy()}
+              count={worktrees()?.length ?? 0}
+              {...collapsible("worktrees")}
+              items={worktrees() ?? []}
+            >
+              {(worktree) => (
+                <SidebarRow
+                  data-worktree={worktree().path}
+                  icon={FolderGit2}
+                  label={worktree().name}
+                  title={describeWorktree(worktree())}
+                  active={worktree().current}
+                  highlighted={worktreeMenuFor() === worktree().path}
+                  faded={worktree().prunable !== null}
+                  meta={
+                    worktree().branch
+                      ? branchName(worktree().branch!)
+                      : worktree().bare
+                        ? "bare"
+                        : "detached"
+                  }
+                  // The section shows it running, and why it failed.
+                  onDblClick={() => section.open(worktree())}
+                />
+              )}
+            </SidebarSection>
+          )}
+        </WorktreeMenu>
+      </Show>
     </>
   );
 }
