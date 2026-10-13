@@ -41,6 +41,9 @@ export function Button(props: {
 export function LinkButton(props: {
   children: JSX.Element;
   disabled?: boolean;
+  /** The id of what the button shows or hides, and whether that's shown. */
+  controls?: string;
+  expanded?: boolean;
   class?: string;
   onClick?: () => void;
 }) {
@@ -52,6 +55,8 @@ export function LinkButton(props: {
         "cursor-pointer border-0 bg-transparent p-0 text-[11.5px] text-primary-strong disabled:cursor-default disabled:opacity-50",
         props.class,
       )}
+      aria-controls={props.controls}
+      aria-expanded={props.expanded}
       onClick={props.onClick}
     >
       {props.children}
