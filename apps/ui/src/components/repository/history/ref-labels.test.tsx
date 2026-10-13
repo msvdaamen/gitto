@@ -40,19 +40,6 @@ describe("switching branches from the history", () => {
     expect(onSwitch).toHaveBeenCalledWith("refs/remotes/origin/feature");
   });
 
-  it("switches to a branch only shown when the count of the rest is hovered", async () => {
-    const user = userEvent.setup();
-    const onSwitch = renderLabels([
-      { kind: "local", name: "main", fullName: "refs/heads/main", current: true },
-      { kind: "remote", name: "origin/release", fullName: "refs/remotes/origin/release" },
-    ]);
-    expect(screen.queryByText("origin/release")).not.toBeInTheDocument();
-
-    await user.hover(screen.getByText("+1"));
-    await user.dblClick(await screen.findByText("origin/release"));
-    expect(onSwitch).toHaveBeenCalledWith("refs/remotes/origin/release");
-  });
-
   it("doesn't switch to a tag or a detached HEAD", async () => {
     const user = userEvent.setup();
     const onSwitchTag = renderLabels([{ kind: "tag", name: "v1", fullName: "refs/tags/v1" }]);

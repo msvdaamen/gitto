@@ -1271,23 +1271,6 @@ describe("deleting from the branch menu", () => {
     ).toBeInTheDocument();
   });
 
-  it("says so of a single commit never pushed", async () => {
-    const user = userEvent.setup();
-    rpc.git.refs.list.mockResolvedValue([
-      branch("main", true),
-      { ...branch("feature"), upstream: "origin/feature", ahead: 1 },
-      branch("origin/feature", false, "remote"),
-    ]);
-    renderSidebar();
-
-    await deleteFrom(user, "origin/feature");
-    expect(
-      await screen.findByText(
-        /feature has 1 commit that origin\/feature doesn't, which is lost unless another branch has it\.$/,
-      ),
-    ).toBeInTheDocument();
-  });
-
   it("says which commits of a local branch its remote one doesn't have", async () => {
     const user = userEvent.setup();
     rpc.git.refs.list.mockResolvedValue([

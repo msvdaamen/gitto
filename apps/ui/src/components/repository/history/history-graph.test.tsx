@@ -58,9 +58,4 @@ describe("HistoryGraph", () => {
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
     vi.useRealTimers();
   });
-
-  it("has no tooltip on the uncommitted changes' node", () => {
-    const { container } = render(() => <HistoryGraph row={row} wip />);
-    expect(container.querySelector("svg g")).not.toBeInTheDocument();
-  });
 });

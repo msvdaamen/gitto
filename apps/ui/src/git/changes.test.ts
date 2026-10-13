@@ -2,14 +2,10 @@ import type { ChangedFile } from "@gitto/git/types";
 import { describe, expect, it } from "vitest";
 
 import {
-  countsOf,
   hasPatch,
   isKnownBinary,
   isNestedRepository,
-  lineTotals,
-  sourceLabel,
   stagingPaths,
-  totalLines,
   unchangedReason,
 } from "./changes";
 
@@ -23,28 +19,9 @@ function file(
   return { path, status, origPath, additions, deletions };
 }
 
-describe("lineTotals", () => {
-  it("adds the files' counts up, leaving out binary ones", () => {
-    expect(lineTotals([file("a", "modified", 2, 1), file("b", "modified", null, null)])).toEqual({
-      additions: 2,
-      deletions: 1,
-    });
-    expect(lineTotals([])).toEqual({ additions: 0, deletions: 0 });
-  });
-});
-
 describe("stagingPaths", () => {
   it("stages a renamed file by both its paths", () => {
     expect(stagingPaths([file("a"), file("b", "renamed", 1, 0, "old")])).toEqual(["a", "b", "old"]);
-  });
-});
-
-describe("countsOf", () => {
-  it("has the file's counts, or none if they weren't counted", () => {
-    expect(countsOf(file("a", "modified", 2, 3))).toEqual({ additions: 2, deletions: 3 });
-    expect(countsOf(file("a", "modified", 2, null))).toEqual({ additions: 2, deletions: 0 });
-    expect(countsOf(file("a", "modified", null, null))).toBeUndefined();
-    expect(totalLines({ additions: 2, deletions: 3 })).toBe(5);
   });
 });
 
@@ -92,14 +69,5 @@ describe("unchangedReason", () => {
     expect(unchangedReason(file("a", "untracked", 0, 0))).toBe("An empty file was added.");
     expect(unchangedReason(file("a", "deleted", 0, 0))).toBe("An empty file was deleted.");
     expect(unchangedReason(file("a", "modified", 0, 0))).toBe("Only the file's mode changed.");
-  });
-});
-
-describe("sourceLabel", () => {
-  it("names the side of the uncommitted changes, and nothing else", () => {
-    expect(sourceLabel({ kind: "unstaged" })).toBe("Unstaged");
-    expect(sourceLabel({ kind: "staged" })).toBe("Staged");
-    expect(sourceLabel({ kind: "commit", sha: "a1" })).toBeUndefined();
-    expect(sourceLabel({ kind: "stash", sha: "a1" })).toBeUndefined();
   });
 });

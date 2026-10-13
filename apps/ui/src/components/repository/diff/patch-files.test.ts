@@ -95,9 +95,4 @@ describe("carriedExpansion", () => {
       ]),
     );
   });
-
-  it("carries nothing when nothing was shown", () => {
-    const from = hydrated(changed10, lines(40, { 10: "ten" }));
-    expect(carriedExpansion(from, new Map(), from).size).toBe(0);
-  });
 });

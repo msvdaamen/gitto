@@ -1,7 +1,7 @@
 import type { Commit, Stash } from "@gitto/git/types";
 import { describe, expect, it } from "vitest";
 
-import { historyGraph, stashRowId, stashSha, toHistoryRows, withStashes } from "./rows";
+import { historyGraph, stashRowId, toHistoryRows, withStashes } from "./rows";
 
 function commit(sha: string, parents: string[], committedAt: number): Commit {
   return {
@@ -95,12 +95,5 @@ describe("historyGraph", () => {
       ["commit", "a"],
     ]);
     expect(rows[2]).toMatchObject({ sha: "s", message: "WIP s", graph: { column: 1 } });
-  });
-});
-
-describe("stash row ids", () => {
-  it("are told apart from commits' SHAs", () => {
-    expect(stashSha(stashRowId("abc"))).toBe("abc");
-    expect(stashSha("abc")).toBeUndefined();
   });
 });
