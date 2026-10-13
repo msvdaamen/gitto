@@ -5,7 +5,6 @@ import PanelLeft from "lucide-solid/icons/panel-left";
 import PanelRight from "lucide-solid/icons/panel-right";
 import Redo2 from "lucide-solid/icons/redo-2";
 import RefreshCw from "lucide-solid/icons/refresh-cw";
-import Settings from "lucide-solid/icons/settings";
 import Undo2 from "lucide-solid/icons/undo-2";
 import { createEffect, createSignal, on, Suspense } from "solid-js";
 
@@ -73,7 +72,6 @@ export function RepositoryToolbar(props: {
         active={props.detailsOpen}
         onClick={props.onToggleDetails}
       />
-      <IconButton label="Repository settings" icon={Settings} />
     </header>
   );
 }
