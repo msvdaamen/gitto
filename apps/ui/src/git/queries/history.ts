@@ -19,6 +19,13 @@ const FIRST_PAGE = 200;
 /** How many more it loads at a time as the end of what's loaded comes into view. */
 const NEXT_PAGE = 1000;
 
+/**
+ * The most commits the history reloads as the repository changes, which is the most the log hands
+ * over at once (see `HistoryContract.log`). Past that, it starts over from the first page: the
+ * graph has to be laid out again, and the commits sent over, for every one of them.
+ */
+const RELOAD_LIMIT = 10_000;
+
 /** A repository's log, as `useLog` loads it: its newest commits, and those loaded after them. */
 interface Log {
   repositoryId: string;
@@ -29,8 +36,10 @@ interface Log {
 
 /**
  * A repository's log: the first `FIRST_PAGE` commits, then `NEXT_PAGE` more each time `more` is
- * run. A refetch, as the repository changes, starts over from the first page: reloading every page
- * loaded so far would take a while once there are a few.
+ * run. A refetch, as the repository changes, reloads as many as were loaded in one go, so the
+ * history keeps its place; git walks the whole history to sort it anyway, so that takes little
+ * longer than the first page (220ms for 6,200 commits of vscode, against 150ms for 200). Past
+ * `RELOAD_LIMIT`, it's back to the first page.
  */
 export function useLog(repositoryId: () => string) {
   const queryClient = useQueryClient();
@@ -40,11 +49,10 @@ export function useLog(repositoryId: () => string) {
       queryKey: gitKeys.log(id),
       // Tagged with its repository, so every row knows where its commit lives (see `toHistoryRows`).
       queryFn: async ({ signal }): Promise<Log> => {
-        const commits = await rpc.git.history.log(
-          { repositoryId: id, skip: 0, limit: FIRST_PAGE },
-          { signal },
-        );
-        return { repositoryId: id, commits, complete: commits.length < FIRST_PAGE };
+        const loaded = queryClient.getQueryData<Log>(gitKeys.log(id))?.commits.length ?? 0;
+        const limit = loaded > RELOAD_LIMIT ? FIRST_PAGE : Math.max(FIRST_PAGE, loaded);
+        const commits = await rpc.git.history.log({ repositoryId: id, skip: 0, limit }, { signal });
+        return { repositoryId: id, commits, complete: commits.length < limit };
       },
       // Merged into the previous log, commit by commit, so a refetch that brings nothing new
       // (the refs changed elsewhere, say) doesn't lay out and render the history again.
@@ -63,7 +71,7 @@ export function useLog(repositoryId: () => string) {
         skip: log.commits.length,
         limit: NEXT_PAGE,
       });
-      // Reloaded meanwhile, so back to the first page, which this one doesn't follow on from.
+      // Reloaded meanwhile: this one may not follow on from what was reloaded.
       if (queryClient.getQueryState(key)?.dataUpdatedAt !== updatedAt) return;
       // Each commit only once: the history may have moved since the commits before were loaded,
       // until the refetch that follows the move.

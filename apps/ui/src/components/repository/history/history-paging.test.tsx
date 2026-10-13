@@ -9,8 +9,8 @@ import { BranchMenuProvider } from "../branch-menu";
 import { ROW_HEIGHT } from "./columns";
 import { HistoryTable } from "./history-table";
 
-/** How many commits the repository has: more than the first two pages. */
-const COMMITS = 1500;
+/** How many commits the repository has: by default, more than the first two pages. */
+let commitCount = 1500;
 
 const rpc = vi.hoisted(() => ({
   git: {
@@ -34,15 +34,15 @@ const rpc = vi.hoisted(() => ({
 
 vi.mock("@/lib/rpc", () => ({ rpc }));
 
-/** Commit `index` of a line of `COMMITS`, newest first. */
+/** Commit `index` of a line of `commitCount`, newest first. */
 function commit(index: number) {
   return {
     sha: `c${index}`,
-    parents: index + 1 < COMMITS ? [`c${index + 1}`] : [],
+    parents: index + 1 < commitCount ? [`c${index + 1}`] : [],
     authorName: "Ada Lovelace",
     authorEmail: "ada@example.com",
     authoredAt: 0,
-    committedAt: (COMMITS - index) * 1000,
+    committedAt: (commitCount - index) * 1000,
     refs: [],
     subject: `Commit ${index}`,
     body: "",
@@ -58,8 +58,9 @@ beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(10 * ROW_HEIGHT);
   vi.spyOn(HTMLElement.prototype, "scrollTop", "get").mockImplementation(() => scrollTop);
   scrollTop = 0;
+  commitCount = 1500;
   rpc.git.history.log.mockImplementation(async ({ skip, limit }: { skip: number; limit: number }) =>
-    Array.from({ length: Math.max(0, Math.min(limit, COMMITS - skip)) }, (_, i) =>
+    Array.from({ length: Math.max(0, Math.min(limit, commitCount - skip)) }, (_, i) =>
       commit(skip + i),
     ),
   );
@@ -130,8 +131,8 @@ describe("the history", () => {
     expect(pages()[2]).toEqual({ skip: 1200, limit: 1000 });
 
     // The last page was short of its limit: that's the whole history.
-    scrollTo(scroller, COMMITS - 10);
-    expect(await screen.findByText(`Commit ${COMMITS - 1}`)).toBeInTheDocument();
+    scrollTo(scroller, commitCount - 10);
+    expect(await screen.findByText(`Commit ${commitCount - 1}`)).toBeInTheDocument();
     expect(pages()).toHaveLength(3);
   });
 
@@ -142,19 +143,34 @@ describe("the history", () => {
     expect(pages()).toEqual([{ skip: 0, limit: 200 }]);
   });
 
-  it("starts over from the first page when it's reloaded", async () => {
+  it("reloads all it has loaded at once, keeping its place", async () => {
     const { client, scroller } = await renderHistory();
     scrollTo(scroller, 120);
     await vi.waitFor(() => expect(rowCount()).toBe(1200));
 
-    scrollTo(scroller, 0);
     await client.invalidateQueries({ queryKey: gitKeys.log("repo") });
-    await vi.waitFor(() => expect(rowCount()).toBe(200));
     expect(pages()).toEqual([
       { skip: 0, limit: 200 },
       { skip: 200, limit: 1000 },
-      { skip: 0, limit: 200 },
+      { skip: 0, limit: 1200 },
     ]);
+    expect(rowCount()).toBe(1200);
+    expect(screen.getByText("Commit 120")).toBeInTheDocument();
+  });
+
+  it("starts over from the first page when it's reloaded past 10,000 commits", async () => {
+    commitCount = 12_000;
+    const { client, scroller } = await renderHistory();
+    for (let loaded = 200; loaded <= 10_000; loaded += 1000) {
+      scrollTo(scroller, loaded - 80);
+      // oxlint-disable-next-line no-await-in-loop -- each page is only asked for once the last is in.
+      await vi.waitFor(() => expect(rowCount()).toBe(loaded + 1000));
+    }
+
+    scrollTo(scroller, 0);
+    await client.invalidateQueries({ queryKey: gitKeys.log("repo") });
+    expect(pages().at(-1)).toEqual({ skip: 0, limit: 200 });
+    await vi.waitFor(() => expect(rowCount()).toBe(200));
   });
 
   it("leaves out a page that was loading as it was reloaded", async () => {
