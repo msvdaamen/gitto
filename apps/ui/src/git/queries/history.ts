@@ -1,16 +1,11 @@
 import type { Commit } from "@gitto/git/types";
-import {
-  keepPreviousData,
-  useInfiniteQuery,
-  useQuery,
-  useQueryClient,
-  type InfiniteData,
-} from "@tanstack/solid-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/solid-query";
 import { createMemo } from "solid-js";
 
 import { checkouts } from "@/git/ref-labels";
 import { historyGraph, toCommitRow, toHistoryRows, withStashes } from "@/git/rows";
 import { hasUncommittedChanges } from "@/git/status";
+import { useResetOn } from "@/hooks/reset-on";
 import { rpc } from "@/lib/rpc";
 
 import { gitKeys } from "./keys";
@@ -24,61 +19,70 @@ const FIRST_PAGE = 200;
 /** How many more it loads at a time as the end of what's loaded comes into view. */
 const NEXT_PAGE = 1000;
 
-/** A page of a repository's log, as `useLog` loads it. */
-interface LogPage {
+/** A repository's log, as `useLog` loads it: its newest commits, and those loaded after them. */
+interface Log {
   repositoryId: string;
   commits: Commit[];
-}
-
-/** Where a page of the log starts, and how long it is. */
-interface LogPageParam {
-  skip: number;
-  limit: number;
+  /** Whether that's all of the history: the last page loaded was short of its limit. */
+  complete: boolean;
 }
 
 /**
- * A repository's log, a page at a time: the first `FIRST_PAGE` commits, then `NEXT_PAGE` more each
- * time `fetchNextPage` is called. A refetch reloads every page loaded so far.
+ * A repository's log: the first `FIRST_PAGE` commits, then `NEXT_PAGE` more each time `more` is
+ * run. A refetch, as the repository changes, starts over from the first page: reloading every page
+ * loaded so far would take a while once there are a few.
  */
 export function useLog(repositoryId: () => string) {
-  return useInfiniteQuery(() => {
+  const queryClient = useQueryClient();
+  const query = useQuery(() => {
     const id = repositoryId();
     return {
       queryKey: gitKeys.log(id),
       // Tagged with its repository, so every row knows where its commit lives (see `toHistoryRows`).
-      queryFn: async ({ pageParam, signal }): Promise<LogPage> => ({
-        repositoryId: id,
-        commits: await rpc.git.history.log({ repositoryId: id, ...pageParam }, { signal }),
-      }),
-      initialPageParam: { skip: 0, limit: FIRST_PAGE } as LogPageParam,
-      // A page short of its limit is the end of the history. The next one is worked out from the
-      // pages before it on a refetch too, so they still follow on from each other when commits
-      // were added at the top meanwhile.
-      getNextPageParam: (last, _pages, param): LogPageParam | undefined =>
-        last.commits.length < param.limit
-          ? undefined
-          : { skip: param.skip + last.commits.length, limit: NEXT_PAGE },
+      queryFn: async ({ signal }): Promise<Log> => {
+        const commits = await rpc.git.history.log(
+          { repositoryId: id, skip: 0, limit: FIRST_PAGE },
+          { signal },
+        );
+        return { repositoryId: id, commits, complete: commits.length < FIRST_PAGE };
+      },
       // Merged into the previous log, commit by commit, so a refetch that brings nothing new
       // (the refs changed elsewhere, say) doesn't lay out and render the history again.
       reconcile: "sha",
     };
   });
-}
 
-/**
- * The commits of every page of `log` loaded so far, newest first. Each only once: a page loaded
- * just as commits were added at the top starts with some the page before has too, until the
- * refetch that follows reloads them all.
- */
-function logCommits(log: InfiniteData<LogPage>): Commit[] {
-  const listed = new Set<string>();
-  return log.pages.flatMap((page) =>
-    page.commits.filter((commit) => {
-      if (listed.has(commit.sha)) return false;
-      listed.add(commit.sha);
-      return true;
-    }),
+  const more = useMutation(() => ({
+    mutationFn: async (id: string) => {
+      const key = gitKeys.log(id);
+      const log = queryClient.getQueryData<Log>(key);
+      if (!log || log.complete) return;
+      const updatedAt = queryClient.getQueryState(key)?.dataUpdatedAt;
+      const commits = await rpc.git.history.log({
+        repositoryId: id,
+        skip: log.commits.length,
+        limit: NEXT_PAGE,
+      });
+      // Reloaded meanwhile, so back to the first page, which this one doesn't follow on from.
+      if (queryClient.getQueryState(key)?.dataUpdatedAt !== updatedAt) return;
+      // Each commit only once: the history may have moved since the commits before were loaded,
+      // until the refetch that follows the move.
+      const listed = new Set(log.commits.map((commit) => commit.sha));
+      queryClient.setQueryData<Log>(key, {
+        ...log,
+        commits: [...log.commits, ...commits.filter((commit) => !listed.has(commit.sha))],
+        complete: commits.length < NEXT_PAGE,
+      });
+    },
+  }));
+  // Whether loading more failed, or is still under way, is of the log as it was: not of another
+  // repository's, nor of the one reloaded since.
+  useResetOn(
+    () => [repositoryId(), query.dataUpdatedAt],
+    () => more.reset(),
   );
+
+  return { query, more };
 }
 
 /**
@@ -86,7 +90,7 @@ function logCommits(log: InfiniteData<LogPage>): Commit[] {
  * it. `selectedId` picks the selected row; it defaults to the first one.
  */
 export function useHistory(repositoryId: () => string, selectedId: () => string | undefined) {
-  const log = useLog(repositoryId);
+  const { query: log, more } = useLog(repositoryId);
   const status = useStatus(repositoryId);
   const stashes = useStashes(repositoryId);
   const worktrees = useWorktrees(repositoryId);
@@ -100,7 +104,7 @@ export function useHistory(repositoryId: () => string, selectedId: () => string 
   // Without the stashes until they've loaded, rather than holding up the history for them (reading
   // `data` before then would suspend it), and if they couldn't be: the Pop button says why.
   const entries = createMemo(() =>
-    log.data ? withStashes(logCommits(log.data), stashes.isSuccess ? stashes.data : []) : [],
+    log.data ? withStashes(log.data.commits, stashes.isSuccess ? stashes.data : []) : [],
   );
   const graph = createMemo(() => historyGraph(entries(), hasChanges(), head()));
   // Where the other worktrees are checked out, for the labels; without them until they've loaded,
@@ -108,12 +112,19 @@ export function useHistory(repositoryId: () => string, selectedId: () => string 
   const others = createMemo(() => checkouts(worktrees.isSuccess ? worktrees.data : []));
   const rows = createMemo(() =>
     log.data
-      ? toHistoryRows(log.data.pages[0]!.repositoryId, entries(), hasChanges(), graph(), others())
+      ? toHistoryRows(log.data.repositoryId, entries(), hasChanges(), graph(), others())
       : [],
   );
   const selected = createMemo(() => rows().find((row) => row.id === selectedId()) ?? rows()[0]);
 
-  return { log, rows, selected };
+  // Whether there's more of the log to load, once it's loaded.
+  const hasMore = () => log.data?.complete === false;
+  /** Loads more of the log, unless it's loading, or reloading, which would leave that unused. */
+  const loadMore = () => {
+    if (hasMore() && !log.isFetching && !more.isPending) more.mutate(repositoryId());
+  };
+
+  return { log, more, hasMore, loadMore, rows, selected };
 }
 
 /**
@@ -132,9 +143,8 @@ export function useCommitDetails(repositoryId: () => string, sha: () => string) 
         rpc.git.history.commit({ repositoryId: id, sha: commitSha }, { signal }),
       initialData: () =>
         queryClient
-          .getQueryData<InfiniteData<LogPage>>(gitKeys.log(id))
-          ?.pages.flatMap((page) => page.commits)
-          .find((commit) => commit.sha === commitSha),
+          .getQueryData<Log>(gitKeys.log(id))
+          ?.commits.find((commit) => commit.sha === commitSha),
       staleTime: Infinity,
       // Keep showing the previous selection while the next one loads, instead of suspending.
       placeholderData: keepPreviousData,

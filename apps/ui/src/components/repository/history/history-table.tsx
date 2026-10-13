@@ -148,16 +148,13 @@ function HistoryRows(props: {
 
   // More of the history is loaded as its end comes into view, a page at a time. Not while
   // searching, which only goes through what's loaded: a search that finds little would have it
-  // load page after page. Nor while it's being reloaded, which reloads every page loaded so far
-  // anyway, and would be cancelled. A page that couldn't be loaded isn't tried again until it is.
+  // load page after page. A page that couldn't be loaded isn't tried again until the history is
+  // reloaded.
   const [nearEnd, setNearEnd] = createSignal(false);
   createEffect(() => {
-    const log = history.log;
-    if (!nearEnd() || needle() || !log.hasNextPage) return;
-    if (log.isFetching || log.isFetchNextPageError) return;
-    void log.fetchNextPage();
+    if (nearEnd() && !needle() && !history.more.isError) history.loadMore();
   });
-  const loadingMore = useDelayed(() => history.log.isFetchingNextPage);
+  const loadingMore = useDelayed(() => history.more.isPending);
 
   let header: HTMLDivElement | undefined;
   let list: HTMLDivElement | undefined;
@@ -220,7 +217,7 @@ function HistoryRows(props: {
           onFocusIn={(event) => event.target !== list && list?.focus({ preventScroll: true })}
         >
           <Show
-            when={!history.log.error || history.log.isFetchNextPageError}
+            when={!history.log.error}
             fallback={
               <EmptyState icon={TriangleAlert} title="Couldn't load history" tone="error">
                 {history.log.error?.message}
@@ -298,9 +295,9 @@ function HistoryRows(props: {
           </Show>
         </div>
         <Switch>
-          <Match when={history.log.isFetchNextPageError}>
+          <Match when={history.more.error}>
             <HistoryFooter tone="error">
-              Couldn't load more history: {history.log.error?.message}
+              Couldn't load more history: {history.more.error?.message}
             </HistoryFooter>
           </Match>
           <Match when={loadingMore()}>

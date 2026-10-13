@@ -3,6 +3,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { gitKeys } from "@/git/queries/keys";
+
 import { BranchMenuProvider } from "../branch-menu";
 import { ROW_HEIGHT } from "./columns";
 import { HistoryTable } from "./history-table";
@@ -85,7 +87,13 @@ async function renderHistory(search = "") {
     </QueryClientProvider>
   ));
   await screen.findAllByRole("option");
-  return screen.getByRole("main");
+  return { client, scroller: screen.getByRole("main") };
+}
+
+/** How many rows the history has room for, loaded or not. */
+function rowCount() {
+  const rows = screen.getByRole("listbox", { name: "Commit history" }).firstElementChild!;
+  return Number.parseFloat((rows as HTMLElement).style.height) / ROW_HEIGHT;
 }
 
 /** Scrolls the history so that row `index` is the first in view. */
@@ -101,7 +109,7 @@ function pages() {
 
 describe("the history", () => {
   it("loads more as its end comes near, until there's none left", async () => {
-    const scroller = await renderHistory();
+    const { scroller } = await renderHistory();
     expect(pages()).toEqual([{ skip: 0, limit: 200 }]);
 
     // Well before the end of the first page.
@@ -132,5 +140,40 @@ describe("the history", () => {
     await renderHistory("Commit 7");
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(pages()).toEqual([{ skip: 0, limit: 200 }]);
+  });
+
+  it("starts over from the first page when it's reloaded", async () => {
+    const { client, scroller } = await renderHistory();
+    scrollTo(scroller, 120);
+    await vi.waitFor(() => expect(rowCount()).toBe(1200));
+
+    scrollTo(scroller, 0);
+    await client.invalidateQueries({ queryKey: gitKeys.log("repo") });
+    await vi.waitFor(() => expect(rowCount()).toBe(200));
+    expect(pages()).toEqual([
+      { skip: 0, limit: 200 },
+      { skip: 200, limit: 1000 },
+      { skip: 0, limit: 200 },
+    ]);
+  });
+
+  it("leaves out a page that was loading as it was reloaded", async () => {
+    const { client, scroller } = await renderHistory();
+    // The second page, held back until it's let through.
+    const held = Promise.withResolvers<void>();
+    rpc.git.history.log.mockImplementationOnce(
+      async ({ skip, limit }: { skip: number; limit: number }) => {
+        await held.promise;
+        return Array.from({ length: limit }, (_, i) => commit(skip + i));
+      },
+    );
+    scrollTo(scroller, 120);
+    await vi.waitFor(() => expect(pages()).toHaveLength(2));
+
+    scrollTo(scroller, 0);
+    await client.invalidateQueries({ queryKey: gitKeys.log("repo") });
+    held.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(rowCount()).toBe(200);
   });
 });
