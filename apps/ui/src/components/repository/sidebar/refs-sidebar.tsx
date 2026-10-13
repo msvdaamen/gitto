@@ -1,10 +1,8 @@
 import { cn } from "cn";
 import ListTree from "lucide-solid/icons/list-tree";
-import LoaderCircle from "lucide-solid/icons/loader-circle";
 import Settings from "lucide-solid/icons/settings";
 import { createSignal, For, Show, Suspense } from "solid-js";
 
-import { EmptyState } from "@/components/ui/empty-state";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 
 import { AgentPlaceholder } from "./agent-placeholder";
@@ -38,11 +36,8 @@ export function RefsSidebar(props: { repositoryId: string; open: boolean }) {
           class="flex min-h-0 flex-1 flex-col overflow-hidden pb-[35px] max-md:items-center max-md:gap-1 max-md:pt-2"
           aria-label="Repository references"
         >
-          <Suspense
-            fallback={
-              <EmptyState icon={LoaderCircle} loading title="Loading branches…" class="h-[150px]" />
-            }
-          >
+          {/* The list shows the branches loading itself, rather than suspending (see `RefList`). */}
+          <Suspense>
             <RefList repositoryId={props.repositoryId} />
           </Suspense>
         </nav>

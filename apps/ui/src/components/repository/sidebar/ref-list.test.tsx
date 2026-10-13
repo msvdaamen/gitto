@@ -3,9 +3,10 @@ import { fireEvent, render, screen, within } from "@solidjs/testing-library";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import type * as SolidRouter from "@tanstack/solid-router";
 import userEvent from "@testing-library/user-event";
-import { createSignal } from "solid-js";
+import { createSignal, Suspense } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { gitKeys } from "@/git/queries/keys";
 import { queryClient } from "@/lib/query-client";
 
 import { BranchMenuProvider } from "../branch-menu";
@@ -59,6 +60,13 @@ function branch(name: string, current = false, kind: "local" | "remote" = "local
   };
 }
 
+/** A query client set up as the app's is. */
+function newClient() {
+  const client = new QueryClient({ defaultOptions: queryClient.getDefaultOptions() });
+  client.setQueryDefaults(gitKeys.all, queryClient.getQueryDefaults(gitKeys.all));
+  return client;
+}
+
 /**
  * The sidebar's list and the toolbar, which shows a switch or a branch being created running, and
  * why it failed.
@@ -68,9 +76,10 @@ function renderSidebar(
   options: {
     onResolve?: (file: ChangedFile) => void;
     beforeChange?: () => Promise<boolean>;
+    client?: QueryClient;
   } = {},
 ) {
-  const client = new QueryClient({ defaultOptions: queryClient.getDefaultOptions() });
+  const client = options.client ?? newClient();
   render(() => (
     <QueryClientProvider client={client}>
       <BranchMenuProvider
@@ -87,7 +96,10 @@ function renderSidebar(
           detailsOpen
           onToggleDetails={() => undefined}
         />
-        <RefList repositoryId={repositoryId()} />
+        {/* In a Suspense boundary, as in the sidebar. */}
+        <Suspense>
+          <RefList repositoryId={repositoryId()} />
+        </Suspense>
       </BranchMenuProvider>
     </QueryClientProvider>
   ));
@@ -142,6 +154,63 @@ afterEach(() => {
   vi.resetAllMocks();
   vi.restoreAllMocks();
   localStorage.clear();
+});
+
+/** The lists of the sections taken off the page by `reload`, by their scroll ids. */
+async function listsRemovedBy(reload: () => Promise<unknown>) {
+  const lists = [...document.querySelectorAll("[data-scroll-restoration-id]")];
+  expect(lists).not.toEqual([]);
+  const removed: Node[] = [];
+  const observer = new MutationObserver((records) => {
+    for (const record of records) removed.push(...record.removedNodes);
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+  await reload();
+  observer.disconnect();
+  return lists
+    .filter((list) => removed.some((node) => node.contains(list)))
+    .map((list) => list.getAttribute("data-scroll-restoration-id"));
+}
+
+describe("reloading the repository", () => {
+  beforeEach(() => {
+    rpc.git.stash.list.mockResolvedValue([newer, older]);
+    rpc.git.worktree.list.mockResolvedValue(WORKTREES);
+    // Expanded, as they're collapsed at first.
+    localStorage.setItem(
+      "gitto-sidebar-collapsed:a",
+      JSON.stringify({ tags: false, stashes: false }),
+    );
+  });
+
+  // Suspending takes the sections off the page and puts them back, their lists scrolled to the top
+  // while the rows rendered are still the ones for where they were scrolled to: blank.
+  it("keeps the sections on the page, so their lists stay where they're scrolled to", async () => {
+    const client = newClient();
+    renderSidebar(undefined, { client });
+    await worktreeRow("/w/repo-feature");
+    await screen.findByTitle(/^On main: older Stashed/);
+
+    expect(
+      await listsRemovedBy(() => client.invalidateQueries({ queryKey: gitKeys.repository("a") })),
+    ).toEqual([]);
+  });
+
+  it("keeps them on the page when the repository was loaded already, as when coming back to it", async () => {
+    const client = new QueryClient({ defaultOptions: queryClient.getDefaultOptions() });
+    await Promise.all([
+      client.prefetchQuery({ queryKey: gitKeys.refs("a"), queryFn: rpc.git.refs.list }),
+      client.prefetchQuery({ queryKey: gitKeys.stashes("a"), queryFn: rpc.git.stash.list }),
+      client.prefetchQuery({ queryKey: gitKeys.worktrees("a"), queryFn: rpc.git.worktree.list }),
+    ]);
+    renderSidebar(undefined, { client });
+    await worktreeRow("/w/repo-feature");
+    await screen.findByTitle(/^On main: older Stashed/);
+
+    expect(
+      await listsRemovedBy(() => client.invalidateQueries({ queryKey: gitKeys.repository("a") })),
+    ).toEqual([]);
+  });
 });
 
 describe("switching branches from the sidebar", () => {
