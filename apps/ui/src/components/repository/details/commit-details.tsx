@@ -160,8 +160,11 @@ function CommitSummary(props: {
         </div>
       </div>
       <h2 class="mt-3.5 mb-1.5 text-sm leading-[1.35] tracking-[-.2px]">{props.commit.message}</h2>
+      {/* Scrolls on its own past a few lines, so a long one doesn't push the files out of sight. */}
       {props.commit.description && (
-        <p class="m-0 text-[12px] leading-[1.55] text-muted">{props.commit.description}</p>
+        <p class="m-0 max-h-[9.3em] overflow-y-auto text-[12px] leading-[1.55] break-words whitespace-pre-wrap text-muted">
+          {props.commit.description}
+        </p>
       )}
       <div class="mt-3 flex w-max items-center overflow-hidden rounded-[5px] border border-border-soft">
         <code class="bg-bg px-[7px] py-1 text-[11px] text-text-soft">{props.commit.shortSha}</code>
