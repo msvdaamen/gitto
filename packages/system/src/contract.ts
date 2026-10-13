@@ -24,7 +24,7 @@ export const SystemContract = {
     seen: oc.output(z.void()),
   },
   telemetry: {
-    /** Whether Gitto sends error reports and how long it takes to start. */
+    /** Whether Gitto sends error reports. */
     get: oc.output(TelemetryStateSchema),
     /** Lets it, or stops it at once; the state it's in then. */
     set: oc.input(z.object({ enabled: z.boolean() })).output(TelemetryStateSchema),

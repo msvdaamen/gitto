@@ -19,7 +19,7 @@ export const UpdateStateSchema = z.object({
 export type UpdateChannel = z.infer<typeof UpdateChannelSchema>;
 export type UpdateState = z.infer<typeof UpdateStateSchema>;
 
-/** Whether Gitto sends error reports and how long it takes to start, as the user's set it to. */
+/** Whether Gitto sends error reports, as the user's set it to. */
 export const TelemetryStateSchema = z.object({
   /** Whether this build sends them at all: one built without a place to send them to doesn't. */
   available: z.boolean(),

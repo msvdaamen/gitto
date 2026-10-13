@@ -4,8 +4,8 @@ import { writeFile } from "node:fs/promises";
 import type { Telemetry } from "@gitto/system/server";
 
 /**
- * Whether the user lets Gitto send error reports and how long it takes to start, kept in `file`.
- * It's on until they turn it off. Read before the app's ready, when Sentry has to start.
+ * Whether the user lets Gitto send error reports, kept in `file`. It's on until they turn it off.
+ * Read before the app's ready, when Sentry has to start.
  */
 export function readTelemetrySetting(file: string): boolean {
   try {

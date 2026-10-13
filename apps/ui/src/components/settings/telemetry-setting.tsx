@@ -3,7 +3,7 @@ import { createResource, createSignal, Show } from "solid-js";
 import { Switch } from "@/components/ui/switch";
 import { rpc } from "@/lib/rpc";
 
-/** Whether Gitto sends error reports and how long it takes to start. */
+/** Whether Gitto sends error reports. */
 export function TelemetrySetting() {
   const [state, { mutate }] = createResource(() => rpc.system.telemetry.get());
   const [saving, setSaving] = createSignal(false);
@@ -33,10 +33,9 @@ export function TelemetrySetting() {
           onChange={(enabled) => void setEnabled(enabled)}
         >
           <span>
-            When something goes wrong, Gitto tells its developers what and where, and how long it
-            took to start. Reports can name files and branches, and include Git's errors, but not
-            what's in your files. Paths start from your home folder, ~, and passwords in URLs are
-            left out.
+            When something goes wrong, Gitto tells its developers what and where. Reports can name
+            files and branches, and include Git's errors, but not what's in your files. Paths start
+            from your home folder, ~, and passwords in URLs are left out.
           </span>
           <Show when={!current().available}>
             <span class="text-faint">This build of Gitto doesn't send error reports.</span>

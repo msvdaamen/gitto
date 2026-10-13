@@ -29,7 +29,7 @@ export interface WhatsNew {
   seen(): Promise<void>;
 }
 
-/** The user's setting for sending error reports and how long Gitto takes to start. */
+/** The user's setting for sending error reports. */
 export interface Telemetry {
   state(): TelemetryState;
   /** Saves it; turning it off stops sending at once. */

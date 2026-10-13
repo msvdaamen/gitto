@@ -5,12 +5,7 @@ import { pathToFileURL } from "node:url";
 import { createDb } from "@gitto/db";
 import { RPC_CONNECT_CHANNEL } from "@gitto/rpc";
 import { createContainer, createRpcHandler } from "@gitto/rpc/server";
-import {
-  captureException,
-  initTelemetry,
-  stopTelemetry,
-  traceStartup,
-} from "@gitto/telemetry-electron/main";
+import { captureException, initTelemetry, stopTelemetry } from "@gitto/telemetry-electron/main";
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, protocol, shell } from "electron";
 
 import iconDataUrl from "../assets/icon.png?inline";
@@ -120,7 +115,7 @@ function registerRpc(updates: Updater) {
   const handler = createRpcHandler({
     reportError: (error, path) => captureException(error, { tags: { "rpc.path": path } }),
   });
-  const context = createContainer(traceStartup("open database", openDatabase), {
+  const context = createContainer(openDatabase(), {
     selectFolder,
     updates,
     changelog: openChangelog(),
@@ -206,6 +201,6 @@ app.on("ready", () => {
   registerAppProtocol();
   const updater = new Updater();
   registerRpc(updater);
-  traceStartup("create window", createWindow);
+  createWindow();
   updater.start();
 });
