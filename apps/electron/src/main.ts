@@ -10,6 +10,7 @@ import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, protocol, shell 
 
 import iconDataUrl from "../assets/icon.png?inline";
 import { resolveRendererPath } from "./renderer-path";
+import { usePathFromShell } from "./shell-path";
 import { handleSquirrelEvent } from "./squirrel";
 import { readTelemetrySetting, TelemetrySetting } from "./telemetry";
 import { Updater } from "./updater";
@@ -37,6 +38,10 @@ const firstInstance = !squirrelRun && app.requestSingleInstanceLock();
 if (!squirrelRun && !firstInstance) {
   app.exit(0);
 }
+
+// Git has to be found where the user's terminal finds it, so git calls wait for this (see
+// registerRpc). It's read while Electron starts, and doesn't hold up the window.
+const shellPath = firstInstance ? usePathFromShell() : Promise.resolve();
 
 // Sentry has to start before the app's ready, so the setting's read from a file, not the database.
 const SETTINGS_FILE = join(app.getPath("userData"), "settings.json");
@@ -128,10 +133,12 @@ function registerRpc(updates: Updater) {
     ),
   });
 
-  // Each renderer connection sends one end of a MessageChannel (see the preload).
-  ipcMain.on(RPC_CONNECT_CHANNEL, (event) => {
+  // Each renderer connection sends one end of a MessageChannel (see the preload). Its requests
+  // wait in the port until the PATH is read.
+  ipcMain.on(RPC_CONNECT_CHANNEL, async (event) => {
     const [port] = event.ports;
     if (!port) return;
+    await shellPath;
     handler.upgrade(port, { context });
     port.start();
   });
