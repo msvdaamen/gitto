@@ -121,8 +121,8 @@ export async function* watchWorkingTree(repo: Repo, signal?: AbortSignal): Async
     const nowIgnored = paths ?? (await ignoredPaths(repo));
     const start = performance.now();
     // Stopped first: the watcher reuses what an existing subscription on the folder already walked,
-    // which would leave out a folder that's no longer ignored. Changes in between are reported
-    // anyway, as the ignore rules changing is one.
+    // which would leave out a folder that's no longer ignored, and on Linux would watch every folder
+    // in one that's newly ignored. Changes in between are reported anyway: callers yield after.
     await tree?.unsubscribe();
     tree = undefined;
     if (closed) return;
@@ -174,7 +174,9 @@ export async function* watchWorkingTree(repo: Repo, signal?: AbortSignal): Async
           (dropped.size ? `, ${dropped.size} ignored` : ""),
       );
       if (shown.length > 0) yield null;
-      if (dropped.size > 0) await leaveOutNewIgnoredFolders([...dropped]);
+      // Nothing was watched while it started over (the new subscription can't start before the old
+      // one stops, see `watchTree`), so what changed meanwhile is refetched, once per new folder.
+      if (dropped.size > 0 && (await leaveOutNewIgnoredFolders([...dropped]))) yield null;
     }
   } finally {
     closed = true;
@@ -185,16 +187,17 @@ export async function* watchWorkingTree(repo: Repo, signal?: AbortSignal): Async
   /**
    * Starts over without the folders `dropped` (ignored paths that changed) are in, if they weren't
    * left out yet, so their changes stop coming in. Not for single files, which are dropped as they
-   * come: they're cheap, and starting over walks the whole tree on Linux.
+   * come: they're cheap, and starting over walks the whole tree on Linux. Whether it started over.
    */
-  async function leaveOutNewIgnoredFolders(dropped: string[]) {
+  async function leaveOutNewIgnoredFolders(dropped: string[]): Promise<boolean> {
     const nowIgnored = await ignoredPaths(repo);
     const newFolders = nowIgnored.filter(
       (path) => !ignored.has(path) && dropped.some((changed) => changed.startsWith(`${path}/`)),
     );
-    if (newFolders.length === 0) return;
+    if (newFolders.length === 0) return false;
     trace(`leaving out new ignored folders in ${root}: ${newFolders.join(", ")}`);
     await watchTree(nowIgnored);
+    return true;
   }
 }
 
@@ -213,15 +216,29 @@ async function ignoredAmong(repo: Repo, paths: string[]): Promise<Set<string>> {
 }
 
 /**
- * What git ignores right now, e.g. `node_modules` or build output: whole directories (listed once,
- * with --directory) and single files. Relative to the repository, `/`-separated.
+ * What git ignores right now, e.g. `node_modules` or build output: directories an ignore rule
+ * matches (listed once) and single files. Relative to the repository, `/`-separated.
+ *
+ * Not `ls-files --ignored --directory`: that also lists a folder that only has ignored files in it
+ * so far (a `.DS_Store`, a log), which no rule ignores. Leaving that out, the files added to it
+ * later never showed. `--ignored=matching` lists the files in it instead.
  */
 export async function ignoredPaths(repo: Repo): Promise<string[]> {
+  // Without renames, each entry is one field; submodules aren't looked into, as only what's ignored
+  // here is read.
   const output = await repo
-    .read(["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"])
+    .read([
+      "status",
+      "--porcelain=v2",
+      "-z",
+      "--ignored=matching",
+      "--untracked-files=normal",
+      "--no-renames",
+      "--ignore-submodules=all",
+    ])
     .catch(() => "");
   return output
     .split("\0")
-    .filter(Boolean)
-    .map((path) => path.replace(/\/$/, ""));
+    .filter((entry) => entry.startsWith("! "))
+    .map((entry) => entry.slice(2).replace(/\/$/, ""));
 }

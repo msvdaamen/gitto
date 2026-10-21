@@ -87,11 +87,13 @@ describe("watching the working tree", () => {
     soon(() => writeFileSync(join(path, "file.txt"), "x"));
     expect(await next).toEqual({ value: null, done: false });
 
-    // Like a build: a new ignored folder, written to repeatedly.
+    // Like a build: a new ignored folder, written to repeatedly. Left out once it's seen, which
+    // reports once, for what changed while it started over.
     next = changes.next();
     mkdirSync(join(path, "dist"));
     writeFileSync(join(path, "dist", "a.js"), "x");
-    expect(await quiet(next)).toBe("quiet");
+    expect(await next).toEqual({ value: null, done: false });
+    next = changes.next();
     writeFileSync(join(path, "dist", "b.js"), "x");
     writeFileSync(join(path, "debug.log"), "x");
     expect(await quiet(next)).toBe("quiet");
@@ -99,6 +101,32 @@ describe("watching the working tree", () => {
     // A change that shows, alongside ignored ones, is still reported.
     writeFileSync(join(path, "dist", "c.js"), "x");
     writeFileSync(join(path, "file.txt"), "y");
+    expect(await next).toEqual({ value: null, done: false });
+
+    controller.abort();
+  });
+
+  it("watches folders with only ignored files in them", { timeout: 10_000 }, async () => {
+    const path = createRepo("watched-only-ignored");
+    writeFileSync(join(path, ".gitignore"), ".DS_Store\n*.log\n");
+    mkdirSync(join(path, "docs"));
+    writeFileSync(join(path, "docs", ".DS_Store"), "x");
+    const repo = await repos.open("watched-only-ignored");
+    const controller = new AbortController();
+    const changes = watchWorkingTree(repo, controller.signal);
+
+    // There from the start: no rule ignores the folder, only what's in it so far.
+    let next = changes.next();
+    soon(() => writeFileSync(join(path, "docs", "plan.md"), "x"));
+    expect(await next).toEqual({ value: null, done: false });
+
+    // New, with an ignored file first: still watched after that's dropped.
+    next = changes.next();
+    mkdirSync(join(path, "notes"));
+    writeFileSync(join(path, "notes", "debug.log"), "x");
+    expect(await next).toEqual({ value: null, done: false });
+    next = changes.next();
+    writeFileSync(join(path, "notes", "todo.md"), "x");
     expect(await next).toEqual({ value: null, done: false });
 
     controller.abort();
