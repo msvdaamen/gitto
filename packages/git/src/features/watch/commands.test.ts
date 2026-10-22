@@ -106,6 +106,29 @@ describe("watching the working tree", () => {
     controller.abort();
   });
 
+  it("skips an ignored folder it only heard of being created", { timeout: 10_000 }, async () => {
+    const path = createRepo("watched-new-ignored-empty");
+    writeFileSync(join(path, ".gitignore"), "dist/\n");
+    const repo = await repos.open("watched-new-ignored-empty");
+    const controller = new AbortController();
+    const changes = watchWorkingTree(repo, controller.signal);
+
+    let next = changes.next();
+    soon(() => writeFileSync(join(path, "file.txt"), "x"));
+    expect(await next).toEqual({ value: null, done: false });
+
+    // As on Linux, where a file written right after its folder is often missed: only the folder
+    // is reported. Left out from then on all the same.
+    next = changes.next();
+    mkdirSync(join(path, "dist"));
+    expect(await next).toEqual({ value: null, done: false });
+    next = changes.next();
+    writeFileSync(join(path, "dist", "a.js"), "x");
+    expect(await quiet(next)).toBe("quiet");
+
+    controller.abort();
+  });
+
   it("watches folders with only ignored files in them", { timeout: 10_000 }, async () => {
     const path = createRepo("watched-only-ignored");
     writeFileSync(join(path, ".gitignore"), ".DS_Store\n*.log\n");
