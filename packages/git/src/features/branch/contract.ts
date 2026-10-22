@@ -2,7 +2,7 @@ import { oc } from "@orpc/contract";
 import * as z from "zod";
 
 import { BranchRef, RepositoryInput } from "../../input";
-import { MergeOutcomeSchema } from "./schema";
+import { MergeOutcomeSchema, RebaseOutcomeSchema } from "./schema";
 
 export const BranchContract = {
   /**
@@ -41,4 +41,16 @@ export const BranchContract = {
   merge: oc
     .input(RepositoryInput.extend({ ref: BranchRef, into: z.string().min(1) }))
     .output(MergeOutcomeSchema),
+  /**
+   * Rebases the checked-out branch, `branch`, as the user saw it, onto a branch, by its full ref
+   * name: says whether it was up to date, fast-forwarded, rebased, or stopped at conflicts, left to
+   * resolve and continue. Fails with PRECONDITION_FAILED, doing nothing, while HEAD is detached, an
+   * operation or conflicts are under way, or there are uncommitted changes, and also when it
+   * stopped partway without conflicts (at a commit that couldn't be signed, say) and was undone;
+   * with CONFLICT if another branch is checked out by now, or it stopped partway and couldn't be
+   * undone, which leaves it under way.
+   */
+  rebase: oc
+    .input(RepositoryInput.extend({ ref: BranchRef, branch: z.string().min(1) }))
+    .output(RebaseOutcomeSchema),
 };

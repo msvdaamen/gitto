@@ -1,5 +1,5 @@
 import type { ChangedFile, StatusSummary, Uncommitted, WorkingTreeFiles } from "@gitto/git/types";
-import { queryOptions, useQuery } from "@tanstack/solid-query";
+import { queryOptions, useQuery, type QueryClient } from "@tanstack/solid-query";
 import { createMemo } from "solid-js";
 
 import { headSha } from "@/git/status";
@@ -59,6 +59,16 @@ export const selectConflicted = ({ changes }: Uncommitted): ConflictedFiles => (
 export function firstToResolve({ files, markerFree }: ConflictedFiles): ChangedFile | undefined {
   const free = new Set(markerFree);
   return files.find((file) => !free.has(file.path)) ?? files[0];
+}
+
+/**
+ * The conflicted file to open first (see `firstToResolve`) as the repository `id`'s status has
+ * it in `queryClient`; `undefined` if none is, or the status isn't there. For once a merge or
+ * rebase has stopped at conflicts and the status has reloaded.
+ */
+export function firstConflictedFile(queryClient: QueryClient, id: string): ChangedFile | undefined {
+  const status = queryClient.getQueryData<Uncommitted>(gitKeys.status(id));
+  return status && firstToResolve(selectConflicted(status));
 }
 
 /** The conflicted files (see `ConflictedFiles`), for what's shown of them outside the lists. */

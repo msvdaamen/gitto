@@ -5,6 +5,7 @@ import { createBranch, switchBranch } from "./commands";
 import { BranchContract } from "./contract";
 import { deleteBranch } from "./delete";
 import { mergeBranch } from "./merge";
+import { rebaseBranch } from "./rebase";
 
 const os = implement(BranchContract).$context<GitContext>();
 
@@ -21,4 +22,7 @@ export const branchRouter = os.router({
   merge: os.merge
     .use(withRepo)
     .handler(({ context, input }) => mergeBranch(context.repo, input.ref, input.into)),
+  rebase: os.rebase
+    .use(withRepo)
+    .handler(({ context, input }) => rebaseBranch(context.repo, input.ref, input.branch)),
 });

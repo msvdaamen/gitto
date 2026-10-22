@@ -1,21 +1,26 @@
 import { remoteOf } from "@gitto/git/remote-name";
-import type { ChangedFile, Uncommitted } from "@gitto/git/types";
+import type { ChangedFile } from "@gitto/git/types";
 import { useQueryClient } from "@tanstack/solid-query";
 import Download from "lucide-solid/icons/download";
 import FolderOpen from "lucide-solid/icons/folder-open";
 import FolderPlus from "lucide-solid/icons/folder-plus";
 import GitBranchPlus from "lucide-solid/icons/git-branch-plus";
 import GitMerge from "lucide-solid/icons/git-merge";
+import GitPullRequestArrow from "lucide-solid/icons/git-pull-request-arrow";
 import Trash from "lucide-solid/icons/trash";
 import { createContext, createSignal, Show, useContext, type Accessor, type JSX } from "solid-js";
 
 import { ContextMenuItem } from "@/components/ui/context-menu";
-import { useBranchesChanging, useDeleteBranch, useMergeBranch } from "@/git/queries/branch";
-import { gitKeys } from "@/git/queries/keys";
+import {
+  useBranchesChanging,
+  useDeleteBranch,
+  useMergeBranch,
+  useRebaseBranch,
+} from "@/git/queries/branch";
 import { useOperationInProgress } from "@/git/queries/progress";
 import { useRefs } from "@/git/queries/refs";
 import { usePull, usePullBranch, useRemotes } from "@/git/queries/remote";
-import { firstToResolve, selectConflicted, useStatus } from "@/git/queries/status";
+import { firstConflictedFile, useStatus } from "@/git/queries/status";
 import { useUnsuspendedData } from "@/git/queries/unsuspended";
 import { useOpenWorktree, useWorktrees } from "@/git/queries/worktree";
 import { branchName, headLabel, isCheckedOut } from "@/git/status";
@@ -33,6 +38,8 @@ interface BranchActions {
   createFrom: (from: string) => void;
   /** Merges a branch, by its full ref name, into the checked-out one, `into`. */
   merge: (ref: string, into: string) => void;
+  /** Rebases the checked-out branch, `branch`, onto a branch, by its full ref name. */
+  rebase: (ref: string, branch: string) => void;
   /**
    * Pulls a local branch, by its full ref name: the checked-out one as the Pull button does, any
    * other by fast-forwarding it to its upstream.
@@ -61,23 +68,24 @@ const OpenFor = createContext<Accessor<string | undefined>>(() => undefined);
 /**
  * What the branch menus in `children` (see `BranchMenu`) share: the dialog naming a branch to
  * create, so a name kept to fix after a failure is there whichever menu it's opened from again,
- * the dialog placing a worktree, likewise, merging, pulling, the dialog asking before deleting a
- * branch, and opening a worktree. A merge that stops at conflicts opens the first conflicted file
- * to resolve them.
+ * the dialog placing a worktree, likewise, merging, rebasing, pulling, the dialog asking before
+ * deleting a branch, and opening a worktree. A merge or rebase that stops at conflicts opens the
+ * first conflicted file to resolve them.
  */
 export function BranchMenuProvider(props: {
   repositoryId: string;
-  /** Opens a conflicted file's conflicts, as a merge that stopped at them asks. */
+  /** Opens a conflicted file's conflicts, as a merge or rebase that stopped at them asks. */
   onResolve?: (file: ChangedFile) => void;
   /**
-   * What merging waits for, as it rewrites files in the working tree: the edits to a file on show
-   * saved. Resolves to whether to go on.
+   * What merging or rebasing waits for, as they rewrite files in the working tree: the edits to a
+   * file on show saved. Resolves to whether to go on.
    */
   beforeChange?: () => Promise<boolean>;
   children: JSX.Element;
 }) {
   const queryClient = useQueryClient();
   const merging = useMergeBranch(() => props.repositoryId);
+  const rebasing = useRebaseBranch(() => props.repositoryId);
   const opening = useOpenWorktree(() => props.repositoryId);
   const deleting = useDeleteBranch(() => props.repositoryId);
   const pullingHead = usePull(() => props.repositoryId);
@@ -98,29 +106,33 @@ export function BranchMenuProvider(props: {
     },
   );
 
-  const merge = async (ref: string, into: string) => {
+  /**
+   * Runs `operation`, a merge or a rebase, on `input`, once the edits to a file on show are
+   * saved; if it stops at conflicts, opens the first conflicted file.
+   */
+  const integrate = async <T,>(
+    operation: { run: (input: T, options: { onSuccess: (outcome: string) => void }) => void },
+    input: T,
+  ) => {
     const id = props.repositoryId;
     // Not once another repository is on show: the branch is this one's.
     if (!(await (props.beforeChange?.() ?? true)) || id !== props.repositoryId) return;
-    merging.run(
-      { ref, into },
-      {
-        onSuccess: (outcome) => {
-          if (outcome !== "conflicts" || id !== props.repositoryId) return;
-          // The status has reloaded by now (see `useMergeBranch`).
-          const status = queryClient.getQueryData<Uncommitted>(gitKeys.status(id));
-          const file = status && firstToResolve(selectConflicted(status));
-          if (file) props.onResolve?.(file);
-        },
+    operation.run(input, {
+      onSuccess: (outcome) => {
+        if (outcome !== "conflicts" || id !== props.repositoryId) return;
+        // The status has reloaded by now (see `useMergeBranch` and `useRebaseBranch`).
+        const file = firstConflictedFile(queryClient, id);
+        if (file) props.onResolve?.(file);
       },
-    );
+    });
   };
 
   return (
     <BranchActions.Provider
       value={{
         createFrom: setFrom,
-        merge: (ref, into) => void merge(ref, into),
+        merge: (ref, into) => void integrate(merging, { ref, into }),
+        rebase: (ref, branch) => void integrate(rebasing, { ref, branch }),
         pull: (ref, checkedOut) =>
           checkedOut ? pullingHead.pull() : pullingBranch.run(branchName(ref)),
         pulling: (checkedOut) => (checkedOut ? pullingHead.isPending() : pullingBranch.isPending()),
@@ -174,18 +186,20 @@ export function useOpenWorktreeFromBranch(): (path: string) => void {
 /**
  * The menu of what can be done with a branch, opened by right-clicking an element in `children`
  * marked with its full ref name as `data-branch`, like a row in the sidebar or a label in the
- * history (see `RowMenu`): creating a branch from it, merging it into the checked-out one, which
- * isn't offered for that one itself, pulling a local one that tracks another, unless it's checked
- * out in another worktree (where it's pulled), checking it out in a new worktree, or opening the
- * one it's checked out in, and deleting it, asking first. One that isn't checked out is pulled
- * without checking it out, by fast-forwarding it, which fails if it diverged from its upstream.
- * Deleting a local branch deletes it here only; deleting a remote one deletes it on its remote,
- * and the local branches tracking it with it.
- * None of creating, merging or deleting is possible while another change of the branches (a
- * switch, a merge, a deletion…) is running. Merging is also disabled while HEAD is detached, or an
- * operation (a merge, a rebase…) or conflicts are under way, and deleting while the branch, or for
- * a remote one a local branch tracking it, is checked out, here or in another worktree, as git
- * would refuse. (Nor will it delete one being rebased or bisected, which only it tells.)
+ * history (see `RowMenu`): creating a branch from it, merging it into the checked-out one, or
+ * rebasing the checked-out one onto it, neither of which is offered for that one itself, pulling
+ * a local one that tracks another, unless it's checked out in another worktree (where it's
+ * pulled), checking it out in a new worktree, or opening the one it's checked out in, and deleting
+ * it, asking first. One that isn't checked out is pulled without checking it out, by
+ * fast-forwarding it, which fails if it diverged from its upstream. Deleting a local branch
+ * deletes it here only; deleting a remote one deletes it on its remote, and the local branches
+ * tracking it with it.
+ * None of creating, merging, rebasing or deleting is possible while another change of the
+ * branches (a switch, a merge, a deletion…) is running. Merging and rebasing are also disabled
+ * while HEAD is detached, or an operation (a merge, a rebase…) or conflicts are under way, and
+ * deleting while the branch, or for a remote one a local branch tracking it, is checked out, here
+ * or in another worktree, as git would refuse. (Nor will it delete one being rebased or bisected,
+ * which only it tells.)
  * Needs a `BranchMenuProvider` around it.
  */
 export function BranchMenu(props: { repositoryId: string; children: JSX.Element }) {
@@ -204,12 +218,15 @@ export function BranchMenu(props: { repositoryId: string; children: JSX.Element 
     return worktree && canOpenWorktree(worktree) ? worktree : undefined;
   };
 
-  /** The branch to merge into: the one checked out; `undefined` with HEAD detached. */
+  /**
+   * The branch to merge into, or to rebase: the one checked out; `undefined` with HEAD detached.
+   */
   const into = () => {
     const head = status()?.head;
     return head && head.kind !== "detached" ? head.name : undefined;
   };
-  const mayMerge = () =>
+  /** Whether a branch can be merged into the checked-out one, or that one rebased onto it. */
+  const mayIntegrate = () =>
     into() !== undefined && !status()?.counts.conflicted && operation() === null && !busy();
 
   /** Whether the local branch `ref` is checked out here. */
@@ -284,10 +301,19 @@ export function BranchMenu(props: { repositoryId: string; children: JSX.Element 
                   <ContextMenuItem
                     icon={GitMerge}
                     label={`Merge ${branchName(branch())} into ${headLabel(head())}`}
-                    disabled={!mayMerge()}
+                    disabled={!mayIntegrate()}
                     onSelect={() => {
                       const target = into();
                       if (target !== undefined) actions.merge(branch(), target);
+                    }}
+                  />
+                  <ContextMenuItem
+                    icon={GitPullRequestArrow}
+                    label={`Rebase ${headLabel(head())} onto ${branchName(branch())}`}
+                    disabled={!mayIntegrate()}
+                    onSelect={() => {
+                      const current = into();
+                      if (current !== undefined) actions.rebase(branch(), current);
                     }}
                   />
                 </Show>

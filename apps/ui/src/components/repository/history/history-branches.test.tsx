@@ -42,7 +42,7 @@ const rpc = vi.hoisted(() => ({
     diff: { commitFiles: async () => [] },
     stash: { list: async () => [] },
     refs: { list: vi.fn() },
-    branch: { switch: vi.fn(), create: vi.fn(), merge: vi.fn() },
+    branch: { switch: vi.fn(), create: vi.fn(), merge: vi.fn(), rebase: vi.fn() },
     operation: { get: vi.fn() },
     worktree: { list: vi.fn(), add: vi.fn(), remove: vi.fn() },
   },
@@ -94,6 +94,7 @@ beforeEach(() => {
   rpc.git.branch.switch.mockResolvedValue(undefined);
   rpc.git.branch.create.mockResolvedValue(undefined);
   rpc.git.branch.merge.mockResolvedValue("merged");
+  rpc.git.branch.rebase.mockResolvedValue("rebased");
   rpc.git.operation.get.mockResolvedValue(null);
   rpc.git.worktree.list.mockResolvedValue([]);
 });
@@ -211,13 +212,32 @@ describe("branches in the history", () => {
     });
   });
 
-  it("doesn't offer merging the checked-out branch's label into itself", async () => {
+  it("rebases the checked-out branch onto a branch right-clicked among a row's labels", async () => {
+    const user = userEvent.setup();
+    await renderHistory();
+
+    await user.pointer({
+      keys: "[MouseRight]",
+      target: await fromTheRest(user, "origin/release"),
+    });
+    const item = await screen.findByRole("menuitem", { name: "Rebase main onto origin/release" });
+    await vi.waitFor(() => expect(item).toHaveAttribute("aria-disabled", "false"));
+    await user.click(item);
+    expect(rpc.git.branch.rebase).toHaveBeenCalledWith({
+      repositoryId: "repo",
+      ref: "refs/remotes/origin/release",
+      branch: "main",
+    });
+  });
+
+  it("doesn't offer merging the checked-out branch's label into itself, or rebasing it onto itself", async () => {
     const user = userEvent.setup();
     await renderHistory();
 
     await user.pointer({ keys: "[MouseRight]", target: await screen.findByText("main") });
     await screen.findByRole("menuitem", { name: "Create branch…" });
     expect(screen.queryByRole("menuitem", { name: /^Merge/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /^Rebase/ })).not.toBeInTheDocument();
   });
 
   it("opens no menu for a tag", async () => {

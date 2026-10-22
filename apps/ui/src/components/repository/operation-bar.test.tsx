@@ -95,6 +95,39 @@ describe("the operation bar", () => {
     });
   });
 
+  it("opens the first conflicted file once continuing stops at the next commit's conflicts", async () => {
+    operation = { kind: "rebase", branch: "feature", onto: "main", steps: { step: 1, total: 2 } };
+    setConflicts([]);
+    rpc.git.operation.continue.mockImplementation(async () => {
+      // As the rebase left it at the next commit, which the repository reloads.
+      operation = { kind: "rebase", branch: "feature", onto: "main", steps: { step: 2, total: 2 } };
+      setConflicts(["a.txt", "b.txt"], ["a.txt"]);
+    });
+    const { onResolve } = renderBar();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Continue" }));
+    // The one with markers left first.
+    await vi.waitFor(() => expect(onResolve).toHaveBeenCalledWith(conflicted("b.txt")));
+    expect(onResolve).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText("2/2")).toBeInTheDocument();
+    expect(
+      screen.getByText("2 files have conflicts, 1 ready to mark resolved"),
+    ).toBeInTheDocument();
+  });
+
+  it("opens nothing once continuing finishes the operation", async () => {
+    operation = { kind: "rebase", branch: "feature", onto: "main", steps: { step: 2, total: 2 } };
+    setConflicts([]);
+    rpc.git.operation.continue.mockImplementation(async () => {
+      operation = null;
+    });
+    const { onResolve } = renderBar();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Continue" }));
+    await vi.waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    expect(onResolve).not.toHaveBeenCalled();
+  });
+
   it("asks before aborting, which throws away what's resolved", async () => {
     setConflicts(["a.txt"]);
     const beforeChange = vi.fn(async () => true);
