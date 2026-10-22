@@ -331,7 +331,9 @@ describe("merging a branch", () => {
       await expect(
         mergeBranch(await repos.open("merge-over-changes"), "refs/heads/side", "main"),
       ).rejects.toThrow(
-        "Merging side would overwrite your uncommitted changes to f.txt. Commit or stash them, then merge.",
+        new MergeBlockedError(
+          "Merging side would overwrite your uncommitted changes to f.txt. Commit or stash them, then merge.",
+        ),
       );
       expect(snapshot(path)).toEqual(before);
     });
@@ -622,18 +624,36 @@ describe("what git says when it refuses to merge", () => {
         "error: Updating the following directories would lose untracked files in them:\n\td\n\nAborting\n",
       ),
     ).toEqual({ kind: "folders", files: ["d"] });
+    expect(
+      parseRefusal(
+        "error: The following untracked working tree files would be overwritten by checkout:\n\tm.txt\nPlease move or remove them before you switch branches.\nAborting\nerror: could not detach HEAD\n",
+      ),
+    ).toEqual({ kind: "overwritten", files: ["m.txt"] });
     expect(parseRefusal("fatal: Not possible to fast-forward, aborting.\n")).toBeUndefined();
   });
 
   it("is put to the user", () => {
-    expect(refusalMessage("removed", "side", ["gone.txt"])).toBe(
+    const merging = { doing: "Merging side", wont: "merge side", next: "merge" };
+    expect(refusalMessage("removed", ["gone.txt"], merging)).toBe(
       "Merging side would remove the untracked file gone.txt. Move or remove it, then merge.",
     );
-    expect(refusalMessage("removed", "side", ["a", "b", "c"])).toBe(
+    expect(refusalMessage("removed", ["a", "b", "c"], merging)).toBe(
       "Merging side would remove the untracked files a and 2 other files. Move or remove them, then merge.",
     );
-    expect(refusalMessage("folders", "side", ["d", "e"])).toBe(
+    expect(refusalMessage("folders", ["d", "e"], merging)).toBe(
       "Merging side would lose the untracked files in the folders d and e. Move or remove them, then merge.",
+    );
+    expect(refusalMessage("staged", ["f.txt"], merging)).toBe(
+      "Git won't merge side while changes are staged, to f.txt. Commit or stash them, then merge.",
+    );
+    expect(
+      refusalMessage("overwritten", ["m.txt"], {
+        doing: "Rebasing onto side",
+        wont: "rebase",
+        next: "rebase",
+      }),
+    ).toBe(
+      "Rebasing onto side would overwrite the untracked file m.txt. Move or remove it, then rebase.",
     );
   });
 });

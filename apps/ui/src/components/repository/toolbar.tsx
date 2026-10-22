@@ -15,6 +15,7 @@ import { TextInput } from "@/components/ui/text-input";
 import {
   useDeleteBranchState,
   useMergeBranchState,
+  useRebaseBranchState,
   useSwitchBranchState,
 } from "@/git/queries/branch";
 import { useFetch, usePullBranchState } from "@/git/queries/remote";
@@ -100,18 +101,24 @@ function FetchButton(props: { repositoryId: string }) {
 
 /**
  * The repository's name and current branch. A spinner takes the branch icon's place while switching
- * branches, merging one into it, or deleting or pulling another (from a branch's menu), and a
- * popover under it says why that failed.
+ * branches, merging one into it, rebasing it onto one, or deleting or pulling another (from a
+ * branch's menu), and a popover under it says why that failed.
  */
 function CurrentBranch(props: { repositoryId: string }) {
   const switching = useSwitchBranchState(() => props.repositoryId);
   const merging = useMergeBranchState(() => props.repositoryId);
+  const rebasing = useRebaseBranchState(() => props.repositoryId);
   const deleting = useDeleteBranchState(() => props.repositoryId);
   const pulling = usePullBranchState(() => props.repositoryId);
   const busy = () =>
-    switching.isPending() || merging.isPending() || deleting.isPending() || pulling.isPending();
+    switching.isPending() ||
+    merging.isPending() ||
+    rebasing.isPending() ||
+    deleting.isPending() ||
+    pulling.isPending();
   const failures = {
     merge: { title: "Merge", error: merging.error, dismiss: () => merging.dismiss() },
+    rebase: { title: "Rebase", error: rebasing.error, dismiss: () => rebasing.dismiss() },
     switch: { title: "Switch branch", error: switching.error, dismiss: () => switching.dismiss() },
     delete: { title: "Delete branch", error: deleting.error, dismiss: () => deleting.dismiss() },
     pull: { title: "Pull", error: pulling.error, dismiss: () => pulling.dismiss() },
@@ -119,10 +126,11 @@ function CurrentBranch(props: { repositoryId: string }) {
   type Failed = keyof typeof failures;
   // Which failed, the last first: each can have failed, one after the other, and they're shown
   // one at a time.
-  const [order, setOrder] = createSignal<Failed[]>(["merge", "switch", "delete", "pull"]);
+  const [order, setOrder] = createSignal<Failed[]>(["merge", "rebase", "switch", "delete", "pull"]);
   const failed = (name: Failed) => (error: Error | null) =>
     error && setOrder((names) => [name, ...names.filter((other) => other !== name)]);
   createEffect(on(merging.error, failed("merge")));
+  createEffect(on(rebasing.error, failed("rebase")));
   createEffect(on(switching.error, failed("switch")));
   createEffect(on(deleting.error, failed("delete")));
   createEffect(on(pulling.error, failed("pull")));

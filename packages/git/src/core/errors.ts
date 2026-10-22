@@ -253,8 +253,9 @@ export class ConflictChangedError extends messageError(CONFLICT) {
 export class NoOperationError extends messageError(PRECONDITION_FAILED) {}
 
 /**
- * A merge that can't start: HEAD isn't on a branch, an operation or conflicts are under way, or
- * the branch to merge is gone. Nothing was done.
+ * A merge that can't start: HEAD isn't on a branch, an operation or conflicts are under way, the
+ * branch to merge is gone, or uncommitted changes or untracked files are in its way. Nothing was
+ * done.
  */
 export class MergeBlockedError extends messageError(PRECONDITION_FAILED) {}
 
@@ -263,6 +264,25 @@ export class MergeBlockedError extends messageError(PRECONDITION_FAILED) {}
  * down: it's under way, to commit or abort.
  */
 export class MergeStoppedError extends messageError(CONFLICT) {}
+
+/**
+ * A rebase that can't start: HEAD isn't on a branch, an operation or conflicts are under way, the
+ * branch to rebase onto is gone, or there are uncommitted changes or untracked files in the way.
+ * Nothing was done.
+ */
+export class RebaseBlockedError extends messageError(PRECONDITION_FAILED) {}
+
+/**
+ * A rebase that stopped partway without conflicts, e.g. as a commit couldn't be signed, and was
+ * undone: nothing is left of it, to try again once that's fixed.
+ */
+export class RebaseUndoneError extends messageError(PRECONDITION_FAILED) {}
+
+/**
+ * A rebase that stopped partway without conflicts, e.g. as a commit couldn't be signed, and
+ * couldn't be undone either: it's under way, to finish in a terminal or abort.
+ */
+export class RebaseStoppedError extends messageError(CONFLICT) {}
 
 /** Changes that can't be discarded, as they're of conflicted files: nothing was discarded. */
 export class DiscardBlockedError extends messageError(PRECONDITION_FAILED) {}

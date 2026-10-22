@@ -34,8 +34,9 @@ import type { MergeOutcome } from "./schema";
  * stash; others are kept as they are.
  *
  * Rejects with `MergeBlockedError`, having done nothing, while HEAD is detached, an operation (a
- * merge, a rebase…) or conflicts are under way, or `ref` is gone; with `MergeStoppedError` if a
- * hook turned the merge commit down, which leaves the merge under way, to commit or abort.
+ * merge, a rebase…) or conflicts are under way, `ref` is gone, or git refused over uncommitted
+ * changes or untracked files; with `MergeStoppedError` if a hook turned the merge commit down,
+ * which leaves the merge under way, to commit or abort.
  */
 export async function mergeBranch(repo: Repo, ref: string, into: string): Promise<MergeOutcome> {
   const target = parseRefName(ref);
@@ -121,13 +122,14 @@ export async function mergeBranch(repo: Repo, ref: string, into: string): Promis
       const refused = parseRefusal(failure.stderr);
       if (!refused) throw failure.withoutHints();
       // Git lists the staged files on one line, which can't be told apart if a name has a space.
-      const files =
-        refused.kind === "staged"
-          ? (await run(["diff", "--cached", "--name-only", "-z", "HEAD"]))
-              .split("\0")
-              .filter(Boolean)
-          : refused.files;
-      throw failure.withMessage(refusalMessage(refused.kind, target.name, files));
+      const files = refused.kind === "staged" ? await stagedFiles(run) : refused.files;
+      throw new MergeBlockedError(
+        refusalMessage(refused.kind, files, {
+          doing: `Merging ${target.name}`,
+          wont: `merge ${target.name}`,
+          next: "merge",
+        }),
+      );
     }
     const after = await resolveRef(run, "HEAD");
     if (after === before) return "up-to-date";
@@ -160,7 +162,9 @@ export type RefusalKind = "changes" | "staged" | "overwritten" | "removed" | "fo
  * Why git refused to merge over uncommitted changes or untracked files, going by what it printed,
  * with the files it listed, each on a line of its own, after a tab; `undefined` if it failed
  * otherwise. Staged changes it lists on one line, two spaces in, separated by spaces, which can't be
- * told apart from spaces in their names: those are left for the caller to ask git for.
+ * told apart from spaces in their names: those are left for the caller to ask git for. Also what
+ * it printed when a rebase couldn't check out the branch to rebase onto, which it says a checkout
+ * would overwrite or remove.
  */
 export function parseRefusal(stderr: string): { kind: RefusalKind; files: string[] } | undefined {
   if (
@@ -169,9 +173,12 @@ export function parseRefusal(stderr: string): { kind: RefusalKind; files: string
     return { kind: "staged", files: [] };
   }
   const patterns: [RegExp, (match: RegExpExecArray) => RefusalKind][] = [
-    [/Your local changes to the following files would be overwritten by merge:\n/, () => "changes"],
     [
-      /The following untracked working tree files would be (overwritten|removed) by merge:\n/,
+      /Your local changes to the following files would be overwritten by (merge|checkout):\n/,
+      () => "changes",
+    ],
+    [
+      /The following untracked working tree files would be (overwritten|removed) by (merge|checkout):\n/,
       (match) => (match[1] === "removed" ? "removed" : "overwritten"),
     ],
     [/Updating the following directories would lose untracked files in them:\n/, () => "folders"],
@@ -189,25 +196,38 @@ export function parseRefusal(stderr: string): { kind: RefusalKind; files: string
   return undefined;
 }
 
-/** What to tell the user when git refused to merge `branch` over `files`, for the reason `kind`. */
-export function refusalMessage(kind: RefusalKind, branch: string, files: string[]): string {
+/**
+ * What to tell the user when git refused to go on over `files`, for the reason `kind`: `doing`
+ * says what was asked, e.g. "Merging side", `wont` what git won't do, e.g. "merge side", and `next`
+ * what to do once that's seen to, e.g. "merge".
+ */
+export function refusalMessage(
+  kind: RefusalKind,
+  files: string[],
+  { doing, wont, next }: { doing: string; wont: string; next: string },
+): string {
   const one = files.length === 1;
   const them = one ? "it" : "them";
   switch (kind) {
     case "changes":
-      return `Merging ${branch} would overwrite your uncommitted changes to ${list(files)}. Commit or stash them, then merge.`;
+      return `${doing} would overwrite your uncommitted changes to ${list(files)}. Commit or stash them, then ${next}.`;
     case "staged":
-      return `Git won't merge ${branch} while changes are staged, to ${list(files)}. Commit or stash them, then merge.`;
+      return `Git won't ${wont} while changes are staged, to ${list(files)}. Commit or stash them, then ${next}.`;
     case "overwritten":
     case "removed":
-      return `Merging ${branch} would ${kind === "removed" ? "remove" : "overwrite"} the untracked ${one ? "file" : "files"} ${list(files)}. Move or remove ${them}, then merge.`;
+      return `${doing} would ${kind === "removed" ? "remove" : "overwrite"} the untracked ${one ? "file" : "files"} ${list(files)}. Move or remove ${them}, then ${next}.`;
     case "folders":
-      return `Merging ${branch} would lose the untracked files in the ${one ? "folder" : "folders"} ${list(files)}. Move or remove them, then merge.`;
+      return `${doing} would lose the untracked files in the ${one ? "folder" : "folders"} ${list(files)}. Move or remove them, then ${next}.`;
   }
 }
 
+/** The files with staged changes, for a refusal over them (see `parseRefusal`). */
+export async function stagedFiles(run: GitCommand): Promise<string[]> {
+  return (await run(["diff", "--cached", "--name-only", "-z", "HEAD"])).split("\0").filter(Boolean);
+}
+
 /** `files` in a sentence: "a.txt", "a.txt and b.txt", or "a.txt and 3 other files". */
-function list(files: string[]): string {
+export function list(files: string[]): string {
   const [first, second] = files;
   if (files.length === 1) return first!;
   if (files.length === 2) return `${first} and ${second}`;

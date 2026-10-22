@@ -20,7 +20,7 @@ const rpc = vi.hoisted(() => ({
     status: { get: vi.fn() },
     refs: { list: vi.fn() },
     stash: { list: vi.fn(), pop: vi.fn(), drop: vi.fn() },
-    branch: { switch: vi.fn(), create: vi.fn(), merge: vi.fn(), delete: vi.fn() },
+    branch: { switch: vi.fn(), create: vi.fn(), merge: vi.fn(), rebase: vi.fn(), delete: vi.fn() },
     operation: { get: vi.fn() },
     worktree: { list: vi.fn(), add: vi.fn(), remove: vi.fn() },
     remote: { list: vi.fn(), pull: vi.fn() },
@@ -597,6 +597,145 @@ describe("merging from the branch menu", () => {
     expect(onResolve).toHaveBeenCalledTimes(1);
     // Stopping at conflicts isn't a failure.
     expect(screen.queryByText("Merge")).not.toBeInTheDocument();
+  });
+});
+
+/** Right-clicks the branch `name`'s row, and chooses to rebase `main` onto it in its menu. */
+async function rebaseOnto(user: ReturnType<typeof userEvent.setup>, name: string) {
+  const item = await menuItem(user, name, `Rebase main onto ${name}`);
+  // Enabled once the operation under way, if any, has loaded.
+  await vi.waitFor(() => expect(item).toHaveAttribute("aria-disabled", "false"));
+  await user.click(item);
+}
+
+describe("rebasing from the branch menu", () => {
+  it("rebases the checked-out branch onto the one right-clicked, showing it running", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+    let finish!: (outcome: string) => void;
+    rpc.git.branch.rebase.mockReturnValue(new Promise((resolve) => (finish = resolve)));
+
+    await rebaseOnto(user, "feature");
+    expect(rpc.git.branch.rebase).toHaveBeenCalledWith({
+      repositoryId: "a",
+      ref: "refs/heads/feature",
+      branch: "main",
+    });
+    await vi.waitFor(() => expect(busy()).toBeInTheDocument());
+
+    // Nor a merge, or another rebase, meanwhile.
+    expect(
+      await menuItem(user, "origin/feature", "Merge origin/feature into main"),
+    ).toHaveAttribute("aria-disabled", "true");
+    expect(
+      screen.getByRole("menuitem", { name: "Rebase main onto origin/feature" }),
+    ).toHaveAttribute("aria-disabled", "true");
+    await user.keyboard("{Escape}");
+
+    const statusCalls = rpc.git.status.get.mock.calls.length;
+    finish("rebased");
+    await vi.waitFor(() => expect(busy()).not.toBeInTheDocument());
+    // The repository was reloaded.
+    expect(rpc.git.status.get.mock.calls.length).toBeGreaterThan(statusCalls);
+    expect(screen.queryByText("Rebase")).not.toBeInTheDocument();
+  });
+
+  it("rebases onto a remote branch", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+    rpc.git.branch.rebase.mockResolvedValue("fast-forward");
+
+    await rebaseOnto(user, "origin/feature");
+    expect(rpc.git.branch.rebase).toHaveBeenCalledWith({
+      repositoryId: "a",
+      ref: "refs/remotes/origin/feature",
+      branch: "main",
+    });
+  });
+
+  it("isn't offered for the checked-out branch", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+
+    await menuItem(user, "main", "Create branch…");
+    expect(screen.queryByRole("menuitem", { name: /^Rebase/ })).not.toBeInTheDocument();
+  });
+
+  it("says when there was nothing to rebase, without reloading the repository", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+    rpc.git.branch.rebase.mockResolvedValue("up-to-date");
+    await vi.waitFor(() => expect(rpc.git.status.get).toHaveBeenCalled());
+
+    const statusCalls = rpc.git.status.get.mock.calls.length;
+    await rebaseOnto(user, "feature");
+    expect(
+      await screen.findByText("Already up to date: main has every commit of feature."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Rebase")).toBeInTheDocument();
+    expect(rpc.git.status.get).toHaveBeenCalledTimes(statusCalls);
+  });
+
+  it("shows the failure that came last, a switch's after a rebase's", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+    rpc.git.branch.rebase.mockRejectedValue(new Error("The rebase failed."));
+    rpc.git.branch.switch.mockRejectedValue(new Error("The switch failed."));
+
+    await rebaseOnto(user, "feature");
+    expect(await screen.findByText("The rebase failed.")).toBeInTheDocument();
+    expect(screen.getByText("Rebase")).toBeInTheDocument();
+    // Dispatched straight to the row, as a switch from the keyboard would leave the popover open.
+    fireEvent.dblClick(await row("origin/feature"));
+    expect(await screen.findByText("The switch failed.")).toBeInTheDocument();
+    expect(screen.getByText("Switch branch")).toBeInTheDocument();
+
+    // The rebase's is still there once that's dismissed.
+    await user.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(await screen.findByText("The rebase failed.")).toBeInTheDocument();
+    expect(screen.getByText("Rebase")).toBeInTheDocument();
+  });
+
+  it("says why a rebase failed, until that's dismissed", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+    const message =
+      "Git won't rebase while there are uncommitted changes to a.txt. Commit or stash them, then rebase.";
+    rpc.git.branch.rebase.mockRejectedValue(new Error(message));
+
+    await rebaseOnto(user, "feature");
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.getByText("Rebase")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Dismiss" }));
+    await vi.waitFor(() => expect(screen.queryByText(message)).not.toBeInTheDocument());
+  });
+
+  it("opens the first conflicted file once it stops at conflicts", async () => {
+    const user = userEvent.setup();
+    const onResolve = vi.fn();
+    renderSidebar(undefined, { onResolve });
+    rpc.git.branch.rebase.mockImplementation(async () => {
+      // As the rebase left it, which the repository reloads.
+      rpc.git.status.get.mockResolvedValue({
+        ...status,
+        counts: { files: 1, staged: 0, unstaged: 1, conflicted: 1 },
+        changes: {
+          staged: [],
+          unstaged: [conflicted("a.txt")],
+          uncounted: false,
+          markerFree: [],
+        },
+        version: "v2",
+      });
+      return "conflicts";
+    });
+
+    await rebaseOnto(user, "feature");
+    await vi.waitFor(() => expect(onResolve).toHaveBeenCalledWith(conflicted("a.txt")));
+    expect(onResolve).toHaveBeenCalledTimes(1);
+    // Stopping at conflicts isn't a failure.
+    expect(screen.queryByText("Rebase")).not.toBeInTheDocument();
   });
 
   it("opens nothing once it went through", async () => {

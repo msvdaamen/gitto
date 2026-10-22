@@ -1,4 +1,5 @@
 import type { ChangedFile, Operation } from "@gitto/git/types";
+import { useQueryClient } from "@tanstack/solid-query";
 import { cn } from "cn";
 import GitMergeConflict from "lucide-solid/icons/git-merge-conflict";
 import TriangleAlert from "lucide-solid/icons/triangle-alert";
@@ -9,7 +10,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { FailurePopover } from "@/components/ui/failure-popover";
 import { operationName, operationProgress, operationTitle } from "@/git/conflicts";
 import { useOperationActions, useOperationInProgress } from "@/git/queries/progress";
-import { firstToResolve, useConflictedFiles } from "@/git/queries/status";
+import { firstConflictedFile, firstToResolve, useConflictedFiles } from "@/git/queries/status";
 import { useUnsuspendedData } from "@/git/queries/unsuspended";
 import { useLingering } from "@/hooks/lingering";
 
@@ -17,8 +18,9 @@ import { useLingering } from "@/hooks/lingering";
  * What's under way in the repository, above the history and a file's changes: a merge, a rebase,
  * cherry-picks or reverts, with how many files still have conflicts, and the conflicts a stash left
  * as it was popped. The first conflicted file is a click away; once none is left, the operation is
- * continued, as git would from a terminal. Aborting it, which throws away what's been resolved, asks
- * first.
+ * continued, as git would from a terminal. One that goes on to stop at the next commit's
+ * conflicts, as a rebase of several commits can, opens the first of those to resolve. Aborting it,
+ * which throws away what's been resolved, asks first.
  */
 export function OperationBar(props: {
   repositoryId: string;
@@ -30,6 +32,7 @@ export function OperationBar(props: {
    */
   beforeChange: () => Promise<boolean>;
 }) {
+  const queryClient = useQueryClient();
   const operation = useUnsuspendedData(useOperationInProgress(() => props.repositoryId));
   const conflicted = useUnsuspendedData(useConflictedFiles(() => props.repositoryId));
   const actions = useOperationActions(() => props.repositoryId);
@@ -42,9 +45,21 @@ export function OperationBar(props: {
     return current && firstToResolve(current);
   };
   const pending = () => actions.continue.isPending() || actions.abort.isPending();
-  /** Continues `current` once the edits to a file on show are saved: it rewrites files. */
+  /**
+   * Continues `current` once the edits to a file on show are saved: it rewrites files. If it stops
+   * at the next commit's conflicts, the first conflicted file is opened to resolve them.
+   */
   const goOn = async (current: Operation) => {
-    if (await props.beforeChange()) actions.continue.run(current.kind);
+    const id = props.repositoryId;
+    if (!(await props.beforeChange()) || id !== props.repositoryId) return;
+    actions.continue.run(current.kind, {
+      onSuccess: () => {
+        if (id !== props.repositoryId) return;
+        // The status has reloaded by now (see `useOperationActions`).
+        const file = firstConflictedFile(queryClient, id);
+        if (file) props.onResolve(file);
+      },
+    });
   };
   /** Aborts `current` once the edits to a file on show are saved, as continuing does. */
   const abort = async (current: Operation) => {
