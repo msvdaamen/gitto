@@ -185,18 +185,25 @@ export async function* watchWorkingTree(repo: Repo, signal?: AbortSignal): Async
   }
 
   /**
-   * Starts over without the folders `dropped` (ignored paths that changed) are in, if they weren't
-   * left out yet, so their changes stop coming in. Not for single files, which are dropped as they
-   * come: they're cheap, and starting over walks the whole tree on Linux. Whether it started over.
+   * Starts over without the folders `dropped` (ignored paths that changed) are, or are in, if they
+   * weren't left out yet, so their changes stop coming in. Not for single files, which are dropped
+   * as they come: they're cheap, and starting over walks the whole tree on Linux. Whether it started
+   * over. The folder itself counts: on Linux, a file written right after its folder was created is
+   * often written before the folder is watched, so only the folder is reported.
    */
   async function leaveOutNewIgnoredFolders(dropped: string[]): Promise<boolean> {
-    const nowIgnored = await ignoredPaths(repo);
-    const newFolders = nowIgnored.filter(
-      (path) => !ignored.has(path) && dropped.some((changed) => changed.startsWith(`${path}/`)),
-    );
+    const listed = await listIgnored(repo);
+    const newFolders = listed
+      .filter((path) => path.endsWith("/"))
+      .map(withoutSlash)
+      .filter(
+        (path) =>
+          !ignored.has(path) &&
+          dropped.some((changed) => changed === path || changed.startsWith(`${path}/`)),
+      );
     if (newFolders.length === 0) return false;
     trace(`leaving out new ignored folders in ${root}: ${newFolders.join(", ")}`);
-    await watchTree(nowIgnored);
+    await watchTree(listed.map(withoutSlash));
     return true;
   }
 }
@@ -224,6 +231,11 @@ async function ignoredAmong(repo: Repo, paths: string[]): Promise<Set<string>> {
  * later never showed. `--ignored=matching` lists the files in it instead.
  */
 export async function ignoredPaths(repo: Repo): Promise<string[]> {
+  return (await listIgnored(repo)).map(withoutSlash);
+}
+
+/** `ignoredPaths`, with directories ending in `/`. */
+async function listIgnored(repo: Repo): Promise<string[]> {
   // Without renames, each entry is one field; submodules aren't looked into, as only what's ignored
   // here is read.
   const output = await repo
@@ -240,5 +252,9 @@ export async function ignoredPaths(repo: Repo): Promise<string[]> {
   return output
     .split("\0")
     .filter((entry) => entry.startsWith("! "))
-    .map((entry) => entry.slice(2).replace(/\/$/, ""));
+    .map((entry) => entry.slice(2));
+}
+
+function withoutSlash(path: string): string {
+  return path.replace(/\/$/, "");
 }
