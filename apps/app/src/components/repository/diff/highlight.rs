@@ -16,7 +16,7 @@ use syntect::parsing::{ParseState, Scope, ScopeStack, SyntaxReference, SyntaxSet
 
 use super::diff_metadata::{FileDiff, HunkContent, Side};
 
-/// Loaded once, on the first highlight: deserializing it takes tens of milliseconds.
+/// Loaded once, on the first highlight: deserializing it takes a few milliseconds.
 static SYNTAXES: LazyLock<SyntaxSet> = LazyLock::new(two_face::syntax::extra_newlines);
 
 /// Lines (of either side) above which a diff isn't highlighted at all (`tokenizeMaxLength`).
@@ -112,7 +112,7 @@ impl DiffHighlights {
     pub fn compute(diff: &FileDiff) -> Self {
         let too_long =
             diff.deletion_lines.len().max(diff.addition_lines.len()) > MAX_HIGHLIGHTED_LINES;
-        let syntax = [Side::Deletions, Side::Additions].map(|side| {
+        let side_syntax = |side: Side| {
             let name = match side {
                 Side::Deletions => diff.prev_name.as_deref().unwrap_or(&diff.name),
                 Side::Additions => &diff.name,
@@ -121,10 +121,23 @@ impl DiffHighlights {
                 Some(syntax) => syntax_spans(diff, side, syntax),
                 None => LineSpans::new(),
             }
+        };
+        // The sides are parsed at once, each on a thread of its own, and the changed words
+        // meanwhile: a modified file's two sides are two whole files, which parsing one after
+        // the other would take twice as long to color.
+        let (deletions, additions, changed) = std::thread::scope(|scope| {
+            let deletions = scope.spawn(|| side_syntax(Side::Deletions));
+            let changed = scope.spawn(|| changed_words(diff));
+            let additions = side_syntax(Side::Additions);
+            (
+                deletions.join().expect("highlighting a side doesn't panic"),
+                additions,
+                changed.join().expect("comparing lines doesn't panic"),
+            )
         });
         DiffHighlights {
-            syntax,
-            changed: changed_words(diff),
+            syntax: [deletions, additions],
+            changed,
         }
     }
 

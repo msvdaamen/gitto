@@ -68,6 +68,10 @@ In `gitto-git`:
 GPUI tests can't run git: a view's test gives every query it shows its data first
 (`components/repository/test_support.rs`), and fakes what changes it.
 
+Dev builds optimize the dependencies (`[profile.dev.package."*"]` in the root `Cargo.toml`): GPUI
+is many times slower without, so the first build takes longer, and the app's speed is only judged
+in such a build or a `--release` one.
+
 Building the app on Linux takes libxkbcommon, Wayland and fontconfig's headers
 (`libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libfontconfig-dev`). To run it headless,
 start a display with `Xvfb :99 -screen 0 1400x900x24 &`, and run `cargo run -p app` with

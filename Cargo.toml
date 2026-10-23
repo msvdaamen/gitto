@@ -44,9 +44,11 @@ log = { version = "0.4.34", features = ["std"] }
 
 # apps/app's diffs: syntax highlighting as gpui-kit's `syntect` feature does it (the same syntect
 # and syntax set), and the words that changed between a removed line and the line added for it.
+# The regexes are Oniguruma's (`regex-onig`, which syntect takes over `regex-fancy`, which gpui-kit
+# asks for): it parses a file about three times as fast, so a diff's colors don't lag its text.
 similar = "2.7.0"
-syntect = { version = "5.3.0", default-features = false, features = ["parsing", "default-syntaxes", "regex-fancy"] }
-two-face = { version = "0.4.5", default-features = false, features = ["syntect-fancy"] }
+syntect = { version = "5.3.0", default-features = false, features = ["parsing", "default-syntaxes", "regex-fancy", "regex-onig"] }
+two-face = { version = "0.4.5", default-features = false, features = ["syntect-fancy", "syntect-onig"] }
 
 # crates/ui: what the UI works out for itself, e.g. the order of the sidebar's folders.
 indexmap = "2.14.2"
@@ -56,3 +58,9 @@ gitto-db = { path = "crates/db" }
 gitto-git = { path = "crates/git" }
 gitto-repository = { path = "crates/repository" }
 gitto-ui = { path = "crates/ui" }
+
+# Dependencies are built optimized in dev builds too: GPUI (its layout, text and rendering) and
+# syntect are many times slower unoptimized, which makes `cargo run -p app` feel sluggish, while
+# Gitto's own crates stay quick to rebuild. They're built once, then cached like any dependency.
+[profile.dev.package."*"]
+opt-level = 3
