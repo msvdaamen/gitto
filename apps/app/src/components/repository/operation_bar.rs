@@ -283,7 +283,10 @@ impl Render for OperationBar {
                         format!("Abort {name}"),
                         abort_state.error,
                         Button::new("abort")
-                            .small()
+                            .xsmall()
+                            // TS's: 26px high, 11.5px semibold.
+                            .h(rems(26. / 15.))
+                            .font_weight(FontWeight::SEMIBOLD)
                             .label("Abort")
                             .disabled(pending)
                             .on_click(cx.listener(move |this, _, window, cx| {
@@ -299,7 +302,10 @@ impl Render for OperationBar {
                         proceed_state.error,
                         Button::new("continue")
                             .primary()
-                            .small()
+                            .xsmall()
+                            // TS's: 26px high, 11.5px semibold.
+                            .h(rems(26. / 15.))
+                            .font_weight(FontWeight::SEMIBOLD)
                             .label(label)
                             .disabled(pending || !files.is_empty())
                             .on_click(cx.listener(move |this, _, _, cx| this.go_on(kind, cx))),
@@ -369,7 +375,10 @@ impl Render for OperationBar {
                         this.child(
                             Button::new("resolve-conflicts")
                                 .ghost()
-                                .small()
+                                .xsmall()
+                                // TS's: 26px high, 11.5px semibold.
+                                .h(rems(26. / 15.))
+                                .font_weight(FontWeight::SEMIBOLD)
                                 .label("Resolve conflicts")
                                 .on_click(cx.listener(move |_, _, _, cx| {
                                     cx.emit(OperationBarEvent::Resolve(file.clone()))
