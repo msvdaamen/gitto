@@ -7,7 +7,7 @@ use std::borrow::Cow;
 use gpui_kit::{AssetSource, SharedString};
 
 /// Gitto's art, by its path.
-const BRAND: [(&str, &[u8]); 2] = [
+const BRAND: [(&str, &[u8]); 4] = [
     (
         "brand/gitto.svg",
         include_bytes!("../assets/brand/gitto.svg"),
@@ -15,6 +15,14 @@ const BRAND: [(&str, &[u8]); 2] = [
     (
         "brand/mascot.svg",
         include_bytes!("../assets/brand/mascot.svg"),
+    ),
+    (
+        "brand/hero-mascot-dark.svg",
+        include_bytes!("../assets/brand/hero-mascot-dark.svg"),
+    ),
+    (
+        "brand/hero-mascot-light.svg",
+        include_bytes!("../assets/brand/hero-mascot-light.svg"),
     ),
 ];
 
