@@ -798,6 +798,15 @@ impl PatchViewer {
             .borrow()
             .last_item_size
             .map_or(window.viewport_size().width, |size| size.item.width);
+        // Until the list is laid out (the first frame) the window's width stands in for its own,
+        // which puts what's aligned to the rows' right out of sight: drawn again once the list's
+        // width is known (after this frame's drawn), or has changed.
+        cx.defer_in(window, move |this, _, cx| {
+            let measured = this.scroll.0.borrow().last_item_size;
+            if measured.is_some_and(|size| size.item.width != viewport_width) {
+                cx.notify();
+            }
+        });
         let digits = highest.max(1).ilog10() as f32 + 1.;
         let gutter_width = char_width * digits + rem * 1.2;
         let code_padding = rem * 1.2;
