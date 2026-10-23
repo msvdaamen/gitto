@@ -197,6 +197,7 @@ dependencies = [
  "gitto-db",
  "gitto-git",
  "gitto-repository",
+ "gitto-ui",
  "gpui-kit",
  "log",
  "regex",
