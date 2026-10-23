@@ -39,15 +39,15 @@ use crate::theme::{Palette, PaletteExt as _};
 
 /// The changes' font size and line height, as the TS viewer had them (12px on 20px lines, at the
 /// app's 15px base).
-const FONT_REMS: f32 = 0.8;
-const ROW_REMS: f32 = 4. / 3.;
+pub(super) const FONT_REMS: f32 = 0.8;
+pub(super) const ROW_REMS: f32 = 4. / 3.;
 
 /// Bytes of a line that are drawn: a longer one (a minified file's) is cut there, as shaping it
 /// whole would hold up every frame it's in view.
-const MAX_DRAWN_LINE: usize = 4000;
+pub(super) const MAX_DRAWN_LINE: usize = 4000;
 
 /// The spaces a tab is drawn as.
-const TAB_WIDTH: usize = 4;
+pub(super) const TAB_WIDTH: usize = 4;
 
 /// What the viewer tells the file's view.
 #[derive(Debug, Clone, PartialEq)]

@@ -103,7 +103,11 @@ impl FileDiffView {
     /// unless it can only be staged whole (a link's, say).
     pub(super) fn line_staging(&self, cx: &App) -> Option<LineStaging> {
         let data = self.view.current()?;
-        if !self.view.source().is_uncommitted() || !self.view.shows_patch() {
+        // Not while it's edited: its lines are the editor's.
+        if !self.view.source().is_uncommitted()
+            || self.view.is_editing()
+            || !self.view.shows_patch()
+        {
             return None;
         }
         if staged_whole(&data.patch) {
@@ -186,7 +190,8 @@ impl FileDiffView {
         self.staging.is_staging(cx) || self.view.shows_other()
     }
 
-    /// Stages, or unstages, the whole file; then on to the next file, as once its last lines are.
+    /// Stages, or unstages, the whole file, its edits saved first so they're staged with it; then
+    /// on to the next file, as once its last lines are.
     pub(super) fn stage_whole(&mut self, cx: &mut Context<Self>) {
         let Some(action) = self.whole_file() else {
             return;
@@ -195,21 +200,34 @@ impl FileDiffView {
             return;
         }
         let key = self.view.file_key();
-        // Picked while the file's still in its list: it's staged before the list is reloaded.
-        let target = self.view.target();
         self.staging.staging_whole = true;
-        self.staging.error = None;
-        let input = FileToStage {
-            repository_id: self.view.repository_id().clone(),
-            action,
-            file: self.view.live_file(),
-        };
-        let staged = self
-            .staging
-            .stage_file
-            .update(cx, |mutation, cx| mutation.mutate(input, cx));
+        let leaving = self.leave(cx);
         cx.notify();
         cx.spawn(async move |this, cx| {
+            let left = leaving.await;
+            let Ok(Some((target, staged))) = this.update(cx, |this, cx| {
+                if !left || key != this.view.file_key() {
+                    this.staging.staging_whole = false;
+                    cx.notify();
+                    return None;
+                }
+                // Picked while the file's still in its list: it's staged before the list is
+                // reloaded.
+                let target = this.view.target();
+                this.staging.error = None;
+                let input = FileToStage {
+                    repository_id: this.view.repository_id().clone(),
+                    action,
+                    file: this.view.live_file(),
+                };
+                let staged = this
+                    .staging
+                    .stage_file
+                    .update(cx, |mutation, cx| mutation.mutate(input, cx));
+                Some((target, staged))
+            }) else {
+                return;
+            };
             let result = staged.await;
             let _ = this.update(cx, |this, cx| {
                 this.staging.staging_whole = false;
