@@ -1,0 +1,9 @@
+[workspace]
+resolver = "3"
+members = ["apps/app", "crates/*"]
+
+[workspace.package]
+edition = "2024"
+
+[workspace.dependencies]
+gpui-kit = { version = "0.8.0", features = ["gpui-fast"] }
