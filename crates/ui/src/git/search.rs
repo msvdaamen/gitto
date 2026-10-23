@@ -1,0 +1,109 @@
+//! Ported from `git/search.ts`: the history's search.
+
+use super::ref_labels::ref_label_matches;
+use super::rows::{HistoryRow, WIP_MESSAGE};
+
+/// Lowercases and trims what was typed in the history search; empty means no search.
+pub fn search_needle(search: &str) -> String {
+    search.trim_matches(crate::js::is_whitespace).to_lowercase()
+}
+
+/// Whether a history row matches `needle` (see [`search_needle`]): a commit by its message, author,
+/// SHA or one of its branches and tags; a stash by its message or SHA; the uncommitted changes by
+/// what their row says.
+pub fn matches_search(row: &HistoryRow, needle: &str) -> bool {
+    match row {
+        HistoryRow::Wip(_) => WIP_MESSAGE.to_lowercase().contains(needle),
+        HistoryRow::Stash(row) => format!("{} {}", row.message, row.sha)
+            .to_lowercase()
+            .contains(needle),
+        HistoryRow::Commit(row) => {
+            format!("{} {} {}", row.message, row.author, row.id)
+                .to_lowercase()
+                .contains(needle)
+                || row
+                    .labels
+                    .iter()
+                    .any(|label| ref_label_matches(label, needle))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::git::ref_labels::{BranchLabel, RefLabel};
+    use crate::git::rows::{CommitRow, StashRow, WipRow};
+
+    fn commit() -> HistoryRow {
+        HistoryRow::Commit(CommitRow {
+            id: "a1b2c3d4e5".into(),
+            repository_id: Arc::from("repo"),
+            short_sha: "a1b2c3d".into(),
+            graph: None,
+            message: "Fix the parser".into(),
+            description: None,
+            author: "Ada Lovelace".into(),
+            initials: "AL".into(),
+            avatar_color: "#000",
+            committed_at: 0,
+            labels: vec![RefLabel::Branch(BranchLabel {
+                name: "main".into(),
+                full_name: "refs/heads/main".into(),
+                local: true,
+                remotes: vec!["origin".into()],
+                current: true,
+                worktree: None,
+            })],
+        })
+    }
+
+    fn stash() -> HistoryRow {
+        HistoryRow::Stash(StashRow {
+            id: "stash:f00dfeed".into(),
+            sha: "f00dfeed".into(),
+            repository_id: Arc::from("repo"),
+            graph: None,
+            message: "WIP on main: a1b2c3d Fix the parser".into(),
+            created_at: 0,
+        })
+    }
+
+    fn wip() -> HistoryRow {
+        HistoryRow::Wip(WipRow {
+            repository_id: Arc::from("repo"),
+            graph: None,
+        })
+    }
+
+    mod matches_search {
+        use super::*;
+
+        #[test]
+        fn matches_a_commit_by_its_message_author_sha_or_labels() {
+            let commit = commit();
+            assert!(matches_search(&commit, &search_needle(" PARSER ")));
+            assert!(matches_search(&commit, &search_needle("lovelace")));
+            assert!(matches_search(&commit, &search_needle("a1b2")));
+            assert!(matches_search(&commit, &search_needle("origin/main")));
+            assert!(!matches_search(&commit, &search_needle("develop")));
+        }
+
+        #[test]
+        fn matches_a_stash_by_its_message_or_sha() {
+            let stash = stash();
+            assert!(matches_search(&stash, &search_needle("wip on main")));
+            assert!(matches_search(&stash, &search_needle("f00d")));
+            assert!(!matches_search(&stash, &search_needle("stash:")));
+        }
+
+        #[test]
+        fn matches_the_uncommitted_changes_by_what_their_row_says() {
+            let wip = wip();
+            assert!(matches_search(&wip, &search_needle("uncommitted")));
+            assert!(!matches_search(&wip, &search_needle("parser")));
+        }
+    }
+}
