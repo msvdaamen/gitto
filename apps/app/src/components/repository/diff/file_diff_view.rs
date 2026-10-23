@@ -674,7 +674,10 @@ impl FileDiffView {
                         };
                         this.child(
                             Button::new("stage-file")
-                                .small()
+                                .xsmall()
+                                // TS's: 26px high, 11.5px semibold.
+                                .h(rems(26. / 15.))
+                                .font_weight(FontWeight::SEMIBOLD)
                                 .icon(Icon::new(icon))
                                 .label(label)
                                 .disabled(staging_disabled)
