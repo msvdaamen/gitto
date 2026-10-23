@@ -1684,6 +1684,57 @@ mod tests {
         assert_eq!(opened.shown(cx), Some(changed_line("a.txt", "left")));
     }
 
+    /// The view in a pane narrower than its window, as the page has it between the sidebar and
+    /// the details.
+    struct Narrow(Entity<FileDiffView>);
+
+    impl Render for Narrow {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .child(div().w(gpui_kit::px(500.)).h_full().child(self.0.clone()))
+        }
+    }
+
+    #[gpui_kit::test]
+    fn shows_the_hunks_buttons_in_a_pane_narrower_than_the_window_once_opened(
+        cx: &mut TestAppContext,
+    ) {
+        let _dir = init(cx);
+        set_changes(vec![], vec![counted("a.txt")], false, cx);
+        patches(&DiffSource::Unstaged, &[counted("a.txt")], "new", cx);
+        let (window, _) = crate::test_support::open(cx, |window, cx| {
+            let lines = Mutation::new(
+                |_: LinesToStage, _: &mut App| Task::ready(Ok(String::new())),
+                cx,
+            );
+            let whole = Mutation::new(|_: FileToStage, _: &mut App| Task::ready(Ok(())), cx);
+            let source = DiffSource::Unstaged;
+            Narrow(cx.new(|cx| {
+                FileDiffView::with_mutations(
+                    id(),
+                    source,
+                    counted("a.txt"),
+                    lines,
+                    whole,
+                    window,
+                    cx,
+                )
+            }))
+        });
+        cx.run_until_parked();
+
+        let right = cx
+            .update_window(window, |_, window, _| {
+                window.find(("stage-hunk", 0_usize)).bounds().right()
+            })
+            .unwrap();
+        assert!(
+            right <= gpui_kit::px(500.),
+            "the button's right edge is at {right:?}"
+        );
+    }
+
     #[gpui_kit::test]
     fn stages_lines_of_an_untracked_file_as_such(cx: &mut TestAppContext) {
         let _dir = init(cx);
