@@ -38,5 +38,10 @@ dirs = "6.0.0"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 sha2 = "0.10.9"
 
+# crates/ui: what the UI works out for itself, e.g. the order of the sidebar's folders.
+indexmap = "2.14.2"
+url = "2.5.8"
+
 gitto-db = { path = "crates/db" }
 gitto-git = { path = "crates/git" }
+gitto-ui = { path = "crates/ui" }
