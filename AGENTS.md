@@ -36,6 +36,11 @@ ported).
   (`commands.ts` → `commands.rs`, `in-use.ts` → `in_use.rs`), declared in that feature's `mod.rs`.
 - `src/test_support/`: `packages/git/src/test/` (real repositories in a temp dir), for tests only.
 
+`packages/db` is ported to `gitto-db` (`crates/db`) and `packages/repository` to `gitto-repository`
+(`crates/repository`). Both apps share one `gitto.db` while both ship, so `gitto-db` embeds the
+migrations drizzle-kit makes in `apps/electron/migrations` and applies them exactly as Drizzle's
+migrator does: make migrations with `pnpm db:generate` only, never by hand in Rust.
+
 Porting a TS file: keep its behavior, including error messages, and the reasoning in its doc
 comments, which say why as much as what. Port its tests one for one, as `#[cfg(test)] mod tests`
 in the same file, named after the TS test (`it("rejects unknown repositories")` →
@@ -43,10 +48,10 @@ in the same file, named after the TS test (`it("rejects unknown repositories")` 
 `smol::block_on`. Async code doesn't use tokio: GPUI has its own executor.
 
 Dependencies go in the root `Cargo.toml`'s `[workspace.dependencies]`, used with
-`dep.workspace = true`. Check the crate before pushing (as CI does):
+`dep.workspace = true`. Check the crates before pushing (as CI does):
 
 ```sh
 cargo fmt --all
-cargo clippy -p gitto-git --all-targets --locked -- -D warnings
-cargo test -p gitto-git --locked
+cargo clippy -p gitto-git -p gitto-db -p gitto-repository --all-targets --locked -- -D warnings
+cargo test -p gitto-git -p gitto-db -p gitto-repository --locked
 ```
