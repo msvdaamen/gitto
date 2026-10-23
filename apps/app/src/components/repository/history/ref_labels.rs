@@ -15,7 +15,7 @@ use gpui_kit::{
 
 use super::columns::{LABEL_ICON, LABEL_LINE, LABEL_TEXT, mixed, part, tinted};
 use crate::components::repository::branch_menu::branch_menu;
-use crate::components::ui::{Icon, IconName};
+use crate::components::ui::{Icon, IconName, menu_frame};
 use crate::theme::{Palette, PaletteExt as _};
 
 /// Switches to a branch, by its full ref name; or opens a worktree, by its path.
@@ -253,7 +253,7 @@ fn ref_pill(
         Some(branch) => {
             let reference: SharedString = branch.full_name.into();
             pill.context_menu(move |menu, window, cx| {
-                branch_menu(menu, reference.clone(), window, cx)
+                branch_menu(menu_frame(menu), reference.clone(), window, cx)
             })
             .into_any_element()
         }

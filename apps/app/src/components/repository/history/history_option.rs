@@ -12,7 +12,7 @@ use gpui_kit::{
 };
 
 use super::columns::{LABEL_ICON, LABEL_LINE, LABEL_TEXT, ROW_HEIGHT, mixed};
-use crate::components::ui::{Icon, IconName, LineStats, Tone};
+use crate::components::ui::{Icon, IconName, LineStats, Tone, menu_frame};
 use crate::theme::PaletteExt as _;
 use gitto_ui::git::changes::LineCounts;
 
@@ -158,7 +158,7 @@ impl RenderOnce for HistoryOption {
             });
         match self.menu {
             Some(menu) => row
-                .context_menu(move |popup, window, cx| menu(popup, window, cx))
+                .context_menu(move |popup, window, cx| menu(menu_frame(popup), window, cx))
                 .into_any_element(),
             None => row.into_any_element(),
         }
