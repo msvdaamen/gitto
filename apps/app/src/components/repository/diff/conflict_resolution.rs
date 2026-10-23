@@ -10,7 +10,7 @@ use gitto_ui::git::conflicts::{ConflictKind, conflict_kind, describe_conflict};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{Disableable as _, Sizable as _};
 use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, Context, Entity, KeyDownEvent, Task, Window, div};
+use gpui_kit::{AnyElement, Context, Entity, FontWeight, KeyDownEvent, Task, Window, div, rems};
 
 use super::conflict_sides::ConflictSides;
 use super::conflict_viewer::{
@@ -511,7 +511,10 @@ impl FileDiffView {
                     .ml_1()
                     .child(
                         Button::new("mark-resolved")
-                            .small()
+                            .xsmall()
+                            // TS's: 26px high, 11.5px semibold.
+                            .h(rems(26. / 15.))
+                            .font_weight(FontWeight::SEMIBOLD)
                             .when(ready, |button| button.primary())
                             .icon(crate::components::ui::Icon::new(IconName::Check))
                             .label("Mark resolved")
@@ -563,6 +566,7 @@ impl FileDiffView {
                         Button::new("keep-all-ours")
                             .ghost()
                             .small()
+                            .font_weight(FontWeight::SEMIBOLD)
                             .label("Keep all of ours")
                             .disabled(busy)
                             .on_click(
@@ -573,6 +577,7 @@ impl FileDiffView {
                         Button::new("keep-all-theirs")
                             .ghost()
                             .small()
+                            .font_weight(FontWeight::SEMIBOLD)
                             .label("Keep all of theirs")
                             .disabled(busy)
                             .on_click(cx.listener(move |this, _, _, cx| {
