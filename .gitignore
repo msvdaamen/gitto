@@ -10,3 +10,4 @@ apps/electron/arch/src/
 apps/electron/arch/pkg/
 apps/electron/arch/*.pkg.tar.*
 apps/electron/changelog.json
+target/
