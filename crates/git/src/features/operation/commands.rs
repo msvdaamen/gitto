@@ -443,21 +443,35 @@ mod tests {
     use std::process::Command;
 
     use super::*;
+    use crate::features::conflicts::commands::{get_conflict, mark_resolved};
+    use crate::features::diff::working_tree::{SaveExpectation, save_working_tree_file};
+    use crate::features::stash::commands::pop_stash;
     use crate::test_support::conflicts::{Sides, commit_files, files, text_conflict, try_git};
     use crate::test_support::{Fixture, git};
 
     /// Resolves `f.txt`'s conflict as `contents`, and marks it resolved.
-    ///
-    /// TS saved it with `saveWorkingTreeFile` and staged it with `markResolved`, of features not
-    /// ported yet; this writes and stages it as they do.
-    fn resolve(path: &Path, contents: &str) {
-        fs::write(path.join("f.txt"), contents).unwrap();
-        git(path, ["add", "--all", "--", "f.txt"]);
+    async fn resolve(repo: &Repo, contents: &str) {
+        let conflict = get_conflict(repo, "f.txt").await.unwrap();
+        let version = save_working_tree_file(
+            repo,
+            "f.txt",
+            contents,
+            &SaveExpectation {
+                version: conflict.text.unwrap().version,
+                overwrite: false,
+            },
+        )
+        .await
+        .unwrap();
+        mark_resolved(repo, "f.txt", Some(&version), false)
+            .await
+            .unwrap();
     }
 
-    /// `f.txt`'s contents as the conflict has them (TS's `getConflict(...).text.contents`).
-    fn conflict_text(path: &Path) -> String {
-        fs::read_to_string(path.join("f.txt")).unwrap()
+    /// `f.txt`'s contents as the conflict has them.
+    async fn conflict_text(repo: &Repo) -> String {
+        let conflict = get_conflict(repo, "f.txt").await.unwrap();
+        conflict.text.unwrap().contents
     }
 
     /// Runs `git rebase -i main` in `path`, its todo list edited by the perl `script`.
@@ -491,7 +505,7 @@ mod tests {
                 .await
                 .unwrap_err();
             assert!(error.as_git().is_some(), "{error:?}");
-            resolve(&path, "one\nresolved\nthree\n");
+            resolve(&repo, "one\nresolved\nthree\n").await;
             continue_operation(&repo, OperationKind::Merge)
                 .await
                 .unwrap();
@@ -609,11 +623,11 @@ mod tests {
                 })
             );
             let theirs = Regex::new(r"(?m)^>>>>>>> [0-9a-f]+ \(theirs\)$").unwrap();
-            let text = conflict_text(&path);
+            let text = conflict_text(&repo).await;
             assert!(theirs.is_match(&text), "{text}");
 
             // The next commit conflicts with how this one was resolved: that's left to resolve too.
-            resolve(&path, "one\nresolved\nthree\n");
+            resolve(&repo, "one\nresolved\nthree\n").await;
             continue_operation(&repo, OperationKind::Rebase)
                 .await
                 .unwrap();
@@ -629,7 +643,7 @@ mod tests {
                 "{operation:?}"
             );
 
-            resolve(&path, "one\nresolved again\nthree\n");
+            resolve(&repo, "one\nresolved again\nthree\n").await;
             continue_operation(&repo, OperationKind::Rebase)
                 .await
                 .unwrap();
@@ -651,7 +665,7 @@ mod tests {
         rebase_interactively(&path, "s/^pick/reword/ if $. == 2");
         smol::block_on(async {
             let repo = fx.repos.open("op-rebase-reword").await.unwrap();
-            resolve(&path, "one\nresolved\nthree\n");
+            resolve(&repo, "one\nresolved\nthree\n").await;
 
             let error = continue_operation(&repo, OperationKind::Rebase)
                 .await
@@ -698,7 +712,7 @@ mod tests {
         );
         smol::block_on(async {
             let repo = fx.repos.open("op-rebase-squash").await.unwrap();
-            resolve(&path, "one\nresolved\nthree\n");
+            resolve(&repo, "one\nresolved\nthree\n").await;
 
             let error = continue_operation(&repo, OperationKind::Rebase)
                 .await
@@ -742,7 +756,7 @@ mod tests {
                 })
             );
 
-            resolve(&path, "one\nours and theirs\nthree\n");
+            resolve(&repo, "one\nours and theirs\nthree\n").await;
             continue_operation(&repo, OperationKind::CherryPick)
                 .await
                 .unwrap();
@@ -761,7 +775,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("op-cherry-pick-empty").await.unwrap();
 
-            resolve(&path, "one\nours\nthree\n");
+            resolve(&repo, "one\nours\nthree\n").await;
             continue_operation(&repo, OperationKind::CherryPick)
                 .await
                 .unwrap();
@@ -790,7 +804,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("op-cherry-pick-later-empty").await.unwrap();
 
-            resolve(&path, "one\nours and theirs\nthree\n");
+            resolve(&repo, "one\nours and theirs\nthree\n").await;
             let error = continue_operation(&repo, OperationKind::CherryPick)
                 .await
                 .unwrap_err();
@@ -820,7 +834,7 @@ mod tests {
         try_git(&path, ["cherry-pick", "main..side"]);
         smol::block_on(async {
             let repo = fx.repos.open("op-cherry-picks-by-hand").await.unwrap();
-            resolve(&path, "one\nresolved\nthree\n");
+            resolve(&repo, "one\nresolved\nthree\n").await;
             git(&path, ["commit", "-q", "--no-edit"]);
 
             assert_eq!(
@@ -898,14 +912,13 @@ mod tests {
         fs::write(path.join("f.txt"), "stashed\n").unwrap();
         git(&path, ["stash", "push", "-q"]);
         commit_files(&path, &files([("f.txt", "committed\n")]), "second");
-        // TS popped it with `popStash`, of a feature not ported yet, which pops it with git.
-        try_git(&path, ["stash", "pop", "-q"]);
         smol::block_on(async {
             let repo = fx.repos.open("op-stash").await.unwrap();
+            let _ = pop_stash(&repo, &git(&path, ["rev-parse", "refs/stash"])).await;
 
             assert_eq!(get_operation(&repo).await.unwrap(), None);
             assert_eq!(
-                conflict_text(&path),
+                conflict_text(&repo).await,
                 "<<<<<<< Updated upstream\ncommitted\n=======\nstashed\n>>>>>>> Stashed changes\n"
             );
         });

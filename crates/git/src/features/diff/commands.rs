@@ -10,7 +10,7 @@ use super::limits::{MAX_BLOB_BYTES, MAX_PATCH_BYTES};
 use super::parse::parse_diff;
 use super::schema::ChangedFile;
 use super::working_tree::check_working_tree_path;
-use crate::core::errors::{Error, Result};
+use crate::core::errors::{Error, GitError, Result};
 use crate::core::repo::{GitCommand, Repo};
 use crate::core::runner::RunOptions;
 use crate::input::FileInput;
@@ -106,7 +106,7 @@ async fn untracked_file_patch<T: Patch>(repo: &Repo, path: &str) -> Result<T> {
         // Exits with 1 when the files differ, which they always do, but also when it can't read
         // one, like a folder: the patch tells them apart.
         Err(error) if error.is_exit(1) => match error.as_git() {
-            Some(git) if !git.stdout.is_empty() => Ok(T::from_stdout(git.stdout.clone())),
+            Some(git) if !git.stdout.is_empty() => Ok(T::from_stdout(git)),
             _ => Err(error),
         },
         result => result,
@@ -177,7 +177,7 @@ fn file_paths(file: &FileInput) -> Vec<&str> {
 trait Patch: Sized + Send + 'static {
     fn read(run: &GitCommand, args: Vec<&str>) -> BoxFuture<'static, Result<Self>>;
     /// The patch a failed command printed (see `GitError::stdout`).
-    fn from_stdout(stdout: String) -> Self;
+    fn from_stdout(error: &GitError) -> Self;
 }
 
 impl Patch for String {
@@ -185,8 +185,8 @@ impl Patch for String {
         read_patch(run, args)
     }
 
-    fn from_stdout(stdout: String) -> Self {
-        stdout
+    fn from_stdout(error: &GitError) -> Self {
+        error.stdout_text().into_owned()
     }
 }
 
@@ -195,10 +195,10 @@ impl Patch for Vec<u8> {
         read_patch_bytes(run, args)
     }
 
-    /// Lossily UTF-8, as the runner keeps a failed command's output: a file that isn't UTF-8 loses
-    /// the bytes that aren't, unlike in TS, which read it as Latin-1.
-    fn from_stdout(stdout: String) -> Self {
-        stdout.into_bytes()
+    /// As git printed it: a file that isn't UTF-8 keeps the bytes that aren't, as in TS, which
+    /// read it as Latin-1.
+    fn from_stdout(error: &GitError) -> Self {
+        error.stdout.clone()
     }
 }
 
