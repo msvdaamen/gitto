@@ -282,6 +282,10 @@ pub fn theme_config(theme: AppTheme, inter: bool) -> ThemeConfig {
         .into_iter()
         .map(|(role, color)| (role.to_owned(), color.into()))
         .collect();
+    let syntax: serde_json::Map<String, serde_json::Value> = palette::syntax_colors(theme)
+        .into_iter()
+        .map(|(name, color)| (name.to_owned(), serde_json::json!({ "color": color })))
+        .collect();
     let mut config = serde_json::json!({
         "name": match theme {
             AppTheme::Dark => "Gitto Dark",
@@ -294,6 +298,8 @@ pub fn theme_config(theme: AppTheme, inter: bool) -> ThemeConfig {
         "radius.lg": RADIUS_LG,
         "shadow": true,
         "colors": colors,
+        // Without, code is drawn with GPUI Kit's light colors in either theme.
+        "highlight": { "syntax": syntax },
     });
     if inter {
         config["font.family"] = "Inter".into();
