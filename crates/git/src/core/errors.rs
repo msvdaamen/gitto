@@ -1,6 +1,7 @@
 //! Errors the git crate returns. They describe what went wrong in git terms and carry a message a
 //! user can read, and each says how the UI should take it (`api`). An error whose `api` is
-//! `ApiCode::InternalServerError` is a bug, reported as such.
+//! `ApiCode::InternalServerError`, or `ApiCode::BadRequest` (input the UI shouldn't have sent), is
+//! a bug, reported as such (see `ApiCode::is_bug`).
 //!
 //! Ported from `packages/git/src/core/errors.ts`, where each error is a class; here each is a
 //! variant of [`Error`], and the failures of git commands share [`GitError`].

@@ -315,6 +315,41 @@ fn takes_only_uuid_v7_repository_ids() {
 }
 
 #[test]
+fn takes_only_the_values_the_contracts_enums_have() {
+    use crate::features::conflicts::schema::Side;
+    use crate::features::operation::schema::OperationKind;
+    use crate::features::staging::discard::DiscardSide;
+    use crate::schema::FileStatus;
+
+    fn parses<T: serde::de::DeserializeOwned>(value: &str) -> bool {
+        serde_json::from_str::<T>(&format!("{value:?}")).is_ok()
+    }
+
+    for kind in ["merge", "rebase", "cherry-pick", "revert", "am"] {
+        assert!(parses::<OperationKind>(kind), "{kind}");
+    }
+    assert!(!parses::<OperationKind>("cherrypick"));
+    assert!(!parses::<OperationKind>("Merge"));
+    assert!(parses::<Side>("ours") && parses::<Side>("theirs"));
+    assert!(!parses::<Side>("base"));
+    assert!(parses::<DiscardSide>("staged") && parses::<DiscardSide>("unstaged"));
+    assert!(!parses::<DiscardSide>("both"));
+    for status in [
+        "modified",
+        "added",
+        "deleted",
+        "renamed",
+        "copied",
+        "typechange",
+        "untracked",
+        "conflicted",
+    ] {
+        assert!(parses::<FileStatus>(status), "{status}");
+    }
+    assert!(!parses::<FileStatus>("ignored"));
+}
+
+#[test]
 fn reports_bugs_with_the_procedure_they_failed_and_only_bugs() {
     let fx = Fixture::new();
     let reported = Arc::new(Mutex::new(Vec::new()));
