@@ -22,9 +22,8 @@ gpui-kit = { workspace = true, features = ["syntect"] }
 gitto-db.workspace = true
 gitto-git.workspace = true
 gitto-repository.workspace = true
-# The UI's pure logic (TS's `apps/ui/src/git/*.ts` and the like), which another change adds in
-# `crates/ui`. Uncomment once it's in the tree, with its line in the root Cargo.toml:
-# gitto-ui.workspace = true
+# The UI's pure logic (TS's `apps/ui/src/git/*.ts` and the like).
+gitto-ui.workspace = true
 
 anyhow.workspace = true
 async-fs.workspace = true

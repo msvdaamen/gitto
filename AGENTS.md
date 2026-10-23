@@ -35,6 +35,9 @@ Gitto is moving to Rust, with a GPUI ([gpui-kit](https://crates.io/crates/gpui-k
 - `gitto-repository` (`crates/repository`): `packages/repository`'s `server/`. Its
   `RepositoryService` is gitto-git's `RepositoryLookup`, so `GitApi::new(service)` opens the
   repositories added to Gitto.
+- `gitto-ui` (`crates/ui`): what `apps/ui/src` works out without Solid or the DOM, for the app's
+  screens: `git/*.ts` outside `git/queries/` in `src/git/`, `lib/format.ts`, and the logic of the
+  hooks that had any in `src/hooks/`. It has no GPUI dependency.
 
 In `gitto-git`:
 
