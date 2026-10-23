@@ -26,20 +26,27 @@ title workflow checks titles with `node packages/release/src/cli.ts check-title 
 ## Rust
 
 Gitto is moving to Rust, with a GPUI ([gpui-kit](https://crates.io/crates/gpui-kit)) UI in
-`apps/app`. `packages/git` is being ported to the `gitto-git` crate in `crates/git`, which the UI
-calls directly (no oRPC: `contract.ts`, `router.ts`, `handler.ts` and `middleware.ts` aren't
-ported).
+`apps/app`, which calls the crates in `crates/` directly (no oRPC):
+
+- `gitto-git` (`crates/git`): `packages/git`.
+- `gitto-db` (`crates/db`): `packages/db`. Both apps share one `gitto.db` while both ship, so it
+  embeds the migrations drizzle-kit makes in `apps/electron/migrations` and applies them exactly as
+  Drizzle's migrator does: make migrations with `pnpm db:generate` only, never by hand in Rust.
+- `gitto-repository` (`crates/repository`): `packages/repository`'s `server/`. Its
+  `RepositoryService` is gitto-git's `RepositoryLookup`, so `GitApi::new(service)` opens the
+  repositories added to Gitto.
+
+In `gitto-git`:
 
 - `src/core/`: `packages/git/src/core/` (running git, `Repo`/`GitRepos`, the errors, git dirs, the
   version check, tracing). `src/input.rs` and `src/schema.rs`: `input.ts` and `schema.ts`.
+- `src/api/`: what the oRPC layer did (`middleware.ts`, the routers, contracts and handlers, and
+  `server.ts`'s errors): `GitApi` opens a repository by its id, after checking git, and turns
+  errors into the `ApiError` the UI shows. A contract's input checks are the types the features
+  take.
 - `src/features/<feature>/`: `packages/git/src/features/<feature>/`, one submodule per TS file
   (`commands.ts` → `commands.rs`, `in-use.ts` → `in_use.rs`), declared in that feature's `mod.rs`.
 - `src/test_support/`: `packages/git/src/test/` (real repositories in a temp dir), for tests only.
-
-`packages/db` is ported to `gitto-db` (`crates/db`) and `packages/repository` to `gitto-repository`
-(`crates/repository`). Both apps share one `gitto.db` while both ship, so `gitto-db` embeds the
-migrations drizzle-kit makes in `apps/electron/migrations` and applies them exactly as Drizzle's
-migrator does: make migrations with `pnpm db:generate` only, never by hand in Rust.
 
 Porting a TS file: keep its behavior, including error messages, and the reasoning in its doc
 comments, which say why as much as what. Port its tests one for one, as `#[cfg(test)] mod tests`
@@ -52,6 +59,6 @@ Dependencies go in the root `Cargo.toml`'s `[workspace.dependencies]`, used with
 
 ```sh
 cargo fmt --all
-cargo clippy -p gitto-git -p gitto-db -p gitto-repository --all-targets --locked -- -D warnings
-cargo test -p gitto-git -p gitto-db -p gitto-repository --locked
+cargo clippy --workspace --exclude app --all-targets --locked -- -D warnings
+cargo test --workspace --exclude app --locked
 ```

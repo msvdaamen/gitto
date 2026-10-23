@@ -10,7 +10,9 @@ name = "gitto_repository"
 
 [dependencies]
 async-fs.workspace = true
+futures.workspace = true
 gitto-db.workspace = true
+gitto-git.workspace = true
 serde.workspace = true
 uuid.workspace = true
 
