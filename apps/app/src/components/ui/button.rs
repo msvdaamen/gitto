@@ -118,6 +118,8 @@ impl RenderOnce for LinkButton {
             .small()
             .label(self.label)
             .text_color(cx.palette().primary_strong)
+            // The color given above outweighs the button's own for disabled: dimmed instead.
+            .when(self.disabled, |button| button.opacity(0.5))
             .when_some(self.icon, |button, icon| button.icon(Icon::new(icon)))
             .disabled(self.disabled)
             .when_some(self.on_click, |button, on_click| button.on_click(on_click))
