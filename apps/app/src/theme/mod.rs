@@ -298,8 +298,15 @@ pub fn theme_config(theme: AppTheme, inter: bool) -> ThemeConfig {
         "radius.lg": RADIUS_LG,
         "shadow": true,
         "colors": colors,
-        // Without, code is drawn with GPUI Kit's light colors in either theme.
-        "highlight": { "syntax": syntax },
+        // Without, code is drawn with GPUI Kit's light colors in either theme. The code editor
+        // (editing a file in its diff) on the diff's background, its line numbers as the diff's.
+        "highlight": {
+            "syntax": syntax,
+            "editor_background": hex(p.bg),
+            "editor.gutter.background": hex(p.bg),
+            "editor_line_number": hex(p.faint),
+            "editor_active_line_number": hex(p.text_soft),
+        },
     });
     if inter {
         config["font.family"] = "Inter".into();
