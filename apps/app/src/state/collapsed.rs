@@ -1,31 +1,18 @@
-//! Which sidebar sections and folders are collapsed. Ported from `hooks/collapsed.ts`.
+//! Which sidebar sections and folders are collapsed: gitto-ui's `hooks::collapsed` (ported from
+//! `hooks/collapsed.ts`), saved in the app's [`LocalStorage`].
 
-use std::collections::BTreeMap;
 use std::rc::Rc;
 
+use gitto_ui::hooks::collapsed;
+
 use crate::services::LocalStorage;
-
-type CollapsedState = BTreeMap<String, bool>;
-
-fn storage_key(repository_id: &str) -> String {
-    format!("gitto-sidebar-collapsed:{repository_id}")
-}
-
-fn load(storage: &LocalStorage, repository_id: &str) -> CollapsedState {
-    storage
-        .get_item(&storage_key(repository_id))
-        .and_then(|saved| serde_json::from_str(&saved).ok())
-        .unwrap_or_default()
-}
 
 /// Which sidebar sections and folders are collapsed in a repository, saved (as `localStorage`
 /// kept it) so it survives restarts. Ids without a saved state fall back to `defaults`, then to
 /// expanded. Made again for another repository, which loads that one's state.
 #[derive(Debug, Clone)]
 pub struct Collapsed {
-    repository_id: String,
-    state: CollapsedState,
-    defaults: CollapsedState,
+    state: collapsed::Collapsed,
     storage: Rc<LocalStorage>,
 }
 
@@ -35,39 +22,26 @@ impl Collapsed {
         defaults: impl IntoIterator<Item = (&'static str, bool)>,
         storage: Rc<LocalStorage>,
     ) -> Self {
-        let repository_id = repository_id.into();
+        let defaults = defaults
+            .into_iter()
+            .map(|(id, collapsed)| (id.to_owned(), collapsed))
+            .collect();
         Collapsed {
-            state: load(&storage, &repository_id),
-            repository_id,
-            defaults: defaults
-                .into_iter()
-                .map(|(id, collapsed)| (id.to_owned(), collapsed))
-                .collect(),
+            state: collapsed::Collapsed::load(&repository_id.into(), defaults, &&*storage),
             storage,
         }
     }
 
     pub fn repository_id(&self) -> &str {
-        &self.repository_id
+        self.state.repository_id()
     }
 
     pub fn is_collapsed(&self, id: &str) -> bool {
-        self.state
-            .get(id)
-            .or_else(|| self.defaults.get(id))
-            .copied()
-            .unwrap_or(false)
+        self.state.is_collapsed(id)
     }
 
-    /// Collapses `id`, or expands it; it applies even if it can't be saved, until the app closes.
     pub fn toggle(&mut self, id: &str) {
-        let collapsed = !self.is_collapsed(id);
-        self.state.insert(id.to_owned(), collapsed);
-        if let Ok(saved) = serde_json::to_string(&self.state) {
-            let _ = self
-                .storage
-                .set_item(&storage_key(&self.repository_id), saved);
-        }
+        self.state.toggle(id, &mut &*self.storage);
     }
 }
 

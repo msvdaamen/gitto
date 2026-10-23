@@ -33,9 +33,9 @@ use crate::data::conflicts::conflict_options;
 use crate::data::diff::fetch_blob;
 use crate::data::file_diff::{FilePatch, fetch_file_patch};
 use crate::data::staging::StageAction;
-use crate::git::diff_source::DiffSource;
 use crate::state::diff_style::{DiffStyle, DiffStyleSetting};
 use crate::theme::PaletteExt as _;
+use gitto_ui::git::diff_source::{DiffSource, diff_file_key};
 
 /// What a file's changes ask of the page.
 #[derive(Debug, Clone, PartialEq)]
@@ -71,7 +71,7 @@ pub fn prefetch_file_diff(
         // Its conflicts, highlighted as the viewer names them, so they show at once.
         let options = conflict_options(repository_id, &file.path, cx);
         let fetching = QueryClient::fetch_query(options, cx);
-        let file_key = source.file_key(&file.path);
+        let file_key = diff_file_key(source, &file.path);
         let path = file.path.clone();
         cx.spawn(async move |cx| {
             // Only ahead of time: opening it says what went wrong.
@@ -943,7 +943,7 @@ mod tests {
         QueryClient::set_data(
             &file_patch_key(&id(), source, &file.path),
             FilePatch {
-                key: source.file_key(&file.path),
+                key: diff_file_key(source, &file.path),
                 file: file.clone(),
                 patch: patch.into(),
             },
@@ -1269,7 +1269,7 @@ mod tests {
         assert_eq!(opened.header(cx), "a.txt");
 
         next.send(FilePatch {
-            key: commit().file_key("b.txt"),
+            key: diff_file_key(&commit(), "b.txt"),
             file: counted("b.txt"),
             patch: changed_line("b.txt", "later").into(),
         })
@@ -1288,7 +1288,7 @@ mod tests {
         // Parsed and highlighted, named as they'll be when they're opened.
         cx.update(|cx| {
             for path in ["a.txt", "c.txt"] {
-                let key = format!("{}:0", commit().file_key(path));
+                let key = format!("{}:0", diff_file_key(&commit(), path));
                 assert!(ViewerRuntime::has_highlights(&key, cx), "{path}");
             }
         });
@@ -1630,7 +1630,7 @@ mod tests {
                 let patch = changed_line(path, &format!("new {path}"));
                 format!(
                     "{}:{}:0",
-                    DiffSource::Unstaged.file_key(path),
+                    diff_file_key(&DiffSource::Unstaged, path),
                     patch_version(&patch)
                 )
             };

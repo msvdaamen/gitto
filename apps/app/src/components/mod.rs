@@ -7,7 +7,6 @@ pub mod git_version_dialog;
 pub mod header;
 pub mod home;
 pub mod notifications;
-pub mod placeholder;
 pub mod profile;
 pub mod remove_repository_dialog;
 pub mod repository;

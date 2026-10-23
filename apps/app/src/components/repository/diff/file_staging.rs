@@ -18,7 +18,7 @@ use crate::data::staging::{
     FileToStage, LinesToStage, StageAction, stage_file_mutation, stage_lines_mutation,
 };
 use crate::data::{Mutation, QueryError};
-use crate::git::diff_source::DiffSource;
+use gitto_ui::git::diff_source::{DiffSource, is_uncommitted};
 
 /// Stages, or unstages, a file's lines; resolves to the patch they leave.
 pub type StageLinesMutation = Entity<Mutation<LinesToStage, String>>;
@@ -104,9 +104,7 @@ impl FileDiffView {
     pub(super) fn line_staging(&self, cx: &App) -> Option<LineStaging> {
         let data = self.view.current()?;
         // Not while it's edited: its lines are the editor's.
-        if !self.view.source().is_uncommitted()
-            || self.view.is_editing()
-            || !self.view.shows_patch()
+        if !is_uncommitted(self.view.source()) || self.view.is_editing() || !self.view.shows_patch()
         {
             return None;
         }
@@ -178,7 +176,7 @@ impl FileDiffView {
     /// changes in its list, but not a repository inside this one, which would be added as a
     /// submodule without its URL.
     pub(super) fn whole_file(&self) -> Option<StageAction> {
-        (self.view.source().is_uncommitted()
+        (is_uncommitted(self.view.source())
             && self.view.listed()
             && !is_nested_repository(&self.view.file()))
         .then(|| self.staging_action())

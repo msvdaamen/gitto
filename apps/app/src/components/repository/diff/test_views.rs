@@ -23,7 +23,7 @@ use super::file_editing::FileIo;
 use crate::data::conflicts::FileToResolve;
 use crate::data::file_diff::{FilePatch, file_patch_key};
 use crate::data::{Mutation, Opaque, QueryClient, QueryError, QueryKey, QueryOptions, keys};
-use crate::git::diff_source::DiffSource;
+use gitto_ui::git::diff_source::{DiffSource, diff_file_key};
 
 pub fn id() -> RepositoryId {
     RepositoryId::parse("01890a5d-ac96-774b-bcce-b302099a8057").unwrap()
@@ -131,7 +131,7 @@ pub fn set_patch(source: &DiffSource, file: &ChangedFile, patch: &str, cx: &mut 
         QueryClient::set_data(
             &file_patch_key(&id(), source, &file.path),
             FilePatch {
-                key: source.file_key(&file.path),
+                key: diff_file_key(source, &file.path),
                 file: file.clone(),
                 patch: patch.into(),
             },

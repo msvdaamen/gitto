@@ -25,11 +25,11 @@ use crate::components::ui::{
 };
 use crate::data::diff::{ChangedFiles, FilesOf, ShownFiles, select_shown_files};
 use crate::data::{Opaque, Query};
-use crate::git::diff_source::DiffSource;
-use crate::git::rows::WIP_ID;
 use crate::state::clock::{Clock, relative_time};
 use crate::theme::PaletteExt as _;
 use crate::util::format::{avatar_color, initials};
+use gitto_ui::git::diff_source::{DiffSource, is_same_source};
+use gitto_ui::git::rows::WIP_ID;
 
 /// What the details ask of the page (TS's `FileOpener`); each part of the details emits them too,
 /// and the details pass them on.
@@ -56,7 +56,7 @@ pub type ShownFile = Option<(DiffSource, String)>;
 pub fn shown_path_in(shown: &ShownFile, source: &DiffSource) -> Option<String> {
     shown
         .as_ref()
-        .filter(|(shown, _)| shown.is_same(source))
+        .filter(|(shown, _)| is_same_source(shown, source))
         .map(|(_, path)| path.clone())
 }
 
@@ -482,7 +482,7 @@ impl Render for SelectedCommit {
 struct CommitSummary {
     commit: Commit,
     count: usize,
-    totals: crate::git::changes::LineCounts,
+    totals: gitto_ui::git::changes::LineCounts,
     copied: bool,
     owner: WeakEntity<SelectedCommit>,
 }

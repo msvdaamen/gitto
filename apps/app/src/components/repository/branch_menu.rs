@@ -18,6 +18,8 @@
 //! than switching to it, which git refuses: [`BranchMenuProvider::open_worktree`] (TS's
 //! `useOpenWorktreeFromBranch`).
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use gitto_git::features::branch::schema::{MergeOutcome, RebaseOutcome};
@@ -120,6 +122,8 @@ pub struct BranchMenuProvider {
     add_worktree: Entity<AddWorktreeDialog>,
     before_change: Option<BeforeChange>,
     menu: RowMenu,
+    /// Whether the dialog asking before deleting a branch is open: it's of this repository.
+    asking_delete: Rc<Cell<bool>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -162,6 +166,7 @@ impl BranchMenuProvider {
             add_worktree,
             before_change: None,
             menu: RowMenu::default(),
+            asking_delete: Rc::default(),
             _subscriptions: vec![cx.observe_global::<Operations>(|_, cx| cx.notify())],
         }
     }
@@ -194,6 +199,10 @@ impl BranchMenuProvider {
         self.remotes = remotes_query(&repository_id, cx);
         self.repository_id = repository_id.clone();
         self.menu.close(cx);
+        if self.asking_delete.replace(false) {
+            use gpui_kit::component::WindowExt as _;
+            window.close_dialog(cx);
+        }
         self.create.update(cx, |dialog, cx| {
             dialog.set_repository(repository_id.clone(), window, cx)
         });
@@ -372,11 +381,18 @@ impl BranchMenuProvider {
     pub fn delete_branch(&mut self, deletion: BranchDeletion, window: &mut Window, cx: &mut App) {
         let delete = self.actions.delete.clone();
         let id = self.repository_id.clone();
+        self.asking_delete.set(true);
+        let (deleting, cancelled) = (
+            Rc::clone(&self.asking_delete),
+            Rc::clone(&self.asking_delete),
+        );
         open_delete_branch_dialog(
             deletion,
             move |deletion, _, cx| {
+                deleting.set(false);
                 let _ = delete.run(&id, deletion.reference().to_owned(), cx);
             },
+            move |_, _| cancelled.set(false),
             window,
             cx,
         );
@@ -1033,6 +1049,35 @@ mod tests {
         assert!(calls.deletes.borrow().is_empty());
         click_label(window, "Delete", cx);
         assert_eq!(*calls.deletes.borrow(), ["refs/remotes/origin/topic"]);
+    }
+
+    // `ref-list.test.tsx`'s, as it's the provider that asks.
+    #[gpui_kit::test]
+    fn forgets_the_branch_it_was_asking_about_deleting_in_another_repository(
+        cx: &mut TestAppContext,
+    ) {
+        let calls = Rc::new(Calls::default());
+        let (_dir, _, window, host) = render(cx, &calls);
+        open_menu(window, "row-refs/heads/topic", cx);
+        choose(window, "Delete topic…", cx);
+        assert!(has_dialog(window, cx));
+
+        let other = repository_id();
+        set_status(&other, status(), cx);
+        set_operation(&other, None, cx);
+        set_refs(&other, vec![local("main", None, 0)], cx);
+        set_worktrees(&other, vec![], cx);
+        set_remotes(&other, &[], cx);
+        let provider = host.read_with(cx, |host, _| host.provider.clone());
+        cx.update_window(window, |_, window, cx| {
+            provider.update(cx, |provider, cx| {
+                provider.set_repository(other.clone(), window, cx)
+            })
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert!(!has_dialog(window, cx));
+        assert!(calls.deletes.borrow().is_empty());
     }
 
     /// Clicks what's labelled `label`, e.g. a dialog's button.

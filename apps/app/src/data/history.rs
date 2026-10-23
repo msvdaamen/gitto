@@ -3,7 +3,8 @@
 //!
 //! The history table's rows are laid out from what [`History`] loads with `git/rows.ts`'s
 //! `withStashes`, `historyGraph` and `toHistoryRows`, and `ref-labels.ts`'s `checkouts`: pure
-//! logic, which the `gitto-ui` crate ports, so the table lays them out (see `crate::git`).
+//! logic, which the `gitto-ui` crate ports, so the table lays them out (see
+//! `gitto_ui::git::rows`).
 
 use std::cell::Cell;
 use std::collections::HashSet;
@@ -29,7 +30,7 @@ use super::query::Query;
 use super::stash::stashes_query;
 use super::status::{head_sha, status_query};
 use super::worktree::worktrees_query;
-use crate::git::status::has_uncommitted_changes;
+use gitto_ui::git::status::has_uncommitted_changes;
 
 /// How many commits the history loads first: a few screenfuls, so it shows quickly.
 pub const FIRST_PAGE: u32 = 200;

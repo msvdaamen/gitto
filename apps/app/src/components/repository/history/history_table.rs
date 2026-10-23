@@ -41,10 +41,10 @@ use crate::data::branch::{BranchChange, switch_branch_operation};
 use crate::data::diff::{ChangedFiles, FilesOf, ShownFiles, changed_files_query};
 use crate::data::history::{GetLog, History, git_log};
 use crate::data::{Operations, Query};
-use crate::git::changes::LineCounts;
 use crate::state::clock::Clock;
 use crate::state::delayed::{DELAY, Delayed};
 use crate::theme::PaletteExt as _;
+use gitto_ui::git::changes::LineCounts;
 
 /// How many rows from the end of the history loaded so far the rows in view come before more is
 /// loaded: a few screenfuls, so it's usually there before it's scrolled to.

@@ -240,7 +240,6 @@ mod tests {
         cx: &mut TestAppContext,
     ) -> (tempfile::TempDir, AnyWindowHandle, Entity<RefsSidebar>) {
         let dir = setup(cx);
-        cx.update(|cx| cx.set_reduce_motion(true));
         let id = repository_id();
         set_status(&id, status(), cx);
         set_refs(&id, vec![local("main", true), local("feature", false)], cx);

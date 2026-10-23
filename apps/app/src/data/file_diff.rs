@@ -23,7 +23,7 @@ use super::diff::{select_shown_files, working_tree_lists_query};
 use super::keys::{self, UncommittedSide};
 use super::opaque::Opaque;
 use super::query::Query;
-use crate::git::diff_source::DiffSource;
+use gitto_ui::git::diff_source::{DiffSource, diff_file_key, is_uncommitted};
 
 /// The files whose changes a [`DiffSource`] has, to step through, kept up to date for uncommitted
 /// ones (`useDiffSourceFiles`). A view keeps one, made in its constructor, and tells it when the
@@ -49,7 +49,7 @@ impl DiffSourceFiles {
             select_shown_files(),
             cx,
         );
-        let working_tree = working_tree_lists_query(id, source.is_uncommitted(), cx);
+        let working_tree = working_tree_lists_query(id, is_uncommitted(&source), cx);
         DiffSourceFiles {
             source,
             commit,
@@ -75,7 +75,7 @@ impl DiffSourceFiles {
             changed_files_options(id, &sha, FilesOf::Stash, is_stash(&source), cx),
             cx,
         );
-        let uncommitted = source.is_uncommitted();
+        let uncommitted = is_uncommitted(&source);
         if self.working_tree.is_enabled() != uncommitted {
             self.working_tree.set_enabled(uncommitted, cx);
         }
@@ -119,7 +119,7 @@ impl DiffSourceFiles {
 
     /// The files' lines weren't counted, so one without line counts isn't known to be binary.
     pub fn uncounted(&self) -> bool {
-        self.source.is_uncommitted()
+        is_uncommitted(&self.source)
             && self
                 .working_tree
                 .data()
@@ -218,7 +218,7 @@ pub fn file_patch_options(
                     DiffSource::Staged => get_staged_file_patch(&repo, &input).await?,
                 };
                 Ok(FilePatch {
-                    key: source.file_key(&file.path),
+                    key: diff_file_key(&source, &file.path),
                     file,
                     patch: patch.into(),
                 })

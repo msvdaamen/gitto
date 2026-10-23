@@ -362,9 +362,6 @@ pub fn open<V: Render>(
     build: impl FnOnce(&mut Window, &mut Context<V>) -> V + 'static,
 ) -> (tempfile::TempDir, AnyWindowHandle, Entity<V>) {
     let dir = crate::test_support::init(cx, |services| services);
-    // Dialogs and menus come in without animating, which runs on the wall clock: a click on one
-    // while it does can miss.
-    cx.update(|cx| cx.set_reduce_motion(true));
     let (window, host) = crate::test_support::open(cx, move |window, cx| Host {
         view: cx.new(|cx| build(window, cx)),
     });

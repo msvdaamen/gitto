@@ -18,7 +18,7 @@ use super::keys;
 use super::opaque::{Opaque, memoized};
 use super::query::Query;
 use super::status::uncommitted_options;
-use crate::git::changes::{LineCounts, line_totals};
+use gitto_ui::git::changes::{LineCounts, line_totals};
 
 /// Whose changed files to load: a commit's, compared to its first parent, or a stash's, compared
 /// to the commit it was made on (TS's pair of a query key and a `FilesFetcher`).

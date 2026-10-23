@@ -1,95 +1,20 @@
-//! Formatting for display. Ported from `lib/format.ts`.
+//! Formatting for display, from `lib/format.ts` (gitto-ui's `format`), and what else the app
+//! formats.
 
+pub use gitto_ui::format::{compact_count, initials, relative_time};
 use gpui_kit::Hsla;
 
 use crate::theme::palette;
 
-/// Up to two letters for an avatar: `AL` for "Ada Lovelace", `AD` for "ada".
-pub fn initials(name: &str) -> String {
-    let words: Vec<&str> = name
-        .split(|c: char| c.is_whitespace() || matches!(c, '.' | '_' | '-'))
-        .filter(|word| !word.is_empty())
-        .collect();
-    let letters: String = if words.len() > 1 {
-        words[0]
-            .chars()
-            .take(1)
-            .chain(words[words.len() - 1].chars().take(1))
-            .collect()
-    } else {
-        name.chars().take(2).collect()
-    };
-    letters.to_uppercase()
-}
-
-/// An avatar colour picked by `key` (e.g. an email address), the same one every time.
+/// An avatar colour picked by `key` (e.g. an email address), the same one every time: gitto-ui's
+/// pick, from the palette's avatar colours (the same ones).
 pub fn avatar_color(key: &str) -> Hsla {
-    let mut hash: i32 = 0;
-    for unit in key.to_lowercase().encode_utf16() {
-        hash = hash.wrapping_mul(31).wrapping_add(i32::from(unit));
-    }
-    palette::avatar_color(hash.unsigned_abs() as usize)
-}
-
-const MINUTE: i64 = 60 * 1000;
-const HOUR: i64 = 60 * MINUTE;
-const DAY: i64 = 24 * HOUR;
-const WEEK: i64 = 7 * DAY;
-const MONTH: i64 = 30 * DAY;
-const YEAR: i64 = 365 * DAY;
-
-const TIME_UNITS: [(&str, i64); 6] = [
-    ("year", YEAR),
-    ("month", MONTH),
-    ("week", WEEK),
-    ("day", DAY),
-    ("hour", HOUR),
-    ("minute", MINUTE),
-];
-
-/// `timestamp` (milliseconds since the epoch) relative to `now`, e.g. "3 days ago": in the largest
-/// unit that fits, as `Intl.RelativeTimeFormat` says it in English with `numeric: "auto"`
-/// ("yesterday", "last week").
-pub fn relative_time(timestamp: i64, now: i64) -> String {
-    let diff = timestamp - now;
-    for (unit, size) in TIME_UNITS {
-        if diff.abs() >= size {
-            let count = (diff as f64 / size as f64).round() as i64;
-            return relative(count, unit);
-        }
-    }
-    "Just now".to_owned()
-}
-
-fn relative(count: i64, unit: &str) -> String {
-    match (count, unit) {
-        (-1, "day") => "yesterday".to_owned(),
-        (1, "day") => "tomorrow".to_owned(),
-        (-1, "week" | "month" | "year") => format!("last {unit}"),
-        (1, "week" | "month" | "year") => format!("next {unit}"),
-        (count, unit) => {
-            let plural = if count.abs() == 1 { "" } else { "s" };
-            if count < 0 {
-                format!("{} {unit}{plural} ago", -count)
-            } else {
-                format!("in {count} {unit}{plural}")
-            }
-        }
-    }
-}
-
-/// A count short enough for a badge: `1.2k` for 1234.
-pub fn compact_count(count: u64) -> String {
-    if count < 1000 {
-        return count.to_string();
-    }
-    let thousands = count as f64 / 1000.;
-    let text = if count < 10_000 {
-        format!("{thousands:.1}")
-    } else {
-        format!("{thousands:.0}")
-    };
-    format!("{}k", text.strip_suffix(".0").unwrap_or(&text))
+    let picked = gitto_ui::format::avatar_color(key);
+    let index = palette::AVATAR_COLORS
+        .iter()
+        .position(|color| color.eq_ignore_ascii_case(picked))
+        .unwrap_or(0);
+    palette::avatar_color(index)
 }
 
 /// `text` with its first letter upper case (`capitalize` in `@gitto/release/changelog`).
@@ -133,37 +58,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn takes_the_first_and_last_words_first_letters() {
-        assert_eq!(initials("Ada King Lovelace"), "AL");
-        assert_eq!(initials("ada.lovelace"), "AL");
-    }
-
-    #[test]
-    fn takes_the_first_two_letters_of_a_single_word() {
-        assert_eq!(initials("ada"), "AD");
-    }
-
-    const NOW: i64 = 1_769_817_600_000; // 2026-01-31
-
-    #[test]
-    fn uses_the_largest_unit_that_fits() {
-        assert_eq!(relative_time(NOW - 3 * DAY, NOW), "3 days ago");
-        assert_eq!(relative_time(NOW - 2 * HOUR, NOW), "2 hours ago");
-        assert_eq!(relative_time(NOW - MINUTE, NOW), "1 minute ago");
-        assert_eq!(relative_time(NOW - DAY, NOW), "yesterday");
-    }
-
-    #[test]
-    fn says_just_now_for_less_than_a_minute() {
-        assert_eq!(relative_time(NOW - 30_000, NOW), "Just now");
-    }
-
-    #[test]
-    fn shortens_thousands() {
-        assert_eq!(compact_count(999), "999");
-        assert_eq!(compact_count(1234), "1.2k");
-        assert_eq!(compact_count(2000), "2k");
-        assert_eq!(compact_count(12_345), "12k");
+    fn picks_gitto_uis_avatar_color() {
+        for key in ["ada@example.com", "grace@example.com", "linus@example.com"] {
+            let index = palette::AVATAR_COLORS
+                .iter()
+                .position(|color| *color == gitto_ui::format::avatar_color(key));
+            assert_eq!(index.map(palette::avatar_color), Some(avatar_color(key)));
+        }
     }
 
     #[test]

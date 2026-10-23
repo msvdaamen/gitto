@@ -130,10 +130,11 @@ pub fn consequences(deletion: &BranchDeletion) -> String {
 
 /// Asks before deleting a branch, `deletion`, saying what goes with it: for a remote one, the
 /// local branches tracking it, and the commits of theirs that were never pushed. Esc, or clicking
-/// outside, cancels; Delete runs `on_delete`.
+/// outside, cancels, which runs `on_cancel`; Delete runs `on_delete`.
 pub fn open_delete_branch_dialog(
     deletion: BranchDeletion,
     on_delete: impl Fn(&BranchDeletion, &mut Window, &mut App) + 'static,
+    on_cancel: impl Fn(&mut Window, &mut App) + 'static,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -143,6 +144,7 @@ pub fn open_delete_branch_dialog(
         .action("Delete", ButtonVariant::Primary, move |window, cx| {
             on_delete(&deletion, window, cx)
         })
+        .on_cancel(on_cancel)
         .open(window, cx);
 }
 

@@ -11,8 +11,12 @@ use crate::state::router::Route;
 
 /// Sets up what the app sets up (see `app::init`), on services `configure` makes of in-memory
 /// ones; the folder they keep their files in lives as long as what's returned.
+///
+/// Motion is reduced: dialogs and popovers then open where they end up at once, rather than after
+/// an animation timed by the wall clock, which a test's clicks could land in the middle of.
 pub fn init(cx: &mut TestAppContext, configure: impl FnOnce(Services) -> Services) -> TempDir {
     cx.update(gpui_kit::init);
+    cx.update(|cx| cx.set_reduce_motion(true));
     let dir = tempfile::tempdir().expect("a temporary folder");
     let services = configure(Services::in_memory(dir.path()).expect("in-memory services"));
     cx.update(|cx| crate::app::init(services, Route::Home, cx));

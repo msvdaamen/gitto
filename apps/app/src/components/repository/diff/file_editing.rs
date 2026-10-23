@@ -555,7 +555,7 @@ mod tests {
     use super::*;
     use crate::data::QueryOptions;
     use crate::data::file_diff::{FilePatch, file_patch_key};
-    use crate::git::diff_source::DiffSource;
+    use gitto_ui::git::diff_source::DiffSource;
 
     /// Saving fails as git's API says the file changed on disk.
     fn changed_on_disk() -> QueryError {
