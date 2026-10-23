@@ -6,7 +6,7 @@ use gitto_ui::git::message::{CommitMessage, edit_message, join_message, split_me
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Enter, InputEvent, InputState, TextareaState};
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{Context, Entity, FontWeight, SharedString, Subscription, Window, div, rems};
 
@@ -397,7 +397,10 @@ impl Render for CommitForm {
             .child(
                 div().mb_2p5().child(
                     Checkbox::new("amend")
+                        .small()
                         .label("Amend last commit")
+                        .text_xs()
+                        .text_color(palette.muted)
                         .checked(amend)
                         .disabled(self.last_commit.is_none() || pending)
                         .on_click(cx.listener(|this, checked: &bool, _, cx| {
