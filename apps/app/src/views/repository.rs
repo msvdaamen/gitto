@@ -13,7 +13,9 @@ use gpui_kit::{
 
 use crate::components::repository::BeforeChange;
 use crate::components::repository::details::commit_details::{CommitDetails, CommitDetailsEvent};
-use crate::components::repository::diff::file_diff_view::{FileDiffEvent, FileDiffView};
+use crate::components::repository::diff::file_diff_view::{
+    FileDiffEvent, FileDiffView, prefetch_file_diff,
+};
 use crate::components::repository::history::history_table::{HistoryEvent, HistoryTable};
 use crate::components::repository::operation_bar::{OperationBar, OperationBarEvent};
 use crate::components::repository::sidebar::refs_sidebar::RefsSidebar;
@@ -129,8 +131,11 @@ impl RepositoryView {
                             this.open_file_of(row, source.clone(), file.clone(), window, cx);
                         }
                     }
-                    // Prefetching a file's changes is the file diff view's, once it's built.
-                    CommitDetailsEvent::PrefetchFile { .. } => {}
+                    CommitDetailsEvent::PrefetchFile {
+                        source,
+                        file,
+                        uncounted,
+                    } => prefetch_file_diff(&this.repository_id, source, file, *uncounted, cx),
                 },
             ),
             cx.subscribe_in(
@@ -329,6 +334,20 @@ impl RepositoryView {
             }
             let _ = this.update_in(cx, |this, window, cx| {
                 let repository_id = this.repository_id.clone();
+                // The view on show takes the other file: the last one stays on show until the
+                // next one's changes are in.
+                if let Some(open) = this.open_file.as_mut()
+                    && open.repository_id == repository_id
+                {
+                    open.row_id = row_id;
+                    open.source = source.clone();
+                    open.file = file.clone();
+                    open.view.update(cx, |view, cx| {
+                        view.set_file(repository_id, source, file, cx)
+                    });
+                    this.reconcile(window, cx);
+                    return;
+                }
                 let view = cx.new(|cx| {
                     FileDiffView::new(
                         repository_id.clone(),
