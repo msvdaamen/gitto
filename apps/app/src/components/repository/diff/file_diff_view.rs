@@ -624,9 +624,11 @@ impl FileDiffView {
                                     .text_color(palette.faint)
                                     .child(folder.to_owned()),
                             )
+                            // Cut short too, rather than run into the label, in a narrow pane.
                             .child(
                                 div()
-                                    .flex_none()
+                                    .min_w_0()
+                                    .truncate()
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child(name.to_owned()),
                             ),
