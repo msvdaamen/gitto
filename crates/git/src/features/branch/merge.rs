@@ -13,6 +13,7 @@ use crate::core::repo::{GitCommand, Repo, current_branch, has_conflicts, ref_exi
 use crate::core::runner::RunOptions;
 use crate::features::operation::commands::operation_under_way;
 use crate::features::remote::commands::fetched_name;
+use crate::input::{BranchRef, NonEmpty};
 
 /// Merges the branch `ref` (a full ref name, local or remote) into the checked-out branch, `into`,
 /// the one the user saw: fails with `Error::RepositoryChanged` if another is checked out by now.
@@ -31,13 +32,12 @@ use crate::features::remote::commands::fetched_name;
 /// merge, a rebase…) or conflicts are under way, `ref` is gone, or git refused over uncommitted
 /// changes or untracked files; with `Error::MergeStopped` if a hook turned the merge commit down,
 /// which leaves the merge under way, to commit or abort.
-pub async fn merge_branch(repo: &Repo, reference: &str, into: &str) -> Result<MergeOutcome> {
-    // As the UI's input is checked.
-    if into.is_empty() {
-        return Err(Error::InvalidInput(
-            "Too small: expected string to have >=1 characters".to_owned(),
-        ));
-    }
+pub async fn merge_branch(
+    repo: &Repo,
+    reference: &BranchRef,
+    into: &NonEmpty,
+) -> Result<MergeOutcome> {
+    let (reference, into) = (reference.as_str(), into.as_str());
     let Some(target) = branch_name(reference) else {
         return Err(Error::MergeBlocked(format!("{reference} isn't a branch.")));
     };
@@ -379,7 +379,7 @@ mod tests {
     use crate::test_support::conflicts::{
         Files, Sides, commit_files, files, text_conflict, try_git,
     };
-    use crate::test_support::{Fixture, git};
+    use crate::test_support::{Fixture, git, valid};
 
     /// `side` changed `s.txt`, `main` changed `m.txt`: they merge without conflicts.
     fn clean() -> Sides {
@@ -410,7 +410,11 @@ mod tests {
 
     /// Resolves `f.txt`'s text conflict as `contents`, and marks it resolved, as the resolver does.
     async fn resolve_text(repo: &Repo, contents: &str) {
-        let text = get_conflict(repo, "f.txt").await.unwrap().text.unwrap();
+        let text = get_conflict(repo, &valid("f.txt"))
+            .await
+            .unwrap()
+            .text
+            .unwrap();
         let expected = SaveExpectation {
             version: text.version,
             overwrite: false,
@@ -418,7 +422,7 @@ mod tests {
         let version = save_working_tree_file(repo, "f.txt", contents, &expected)
             .await
             .unwrap();
-        mark_resolved(repo, "f.txt", Some(&version), false)
+        mark_resolved(repo, &valid("f.txt"), Some(&version), false)
             .await
             .unwrap();
     }
@@ -471,7 +475,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("merge-ff").await.unwrap();
             assert_eq!(
-                merge_branch(&repo, "refs/heads/side", "main")
+                merge_branch(&repo, &valid("refs/heads/side"), &valid("main"))
                     .await
                     .unwrap(),
                 MergeOutcome::FastForward
@@ -494,7 +498,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("merge-commit").await.unwrap();
             assert_eq!(
-                merge_branch(&repo, "refs/heads/side", "main")
+                merge_branch(&repo, &valid("refs/heads/side"), &valid("main"))
                     .await
                     .unwrap(),
                 MergeOutcome::Merged
@@ -520,7 +524,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("merge-into").await.unwrap();
-            merge_branch(&repo, "refs/heads/side", "topic")
+            merge_branch(&repo, &valid("refs/heads/side"), &valid("topic"))
                 .await
                 .unwrap();
         });
@@ -544,7 +548,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("merge-remote").await.unwrap();
             assert_eq!(
-                merge_branch(&repo, "refs/remotes/origin/side", "main")
+                merge_branch(&repo, &valid("refs/remotes/origin/side"), &valid("main"))
                     .await
                     .unwrap(),
                 MergeOutcome::Merged
@@ -572,7 +576,9 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("merge-up-to-date").await.unwrap();
             assert_eq!(
-                merge_branch(&repo, "refs/heads/old", "main").await.unwrap(),
+                merge_branch(&repo, &valid("refs/heads/old"), &valid("main"))
+                    .await
+                    .unwrap(),
                 MergeOutcome::UpToDate
             );
         });
@@ -590,7 +596,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("merge-unborn").await.unwrap();
             assert_eq!(
-                merge_branch(&repo, "refs/heads/main", "empty")
+                merge_branch(&repo, &valid("refs/heads/main"), &valid("empty"))
                     .await
                     .unwrap(),
                 MergeOutcome::FastForward
@@ -612,7 +618,7 @@ mod tests {
             let repo = fx.repos.open("merge-tag-name").await.unwrap();
 
             assert_eq!(
-                merge_branch(&repo, "refs/heads/side", "main")
+                merge_branch(&repo, &valid("refs/heads/side"), &valid("main"))
                     .await
                     .unwrap(),
                 MergeOutcome::Conflicts
@@ -643,7 +649,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("merge-keeps-changes").await.unwrap();
             assert_eq!(
-                merge_branch(&repo, "refs/heads/side", "main")
+                merge_branch(&repo, &valid("refs/heads/side"), &valid("main"))
                     .await
                     .unwrap(),
                 MergeOutcome::Merged
@@ -664,7 +670,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("merge-no-ff").await.unwrap();
             assert_eq!(
-                merge_branch(&repo, "refs/heads/side", "main")
+                merge_branch(&repo, &valid("refs/heads/side"), &valid("main"))
                     .await
                     .unwrap(),
                 MergeOutcome::Merged
@@ -685,7 +691,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("merge-ff-only").await.unwrap();
-            let error = merge_branch(&repo, "refs/heads/side", "main")
+            let error = merge_branch(&repo, &valid("refs/heads/side"), &valid("main"))
                 .await
                 .unwrap_err();
             assert!(matches!(error, Error::Git(_)), "{error:?}");
@@ -705,7 +711,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("merge-log").await.unwrap();
-            merge_branch(&repo, "refs/heads/side", "main")
+            merge_branch(&repo, &valid("refs/heads/side"), &valid("main"))
                 .await
                 .unwrap();
         });
@@ -727,7 +733,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("merge-options").await.unwrap();
             assert_eq!(
-                merge_branch(&repo, "refs/heads/side", "main")
+                merge_branch(&repo, &valid("refs/heads/side"), &valid("main"))
                     .await
                     .unwrap(),
                 MergeOutcome::Merged
@@ -752,7 +758,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("merge-autostash").await.unwrap();
-            merge_branch(&repo, "refs/heads/side", "main")
+            merge_branch(&repo, &valid("refs/heads/side"), &valid("main"))
                 .await
                 .unwrap_err();
         });
@@ -770,7 +776,7 @@ mod tests {
             let repo = fx.repos.open("merge-conflicts").await.unwrap();
 
             assert_eq!(
-                merge_branch(&repo, "refs/heads/side", "main")
+                merge_branch(&repo, &valid("refs/heads/side"), &valid("main"))
                     .await
                     .unwrap(),
                 MergeOutcome::Conflicts
@@ -792,7 +798,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("merge-resolved").await.unwrap();
 
-            merge_branch(&repo, "refs/heads/side", "main")
+            merge_branch(&repo, &valid("refs/heads/side"), &valid("main"))
                 .await
                 .unwrap();
             resolve_text(&repo, "one\nboth\nthree\n").await;
@@ -823,7 +829,7 @@ mod tests {
             let repo = fx.repos.open("merge-resolved-remote").await.unwrap();
 
             assert_eq!(
-                merge_branch(&repo, "refs/remotes/origin/side", "topic")
+                merge_branch(&repo, &valid("refs/remotes/origin/side"), &valid("topic"))
                     .await
                     .unwrap(),
                 MergeOutcome::Conflicts
@@ -852,7 +858,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("merge-abort").await.unwrap();
 
-            merge_branch(&repo, "refs/heads/side", "main")
+            merge_branch(&repo, &valid("refs/heads/side"), &valid("main"))
                 .await
                 .unwrap();
             abort_operation(&repo, OperationKind::Merge).await.unwrap();
@@ -874,18 +880,18 @@ mod tests {
             let repo = fx.repos.open("merge-deleted").await.unwrap();
 
             assert_eq!(
-                merge_branch(&repo, "refs/heads/side", "main")
+                merge_branch(&repo, &valid("refs/heads/side"), &valid("main"))
                     .await
                     .unwrap(),
                 MergeOutcome::Conflicts
             );
-            let conflict = get_conflict(&repo, "f.txt").await.unwrap();
+            let conflict = get_conflict(&repo, &valid("f.txt")).await.unwrap();
             assert_eq!(conflict.ours, None);
             let shown = ShownConflict {
                 sides: conflict.sides(),
                 version: None,
             };
-            keep_side(&repo, "f.txt", Side::Theirs, &shown)
+            keep_side(&repo, &valid("f.txt"), Side::Theirs, &shown)
                 .await
                 .unwrap();
             continue_operation(&repo, OperationKind::Merge)
@@ -912,12 +918,12 @@ mod tests {
             let repo = fx.repos.open("merge-binary").await.unwrap();
 
             assert_eq!(
-                merge_branch(&repo, "refs/heads/side", "main")
+                merge_branch(&repo, &valid("refs/heads/side"), &valid("main"))
                     .await
                     .unwrap(),
                 MergeOutcome::Conflicts
             );
-            let conflict = get_conflict(&repo, "b.dat").await.unwrap();
+            let conflict = get_conflict(&repo, &valid("b.dat")).await.unwrap();
             assert!(conflict.ours.is_some());
             assert!(conflict.theirs.is_some());
             assert_eq!(conflict.text, None);
@@ -935,7 +941,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("merge-conflicts-changes").await.unwrap();
             assert_eq!(
-                merge_branch(&repo, "refs/heads/side", "main")
+                merge_branch(&repo, &valid("refs/heads/side"), &valid("main"))
                     .await
                     .unwrap(),
                 MergeOutcome::Conflicts
@@ -955,7 +961,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("merge-over-changes").await.unwrap();
-            let error = merge_branch(&repo, "refs/heads/side", "main")
+            let error = merge_branch(&repo, &valid("refs/heads/side"), &valid("main"))
                 .await
                 .unwrap_err();
             assert_blocked(
@@ -981,7 +987,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("merge-over-several").await.unwrap();
-            let error = merge_branch(&repo, "refs/heads/side", "main")
+            let error = merge_branch(&repo, &valid("refs/heads/side"), &valid("main"))
                 .await
                 .unwrap_err();
             assert!(
@@ -1003,7 +1009,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("merge-over-staged").await.unwrap();
-            let error = merge_branch(&repo, "refs/heads/side", "main")
+            let error = merge_branch(&repo, &valid("refs/heads/side"), &valid("main"))
                 .await
                 .unwrap_err();
             assert!(
@@ -1030,7 +1036,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("merge-over-staged-several").await.unwrap();
-            let error = merge_branch(&repo, "refs/heads/side", "main")
+            let error = merge_branch(&repo, &valid("refs/heads/side"), &valid("main"))
                 .await
                 .unwrap_err();
             assert!(
@@ -1059,7 +1065,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("merge-over-folder").await.unwrap();
-            let error = merge_branch(&repo, "refs/heads/side", "main")
+            let error = merge_branch(&repo, &valid("refs/heads/side"), &valid("main"))
                 .await
                 .unwrap_err();
             assert!(
@@ -1082,7 +1088,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("merge-over-untracked").await.unwrap();
-            let error = merge_branch(&repo, "refs/heads/side", "main")
+            let error = merge_branch(&repo, &valid("refs/heads/side"), &valid("main"))
                 .await
                 .unwrap_err();
             assert!(
@@ -1113,7 +1119,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("merge-ff-untracked").await.unwrap();
-            let error = merge_branch(&repo, "refs/heads/side", "main")
+            let error = merge_branch(&repo, &valid("refs/heads/side"), &valid("main"))
                 .await
                 .unwrap_err();
             assert!(
@@ -1136,13 +1142,13 @@ mod tests {
         git(&path, ["branch", "other", "main~"]);
         smol::block_on(async {
             let repo = fx.repos.open("merge-during-merge").await.unwrap();
-            merge_branch(&repo, "refs/heads/side", "main")
+            merge_branch(&repo, &valid("refs/heads/side"), &valid("main"))
                 .await
                 .unwrap();
             // Resolved, but not committed yet: still under way.
             resolve_text(&repo, "one\nboth\nthree\n").await;
 
-            let error = merge_branch(&repo, "refs/heads/other", "main")
+            let error = merge_branch(&repo, &valid("refs/heads/other"), &valid("main"))
                 .await
                 .unwrap_err();
             assert_blocked(
@@ -1163,7 +1169,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("merge-during-rebase").await.unwrap();
-            let error = merge_branch(&repo, "refs/heads/other", "side")
+            let error = merge_branch(&repo, &valid("refs/heads/other"), &valid("side"))
                 .await
                 .unwrap_err();
             assert_blocked(
@@ -1181,7 +1187,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("merge-during-pick").await.unwrap();
-            let error = merge_branch(&repo, "refs/heads/side", "main")
+            let error = merge_branch(&repo, &valid("refs/heads/side"), &valid("main"))
                 .await
                 .unwrap_err();
             assert_blocked(
@@ -1201,10 +1207,10 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("merge-during-pop").await.unwrap();
             let stash = git(&path, ["rev-parse", "refs/stash"]);
-            let _ = pop_stash(&repo, &stash).await;
+            let _ = pop_stash(&repo, &valid(&stash)).await;
             let before = snapshot(&path);
 
-            let error = merge_branch(&repo, "refs/heads/side", "main")
+            let error = merge_branch(&repo, &valid("refs/heads/side"), &valid("main"))
                 .await
                 .unwrap_err();
             assert_blocked(
@@ -1224,7 +1230,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("merge-detached").await.unwrap();
-            let error = merge_branch(&repo, "refs/heads/side", "main")
+            let error = merge_branch(&repo, &valid("refs/heads/side"), &valid("main"))
                 .await
                 .unwrap_err();
             assert_blocked(
@@ -1244,7 +1250,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("merge-switched").await.unwrap();
-            let error = merge_branch(&repo, "refs/heads/side", "main")
+            let error = merge_branch(&repo, &valid("refs/heads/side"), &valid("main"))
                 .await
                 .unwrap_err();
             assert!(matches!(error, Error::RepositoryChanged(_)), "{error:?}");
@@ -1264,7 +1270,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("merge-gone").await.unwrap();
-            let error = merge_branch(&repo, "refs/heads/side", "main")
+            let error = merge_branch(&repo, &valid("refs/heads/side"), &valid("main"))
                 .await
                 .unwrap_err();
             assert_blocked(&error, "side no longer exists.");
@@ -1278,7 +1284,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("merge-itself").await.unwrap();
-            let error = merge_branch(&repo, "refs/heads/main", "main")
+            let error = merge_branch(&repo, &valid("refs/heads/main"), &valid("main"))
                 .await
                 .unwrap_err();
             assert_blocked(&error, "Can't merge main into itself.");
@@ -1292,7 +1298,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("merge-revision").await.unwrap();
-            let error = merge_branch(&repo, "refs/heads/side~1", "main")
+            let error = merge_branch(&repo, &valid("refs/heads/side~1"), &valid("main"))
                 .await
                 .unwrap_err();
             assert_blocked(&error, "side~1 no longer exists.");
@@ -1307,10 +1313,12 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("merge-not-branch").await.unwrap();
-            let error = merge_branch(&repo, "refs/tags/v1", "main")
+            // A tag is refused as the input's parsed: `merge_branch` takes a `BranchRef`.
+            assert!(BranchRef::parse("refs/tags/v1").is_err());
+            let error = merge_branch(&repo, &valid("refs/remotes/origin/HEAD"), &valid("main"))
                 .await
                 .unwrap_err();
-            assert_blocked(&error, "refs/tags/v1 isn't a branch.");
+            assert_blocked(&error, "refs/remotes/origin/HEAD isn't a branch.");
         });
     }
 
@@ -1327,7 +1335,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("merge-unsigned").await.unwrap();
 
-            let error = merge_branch(&repo, "refs/heads/side", "main")
+            let error = merge_branch(&repo, &valid("refs/heads/side"), &valid("main"))
                 .await
                 .unwrap_err();
             assert!(matches!(error, Error::MergeStopped(_)), "{error:?}");
@@ -1362,7 +1370,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("merge-hook").await.unwrap();
 
-            let error = merge_branch(&repo, "refs/heads/side", "main")
+            let error = merge_branch(&repo, &valid("refs/heads/side"), &valid("main"))
                 .await
                 .unwrap_err();
             assert!(matches!(error, Error::MergeStopped(_)), "{error:?}");

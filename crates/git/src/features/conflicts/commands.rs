@@ -18,17 +18,10 @@ use crate::features::diff::limits::MAX_BLOB_BYTES;
 use crate::features::diff::working_tree::{
     decode_utf8, read_working_tree_bytes, scan_working_tree_file,
 };
+use crate::input::NonEmpty;
 
 /// A submodule's mode in the index: its commit, rather than a file.
 const SUBMODULE: &str = "160000";
-
-/// Refuses an empty path, as the contract's `z.string().min(1)` did.
-fn check_path(path: &str) -> Result<()> {
-    if path.is_empty() {
-        return Err(Error::InvalidInput("Not a path.".to_owned()));
-    }
-    Ok(())
-}
 
 /// The sides of the conflicted file at `path`, as `git ls-files -u` lists them: stage 1 is the
 /// common ancestor's, 2 ours, 3 theirs. All `None` once it isn't conflicted.
@@ -74,8 +67,8 @@ async fn unmerged_paths(run: &GitCommand) -> Result<Vec<String>> {
 
 /// The conflicted file at `path`: its sides, and the file in the working tree, as text to resolve
 /// its conflicts in if it's text, with its version, which writing it checks it still has.
-pub async fn get_conflict(repo: &Repo, path: &str) -> Result<Conflict> {
-    check_path(path)?;
+pub async fn get_conflict(repo: &Repo, path: &NonEmpty) -> Result<Conflict> {
+    let path = path.as_str();
     let run = repo.git();
     let (sides, file) = futures::try_join!(read_sides(&run, path), read_text(repo, path))?;
     Ok(Conflict {
@@ -175,8 +168,13 @@ pub struct ShownConflict {
 /// only put in the index; its folder is left as it is, to update when the user's ready. Fails
 /// with `Error::ConflictChanged` if the conflict isn't the one `shown` any more, and with
 /// `Error::FileChangedOnDisk` if the file changed on disk since, which keeping a side would lose.
-pub async fn keep_side(repo: &Repo, path: &str, side: Side, shown: &ShownConflict) -> Result<()> {
-    check_path(path)?;
+pub async fn keep_side(
+    repo: &Repo,
+    path: &NonEmpty,
+    side: Side,
+    shown: &ShownConflict,
+) -> Result<()> {
+    let path = path.as_str();
     repo.exclusive(|run| async move {
         let sides = read_sides(&run, path).await?;
         if !same_sides(&sides, &shown.sides) {
@@ -263,11 +261,11 @@ fn same_side(a: &Option<ConflictSide>, b: &Option<ConflictSide>) -> bool {
 /// saw. Does nothing if it isn't conflicted any more, e.g. as it was staged in a terminal.
 pub async fn mark_resolved(
     repo: &Repo,
-    path: &str,
+    path: &NonEmpty,
     version: Option<&str>,
     with_markers: bool,
 ) -> Result<()> {
-    check_path(path)?;
+    let path = path.as_str();
     repo.exclusive(|run| async move {
         let sides = read_sides(&run, path).await?;
         if sides.base.is_none() && sides.ours.is_none() && sides.theirs.is_none() {
@@ -504,9 +502,10 @@ mod tests {
     use crate::features::staging::commands::stage_all;
     use crate::features::status::commands::get_status;
     use crate::features::status::parse::{STATUS_ARGS, parse_status};
+    use crate::input::Paths;
     use crate::schema::FileStatus;
     use crate::test_support::conflicts::{Files, Sides, files, text_conflict, try_git};
-    use crate::test_support::{Fixture, git};
+    use crate::test_support::{Fixture, git, valid};
 
     type Row = (String, Option<&'static str>, Option<&'static str>);
 
@@ -538,7 +537,7 @@ mod tests {
 
     /// The staging feature's `stage`, given the paths as the TS tests give them.
     async fn stage(repo: &Repo, paths: &[&str]) -> Result<()> {
-        let paths: Vec<String> = paths.iter().map(|path| path.to_string()).collect();
+        let paths = Paths::parse(paths.iter().copied())?;
         staging::commands::stage(repo, &paths).await
     }
 
@@ -578,7 +577,7 @@ mod tests {
             let contents =
                 markers.replacen("BASE", &git(&path, ["rev-parse", "--short", "HEAD~"]), 1);
 
-            let conflict = get_conflict(&repo, "f.txt").await.unwrap();
+            let conflict = get_conflict(&repo, &valid("f.txt")).await.unwrap();
             let version = conflict.text.as_ref().unwrap().version.clone();
             assert_eq!(
                 conflict,
@@ -629,9 +628,13 @@ mod tests {
         let path = fx.create_merge_conflict("resolve", None, &text_conflict());
         smol::block_on(async {
             let repo = fx.repos.open("resolve").await.unwrap();
-            let text = get_conflict(&repo, "f.txt").await.unwrap().text.unwrap();
+            let text = get_conflict(&repo, &valid("f.txt"))
+                .await
+                .unwrap()
+                .text
+                .unwrap();
 
-            let error = mark_resolved(&repo, "f.txt", Some(&text.version), false)
+            let error = mark_resolved(&repo, &valid("f.txt"), Some(&text.version), false)
                 .await
                 .unwrap_err();
             assert!(matches!(error, Error::ConflictMarkers { .. }), "{error:?}");
@@ -650,7 +653,7 @@ mod tests {
                 rows(&[("f.txt", Some("conflicted"), Some("conflicted"))])
             );
 
-            mark_resolved(&repo, "f.txt", Some(&version), false)
+            mark_resolved(&repo, &valid("f.txt"), Some(&version), false)
                 .await
                 .unwrap();
             assert_eq!(
@@ -659,7 +662,7 @@ mod tests {
             );
             assert_eq!(git(&path, ["show", ":f.txt"]), "one\nours\ntheirs\nthree");
             // Marking it again, once it isn't conflicted, does nothing.
-            mark_resolved(&repo, "f.txt", Some(&version), false)
+            mark_resolved(&repo, &valid("f.txt"), Some(&version), false)
                 .await
                 .unwrap();
         });
@@ -671,9 +674,13 @@ mod tests {
         let path = fx.create_merge_conflict("resolve-with-markers", None, &text_conflict());
         smol::block_on(async {
             let repo = fx.repos.open("resolve-with-markers").await.unwrap();
-            let text = get_conflict(&repo, "f.txt").await.unwrap().text.unwrap();
+            let text = get_conflict(&repo, &valid("f.txt"))
+                .await
+                .unwrap()
+                .text
+                .unwrap();
 
-            mark_resolved(&repo, "f.txt", Some(&text.version), true)
+            mark_resolved(&repo, &valid("f.txt"), Some(&text.version), true)
                 .await
                 .unwrap();
             assert_eq!(
@@ -708,10 +715,14 @@ mod tests {
         let path = fx.create_merge_conflict("resolve-changed", None, &text_conflict());
         smol::block_on(async {
             let repo = fx.repos.open("resolve-changed").await.unwrap();
-            let text = get_conflict(&repo, "f.txt").await.unwrap().text.unwrap();
+            let text = get_conflict(&repo, &valid("f.txt"))
+                .await
+                .unwrap()
+                .text
+                .unwrap();
             fs::write(path.join("f.txt"), "one\nchanged elsewhere\nthree\n").unwrap();
 
-            let error = mark_resolved(&repo, "f.txt", Some(&text.version), false)
+            let error = mark_resolved(&repo, &valid("f.txt"), Some(&text.version), false)
                 .await
                 .unwrap_err();
             assert!(
@@ -784,9 +795,9 @@ mod tests {
         let path = fx.create_merge_conflict("keep-theirs", None, &text_conflict());
         smol::block_on(async {
             let repo = fx.repos.open("keep-theirs").await.unwrap();
-            let conflict = get_conflict(&repo, "f.txt").await.unwrap();
+            let conflict = get_conflict(&repo, &valid("f.txt")).await.unwrap();
 
-            keep_side(&repo, "f.txt", Side::Theirs, &shown(&conflict))
+            keep_side(&repo, &valid("f.txt"), Side::Theirs, &shown(&conflict))
                 .await
                 .unwrap();
             assert_eq!(read(&path.join("f.txt")), "one\ntheirs\nthree\n");
@@ -803,10 +814,10 @@ mod tests {
         let path = fx.create_merge_conflict("keep-changed", None, &text_conflict());
         smol::block_on(async {
             let repo = fx.repos.open("keep-changed").await.unwrap();
-            let conflict = get_conflict(&repo, "f.txt").await.unwrap();
+            let conflict = get_conflict(&repo, &valid("f.txt")).await.unwrap();
 
             fs::write(path.join("f.txt"), "one\nedited\nthree\n").unwrap();
-            let error = keep_side(&repo, "f.txt", Side::Ours, &shown(&conflict))
+            let error = keep_side(&repo, &valid("f.txt"), Side::Ours, &shown(&conflict))
                 .await
                 .unwrap_err();
             assert!(
@@ -818,7 +829,7 @@ mod tests {
                 sides: conflict.sides(),
                 version: None,
             };
-            let error = keep_side(&repo, "f.txt", Side::Ours, &unversioned)
+            let error = keep_side(&repo, &valid("f.txt"), Side::Ours, &unversioned)
                 .await
                 .unwrap_err();
             assert!(matches!(error, Error::ConflictChanged { .. }), "{error:?}");
@@ -842,7 +853,7 @@ mod tests {
         let path = fx.create_merge_conflict("deleted-by-them", None, &deleted_by_them());
         smol::block_on(async {
             let repo = fx.repos.open("deleted-by-them").await.unwrap();
-            let conflict = get_conflict(&repo, "f.txt").await.unwrap();
+            let conflict = get_conflict(&repo, &valid("f.txt")).await.unwrap();
             assert_eq!(conflict.base.unwrap().oid, oid(&path, ":1:f.txt"));
             assert_eq!(conflict.ours.unwrap().oid, oid(&path, ":2:f.txt"));
             assert_eq!(conflict.theirs, None);
@@ -857,8 +868,8 @@ mod tests {
         let path = fx.create_merge_conflict("delete-kept", None, &deleted_by_them());
         smol::block_on(async {
             let repo = fx.repos.open("delete-kept").await.unwrap();
-            let conflict = get_conflict(&repo, "f.txt").await.unwrap();
-            keep_side(&repo, "f.txt", Side::Theirs, &shown(&conflict))
+            let conflict = get_conflict(&repo, &valid("f.txt")).await.unwrap();
+            keep_side(&repo, &valid("f.txt"), Side::Theirs, &shown(&conflict))
                 .await
                 .unwrap();
             assert!(!path.join("f.txt").exists());
@@ -869,8 +880,8 @@ mod tests {
 
             fx.create_merge_conflict("modify-kept", None, &deleted_by_them());
             let other = fx.repos.open("modify-kept").await.unwrap();
-            let conflict = get_conflict(&other, "f.txt").await.unwrap();
-            keep_side(&other, "f.txt", Side::Ours, &shown(&conflict))
+            let conflict = get_conflict(&other, &valid("f.txt")).await.unwrap();
+            keep_side(&other, &valid("f.txt"), Side::Ours, &shown(&conflict))
                 .await
                 .unwrap();
             assert_eq!(status_files(&other).await, rows(&[]));
@@ -888,14 +899,14 @@ mod tests {
         let path = fx.create_merge_conflict("deleted-by-us", None, &sides);
         smol::block_on(async {
             let repo = fx.repos.open("deleted-by-us").await.unwrap();
-            let conflict = get_conflict(&repo, "f.txt").await.unwrap();
+            let conflict = get_conflict(&repo, &valid("f.txt")).await.unwrap();
             assert_eq!(conflict.ours, None);
             assert_eq!(
                 conflict.theirs.as_ref().unwrap().oid,
                 oid(&path, ":3:f.txt")
             );
 
-            keep_side(&repo, "f.txt", Side::Theirs, &shown(&conflict))
+            keep_side(&repo, &valid("f.txt"), Side::Theirs, &shown(&conflict))
                 .await
                 .unwrap();
             assert_eq!(read(&path.join("f.txt")), "one\ntheirs\n");
@@ -919,7 +930,7 @@ mod tests {
         fx.create_merge_conflict("added-by-both", None, &sides);
         smol::block_on(async {
             let repo = fx.repos.open("added-by-both").await.unwrap();
-            let conflict = get_conflict(&repo, "new.txt").await.unwrap();
+            let conflict = get_conflict(&repo, &valid("new.txt")).await.unwrap();
             assert_eq!(conflict.base, None);
             assert_eq!(conflict.ours.unwrap().mode, "100644");
             assert_eq!(conflict.theirs.unwrap().mode, "100644");
@@ -946,7 +957,7 @@ mod tests {
         fx.create_merge_conflict("binary", None, &binary_sides());
         smol::block_on(async {
             let repo = fx.repos.open("binary").await.unwrap();
-            let conflict = get_conflict(&repo, "b.bin").await.unwrap();
+            let conflict = get_conflict(&repo, &valid("b.bin")).await.unwrap();
             assert_eq!(conflict.text, None);
             assert!(conflict.version.is_some());
             assert!(conflict.binary);
@@ -962,8 +973,8 @@ mod tests {
         let path = fx.create_merge_conflict("binary-kept", None, &binary_sides());
         smol::block_on(async {
             let repo = fx.repos.open("binary-kept").await.unwrap();
-            let conflict = get_conflict(&repo, "b.bin").await.unwrap();
-            keep_side(&repo, "b.bin", Side::Theirs, &shown(&conflict))
+            let conflict = get_conflict(&repo, &valid("b.bin")).await.unwrap();
+            keep_side(&repo, &valid("b.bin"), Side::Theirs, &shown(&conflict))
                 .await
                 .unwrap();
             assert_eq!(fs::read(path.join("b.bin")).unwrap(), [0, 1, 4]);
@@ -989,7 +1000,7 @@ mod tests {
         let path = fx.create_merge_conflict("too-large", None, &sides);
         smol::block_on(async {
             let repo = fx.repos.open("too-large").await.unwrap();
-            let conflict = get_conflict(&repo, "f.txt").await.unwrap();
+            let conflict = get_conflict(&repo, &valid("f.txt")).await.unwrap();
             assert_eq!(conflict.text, None);
             assert!(
                 conflict.version.as_ref().unwrap().starts_with("stamp:"),
@@ -1004,15 +1015,15 @@ mod tests {
             assert!(matches!(error, Error::ConflictMarkers { .. }), "{error:?}");
 
             fs::write(path.join("f.txt"), format!("edited\n{tail}")).unwrap();
-            let error = keep_side(&repo, "f.txt", Side::Ours, &shown(&conflict))
+            let error = keep_side(&repo, &valid("f.txt"), Side::Ours, &shown(&conflict))
                 .await
                 .unwrap_err();
             assert!(
                 matches!(error, Error::FileChangedOnDisk { .. }),
                 "{error:?}"
             );
-            let conflict = get_conflict(&repo, "f.txt").await.unwrap();
-            keep_side(&repo, "f.txt", Side::Ours, &shown(&conflict))
+            let conflict = get_conflict(&repo, &valid("f.txt")).await.unwrap();
+            keep_side(&repo, &valid("f.txt"), Side::Ours, &shown(&conflict))
                 .await
                 .unwrap();
             assert_eq!(status_files(&repo).await, rows(&[]));
@@ -1045,13 +1056,13 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("link-conflict").await.unwrap();
 
-            let conflict = get_conflict(&repo, "config").await.unwrap();
+            let conflict = get_conflict(&repo, &valid("config")).await.unwrap();
             assert_eq!(conflict.ours.as_ref().unwrap().mode, "120000");
             assert_eq!(conflict.theirs.as_ref().unwrap().mode, "120000");
             assert_eq!(conflict.text, None);
             assert_eq!(conflict.version, None);
             assert_eq!(conflict.unreadable, None);
-            keep_side(&repo, "config", Side::Theirs, &shown(&conflict))
+            keep_side(&repo, &valid("config"), Side::Theirs, &shown(&conflict))
                 .await
                 .unwrap();
             assert_eq!(
@@ -1074,7 +1085,7 @@ mod tests {
         try_git(&path, ["merge", "--abort"]);
         smol::block_on(async {
             let repo = fx.repos.open("not-conflicted").await.unwrap();
-            let conflict = get_conflict(&repo, "f.txt").await.unwrap();
+            let conflict = get_conflict(&repo, &valid("f.txt")).await.unwrap();
             assert_eq!(conflict.base, None);
             assert_eq!(conflict.ours, None);
             assert_eq!(conflict.theirs, None);
