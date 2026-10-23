@@ -34,6 +34,10 @@ serde.workspace = true
 serde_json.workspace = true
 smol.workspace = true
 thiserror.workspace = true
+# Diffs: syntax highlighting, and the words that changed in a line (see `components::repository::diff`).
+similar.workspace = true
+syntect.workspace = true
+two-face.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
