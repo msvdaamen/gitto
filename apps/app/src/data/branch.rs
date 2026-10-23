@@ -56,7 +56,8 @@ impl<T, R> Clone for BranchChange<T, R> {
 }
 
 impl<T: 'static, R: 'static> BranchChange<T, R> {
-    fn new(operation: RepositoryOperation<T, R>) -> Self {
+    /// `operation`, as one of the changes of the branches: the data layer's own, or a test's.
+    pub(crate) fn new(operation: RepositoryOperation<T, R>) -> Self {
         BranchChange {
             operation: operation.one_at_a_time(branches_changing),
         }

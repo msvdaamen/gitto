@@ -62,6 +62,12 @@ pub struct PullOperation {
 }
 
 impl PullOperation {
+    /// A pull that `operation` does, which a test makes up; it must be named "pull".
+    #[cfg(test)]
+    pub(crate) fn with_operation(operation: RepositoryOperation<()>) -> Self {
+        PullOperation { operation }
+    }
+
     /// Pulls into the repository `id`, unless it's pulling already.
     pub fn pull(
         &self,
@@ -132,6 +138,13 @@ pub struct PushOperation {
 }
 
 impl PushOperation {
+    /// A push that `operation` does, given whether to force, which a test makes up; it must be
+    /// named "push".
+    #[cfg(test)]
+    pub(crate) fn with_operation(operation: RepositoryOperation<bool>) -> Self {
+        PushOperation { operation }
+    }
+
     pub fn push(
         &self,
         id: &RepositoryId,
