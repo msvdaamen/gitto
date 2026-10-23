@@ -242,8 +242,13 @@ pub struct History {
 
 impl History {
     pub fn new<V: 'static>(id: &RepositoryId, cx: &mut Context<V>) -> Self {
+        History::with_get(id, git_log(cx), cx)
+    }
+
+    /// With the log read by `get`: e.g. a test's, which pages it itself.
+    pub fn with_get<V: 'static>(id: &RepositoryId, get: GetLog, cx: &mut Context<V>) -> Self {
         History {
-            log: LogQuery::new(id, cx),
+            log: LogQuery::with_get(id, get, cx),
             status: status_query(id, cx),
             stashes: stashes_query(id, cx),
             worktrees: worktrees_query(id, cx),
