@@ -249,8 +249,13 @@ describe("branches in the history", () => {
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
-  it("opens the selected row's branch's menu with a key", async () => {
+  it("opens the selected row's branch's menu with a key, if the commit has none", async () => {
     const user = userEvent.setup();
+    // Only the last commit of the checked-out branch has a menu of its own (see `CommitMenu`).
+    rpc.git.status.get.mockResolvedValue({
+      ...(await rpc.git.status.get()),
+      head: { kind: "detached", sha: "e5" },
+    });
     const { list } = await renderHistory();
 
     // What Shift+F10 or the Menu key fires, at what has the focus.
@@ -259,13 +264,15 @@ describe("branches in the history", () => {
     expect(await screen.findByText("From main.")).toBeInTheDocument();
   });
 
-  it("opens no menu at a long press off a branch", async () => {
+  it("opens the commit's menu, not a branch's, at a long press off a branch", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       await renderHistory();
       fireEvent.pointerDown(screen.getByText("Commit e5"), { pointerType: "touch" });
       await vi.advanceTimersByTimeAsync(1000);
-      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+      expect(screen.getAllByRole("menu")).toHaveLength(1);
+      expect(screen.getByRole("menuitem", { name: "Edit message…" })).toBeInTheDocument();
+      expect(screen.queryByRole("menuitem", { name: "Create branch…" })).not.toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }

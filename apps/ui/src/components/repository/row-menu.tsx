@@ -1,21 +1,76 @@
 import { ContextMenu } from "@kobalte/core/context-menu";
 import { useMenuContext } from "@kobalte/core/menu";
-import { createEffect, createSignal, on, Show, type JSX } from "solid-js";
+import {
+  createContext,
+  createEffect,
+  createSignal,
+  on,
+  onCleanup,
+  Show,
+  useContext,
+  type JSX,
+} from "solid-js";
 
 import { ContextMenuContent } from "@/components/ui/context-menu";
 
+/** A `RowMenu`'s items, as the menus around and in it see them, to tell whose an element is. */
+interface Layer {
+  /** The data attribute marking its items' elements, e.g. `data-branch`. */
+  attribute: string;
+  /** Whether it has an item by the key `key`. */
+  has: (key: string) => boolean;
+}
+
+/** What a `RowMenu` tells the ones in it: the menus around them, and how to join those. */
+interface Nesting {
+  /** The menus around, outermost first. */
+  around: Layer[];
+  /** Makes a menu in this one known to it, and to the ones around it, while it's there. */
+  join: (layer: Layer) => void;
+}
+
+const Nesting = createContext<Nesting>({ around: [], join: () => {} });
+
 /**
- * The element marked with an item's key as `attribute` that `event` is on, if any. On a list that
- * has the focus, as when a key opens the menu, the first one in its active option: the history
- * keeps the focus on its list rather than on a row.
+ * The element `event` is on that's an item of one of the menus `layers`, and which menu's, if any:
+ * the innermost around what was right-clicked, the innermost menu's if it's an item of several. On
+ * a list that has the focus, as when a key opens a menu, its active option's: the option itself,
+ * else the first element in it that's an item. The history keeps the focus on its list rather than
+ * on a row.
  */
-function markedElement(event: Event, attribute: string): HTMLElement | null {
-  if (!(event.target instanceof Element)) return null;
-  const marked = event.target.closest<HTMLElement>(`[${attribute}]`);
-  if (marked) return marked;
+function itemElement(
+  event: Event,
+  layers: Layer[],
+): { element: HTMLElement; layer: Layer } | undefined {
+  if (!(event.target instanceof Element)) return undefined;
+  const selector = layers.map((layer) => `[${layer.attribute}]`).join(",");
+  const owner = (element: Element) =>
+    layers.findLast((layer) => {
+      const key = element.getAttribute(layer.attribute);
+      return key !== null && layer.has(key);
+    });
+  /** The innermost element that's an item, from `start` out. */
+  const around = (start: Element) => {
+    let element = start.closest<HTMLElement>(selector);
+    while (element) {
+      const layer = owner(element);
+      if (layer) return { element, layer };
+      element = element.parentElement?.closest<HTMLElement>(selector) ?? null;
+    }
+    return undefined;
+  };
+  const found = around(event.target);
+  if (found) return found;
   const active = event.target.getAttribute("aria-activedescendant");
   const option = active ? document.getElementById(active) : null;
-  return option?.querySelector<HTMLElement>(`[${attribute}]`) ?? null;
+  if (!option) return undefined;
+  const ofOption = around(option);
+  if (ofOption) return ofOption;
+  for (const element of option.querySelectorAll<HTMLElement>(selector)) {
+    const layer = owner(element);
+    if (layer) return { element, layer };
+  }
+  return undefined;
 }
 
 /**
@@ -37,9 +92,13 @@ function reopenAt(element: HTMLElement) {
 /**
  * A menu of what can be done with an item, opened by right-clicking an element in `children`
  * marked with the item's key as `data-<attribute>`, like a row in the sidebar or a label in the
- * history. Right-clicking anything else opens nothing. One menu for every element, rather than one
- * each: there can be thousands, made and dropped as the lists scroll. Elements rendered elsewhere
- * through a portal count too, as their events bubble through `children`.
+ * history. Right-clicking anything else opens nothing. A `RowMenu` can be in another, whose items'
+ * elements hold its own: a commit's row in the history holds its branches' labels. An element then
+ * opens the menu it's an item of, the innermost one's around what was right-clicked: a branch's
+ * label opens the branch's menu, anywhere else on the row the commit's. A key opens the active
+ * row's own menu, or else the first one of an item in it. One menu for every element, rather than
+ * one each: there can be thousands, made and dropped as the lists scroll. Elements rendered
+ * elsewhere through a portal count too, as their events bubble through `children`.
  */
 export function RowMenu<T>(props: {
   /** The repository the items are of: the menu closes once it changes. */
@@ -62,11 +121,30 @@ export function RowMenu<T>(props: {
     focus: HTMLElement | undefined;
   }>();
 
-  /** Takes the item whose element `event` is on as the target; that element, if it has one. */
+  const nesting = useContext(Nesting);
+  const self: Layer = {
+    get attribute() {
+      return `data-${props.attribute}`;
+    },
+    has: (key) => props.item(key) !== undefined,
+  };
+  // The menus in this one, whose items' elements can hold its own, or be held by them.
+  const inside: Layer[] = [];
+  const join = (layer: Layer) => {
+    inside.push(layer);
+    nesting.join(layer);
+    onCleanup(() => inside.splice(inside.indexOf(layer), 1));
+  };
+  nesting.join(self);
+
+  /**
+   * Takes the item whose element `event` is on as the target, unless that element is another
+   * menu's; this one's element, if it has one, and whether any menu has an item there.
+   */
   const aim = (event: Event) => {
-    const attribute = `data-${props.attribute}`;
-    const element = markedElement(event, attribute);
-    const key = element?.getAttribute(attribute) ?? undefined;
+    const found = itemElement(event, [...nesting.around, self, ...inside]);
+    const element = found?.layer === self ? found.element : undefined;
+    const key = element?.getAttribute(self.attribute) ?? undefined;
     const item = key === undefined ? undefined : props.item(key);
     // What has the focus: the row right-clicked, or the history's list, which keeps it rather than
     // its rows. Else the row, as at a long press, which focuses it only after this.
@@ -76,7 +154,7 @@ export function RowMenu<T>(props: {
         ? focused
         : (element?.closest("button") ?? undefined);
     setTarget(key !== undefined && item !== undefined ? { key, item, focus } : undefined);
-    return item === undefined ? null : element;
+    return { element: item === undefined ? undefined : element, taken: found !== undefined };
   };
 
   return (
@@ -90,15 +168,22 @@ export function RowMenu<T>(props: {
         disabled={!target()}
         // Kobalte opens it where it was right-clicked, unless this is prevented.
         onContextMenu={(event) => {
-          const element = aim(event);
+          const { element, taken } = aim(event);
           if (element?.contains(event.target as Node)) return;
-          event.preventDefault();
-          if (element) reopenAt(element);
+          if (element) {
+            event.preventDefault();
+            reopenAt(element);
+          }
+          // Else it's another menu's, around this one or in it, to open; or none's, and the
+          // outermost keeps the browser's own from opening.
+          else if (!taken && nesting.around.length === 0) event.preventDefault();
         }}
         // Kobalte opens it at a long press of a finger or pen.
         onPointerDown={(event) => event.pointerType !== "mouse" && aim(event)}
       >
-        {props.children}
+        <Nesting.Provider value={{ around: [...nesting.around, self], join }}>
+          {props.children}
+        </Nesting.Provider>
       </ContextMenu.Trigger>
       <ContextMenuContent
         // Back to what had the focus, rather than to this, which can't take focus.

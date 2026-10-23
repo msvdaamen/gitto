@@ -3,19 +3,26 @@ import * as z from "zod";
 
 import { FullSha, RepositoryInput, Sha } from "../../input";
 
+/**
+ * A commit's message. Not trimmed: an amend, or a reword, commits it exactly as it's sent, ending in
+ * a newline or not.
+ */
+const Message = z.string().regex(/\S/, "The message is empty.");
+
 export const CommitContract = {
   /**
    * Commits what's staged. With `amend`, HEAD's full SHA, replaces that commit instead, with what's
    * staged added to it and the new message; nothing needs to be staged to only reword it. Fails if
    * HEAD has moved on since, so another commit is never amended by mistake.
    */
-  create: oc.input(
-    RepositoryInput.extend({
-      // Not trimmed: an amend commits it exactly as it's sent, ending in a newline or not.
-      message: z.string().regex(/\S/, "The message is empty."),
-      amend: FullSha.optional(),
-    }),
-  ),
+  create: oc.input(RepositoryInput.extend({ message: Message, amend: FullSha.optional() })),
+  /**
+   * Rewrites the message of HEAD's commit, `sha` (its full SHA), with what's staged left out of it
+   * and still staged; the rewritten commit's full SHA. Its own endpoint, rather than an option of
+   * `create`, for that SHA, which committing doesn't look up. Fails if HEAD has moved on since,
+   * like amending.
+   */
+  reword: oc.input(RepositoryInput.extend({ sha: FullSha, message: Message })).output(z.string()),
   /** A commit's full message, e.g. the last one's to amend it. */
   message: oc.input(RepositoryInput.extend({ sha: Sha })).output(z.string()),
   /**

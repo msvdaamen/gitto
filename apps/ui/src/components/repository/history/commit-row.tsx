@@ -4,6 +4,7 @@ import { Show, Suspense } from "solid-js";
 import type { CommitRow } from "@/git/rows";
 import { useRelativeTime } from "@/hooks/relative-time";
 
+import { useCommitMenuOpenFor } from "./commit-menu";
 import { HistoryGraph, laneColor } from "./history-graph";
 import { HistoryOption, RowTotals, type HistoryRowProps } from "./history-option";
 import { HistoryRefLabels } from "./ref-labels";
@@ -22,14 +23,18 @@ export function HistoryCommitRow(
   },
 ) {
   const ago = useRelativeTime();
+  const menuFor = useCommitMenuOpenFor();
 
   return (
     <HistoryOption
       selected={props.selected}
       position={props.position}
       onSelect={props.onSelect}
+      data-commit={props.commit.id}
       class={cn(
         "group border-border-soft bg-transparent hover:bg-panel-hover",
+        // Its menu is open.
+        menuFor() === props.commit.id && "bg-panel-hover",
         props.selected &&
           "bg-[linear-gradient(90deg,var(--primary-soft),color-mix(in_srgb,var(--primary-soft)_35%,transparent))] text-text-soft shadow-[inset_2px_0_var(--primary)]",
       )}

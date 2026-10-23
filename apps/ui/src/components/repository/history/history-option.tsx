@@ -41,11 +41,17 @@ export interface HistoryRowProps {
  * The selected one is outlined while the keyboard does.
  */
 export function HistoryOption(
-  props: Omit<HistoryRowProps, "detailed"> & { class: string; children: JSX.Element },
+  props: Omit<HistoryRowProps, "detailed"> & {
+    class: string;
+    /** A commit's SHA, marking its row for the commit menu (see `CommitMenu`). */
+    "data-commit"?: string;
+    children: JSX.Element;
+  },
 ) {
   return (
     <button
       id={optionId(props.position.index)}
+      data-commit={props["data-commit"]}
       role="option"
       tabIndex={-1}
       aria-selected={props.selected ? "true" : "false"}
