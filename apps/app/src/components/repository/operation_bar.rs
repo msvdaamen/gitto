@@ -1,18 +1,62 @@
-//! **Stub.** What's under way in the repository. Replaces
-//! `components/repository/operation-bar.tsx`.
+//! What's under way in the repository. Ported from `components/repository/operation-bar.tsx`.
 
 use gitto_git::features::diff::schema::ChangedFile;
+use gitto_git::features::operation::schema::{Operation, OperationKind};
+use gitto_git::features::status::schema::Uncommitted;
 use gitto_git::input::RepositoryId;
+use gitto_ui::git::conflicts::{operation_name, operation_progress, operation_title};
+use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
+use gpui_kit::component::{Disableable as _, Sizable as _, h_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{Context, EventEmitter, Window, div};
+use gpui_kit::{
+    App, Context, EventEmitter, FontWeight, Role, SharedString, Subscription, Task, Window, div,
+    rems,
+};
 
 use super::BeforeChange;
+use crate::components::ui::{ConfirmDialog, FailurePopover, Icon, IconName, Tone};
+use crate::data::progress::{OperationActions, operation_actions, operation_in_progress_query};
+use crate::data::status::{
+    ConflictedFiles, conflicted_files_query, first_conflicted_file, first_to_resolve,
+};
+use crate::data::{Opaque, Operations, Query};
+use crate::theme::PaletteExt as _;
 
 /// What the operation bar asks of the page.
 #[derive(Debug, Clone, PartialEq)]
 pub enum OperationBarEvent {
     /// Opens a conflicted file's conflicts.
     Resolve(ChangedFile),
+}
+
+/// What continuing does, on its button: commits a merge, goes on with the rest.
+pub fn continue_label(kind: OperationKind) -> &'static str {
+    if kind == OperationKind::Merge {
+        "Commit merge"
+    } else {
+        "Continue"
+    }
+}
+
+/// How many files have conflicts, and how many of them are ready to mark resolved; once none has,
+/// with an operation under way, that it can go on; with neither, nothing.
+pub fn conflicts_summary(operation: bool, files: usize, ready: usize) -> String {
+    if files == 0 {
+        return if operation {
+            "All conflicts resolved".to_owned()
+        } else {
+            String::new()
+        };
+    }
+    let conflicts = format!(
+        "{files} {} conflicts",
+        if files == 1 { "file has" } else { "files have" }
+    );
+    if ready > 0 {
+        format!("{conflicts}, {ready} ready to mark resolved")
+    } else {
+        conflicts
+    }
 }
 
 /// What's under way in the repository, above the history and a file's changes: a merge, a
@@ -24,20 +68,35 @@ pub enum OperationBarEvent {
 ///
 /// An entity: it loads the operation and the conflicted files. Continuing or aborting waits for
 /// [`set_before_change`](Self::set_before_change)'s guard, as either rewrites the working tree.
-///
-/// Stub: renders nothing, as there's nothing under way until it's built.
 pub struct OperationBar {
     repository_id: RepositoryId,
+    operation: Query<Option<Operation>>,
+    conflicted: Query<Opaque<Uncommitted>, ConflictedFiles>,
+    actions: OperationActions,
     before_change: Option<BeforeChange>,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl EventEmitter<OperationBarEvent> for OperationBar {}
 
 impl OperationBar {
-    pub fn new(repository_id: RepositoryId, _: &mut Window, _: &mut Context<Self>) -> Self {
+    pub fn new(repository_id: RepositoryId, _: &mut Window, cx: &mut Context<Self>) -> Self {
+        OperationBar::with_actions(repository_id, operation_actions(), cx)
+    }
+
+    /// With `actions` continuing and aborting: a test's.
+    pub(crate) fn with_actions(
+        repository_id: RepositoryId,
+        actions: OperationActions,
+        cx: &mut Context<Self>,
+    ) -> Self {
         OperationBar {
+            operation: operation_in_progress_query(&repository_id, cx),
+            conflicted: conflicted_files_query(&repository_id, cx),
             repository_id,
+            actions,
             before_change: None,
+            _subscriptions: vec![cx.observe_global::<Operations>(|_, cx| cx.notify())],
         }
     }
 
@@ -47,6 +106,8 @@ impl OperationBar {
 
     pub fn set_repository(&mut self, repository_id: RepositoryId, cx: &mut Context<Self>) {
         if self.repository_id != repository_id {
+            self.operation = operation_in_progress_query(&repository_id, cx);
+            self.conflicted = conflicted_files_query(&repository_id, cx);
             self.repository_id = repository_id;
             cx.notify();
         }
@@ -56,11 +117,564 @@ impl OperationBar {
     pub fn set_before_change(&mut self, guard: BeforeChange) {
         self.before_change = Some(guard);
     }
+
+    /// The operation under way, if any.
+    pub fn operation(&self) -> Option<Operation> {
+        self.operation.data().flatten()
+    }
+
+    fn files(&self) -> Vec<ChangedFile> {
+        self.conflicted
+            .data()
+            .map(|conflicted| conflicted.files)
+            .unwrap_or_default()
+    }
+
+    /// Whether it's shown: there's an operation under way, or conflicts.
+    pub fn is_shown(&self) -> bool {
+        self.operation().is_some() || !self.files().is_empty()
+    }
+
+    /// What's said of the conflicts, as the bar shows it.
+    pub fn summary(&self) -> String {
+        let conflicted = self.conflicted.data();
+        let files = conflicted.as_ref().map_or(0, |c| c.files.len());
+        let ready = conflicted.as_ref().map_or(0, |c| c.marker_free.len());
+        let operation = self.operation().is_some();
+        let summary = conflicts_summary(operation, files, ready);
+        if !operation && files > 0 {
+            format!("{summary}. Resolve them, then commit.")
+        } else {
+            summary
+        }
+    }
+
+    /// The file "Resolve conflicts" opens: one with markers left, if any is.
+    pub fn first(&self) -> Option<ChangedFile> {
+        self.conflicted
+            .data()
+            .and_then(|conflicted| first_to_resolve(&conflicted).cloned())
+    }
+
+    fn is_pending(&self, cx: &App) -> bool {
+        self.actions.proceed.state(&self.repository_id, cx).running
+            || self.actions.abort.state(&self.repository_id, cx).running
+    }
+
+    /// Whether Continue (or Commit merge) can be clicked: nothing's running, and nothing's
+    /// conflicted.
+    pub fn may_continue(&self, cx: &App) -> bool {
+        !self.is_pending(cx) && self.files().is_empty()
+    }
+
+    fn saved(&self, cx: &mut App) -> Task<bool> {
+        match &self.before_change {
+            Some(before_change) => before_change(cx),
+            None => Task::ready(true),
+        }
+    }
+
+    /// Continues `kind` once the edits to a file on show are saved: it rewrites files. If it
+    /// stops at the next commit's conflicts, the first conflicted file is opened to resolve them.
+    pub fn go_on(&mut self, kind: OperationKind, cx: &mut Context<Self>) {
+        let id = self.repository_id.clone();
+        let saved = self.saved(cx);
+        let proceed = self.actions.proceed.clone();
+        cx.spawn(async move |this, cx| {
+            if !saved.await {
+                return;
+            }
+            let Ok(Some(done)) = this.update(cx, |this, cx| {
+                if this.repository_id != id {
+                    return None;
+                }
+                proceed.run(&id, kind, cx)
+            }) else {
+                return;
+            };
+            if !matches!(done.await, Ok(Ok(()))) {
+                return;
+            }
+            let _ = this.update(cx, |this, cx| {
+                if this.repository_id != id {
+                    return;
+                }
+                // The status has reloaded by now (see `operation_actions`).
+                if let Some(file) = first_conflicted_file(&id, cx) {
+                    cx.emit(OperationBarEvent::Resolve(file));
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Aborts `kind` once the edits to a file on show are saved, as continuing does.
+    pub fn abort(&mut self, kind: OperationKind, cx: &mut Context<Self>) {
+        let id = self.repository_id.clone();
+        let saved = self.saved(cx);
+        let abort = self.actions.abort.clone();
+        cx.spawn(async move |_, cx| {
+            if saved.await {
+                cx.update(|cx| {
+                    let _ = abort.run(&id, kind, cx);
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Asks before aborting `operation`, which puts the repository back as it was before it:
+    /// what's been resolved so far is lost. Esc, or clicking outside, cancels.
+    fn confirm_abort(&mut self, operation: Operation, window: &mut Window, cx: &mut Context<Self>) {
+        let name = operation_name(&operation);
+        let kind = operation.kind();
+        let this = cx.entity();
+        ConfirmDialog::new(
+            IconName::TriangleAlert,
+            Tone::Coral,
+            format!("Abort {name}?"),
+        )
+        .description(format!(
+            "This puts the repository back as it was before {name} started. The conflicts \
+                 you've resolved so far are lost."
+        ))
+        .action("Abort", ButtonVariant::Primary, move |_, cx| {
+            this.update(cx, |this, cx| this.abort(kind, cx));
+        })
+        .open(window, cx);
+    }
 }
 
 impl Render for OperationBar {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let _ = &self.before_change;
-        div()
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !self.is_shown() {
+            return div().into_any_element();
+        }
+        let palette = *cx.palette();
+        let operation = self.operation();
+        let files = self.files();
+        let first = self.first();
+        let pending = self.is_pending(cx);
+        let title: SharedString = operation.as_ref().map_or_else(
+            || "Conflicts".into(),
+            |operation| operation_title(operation).into(),
+        );
+        let progress = operation.as_ref().and_then(operation_progress);
+        let id = self.repository_id.clone();
+
+        let actions = operation.map(|operation| {
+            let name = operation_name(&operation);
+            let kind = operation.kind();
+            let abort_state = self.actions.abort.state(&id, cx);
+            let proceed_state = self.actions.proceed.state(&id, cx);
+            let label = if proceed_state.running {
+                "Continuing…"
+            } else {
+                continue_label(kind)
+            };
+            let (dismiss_abort, dismiss_proceed) =
+                (self.actions.abort.clone(), self.actions.proceed.clone());
+            let (abort_id, proceed_id) = (id.clone(), id.clone());
+            h_flex()
+                .gap_1p5()
+                .child(
+                    FailurePopover::new(
+                        "abort-failure",
+                        format!("Abort {name}"),
+                        abort_state.error,
+                        Button::new("abort")
+                            .small()
+                            .label("Abort")
+                            .disabled(pending)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.confirm_abort(operation.clone(), window, cx)
+                            })),
+                    )
+                    .on_dismiss(move |_, cx| dismiss_abort.dismiss(&abort_id, cx)),
+                )
+                .child(
+                    FailurePopover::new(
+                        "continue-failure",
+                        format!("Continue {name}"),
+                        proceed_state.error,
+                        Button::new("continue")
+                            .primary()
+                            .small()
+                            .label(label)
+                            .disabled(pending || !files.is_empty())
+                            .on_click(cx.listener(move |this, _, _, cx| this.go_on(kind, cx))),
+                    )
+                    .on_dismiss(move |_, cx| dismiss_proceed.dismiss(&proceed_id, cx)),
+                )
+        });
+
+        h_flex()
+            .id("operation-bar")
+            .role(Role::Status)
+            .flex_none()
+            .min_w_0()
+            .gap_2()
+            .px_3()
+            .py_1p5()
+            .border_b_1()
+            .border_color(palette.border)
+            .bg(palette.panel)
+            .text_size(rems(0.8))
+            .child(
+                Icon::new(IconName::GitMergeConflict)
+                    .size_4()
+                    .flex_none()
+                    .text_color(if files.is_empty() {
+                        palette.mint
+                    } else {
+                        palette.coral
+                    }),
+            )
+            .child(
+                h_flex()
+                    .min_w_0()
+                    .items_baseline()
+                    .gap_2()
+                    .child(
+                        div()
+                            .truncate()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(palette.text)
+                            .child(title),
+                    )
+                    .when_some(progress, |this, progress| {
+                        this.child(
+                            div()
+                                .flex_none()
+                                .text_xs()
+                                .text_color(palette.faint)
+                                .child(progress),
+                        )
+                    })
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_xs()
+                            .text_color(palette.muted)
+                            .child(self.summary()),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .ml_auto()
+                    .flex_none()
+                    .gap_1p5()
+                    .when_some(first, |this, file| {
+                        this.child(
+                            Button::new("resolve-conflicts")
+                                .ghost()
+                                .small()
+                                .label("Resolve conflicts")
+                                .on_click(cx.listener(move |_, _, _, cx| {
+                                    cx.emit(OperationBarEvent::Resolve(file.clone()))
+                                })),
+                        )
+                    })
+                    .children(actions),
+            )
+            .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    use gitto_git::features::operation::schema::Steps;
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, TestAppContext};
+
+    use super::*;
+    use crate::components::repository::test_support::{
+        conflicted, repository_id, set_operation, set_status, setup, status, with_conflicts,
+    };
+    use crate::data::{QueryError, RepositoryOperation};
+
+    fn merge() -> Operation {
+        Operation::Merge {
+            merging: "feature".into(),
+            into: Some("main".into()),
+        }
+    }
+
+    fn rebase(step: u64, total: u64) -> Operation {
+        Operation::Rebase {
+            branch: Some("feature".into()),
+            onto: "main".into(),
+            steps: Some(Steps { step, total }),
+        }
+    }
+
+    /// What was continued and aborted, and what continuing leaves.
+    #[derive(Default)]
+    struct Calls {
+        continued: RefCell<Vec<OperationKind>>,
+        aborted: RefCell<Vec<OperationKind>>,
+        /// The repository as continuing leaves it: the operation, and the status.
+        after_continue: RefCell<Option<(Option<Operation>, Uncommitted)>>,
+    }
+
+    struct Bar {
+        _dir: tempfile::TempDir,
+        window: AnyWindowHandle,
+        bar: Entity<OperationBar>,
+        resolved: Rc<RefCell<Vec<ChangedFile>>>,
+        saved: Rc<Cell<bool>>,
+        calls: Rc<Calls>,
+    }
+
+    fn render(cx: &mut TestAppContext, operation: Option<Operation>, status: Uncommitted) -> Bar {
+        let dir = setup(cx);
+        let id = repository_id();
+        set_operation(&id, operation, cx);
+        set_status(&id, status, cx);
+        let calls = Rc::new(Calls::default());
+        let actions = OperationActions {
+            proceed: RepositoryOperation::new("continue", {
+                let calls = Rc::clone(&calls);
+                move |id: RepositoryId, kind, cx: &mut App| {
+                    calls.continued.borrow_mut().push(kind);
+                    // As the repository reloads after it.
+                    if let Some((operation, status)) = calls.after_continue.borrow_mut().take() {
+                        crate::data::QueryClient::set_data(
+                            &crate::data::keys::operation(&id),
+                            operation,
+                            cx,
+                        );
+                        crate::data::QueryClient::set_data(
+                            &crate::data::keys::status(&id),
+                            Opaque::new(status),
+                            cx,
+                        );
+                    }
+                    cx.background_spawn(async { Ok::<_, QueryError>(()) })
+                }
+            }),
+            abort: RepositoryOperation::new("abort", {
+                let calls = Rc::clone(&calls);
+                move |_, kind, cx: &mut App| {
+                    calls.aborted.borrow_mut().push(kind);
+                    cx.background_spawn(async { Ok(()) })
+                }
+            }),
+        };
+        let saved = Rc::new(Cell::new(true));
+        let resolved = Rc::new(RefCell::new(Vec::new()));
+        let shown = id.clone();
+        let (window, bar) = crate::test_support::open(cx, {
+            let saved = Rc::clone(&saved);
+            let resolved = Rc::clone(&resolved);
+            move |_, cx| {
+                let bar = cx.new(|cx| {
+                    let mut bar = OperationBar::with_actions(shown, actions, cx);
+                    bar.set_before_change(Rc::new(move |_| Task::ready(saved.get())));
+                    bar
+                });
+                cx.subscribe(&bar, move |_, _, OperationBarEvent::Resolve(file), _| {
+                    resolved.borrow_mut().push(file.clone())
+                })
+                .detach();
+                Holder { bar }
+            }
+        });
+        let bar = bar.read_with(cx, |holder, _| holder.bar.clone());
+        Bar {
+            _dir: dir,
+            window,
+            bar,
+            resolved,
+            saved,
+            calls,
+        }
+    }
+
+    struct Holder {
+        bar: Entity<OperationBar>,
+    }
+
+    impl Render for Holder {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(self.bar.clone())
+        }
+    }
+
+    fn click(bar: &Bar, id: &'static str, cx: &mut TestAppContext) {
+        cx.update_window(bar.window, |_, window, cx| window.click(id, cx))
+            .unwrap();
+        cx.run_until_parked();
+    }
+
+    fn has_dialog(bar: &Bar, cx: &mut TestAppContext) -> bool {
+        use gpui_kit::component::WindowExt as _;
+        cx.update_window(bar.window, |_, window, cx| window.has_active_dialog(cx))
+            .unwrap()
+    }
+
+    /// Clicks the dialog's button labelled `label`.
+    fn click_label(bar: &Bar, label: &str, cx: &mut TestAppContext) {
+        cx.update_window(bar.window, |_, window, cx| {
+            use gpui_kit::test::{TestEventExt as _, TestQueryExt as _};
+            let center = window.find_by_label(label).bounds().center();
+            window.pointer_down(center, gpui_kit::MouseButton::Left, cx);
+            window.pointer_up(center, gpui_kit::MouseButton::Left, cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+    }
+
+    #[gpui_kit::test]
+    fn isnt_there_without_an_operation_or_conflicts(cx: &mut TestAppContext) {
+        let bar = render(cx, None, status());
+        assert!(!bar.bar.read_with(cx, |bar, _| bar.is_shown()));
+        let found = cx
+            .update_window(bar.window, |_, window, _| {
+                window.try_find("operation-bar").is_some()
+            })
+            .unwrap();
+        assert!(!found);
+    }
+
+    #[gpui_kit::test]
+    fn says_whats_under_way_and_only_continues_once_nothings_conflicted(cx: &mut TestAppContext) {
+        let bar = render(
+            cx,
+            Some(merge()),
+            with_conflicts(status(), &["a.txt", "b.txt"], &["b.txt"]),
+        );
+        let operation = bar.bar.read_with(cx, |bar, _| bar.operation()).unwrap();
+        assert_eq!(operation_title(&operation), "Merging feature into main");
+        assert_eq!(
+            bar.bar.read_with(cx, |bar, _| bar.summary()),
+            "2 files have conflicts, 1 ready to mark resolved"
+        );
+        assert!(!bar.bar.read_with(cx, |bar, cx| bar.may_continue(cx)));
+        click(&bar, "continue", cx);
+        assert!(bar.calls.continued.borrow().is_empty());
+
+        // The one with markers left first.
+        click(&bar, "resolve-conflicts", cx);
+        assert_eq!(*bar.resolved.borrow(), [conflicted("a.txt")]);
+    }
+
+    #[gpui_kit::test]
+    fn continues_once_every_conflict_is_resolved(cx: &mut TestAppContext) {
+        let bar = render(cx, Some(rebase(3, 7)), status());
+        let operation = bar.bar.read_with(cx, |bar, _| bar.operation()).unwrap();
+        assert_eq!(operation_title(&operation), "Rebasing feature onto main");
+        assert_eq!(operation_progress(&operation).as_deref(), Some("3/7"));
+        assert_eq!(
+            bar.bar.read_with(cx, |bar, _| bar.summary()),
+            "All conflicts resolved"
+        );
+        click(&bar, "continue", cx);
+        assert_eq!(*bar.calls.continued.borrow(), [OperationKind::Rebase]);
+    }
+
+    #[gpui_kit::test]
+    fn opens_the_first_conflicted_file_once_continuing_stops_at_the_next_commits_conflicts(
+        cx: &mut TestAppContext,
+    ) {
+        let bar = render(cx, Some(rebase(1, 2)), status());
+        *bar.calls.after_continue.borrow_mut() = Some((
+            Some(rebase(2, 2)),
+            with_conflicts(status(), &["a.txt", "b.txt"], &["a.txt"]),
+        ));
+
+        click(&bar, "continue", cx);
+        // The one with markers left first.
+        assert_eq!(*bar.resolved.borrow(), [conflicted("b.txt")]);
+        let operation = bar.bar.read_with(cx, |bar, _| bar.operation()).unwrap();
+        assert_eq!(operation_progress(&operation).as_deref(), Some("2/2"));
+        assert_eq!(
+            bar.bar.read_with(cx, |bar, _| bar.summary()),
+            "2 files have conflicts, 1 ready to mark resolved"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn opens_nothing_once_continuing_finishes_the_operation(cx: &mut TestAppContext) {
+        let bar = render(cx, Some(rebase(2, 2)), status());
+        *bar.calls.after_continue.borrow_mut() = Some((None, status()));
+
+        click(&bar, "continue", cx);
+        assert!(!bar.bar.read_with(cx, |bar, _| bar.is_shown()));
+        assert!(bar.resolved.borrow().is_empty());
+    }
+
+    #[gpui_kit::test]
+    fn asks_before_aborting_which_throws_away_whats_resolved(cx: &mut TestAppContext) {
+        let bar = render(cx, Some(merge()), with_conflicts(status(), &["a.txt"], &[]));
+
+        click(&bar, "abort", cx);
+        assert!(has_dialog(&bar, cx));
+        click_label(&bar, "Cancel", cx);
+        assert!(!has_dialog(&bar, cx));
+        assert!(bar.calls.aborted.borrow().is_empty());
+
+        click(&bar, "abort", cx);
+        assert!(has_dialog(&bar, cx));
+        // The dialog's own Abort, under the bar's.
+        cx.update_window(bar.window, |_, window, cx| {
+            use gpui_kit::test::{TestEventExt as _, TestQueryExt as _};
+            let buttons = window.find_all_by_label("Abort");
+            let center = buttons.last().unwrap().bounds().center();
+            window.pointer_down(center, gpui_kit::MouseButton::Left, cx);
+            window.pointer_up(center, gpui_kit::MouseButton::Left, cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert_eq!(*bar.calls.aborted.borrow(), [OperationKind::Merge]);
+    }
+
+    #[gpui_kit::test]
+    fn continues_once_a_files_edits_are_saved_and_not_while_they_cant_be(cx: &mut TestAppContext) {
+        let bar = render(cx, Some(rebase(3, 7)), status());
+        bar.saved.set(false);
+        click(&bar, "continue", cx);
+        assert!(bar.calls.continued.borrow().is_empty());
+        bar.saved.set(true);
+        click(&bar, "continue", cx);
+        assert_eq!(*bar.calls.continued.borrow(), [OperationKind::Rebase]);
+    }
+
+    #[gpui_kit::test]
+    fn doesnt_abort_while_a_files_edits_cant_be_saved(cx: &mut TestAppContext) {
+        let bar = render(cx, Some(merge()), with_conflicts(status(), &["a.txt"], &[]));
+        bar.saved.set(false);
+        bar.bar
+            .update(cx, |bar, cx| bar.abort(OperationKind::Merge, cx));
+        cx.run_until_parked();
+        assert!(bar.calls.aborted.borrow().is_empty());
+    }
+
+    #[gpui_kit::test]
+    fn shows_the_conflicts_a_popped_stash_left_without_an_operation_to_continue(
+        cx: &mut TestAppContext,
+    ) {
+        let bar = render(cx, None, with_conflicts(status(), &["a.txt"], &[]));
+        assert!(bar.bar.read_with(cx, |bar, _| bar.is_shown()));
+        assert_eq!(
+            bar.bar.read_with(cx, |bar, _| bar.summary()),
+            "1 file has conflicts. Resolve them, then commit."
+        );
+        let abort = cx
+            .update_window(bar.window, |_, window, _| {
+                window.try_find("abort").is_some()
+            })
+            .unwrap();
+        assert!(!abort);
+    }
+
+    #[test]
+    fn labels_continuing_as_committing_a_merge() {
+        assert_eq!(continue_label(OperationKind::Merge), "Commit merge");
+        assert_eq!(continue_label(OperationKind::Rebase), "Continue");
     }
 }

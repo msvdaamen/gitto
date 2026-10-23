@@ -12,6 +12,7 @@ use gpui_kit::{
 };
 
 use crate::components::repository::BeforeChange;
+use crate::components::repository::branch_menu::{BranchMenuEvent, BranchMenuProvider};
 use crate::components::repository::details::commit_details::{CommitDetails, CommitDetailsEvent};
 use crate::components::repository::diff::file_diff_view::{FileDiffEvent, FileDiffView};
 use crate::components::repository::history::history_table::{HistoryEvent, HistoryTable};
@@ -90,6 +91,9 @@ pub struct RepositoryView {
     details: PanelWidth,
     toolbar: Entity<RepositoryToolbar>,
     operation_bar: Entity<OperationBar>,
+    /// What the branch menus in the sidebar and the history share (TS's `BranchMenuProvider`
+    /// around them).
+    branch_menu: Entity<BranchMenuProvider>,
     refs_sidebar: Entity<RefsSidebar>,
     history: Entity<HistoryTable>,
     commit_details: Entity<CommitDetails>,
@@ -104,6 +108,7 @@ impl RepositoryView {
         let id = repository_id.clone();
         let toolbar = cx.new(|cx| RepositoryToolbar::new(id.clone(), window, cx));
         let operation_bar = cx.new(|cx| OperationBar::new(id.clone(), window, cx));
+        let branch_menu = cx.new(|cx| BranchMenuProvider::new(id.clone(), window, cx));
         let refs_sidebar = cx.new(|cx| RefsSidebar::new(id.clone(), window, cx));
         let history = cx.new(|cx| HistoryTable::new(id.clone(), window, cx));
         let commit_details = cx.new(|cx| CommitDetails::new(id.clone(), window, cx));
@@ -142,6 +147,15 @@ impl RepositoryView {
                     }
                 },
             ),
+            cx.subscribe_in(
+                &branch_menu,
+                window,
+                |this, _, event, window, cx| match event {
+                    BranchMenuEvent::Resolve(file) => {
+                        this.resolve_conflicts(file.clone(), window, cx)
+                    }
+                },
+            ),
             cx.observe_window_activation(window, |this, window, cx| {
                 let focused = window.is_window_active();
                 this.watcher
@@ -151,6 +165,7 @@ impl RepositoryView {
 
         let before_change = Self::before_change(cx.entity().downgrade());
         operation_bar.update(cx, |bar, _| bar.set_before_change(before_change.clone()));
+        branch_menu.update(cx, |menu, _| menu.set_before_change(before_change.clone()));
         // Nor is another repository opened, or the home page, before the file's edits are saved.
         Router::set_blocker(Some(before_change), cx);
 
@@ -168,6 +183,7 @@ impl RepositoryView {
             details: PanelWidth::new("details", DETAILS_BOUNDS, storage),
             toolbar,
             operation_bar,
+            branch_menu,
             refs_sidebar,
             history,
             commit_details,
@@ -203,6 +219,12 @@ impl RepositoryView {
         &self.repository_id
     }
 
+    /// What the branch menus share: for the sidebar and the history to build a branch's menu
+    /// from (see `branch_menu::branch_menu`).
+    pub fn branch_menu(&self) -> &Entity<BranchMenuProvider> {
+        &self.branch_menu
+    }
+
     /// Shows the repository `id` instead: its own selection (none), the panels as they are.
     pub fn set_repository(
         &mut self,
@@ -215,10 +237,13 @@ impl RepositoryView {
         }
         self.repository_id = id.clone();
         self.watcher = Self::watch(&id, window, cx);
-        self.toolbar
-            .update(cx, |toolbar, cx| toolbar.set_repository(id.clone(), cx));
+        self.toolbar.update(cx, |toolbar, cx| {
+            toolbar.set_repository(id.clone(), window, cx)
+        });
         self.operation_bar
             .update(cx, |bar, cx| bar.set_repository(id.clone(), cx));
+        self.branch_menu
+            .update(cx, |menu, cx| menu.set_repository(id.clone(), window, cx));
         self.refs_sidebar
             .update(cx, |sidebar, cx| sidebar.set_repository(id.clone(), cx));
         self.history
