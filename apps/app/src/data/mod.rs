@@ -90,7 +90,19 @@
 //! ```
 //!
 //! What isn't kept by a key but read once (TS's `queryClient.getQueryData`) is
-//! [`QueryClient::get_data`]; [`QueryClient::set_data`] writes it.
+//! [`QueryClient::get_data`]; [`QueryClient::set_data`] and [`QueryClient::update_data`] write it.
+//! TS's `fetchQuery` (loading ahead what's about to be shown, or what's read once, like a blob) is
+//! [`QueryClient::fetch_query`], and `cancelQueries` is [`QueryClient::cancel`].
+//!
+//! # Switching what a query is of
+//!
+//! TS's `useQuery` follows its options as they change; a [`Query`] is told, with
+//! [`Query::set_options`]: another commit's files, say. With [`QueryOptions::keep_previous_data`]
+//! (TS's `placeholderData: keepPreviousData`), what was shown stays until the other has loaded,
+//! as [`Query::is_placeholder_data`] says. A query that starts with what's cached elsewhere (a
+//! commit from the log) has [`QueryOptions::initial_data`]; one that's big and quick to load again
+//! keeps a shorter [`QueryOptions::gc_time`]. The modules give each such query's options as
+//! `x_query_options`, beside `x_query`, for `set_options`.
 //!
 //! # Writing an operation
 //!
@@ -114,28 +126,53 @@
 //! render again when it starts or ends. TS's `oneAtATime(operation, busy)` is
 //! [`RepositoryOperation::one_at_a_time`]; `useRepositoryOperationState(name, id)` is
 //! [`Operations::state`].
+//!
+//! TS's plain `useMutation`s (committing, staging, fetching), whose state is the view's own, are
+//! [`Mutation`]s: entities a view makes and observes. Their input carries the repository's id.
+//!
+//! # The modules
+//!
+//! One per TS query file: [`branch`], [`commit`], [`conflicts`], [`diff`], [`file_diff`],
+//! [`history`], [`overview`], [`progress`] (the operation under way), [`refs`], [`remote`],
+//! [`staging`], [`stash`], [`status`], [`user`], [`version`], [`watch`] and [`worktree`]; and
+//! `hooks/repositories.ts` as [`repositories`].
 
+mod call;
 pub mod client;
 pub mod key;
 pub mod keys;
+pub mod mutation;
 pub mod opaque;
 pub mod operation;
 pub mod query;
 
+pub mod branch;
+pub mod commit;
+pub mod conflicts;
+pub mod diff;
+pub mod file_diff;
+pub mod history;
 pub mod overview;
+pub mod progress;
+pub mod refs;
+pub mod remote;
 pub mod repositories;
+pub mod staging;
+pub mod stash;
 pub mod status;
 pub mod user;
 pub mod version;
 pub mod watch;
+pub mod worktree;
 
 pub use self::client::{
     QueryClient, QueryDefaults, QueryEntry, QueryError, QueryOptions, QueryStatus, RefetchOnFocus,
     Reloading, StaleTime,
 };
 pub use self::key::QueryKey;
+pub use self::mutation::Mutation;
 pub use self::opaque::Opaque;
-pub use self::operation::{OperationState, Operations, RepositoryOperation, reloading};
+pub use self::operation::{OneAtATime, OperationState, Operations, RepositoryOperation, reloading};
 pub use self::query::Query;
 pub use self::watch::RepositoryWatcher;
 

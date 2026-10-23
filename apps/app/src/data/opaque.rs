@@ -55,6 +55,26 @@ impl<T: fmt::Debug> fmt::Debug for Opaque<T> {
     }
 }
 
+/// `select`, run once per `Opaque` it's given: what it picks of the last one is kept, and handed
+/// back while it's given the same one again. For a `Query::with_select` whose selection takes
+/// work (filtering a list of files, say): a `Query` selects again whenever its query changes,
+/// loading or not, and a selection made again would be another `Opaque`, unequal to the last.
+pub fn memoized<T: 'static, S: Clone + 'static>(
+    select: impl Fn(&Opaque<T>) -> S + 'static,
+) -> impl Fn(&Opaque<T>) -> S + 'static {
+    let last: std::cell::RefCell<Option<(Opaque<T>, S)>> = std::cell::RefCell::new(None);
+    move |value| {
+        if let Some((of, selected)) = &*last.borrow()
+            && Opaque::ptr_eq(of, value)
+        {
+            return selected.clone();
+        }
+        let selected = select(value);
+        *last.borrow_mut() = Some((value.clone(), selected.clone()));
+        selected
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -65,5 +85,13 @@ mod tests {
         assert_eq!(files, files.clone());
         assert_ne!(files, Opaque::new(vec!["a.txt".to_owned()]));
         assert_eq!(files[0], "a.txt");
+    }
+
+    #[test]
+    fn selects_once_per_value() {
+        let select = memoized(|files: &Opaque<Vec<String>>| Opaque::new(files.len()));
+        let files = Opaque::new(vec!["a.txt".to_owned()]);
+        assert_eq!(select(&files), select(&files.clone()));
+        assert_ne!(select(&files), select(&Opaque::new(vec![])));
     }
 }
