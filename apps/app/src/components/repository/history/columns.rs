@@ -8,7 +8,9 @@
 use std::sync::Arc;
 
 use gpui_kit::prelude::*;
-use gpui_kit::{Div, ElementId, Hsla, Rems, Rgba, SharedString, rems};
+use gpui_kit::{Div, ElementId, Hsla, Rems, SharedString, rems};
+
+pub use crate::theme::mixed;
 
 /// Height of a history row, including its 1px bottom border (38px).
 pub const ROW_HEIGHT: Rems = Rems(38. / 15.);
@@ -92,24 +94,9 @@ pub fn tinted(color: Hsla, alpha: f32) -> Hsla {
     }
 }
 
-/// `color-mix(in srgb, color share%, other)`: the two mixed channel by channel in sRGB, as the
-/// TS's borders mixed a lane's colour into the border's.
-pub fn mixed(color: Hsla, share: f32, other: Hsla) -> Hsla {
-    let a = Rgba::from(color);
-    let b = Rgba::from(other);
-    let mix = |x: f32, y: f32| x * share + y * (1. - share);
-    Rgba {
-        r: mix(a.r, b.r),
-        g: mix(a.g, b.g),
-        b: mix(a.b, b.b),
-        a: mix(a.a, b.a),
-    }
-    .into()
-}
-
 #[cfg(test)]
 mod tests {
-    use gpui_kit::{hsla, rgb};
+    use gpui_kit::{Rgba, hsla, rgb};
 
     use super::*;
 

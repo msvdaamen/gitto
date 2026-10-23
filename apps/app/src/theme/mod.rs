@@ -21,7 +21,7 @@ pub mod palette;
 use std::rc::Rc;
 
 use gpui_kit::component::{Colorize as _, Theme, ThemeConfig, ThemeMode};
-use gpui_kit::{App, Global, Hsla};
+use gpui_kit::{App, Global, Hsla, Rgba};
 
 pub use self::palette::Palette;
 use crate::services::LocalStorage;
@@ -312,6 +312,21 @@ pub fn theme_config(theme: AppTheme, inter: bool) -> ThemeConfig {
         config["font.family"] = "Inter".into();
     }
     serde_json::from_value(config).expect("Gitto's theme is a GPUI Kit theme")
+}
+
+/// `color-mix(in srgb, color share%, other)`: the two mixed channel by channel in sRGB, as TS's
+/// borders mixed a color into the border's.
+pub fn mixed(color: Hsla, share: f32, other: Hsla) -> Hsla {
+    let a = Rgba::from(color);
+    let b = Rgba::from(other);
+    let mix = |x: f32, y: f32| x * share + y * (1. - share);
+    Rgba {
+        r: mix(a.r, b.r),
+        g: mix(a.g, b.g),
+        b: mix(a.b, b.b),
+        a: mix(a.a, b.a),
+    }
+    .into()
 }
 
 #[cfg(test)]
