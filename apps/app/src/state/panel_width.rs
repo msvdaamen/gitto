@@ -1,6 +1,9 @@
-//! The width of a resizable panel. Ported from `hooks/panel-width.ts`.
+//! The width of a resizable panel: gitto-ui's `hooks::panel_width` (ported from
+//! `hooks/panel-width.ts`), saved in the app's [`LocalStorage`], in GPUI's `f32` pixels.
 
 use std::rc::Rc;
+
+use gitto_ui::hooks::panel_width;
 
 use crate::services::LocalStorage;
 
@@ -17,64 +20,53 @@ impl PanelBounds {
         PanelBounds { initial, min, max }
     }
 
-    /// `width` within the bounds, in whole pixels.
-    pub fn clamp(&self, width: f32) -> f32 {
-        width.clamp(self.min, self.max).round()
+    fn of_hook(self) -> panel_width::PanelBounds {
+        panel_width::PanelBounds {
+            initial: f64::from(self.initial),
+            min: f64::from(self.min),
+            max: f64::from(self.max),
+        }
     }
-}
-
-fn storage_key(name: &str) -> String {
-    format!("gitto-panel-width:{name}")
 }
 
 /// The width of a resizable panel, kept within its bounds and saved (as `localStorage` kept it)
 /// so it survives restarts. Shared by all repositories: one per panel, by its `name`.
 #[derive(Debug, Clone)]
 pub struct PanelWidth {
-    name: &'static str,
     bounds: PanelBounds,
-    width: f32,
+    width: panel_width::PanelWidth,
     storage: Rc<LocalStorage>,
 }
 
 impl PanelWidth {
-    /// The panel `name`'s width as it was saved, or its initial one.
     pub fn new(name: &'static str, bounds: PanelBounds, storage: Rc<LocalStorage>) -> Self {
-        let width = storage
-            .get_item(&storage_key(name))
-            .and_then(|saved| saved.parse::<f32>().ok())
-            .filter(|width| width.is_finite())
-            .map_or(bounds.initial, |width| bounds.clamp(width));
         PanelWidth {
-            name,
             bounds,
-            width,
+            width: panel_width::PanelWidth::load(name, bounds.of_hook(), &&*storage),
             storage,
         }
     }
 
     pub fn width(&self) -> f32 {
-        self.width
+        self.width.width() as f32
     }
 
     pub fn bounds(&self) -> PanelBounds {
         self.bounds
     }
 
-    /// Sets the width; `save: false` while it's being dragged, which sets it on every frame. It
-    /// applies even if it can't be saved, until the app closes.
+    /// Sets the width, within the bounds; saved only once `save`, when the drag ends, rather than
+    /// on every move.
     pub fn set_width(&mut self, width: f32, save: bool) {
-        self.width = self.bounds.clamp(width);
-        if save {
-            let _ = self
-                .storage
-                .set_item(&storage_key(self.name), self.width.to_string());
-        }
+        let mut storage = &*self.storage;
+        self.width.set_width(
+            f64::from(width),
+            save.then_some(&mut storage as &mut dyn gitto_ui::hooks::Storage),
+        );
     }
 
-    /// Back to its initial width, saved.
     pub fn reset(&mut self) {
-        self.set_width(self.bounds.initial, true);
+        self.width.reset(&mut &*self.storage);
     }
 }
 

@@ -22,14 +22,15 @@ use crate::components::repository::operation_bar::{OperationBar, OperationBarEve
 use crate::components::repository::sidebar::refs_sidebar::RefsSidebar;
 use crate::components::repository::toolbar::{RepositoryToolbar, ToolbarEvent};
 use crate::components::ui::{HandleSide, PanelDrag, ResizeHandle, dragged_width};
+use crate::data::watch::WatchStreams;
 use crate::data::{QueryClient, RepositoryWatcher};
-use crate::git::diff_source::DiffSource;
-use crate::git::rows::WIP_ID;
 use crate::services::Services;
 use crate::state::panel_width::{PanelBounds, PanelWidth};
 use crate::state::router::Router;
 use crate::state::settled::{SETTLE_AFTER, Settled};
 use crate::theme::PaletteExt as _;
+use gitto_ui::git::diff_source::{DiffSource, is_same_source};
+use gitto_ui::git::rows::WIP_ID;
 
 /// The sidebar's widths. The panels can't take more than a share of the window either (see
 /// [`SIDEBAR_SHARE`]), so the history keeps room on small screens.
@@ -73,6 +74,8 @@ struct OpenFile {
 /// [`set_repository`]: Self::set_repository
 pub struct RepositoryView {
     repository_id: RepositoryId,
+    /// What tells the watcher of changes on disk: git's, or a test's.
+    streams: Rc<dyn WatchStreams>,
     watcher: Entity<RepositoryWatcher>,
     search: SharedString,
     selection: Option<RowOf>,
@@ -106,6 +109,17 @@ pub struct RepositoryView {
 
 impl RepositoryView {
     pub fn new(repository_id: RepositoryId, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let streams = Rc::new(Services::global(cx).git().clone());
+        Self::with_streams(repository_id, streams, window, cx)
+    }
+
+    /// [`new`](Self::new), watching the repository through `streams`.
+    pub fn with_streams(
+        repository_id: RepositoryId,
+        streams: Rc<dyn WatchStreams>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let storage = Rc::clone(Services::global(cx).storage());
         let id = repository_id.clone();
         let toolbar = cx.new(|cx| RepositoryToolbar::new(id.clone(), window, cx));
@@ -115,7 +129,7 @@ impl RepositoryView {
         let history = cx.new(|cx| HistoryTable::new(id.clone(), window, cx));
         let commit_details = cx.new(|cx| CommitDetails::new(id.clone(), window, cx));
         let settled = cx.new(|_| Settled::new(None, SETTLE_AFTER));
-        let watcher = Self::watch(&repository_id, window, cx);
+        let watcher = Self::watch(&repository_id, &streams, window, cx);
 
         let subscriptions = vec![
             cx.observe_in(&settled, window, |this, _, window, cx| {
@@ -173,9 +187,23 @@ impl RepositoryView {
         branch_menu.update(cx, |menu, _| menu.set_before_change(before_change.clone()));
         // Nor is another repository opened, or the home page, before the file's edits are saved.
         Router::set_blocker(Some(before_change), cx);
+        // A repository loaded before has its rows at once: the one the history fell back to was
+        // reported before anything listened.
+        cx.defer_in(window, |this: &mut Self, window, cx| {
+            if this.selection.is_none()
+                && let Some(id) = this
+                    .history
+                    .read(cx)
+                    .selected()
+                    .map(|row| row.id().to_owned())
+            {
+                this.select(id, window, cx);
+            }
+        });
 
         RepositoryView {
             repository_id,
+            streams,
             watcher,
             search: SharedString::default(),
             selection: None,
@@ -200,11 +228,11 @@ impl RepositoryView {
     /// Starts watching the repository `id`, which comes on show now.
     fn watch(
         id: &RepositoryId,
+        streams: &Rc<dyn WatchStreams>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<RepositoryWatcher> {
-        let git: Rc<dyn crate::data::watch::WatchStreams> =
-            Rc::new(Services::global(cx).git().clone());
+        let git = Rc::clone(streams);
         let focused = window.is_window_active();
         let shown_at = QueryClient::now(cx);
         let id = id.clone();
@@ -241,7 +269,7 @@ impl RepositoryView {
             return;
         }
         self.repository_id = id.clone();
-        self.watcher = Self::watch(&id, window, cx);
+        self.watcher = Self::watch(&id, &self.streams, window, cx);
         self.toolbar.update(cx, |toolbar, cx| {
             toolbar.set_repository(id.clone(), window, cx)
         });
@@ -350,7 +378,9 @@ impl RepositoryView {
         cx: &mut Context<Self>,
     ) {
         let same = self.shown_file(cx).is_some_and(|open| {
-            open.row_id == row_id && open.source.is_same(&source) && open.file.path == file.path
+            open.row_id == row_id
+                && is_same_source(&open.source, &source)
+                && open.file.path == file.path
         });
         if same {
             return;
@@ -533,7 +563,17 @@ impl Render for RepositoryView {
                     .min_h_0()
                     .child(self.history.clone())
                     .when_some(shown_file, |this, view| {
-                        this.child(div().absolute().inset_0().bg(palette.bg).child(view))
+                        // Occluding: the history underneath takes no clicks or hovers meant for
+                        // the file.
+                        this.child(
+                            div()
+                                .id("shown-file")
+                                .absolute()
+                                .inset_0()
+                                .bg(palette.bg)
+                                .occlude()
+                                .child(view),
+                        )
                     }),
             );
 
@@ -596,9 +636,12 @@ impl Render for RepositoryView {
                         if large {
                             this.child(details.flex_none().w(details_width))
                         } else {
-                            // Below `LARGE`, the details slide over the history instead.
+                            // Below `LARGE`, the details slide over the history instead, which
+                            // takes none of their clicks.
                             this.child(
                                 div()
+                                    .id("details-overlay")
+                                    .occlude()
                                     .absolute()
                                     .top_0()
                                     .right_0()
@@ -610,5 +653,230 @@ impl Render for RepositoryView {
                         }
                     }),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! The page as a whole: its areas, each tested on its own, wired together. GPUI tests can't
+    //! run git, so every query the page shows is given its data first (see
+    //! `components::repository::test_support`).
+
+    use std::rc::Rc;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use gitto_git::features::history::schema::Commit;
+    use gitto_git::features::status::schema::Head;
+    use gitto_git::schema::FileStatus;
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{AnyWindowHandle, Entity, TestAppContext};
+
+    use super::*;
+    use crate::components::repository::history::columns::keyed;
+    use crate::components::repository::test_support::{
+        Repositories, repository, repository_id, set_operation, set_push_target, set_refs,
+        set_remotes, set_stashes, set_status, set_worktrees, setup_with, uncommitted,
+    };
+    use crate::data::diff::ChangedFiles;
+    use crate::data::file_diff::{FilePatch, file_patch_key};
+    use crate::data::history::Log;
+    use crate::data::{Opaque, QueryClient, keys};
+
+    fn commit(sha: &str, subject: &str, parents: &[&str], committed_at: i64) -> Commit {
+        Commit {
+            sha: sha.into(),
+            parents: parents.iter().map(|parent| (*parent).to_owned()).collect(),
+            author_name: "Ada Lovelace".into(),
+            author_email: "ada@example.com".into(),
+            authored_at: 0,
+            committed_at,
+            refs: vec![],
+            subject: subject.into(),
+            body: String::new(),
+        }
+    }
+
+    fn added(path: &str) -> ChangedFile {
+        ChangedFile {
+            path: path.into(),
+            status: FileStatus::Added,
+            orig_path: None,
+            additions: Some(1),
+            deletions: Some(0),
+        }
+    }
+
+    /// A repository nothing changes in on disk.
+    struct Unchanged;
+
+    impl WatchStreams for Unchanged {
+        fn git_dir(
+            &self,
+            _: &RepositoryId,
+        ) -> futures::stream::BoxStream<
+            'static,
+            Result<Vec<gitto_git::features::watch::schema::GitDirChange>, gitto_git::ApiError>,
+        > {
+            Box::pin(futures::stream::pending())
+        }
+
+        fn working_tree(
+            &self,
+            _: &RepositoryId,
+        ) -> futures::stream::BoxStream<'static, Result<(), gitto_git::ApiError>> {
+            Box::pin(futures::stream::pending())
+        }
+    }
+
+    struct Page {
+        _dir: tempfile::TempDir,
+        window: AnyWindowHandle,
+        view: Entity<RepositoryView>,
+    }
+
+    /// The page of a repository on main at `b1` ("Second", made on "First", `a1`), each commit
+    /// adding a file, without changes.
+    fn render(cx: &mut TestAppContext) -> Page {
+        let id = repository_id();
+        let repositories = Rc::new(Repositories::default());
+        repositories
+            .list
+            .borrow_mut()
+            .push(repository(&id, "/work/repo"));
+        let dir = setup_with(cx, repositories);
+        set_status(
+            &id,
+            uncommitted(Head::Branch {
+                name: "main".into(),
+                sha: "b1".into(),
+            }),
+            cx,
+        );
+        set_stashes(&id, vec![], cx);
+        set_refs(&id, vec![], cx);
+        set_worktrees(&id, vec![], cx);
+        set_operation(&id, None, cx);
+        set_remotes(&id, &[], cx);
+        set_push_target(
+            &id,
+            gitto_git::features::remote::schema::PushTarget::Blocked {
+                reason: "There's no remote to push to.".into(),
+            },
+            cx,
+        );
+        let log = Log {
+            repository_id: id.to_string(),
+            commits: Arc::from(vec![
+                commit("b1", "Second", &["a1"], 2000),
+                commit("a1", "First", &[], 1000),
+            ]),
+            complete: true,
+        };
+        cx.update(|cx| QueryClient::set_data(&keys::log(&id), log, cx));
+        for (sha, path) in [("b1", "second.txt"), ("a1", "first.txt")] {
+            let files = ChangedFiles {
+                sha: sha.into(),
+                files: Opaque::new(vec![added(path)]),
+            };
+            cx.update(|cx| QueryClient::set_data(&keys::commit_files(&id, sha), files, cx));
+            let source = DiffSource::Commit { sha: sha.into() };
+            let patch = FilePatch {
+                key: gitto_ui::git::diff_source::diff_file_key(&source, path),
+                file: added(path),
+                patch: format!(
+                    "diff --git a/{path} b/{path}\nnew file mode 100644\nindex 0000000..1111111\n--- /dev/null\n+++ b/{path}\n@@ -0,0 +1 @@\n+{sha}\n"
+                )
+                .into(),
+            };
+            cx.update(|cx| QueryClient::set_data(&file_patch_key(&id, &source, path), patch, cx));
+        }
+        let (window, view) = crate::test_support::open(cx, |window, cx| {
+            RepositoryView::with_streams(id, Rc::new(Unchanged), window, cx)
+        });
+        // The history falls back to its first row as it's drawn.
+        cx.update_window(window, |_, window, cx| window.render_frame(cx))
+            .unwrap();
+        settle(cx);
+        Page {
+            _dir: dir,
+            window,
+            view,
+        }
+    }
+
+    /// Lets the selection reach the details.
+    fn settle(cx: &mut TestAppContext) {
+        cx.executor()
+            .advance_clock(SETTLE_AFTER + Duration::from_millis(10));
+        cx.run_until_parked();
+    }
+
+    impl Page {
+        fn click(&self, id: impl Into<gpui_kit::ElementId>, cx: &mut TestAppContext) {
+            let id = id.into();
+            cx.update_window(self.window, |_, window, cx| {
+                window.render_frame(cx);
+                window.click(id, cx);
+            })
+            .unwrap();
+            settle(cx);
+        }
+
+        fn selected(&self, cx: &mut TestAppContext) -> Option<String> {
+            self.view.read_with(cx, |view, _| view.selected_id())
+        }
+
+        fn details(&self, cx: &mut TestAppContext) -> Option<String> {
+            self.view.read_with(cx, |view, cx| view.details_id(cx))
+        }
+
+        /// The file on show in place of the history, by its source and path.
+        fn shown_file(&self, cx: &mut TestAppContext) -> Option<(DiffSource, String)> {
+            self.view.read_with(cx, |view, cx| {
+                view.shown_file(cx)
+                    .map(|open| (open.source.clone(), open.file.path.clone()))
+            })
+        }
+    }
+
+    #[gpui_kit::test]
+    fn shows_the_details_of_the_commit_selected_in_the_history(cx: &mut TestAppContext) {
+        let page = render(cx);
+        // The history selects its first row, and the details show it.
+        assert_eq!(page.selected(cx).as_deref(), Some("b1"));
+        assert_eq!(page.details(cx).as_deref(), Some("b1"));
+
+        page.click(keyed("commit", "a1"), cx);
+        assert_eq!(page.selected(cx).as_deref(), Some("a1"));
+        assert_eq!(page.details(cx).as_deref(), Some("a1"));
+    }
+
+    #[gpui_kit::test]
+    fn opens_a_file_over_the_history_which_takes_none_of_its_clicks(cx: &mut TestAppContext) {
+        let page = render(cx);
+        page.click(keyed("commit", "a1"), cx);
+        page.click("file:first.txt", cx);
+        let first = DiffSource::Commit { sha: "a1".into() };
+        assert_eq!(
+            page.shown_file(cx),
+            Some((first.clone(), "first.txt".into()))
+        );
+
+        // Where the other commit's row is, under the file: the file's, not the row's.
+        page.click(keyed("commit", "b1"), cx);
+        assert_eq!(page.selected(cx).as_deref(), Some("a1"));
+        assert_eq!(page.shown_file(cx), Some((first, "first.txt".into())));
+
+        // Once it's closed, the history takes them again, and the details show the other commit.
+        let view = page.view.clone();
+        cx.update_window(page.window, |_, window, cx| {
+            view.update(cx, |view, cx| view.close_file(window, cx))
+        })
+        .unwrap();
+        settle(cx);
+        assert_eq!(page.shown_file(cx), None);
+        page.click(keyed("commit", "b1"), cx);
+        assert_eq!(page.details(cx).as_deref(), Some("b1"));
     }
 }

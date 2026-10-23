@@ -10,11 +10,11 @@ use super::app_version::AppVersion;
 use crate::components::ui::{Divider, GittoIcon, Icon, IconName, StatusDot};
 use crate::data::status::status_query;
 use crate::data::{Opaque, Query};
-use crate::git::status::{head_label, sync_label};
 use crate::state::router::Router;
 use crate::state::update::UpdateStatus;
 use crate::theme::PaletteExt as _;
 use gitto_git::features::status::schema::Uncommitted;
+use gitto_ui::git::status::{head_label, sync_label};
 
 /// The footer's height (TS's grid row, 27px).
 pub const FOOTER_HEIGHT: f32 = 1.8;
@@ -74,7 +74,10 @@ impl Footer {
                             .gap_1()
                             .text_color(palette.blue)
                             .child(Icon::new(IconName::Cloud).size_3())
-                            .child(format!("{upstream} · {}", sync_label(&status))),
+                            .child(format!(
+                                "{upstream} · {}",
+                                sync_label(status.ahead, status.behind)
+                            )),
                     )
                 }),
         )

@@ -21,10 +21,11 @@ use super::client::QueryClient;
 use super::file_diff::FilePatch;
 use super::keys::{self, UncommittedSide};
 use super::mutation::Mutation;
-use crate::git::changes::staging_paths;
-use crate::git::patch::has_hunks;
+use gitto_ui::git::changes::staging_paths;
+use gitto_ui::git::patch::has_hunks;
 
-/// Files to stage or unstage: their paths (see `git::changes::staging_paths`), or all of them.
+/// Files to stage or unstage: their paths (see `gitto_ui::git::changes::staging_paths`), or all
+/// of them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StagingTarget {
     Paths(Vec<String>),

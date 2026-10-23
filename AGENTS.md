@@ -51,6 +51,32 @@ In `gitto-git`:
   (`commands.ts` → `commands.rs`, `in-use.ts` → `in_use.rs`), declared in that feature's `mod.rs`.
 - `src/test_support/`: `packages/git/src/test/` (real repositories in a temp dir), for tests only.
 
+`apps/app` is laid out as `apps/ui/src` is, one module per TS file:
+
+- `views/`: the pages (`routes/`) and the window around them. `views/repository.rs` lays out a
+  repository's areas and wires them together: the selection, the file on show, the watcher.
+- `components/<area>/`: what pages are made of (`components/`); the primitives are in
+  `components/ui/`. An area that keeps state is an entity, made with a repository's id, told of
+  another with `set_repository`, and talking back through its events.
+- `data/`: the data layer, in place of TanStack Query: `QueryClient` (a global) caches queries by
+  their `keys` (`keys.ts`'s), a view holds a `Query` (`useQuery`), `RepositoryOperation` runs a
+  change to a repository, and `RepositoryWatcher` reloads what changes on disk. Queries call
+  gitto-git and the other crates off the main thread.
+- `state/` (what outlives a view, and the hooks GPUI needs as state), `services/` (what's started
+  at launch, in the `Services` global), and `theme/` (`index.css`).
+
+GPUI tests can't run git: a view's test gives every query it shows its data first
+(`components/repository/test_support.rs`), and fakes what changes it.
+
+Building the app on Linux takes libxkbcommon, Wayland and fontconfig's headers
+(`libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libfontconfig-dev`). To run it headless,
+start a display with `Xvfb :99 -screen 0 1400x900x24 &`, and run `cargo run -p app` with
+`DISPLAY=:99` and `GITTO_USER_DATA_DIR` set to a folder of its own. There's no folder picker
+without a desktop portal, so add repositories as rows of that folder's `gitto.db` (`repositories`:
+a UUIDv7 `id`, `name`, `path` and `position`), e.g. one `.claude/skills/run-app/make-demo-repo.sh`
+made. Screenshot with `import -window root shot.png` and drive it with `xdotool`. Software
+rendering needs Mesa's Vulkan driver (lavapipe).
+
 Porting a TS file: keep its behavior, including error messages, and the reasoning in its doc
 comments, which say why as much as what. Port its tests one for one, as `#[cfg(test)] mod tests`
 in the same file, named after the TS test (`it("rejects unknown repositories")` →

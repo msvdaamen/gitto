@@ -24,8 +24,8 @@ use crate::data::conflicts::{
     resolve_file_mutation,
 };
 use crate::data::{Mutation, Query, QueryError, keys};
-use crate::git::diff_source::DiffSource;
 use crate::theme::PaletteExt as _;
+use gitto_ui::git::diff_source::DiffSource;
 
 /// Resolves a conflicted file whole: keeps a side, or marks it resolved.
 pub type ResolveFileMutation = Entity<Mutation<FileToResolve>>;
@@ -788,7 +788,10 @@ mod tests {
         opened.view.update(cx, |view, cx| {
             view.on_conflict_viewer(
                 &ConflictViewerEvent::Progress(ConflictProgress {
-                    file_key: Some(DiffSource::Unstaged.file_key("b.txt")),
+                    file_key: Some(gitto_ui::git::diff_source::diff_file_key(
+                        &DiffSource::Unstaged,
+                        "b.txt",
+                    )),
                     left: 0,
                     current: None,
                     saving: false,

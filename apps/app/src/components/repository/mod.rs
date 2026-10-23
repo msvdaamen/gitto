@@ -2,8 +2,7 @@
 //! the TSX it replaces; the page (`views::repository`) lays them out and wires them together.
 //!
 //! An area that keeps state is an entity, made with the repository's id, told when the page
-//! shows another repository (`set_repository`), and talking back through its events. The ones
-//! still to be built are **stubs** that render a placeholder, with their final interface.
+//! shows another repository (`set_repository`), and talking back through its events.
 
 pub mod details;
 pub mod diff;

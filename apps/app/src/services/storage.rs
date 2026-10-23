@@ -65,6 +65,18 @@ impl LocalStorage {
     }
 }
 
+/// What gitto-ui's hooks (`gitto_ui::hooks`) save what they keep in: this, as the TS hooks did
+/// `localStorage`.
+impl gitto_ui::hooks::Storage for &LocalStorage {
+    fn get(&self, key: &str) -> Option<String> {
+        self.get_item(key)
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> io::Result<()> {
+        self.set_item(key, value)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

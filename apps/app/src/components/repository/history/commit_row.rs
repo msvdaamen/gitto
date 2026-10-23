@@ -16,9 +16,9 @@ use super::history_option::{
     HistoryOption, MenuBuilder, OnSelect, RowLook, RowPosition, RowTotals,
 };
 use super::ref_labels::{HistoryRefLabels, LabelActions, MoreLabels};
-use crate::git::changes::LineCounts;
 use crate::state::clock::relative_time;
 use crate::theme::{Palette, PaletteExt as _};
+use gitto_ui::git::changes::LineCounts;
 
 /// What every row gets from the table.
 #[derive(Clone)]

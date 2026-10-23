@@ -19,8 +19,8 @@ use crate::data::file_diff::{
     DiffSourceFiles, FilePatch, file_patch_query, file_patch_query_options,
 };
 use crate::data::{Opaque, Query, QueryError};
-use crate::git::diff_source::DiffSource;
 use crate::state::delayed::{DELAY, Delayed};
+use gitto_ui::git::diff_source::{DiffSource, diff_file_key, is_same_source, is_uncommitted};
 
 /// Changed lines above which a file's changes are only shown when asked: reading and parsing them
 /// takes a noticeable moment, and such a change is rarely read line by line (a lockfile, say).
@@ -29,7 +29,7 @@ pub const LARGE_DIFF_LINES: u64 = 20_000;
 /// Names a file's patch in the highlighting cache. A commit's or a stash's never changes, so its
 /// file's name will do; an uncommitted one's is named by what's in it too (see `patch_version`).
 pub fn patch_cache_key(source: &DiffSource, data: &FilePatch) -> String {
-    if source.is_uncommitted() {
+    if is_uncommitted(source) {
         format!("{}:{}", data.key, patch_version(&data.patch))
     } else {
         data.key.clone()
@@ -131,7 +131,7 @@ impl ShownFile {
         if repository_id != self.repository_id {
             self.lists = DiffSourceFiles::new(&repository_id, source.clone(), cx);
             self.repository_id = repository_id;
-        } else if !self.source.is_same(&source) {
+        } else if !is_same_source(&self.source, &source) {
             self.lists
                 .set_source(&self.repository_id, source.clone(), cx);
         }
@@ -184,7 +184,7 @@ impl ShownFile {
 
     /// Names the file in its source (see `DiffSource::file_key`).
     pub fn file_key(&self) -> String {
-        self.source.file_key(&self.file.path)
+        diff_file_key(&self.source, &self.file.path)
     }
 
     /// Where the file is in its list, if it is.
@@ -232,7 +232,7 @@ impl ShownFile {
     /// The file as its list has it now: uncommitted changes change on disk, and are listed anew.
     /// As it was opened if it's gone from the list.
     pub fn live_file(&self) -> ChangedFile {
-        if self.source.is_uncommitted()
+        if is_uncommitted(&self.source)
             && let Some(ix) = self.found()
             && let Some(file) = self.files().get(ix)
         {
@@ -253,7 +253,7 @@ impl ShownFile {
     /// edited.
     pub fn gone(&self) -> bool {
         self.editing.is_none()
-            && self.source.is_uncommitted()
+            && is_uncommitted(&self.source)
             && self.lists.loaded()
             && self.found().is_none()
     }
@@ -314,7 +314,7 @@ impl ShownFile {
     /// What the patch says of the changes: an uncommitted file's line counts can be older than
     /// its patch, and some files have none at all.
     pub fn summary_of(&self, data: &FilePatch) -> Option<PatchSummary> {
-        (self.source.is_uncommitted() || data.file.additions.is_none())
+        (is_uncommitted(&self.source) || data.file.additions.is_none())
             .then(|| summarize_patch(&data.patch))
     }
 

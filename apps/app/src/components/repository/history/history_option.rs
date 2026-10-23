@@ -13,8 +13,8 @@ use gpui_kit::{
 
 use super::columns::{LABEL_ICON, LABEL_LINE, LABEL_TEXT, ROW_HEIGHT, mixed};
 use crate::components::ui::{Icon, IconName, LineStats, Tone};
-use crate::git::changes::LineCounts;
 use crate::theme::PaletteExt as _;
+use gitto_ui::git::changes::LineCounts;
 
 /// A row's place in the list. Only the rows in view are rendered, so assistive tech needs to be
 /// told how long the list is.

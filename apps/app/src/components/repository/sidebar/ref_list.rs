@@ -1159,8 +1159,6 @@ mod tests {
             .borrow_mut()
             .extend([repository(&id, "/w/repo"), repository(&other, "/w/other")]);
         let dir = setup_with(cx, repositories);
-        // Dialogs and menus in place at once, where they're clicked.
-        cx.update(|cx| cx.set_reduce_motion(true));
         seed(&id, cx);
         seed(&other, cx);
         prepare(&id, cx);
