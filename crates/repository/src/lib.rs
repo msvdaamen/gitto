@@ -6,8 +6,12 @@
 //! - [`RepositoryService`]: adds, removes, reorders and lists them.
 //! - [`RepositoryStore`]: their table in the database.
 //! - [`Error`]: why that failed, in words a user can read.
+//!
+//! [`RepositoryService`] is gitto-git's `RepositoryLookup`: `gitto_git::GitApi::new(service)`
+//! opens the repositories added to Gitto, by their id.
 
 mod errors;
+mod lookup;
 mod service;
 mod store;
 mod types;

@@ -47,5 +47,5 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: cargo fmt --all --check
-      - run: cargo clippy -p gitto-git -p gitto-db -p gitto-repository --all-targets --locked -- -D warnings
-      - run: cargo test -p gitto-git -p gitto-db -p gitto-repository --locked
+      - run: cargo clippy --workspace --exclude app --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --exclude app --locked

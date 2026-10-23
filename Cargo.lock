@@ -2026,7 +2026,9 @@ name = "gitto-repository"
 version = "0.1.0"
 dependencies = [
  "async-fs",
+ "futures",
  "gitto-db",
+ "gitto-git",
  "serde",
  "serde_json",
  "smol",
