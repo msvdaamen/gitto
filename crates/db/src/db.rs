@@ -5,9 +5,10 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use rusqlite::Connection;
+use rusqlite::config::DbConfig;
 
 use crate::Result;
-use crate::migrator::{MIGRATIONS, migrate};
+use crate::migrator::{MIGRATIONS, Migration, migrate};
 
 /// Gitto's database: one SQLite connection, migrated. Cheap to clone; clones share the connection.
 ///
@@ -29,20 +30,26 @@ impl Db {
     /// [`crate::migrator`]). Its folder has to exist, as for the Electron app, whose `userData`
     /// folder Electron makes (see [`crate::user_data_dir`]).
     pub fn open(path: impl AsRef<Path>) -> Result<Db> {
-        Db::init(Connection::open(path)?)
+        Db::init(Connection::open(path)?, MIGRATIONS)
     }
 
     /// A database of its own in memory, migrated: for tests.
     pub fn open_in_memory() -> Result<Db> {
-        Db::init(Connection::open_in_memory()?)
+        Db::init(Connection::open_in_memory()?, MIGRATIONS)
     }
 
-    fn init(mut conn: Connection) -> Result<Db> {
+    fn init(mut conn: Connection, migrations: &[Migration]) -> Result<Db> {
         // node:sqlite doesn't wait for a lock (its `timeout` is 0 by default), where rusqlite
         // waits 5 seconds: a locked database fails at once, as in the Electron app.
         conn.busy_timeout(Duration::ZERO)?;
+        // node:sqlite turns off SQLite's double-quoted string literals (its
+        // `enableDoubleQuotedStringLiterals` is false by default), which rusqlite's SQLite keeps:
+        // `"text"` is an identifier, never a string, so SQL (a migration's above all) means the
+        // same, and fails the same, in both apps.
+        conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DQS_DML, false)?;
+        conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DQS_DDL, false)?;
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
-        migrate(&mut conn, MIGRATIONS)?;
+        migrate(&mut conn, migrations)?;
         Ok(Db {
             conn: Arc::new(Mutex::new(conn)),
         })
@@ -115,6 +122,27 @@ mod tests {
             error.to_string().contains("unable to open database file"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn takes_double_quoted_text_as_an_identifier_as_node_sqlite_does() {
+        let db = Db::open_in_memory().unwrap();
+        let error = smol::block_on(
+            db.run(|conn| conn.query_row(r#"SELECT "text""#, [], |row| row.get::<_, String>(0))),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("no such column"), "{error}");
+    }
+
+    #[test]
+    fn refuses_a_migration_with_a_double_quoted_string_as_node_sqlite_does() {
+        let migrations = [Migration {
+            name: "20260101000000_quoted",
+            sql: "CREATE TABLE `t` (`a` text);--> statement-breakpoint\n\
+                  INSERT INTO `t` VALUES (\"text\");",
+        }];
+        let error = Db::init(Connection::open_in_memory().unwrap(), &migrations).unwrap_err();
+        assert!(error.to_string().contains("no such column"), "{error}");
     }
 
     #[test]
