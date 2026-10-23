@@ -246,8 +246,9 @@ impl RepositoryView {
             .update(cx, |menu, cx| menu.set_repository(id.clone(), window, cx));
         self.refs_sidebar
             .update(cx, |sidebar, cx| sidebar.set_repository(id.clone(), cx));
-        self.history
-            .update(cx, |history, cx| history.set_repository(id.clone(), cx));
+        self.history.update(cx, |history, cx| {
+            history.set_repository(id.clone(), window, cx)
+        });
         self.commit_details
             .update(cx, |details, cx| details.set_repository(id.clone(), cx));
         self.reconcile(window, cx);
