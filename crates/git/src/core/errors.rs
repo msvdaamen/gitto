@@ -92,7 +92,9 @@ pub struct GitError {
     pub exit_code: Option<i32>,
     pub stderr: String,
     /// What it printed on stdout, for a command whose output still says something when it fails.
-    pub stdout: String,
+    /// As git printed it, for output that's handed back to git: a patch of a file that isn't
+    /// UTF-8, say (TS read such output as Latin-1, which keeps every byte). See `stdout_text`.
+    pub stdout: Vec<u8>,
 }
 
 impl GitError {
@@ -109,8 +111,13 @@ impl GitError {
             args,
             exit_code,
             stderr: stderr.into(),
-            stdout: String::new(),
+            stdout: Vec::new(),
         }
+    }
+
+    /// `stdout`, lossily UTF-8: for messages and matching.
+    pub fn stdout_text(&self) -> std::borrow::Cow<'_, str> {
+        String::from_utf8_lossy(&self.stdout)
     }
 
     /// How it reaches the UI: as a bug, unless its kind knows better.
@@ -489,7 +496,7 @@ pub fn command_error(
         (stderr, _) => stderr.to_owned(),
     };
     GitError {
-        stdout: stdout.to_owned(),
+        stdout: stdout.as_bytes().to_vec(),
         ..GitError::new(message, args.to_vec(), exit_code, stderr)
     }
 }
@@ -569,7 +576,7 @@ mod tests {
             "",
         );
         assert_eq!(error.message, "nothing to commit");
-        assert_eq!(error.stdout, "nothing to commit\n");
+        assert_eq!(error.stdout_text(), "nothing to commit\n");
         assert_eq!(error.api(), ApiCode::InternalServerError);
 
         let error = command_error("/repo", &args(&["diff"]), None, "", "");

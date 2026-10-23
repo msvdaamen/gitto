@@ -311,66 +311,26 @@ mod tests {
 
     use super::*;
     use crate::core::repo::{How, Observed};
+    use crate::features::status::parse::{STATUS_ARGS, parse_status};
     use crate::schema::FileStatus;
     use crate::test_support::{Fixture, git};
 
-    fn code(letter: Option<char>) -> Option<&'static str> {
-        Some(match letter? {
-            'M' => "modified",
-            'A' => "added",
-            'D' => "deleted",
-            'R' => "renamed",
-            'C' => "copied",
-            'T' => "typechange",
-            _ => return None,
-        })
-    }
-
     type Row = (String, Option<&'static str>, Option<&'static str>);
 
-    /// Each changed file, with how it changed in the index and the working tree, as the status
-    /// feature's `parseStatus` reads `STATUS_ARGS`. A stand-in for it until it's ported.
+    /// Each changed file, with how it changed in the index and the working tree:
+    /// `parseStatus(await repo.read(STATUS_ARGS)).files`.
     async fn status_files(repo: &Repo) -> Vec<Row> {
-        let output = repo
-            .read([
-                "status",
-                "--porcelain=v2",
-                "-z",
-                "--branch",
-                "--untracked-files=all",
-            ])
-            .await
-            .unwrap();
-        let mut records = output.split('\0');
-        let mut files = Vec::new();
-        while let Some(record) = records.next() {
-            let fields = |count| record.splitn(count, ' ').collect::<Vec<_>>();
-            let (path, xy) = match record.chars().next() {
-                Some('1') => {
-                    let fields = fields(9);
-                    (fields[8], fields[1])
-                }
-                Some('2') => {
-                    let fields = fields(10);
-                    records.next();
-                    (fields[9], fields[1])
-                }
-                Some('u') => {
-                    let fields = fields(11);
-                    let conflicted = Some("conflicted");
-                    files.push((fields[10].to_owned(), conflicted, conflicted));
-                    continue;
-                }
-                Some('?') => {
-                    files.push((record[2..].to_owned(), None, Some("untracked")));
-                    continue;
-                }
-                _ => continue,
-            };
-            let mut xy = xy.chars();
-            files.push((path.to_owned(), code(xy.next()), code(xy.next())));
-        }
-        files
+        parse_status(&repo.read(STATUS_ARGS).await.unwrap())
+            .files
+            .into_iter()
+            .map(|file| {
+                (
+                    file.path,
+                    file.staged.map(FileStatus::as_str),
+                    file.unstaged.map(FileStatus::as_str),
+                )
+            })
+            .collect()
     }
 
     fn rows(rows: &[(&str, Option<&'static str>, Option<&'static str>)]) -> Vec<Row> {

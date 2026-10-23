@@ -290,6 +290,9 @@ mod tests {
     use super::*;
     use crate::core::errors::GitErrorKind;
     use crate::core::repo::Observed;
+    use crate::features::diff::schema::ChangedFile;
+    use crate::features::status::commands::get_status;
+    use crate::features::status::schema::WorkingTreeFiles;
     use crate::schema::FileStatus::{self, *};
     use crate::test_support::{Fixture, git, non_utf8_names};
 
@@ -364,6 +367,21 @@ mod tests {
         StatusFile::new(path, None, staged, unstaged)
     }
 
+    fn changed_file(
+        path: &str,
+        status: FileStatus,
+        additions: Option<u64>,
+        deletions: Option<u64>,
+    ) -> ChangedFile {
+        ChangedFile {
+            path: path.to_owned(),
+            status,
+            orig_path: None,
+            additions,
+            deletions,
+        }
+    }
+
     fn is_index_locked(error: &Error) -> bool {
         error
             .as_git()
@@ -371,6 +389,69 @@ mod tests {
     }
 
     // Staging files.
+
+    #[test]
+    fn moves_staged_changes_between_the_working_tree_and_the_index() {
+        let fx = Fixture::new();
+        smol::block_on(async {
+            let repo = fx.create_history_repo("history").await;
+            let change = changed_file("a file.txt", Modified, Some(1), Some(2));
+            let untracked_file = changed_file("new file.txt", Untracked, None, None);
+
+            stage(&repo, &strings(&["a file.txt"])).await.unwrap();
+            assert_eq!(
+                get_status(&repo).await.unwrap().changes,
+                WorkingTreeFiles {
+                    staged: vec![change.clone()],
+                    unstaged: vec![untracked_file.clone()],
+                    uncounted: false,
+                    marker_free: vec![],
+                }
+            );
+
+            unstage(&repo, &strings(&["a file.txt"])).await.unwrap();
+            assert_eq!(
+                get_status(&repo).await.unwrap().changes,
+                WorkingTreeFiles {
+                    staged: vec![],
+                    unstaged: vec![change, untracked_file],
+                    uncounted: false,
+                    marker_free: vec![],
+                }
+            );
+        });
+    }
+
+    #[test]
+    fn stages_and_unstages_before_the_first_commit() {
+        let fx = Fixture::new();
+        let path = fx.create_repo("empty");
+        smol::block_on(async {
+            let repo = fx.repos.open("empty").await.unwrap();
+            fs::write(path.join("x y.txt"), "hi\n").unwrap();
+
+            stage(&repo, &strings(&["x y.txt"])).await.unwrap();
+            assert_eq!(
+                status_files(&repo).await,
+                [entry("x y.txt", Some(Added), None)]
+            );
+            assert_eq!(
+                get_status(&repo).await.unwrap().changes,
+                WorkingTreeFiles {
+                    staged: vec![changed_file("x y.txt", Added, Some(1), Some(0))],
+                    unstaged: vec![],
+                    uncounted: false,
+                    marker_free: vec![],
+                }
+            );
+
+            unstage(&repo, &strings(&["x y.txt"])).await.unwrap();
+            assert_eq!(
+                status_files(&repo).await,
+                [entry("x y.txt", None, Some(Untracked))]
+            );
+        });
+    }
 
     #[test]
     fn recognises_another_git_process_holding_the_index() {
@@ -401,6 +482,78 @@ mod tests {
     }
 
     // A big working tree.
+
+    #[test]
+    fn stages_and_unstages_more_paths_than_fit_on_a_windows_command_line() {
+        let fx = Fixture::new();
+        let path = fx.create_repo("big-stage");
+        let names: Vec<String> = (0..1000)
+            .map(|i| format!("{}{i}.txt", "long-file-name-".repeat(3)))
+            .collect();
+        for name in &names {
+            fs::write(path.join(name), "a\n").unwrap();
+        }
+        smol::block_on(async {
+            let repo = fx.repos.open("big-stage").await.unwrap();
+
+            stage(&repo, &names).await.unwrap();
+            assert_eq!(get_status(&repo).await.unwrap().changes.staged.len(), 1000);
+            unstage(&repo, &names).await.unwrap();
+            assert_eq!(get_status(&repo).await.unwrap().changes.staged, []);
+        });
+    }
+
+    #[test]
+    fn stages_and_unstages_everything_at_once() {
+        let fx = Fixture::new();
+        let path = fx.create_repo("all");
+        for name in ["kept.txt", "deleted.txt", "moved.txt"] {
+            fs::write(path.join(name), format!("{name}\n")).unwrap();
+        }
+        git(&path, ["add", "."]);
+        git(&path, ["commit", "-q", "-m", "First"]);
+        fs::write(path.join("kept.txt"), "changed\n").unwrap();
+        fs::remove_file(path.join("deleted.txt")).unwrap();
+        git(&path, ["mv", "moved.txt", "renamed.txt"]);
+        fs::write(path.join("new file.txt"), "new\n").unwrap();
+        smol::block_on(async {
+            let repo = fx.repos.open("all").await.unwrap();
+
+            stage_all(&repo).await.unwrap();
+            let files: Vec<_> = status_files(&repo)
+                .await
+                .into_iter()
+                .map(|file| (file.path, file.staged, file.unstaged))
+                .collect();
+            assert_eq!(
+                files,
+                [
+                    ("deleted.txt".to_owned(), Some(Deleted), None),
+                    ("kept.txt".to_owned(), Some(Modified), None),
+                    ("new file.txt".to_owned(), Some(Added), None),
+                    ("renamed.txt".to_owned(), Some(Renamed), None),
+                ]
+            );
+
+            unstage_all(&repo).await.unwrap();
+            assert_eq!(get_status(&repo).await.unwrap().changes.staged, []);
+            let files: Vec<_> = status_files(&repo)
+                .await
+                .into_iter()
+                .map(|file| (file.path, file.unstaged))
+                .collect();
+            assert_eq!(
+                files,
+                [
+                    ("deleted.txt".to_owned(), Some(Deleted)),
+                    ("kept.txt".to_owned(), Some(Modified)),
+                    ("moved.txt".to_owned(), Some(Deleted)),
+                    ("new file.txt".to_owned(), Some(Untracked)),
+                    ("renamed.txt".to_owned(), Some(Untracked)),
+                ]
+            );
+        });
+    }
 
     #[test]
     fn unstages_everything_but_conflicts_which_stay_conflicted() {
@@ -434,6 +587,41 @@ mod tests {
                 ]
             );
             assert!(path.join(".git").join("MERGE_HEAD").exists());
+        });
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn unstages_a_folder_that_replaced_a_file_a_symlink_and_a_file_made_executable() {
+        let fx = Fixture::new();
+        let path = fx.create_repo("all-kinds");
+        fs::write(path.join("thing"), "a file\n").unwrap();
+        fs::write(path.join("script.sh"), "echo\n").unwrap();
+        fs::write(path.join("tab\tand\nline.txt"), "odd name\n").unwrap();
+        git(&path, ["add", "."]);
+        git(&path, ["commit", "-q", "-m", "First"]);
+        fs::remove_file(path.join("thing")).unwrap();
+        fs::create_dir(path.join("thing")).unwrap();
+        fs::write(path.join("thing").join("inner.txt"), "now a folder\n").unwrap();
+        std::os::unix::fs::symlink("script.sh", path.join("link")).unwrap();
+        git(&path, ["update-index", "--chmod=+x", "script.sh"]);
+        fs::write(path.join("tab\tand\nline.txt"), "changed\n").unwrap();
+        git(&path, ["add", "."]);
+        let head = git(&path, ["ls-tree", "-r", "HEAD"]);
+        smol::block_on(async {
+            let repo = fx.repos.open("all-kinds").await.unwrap();
+
+            unstage_all(&repo).await.unwrap();
+            assert_eq!(get_status(&repo).await.unwrap().changes.staged, []);
+            // The index is HEAD's again: modes, objects and all.
+            assert_eq!(
+                git(&path, ["ls-files", "--stage"]).replace(" 0\t", "\t"),
+                head.replace(" blob ", " ")
+            );
+            assert_eq!(
+                fs::read_to_string(path.join("thing").join("inner.txt")).unwrap(),
+                "now a folder\n"
+            );
         });
     }
 
@@ -512,6 +700,25 @@ mod tests {
                     entry("a.txt", None, Some(Modified)),
                     entry("b.txt", None, Some(Untracked)),
                 ]
+            );
+        });
+    }
+
+    #[test]
+    fn stages_and_unstages_everything_before_the_first_commit() {
+        let fx = Fixture::new();
+        let path = fx.create_repo("all-empty");
+        smol::block_on(async {
+            let repo = fx.repos.open("all-empty").await.unwrap();
+            unstage_all(&repo).await.unwrap();
+
+            fs::write(path.join("a.txt"), "a\n").unwrap();
+            stage_all(&repo).await.unwrap();
+            assert_eq!(get_status(&repo).await.unwrap().changes.staged.len(), 1);
+            unstage_all(&repo).await.unwrap();
+            assert_eq!(
+                status_files(&repo).await,
+                [entry("a.txt", None, Some(Untracked))]
             );
         });
     }
@@ -950,6 +1157,28 @@ mod tests {
             assert_eq!(
                 error.to_string(),
                 "A binary file's changes can only be staged whole."
+            );
+        });
+    }
+
+    // Not in TS, where it passed as git printed it, read as Latin-1: an untracked file's patch
+    // comes from a command that exits with 1, and isn't UTF-8 here.
+    #[test]
+    fn stages_lines_of_an_untracked_file_that_isnt_utf_8_as_they_are() {
+        let fx = Fixture::new();
+        let path = fx.create_repo("lines-untracked-latin1");
+        git(&path, ["commit", "-q", "--allow-empty", "-m", "first"]);
+        fs::write(path.join("f.txt"), latin1_of("caf\u{e9}\nb\ncr\u{e8}me\n")).unwrap();
+        smol::block_on(async {
+            let repo = fx.repos.open("lines-untracked-latin1").await.unwrap();
+
+            let shown = unstaged_patch(&repo, "f.txt", true, None).await;
+            stage_lines_of(&repo, "f.txt", None, true, &shown, lines(&[], &[1, 3]))
+                .await
+                .unwrap();
+            assert_eq!(
+                indexed_bytes(&path, "f.txt"),
+                latin1_of("caf\u{e9}\ncr\u{e8}me\n")
             );
         });
     }
