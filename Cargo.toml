@@ -42,7 +42,11 @@ sha2 = "0.10.9"
 anyhow = "1.0.104"
 log = { version = "0.4.34", features = ["std"] }
 
+# crates/ui: what the UI works out for itself, e.g. the order of the sidebar's folders.
+indexmap = "2.14.2"
+url = "2.5.8"
+
 gitto-db = { path = "crates/db" }
 gitto-git = { path = "crates/git" }
 gitto-repository = { path = "crates/repository" }
-# gitto-ui = { path = "crates/ui" }
+gitto-ui = { path = "crates/ui" }
