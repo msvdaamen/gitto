@@ -447,11 +447,11 @@ mod tests {
     use crate::features::diff::working_tree::{SaveExpectation, save_working_tree_file};
     use crate::features::stash::commands::pop_stash;
     use crate::test_support::conflicts::{Sides, commit_files, files, text_conflict, try_git};
-    use crate::test_support::{Fixture, git};
+    use crate::test_support::{Fixture, git, valid};
 
     /// Resolves `f.txt`'s conflict as `contents`, and marks it resolved.
     async fn resolve(repo: &Repo, contents: &str) {
-        let conflict = get_conflict(repo, "f.txt").await.unwrap();
+        let conflict = get_conflict(repo, &valid("f.txt")).await.unwrap();
         let version = save_working_tree_file(
             repo,
             "f.txt",
@@ -463,14 +463,14 @@ mod tests {
         )
         .await
         .unwrap();
-        mark_resolved(repo, "f.txt", Some(&version), false)
+        mark_resolved(repo, &valid("f.txt"), Some(&version), false)
             .await
             .unwrap();
     }
 
     /// `f.txt`'s contents as the conflict has them.
     async fn conflict_text(repo: &Repo) -> String {
-        let conflict = get_conflict(repo, "f.txt").await.unwrap();
+        let conflict = get_conflict(repo, &valid("f.txt")).await.unwrap();
         conflict.text.unwrap().contents
     }
 
@@ -914,7 +914,7 @@ mod tests {
         commit_files(&path, &files([("f.txt", "committed\n")]), "second");
         smol::block_on(async {
             let repo = fx.repos.open("op-stash").await.unwrap();
-            let _ = pop_stash(&repo, &git(&path, ["rev-parse", "refs/stash"])).await;
+            let _ = pop_stash(&repo, &valid(git(&path, ["rev-parse", "refs/stash"]))).await;
 
             assert_eq!(get_operation(&repo).await.unwrap(), None);
             assert_eq!(

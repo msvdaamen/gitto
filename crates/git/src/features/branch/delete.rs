@@ -10,6 +10,7 @@ use crate::core::repo::{GitCommand, Repo};
 use crate::features::refs::schema::RefKind;
 use crate::features::remote::commands::list_remotes;
 use crate::features::remote::remote_name::remote_of;
+use crate::input::BranchRef;
 
 /// Deletes the branch `ref` (a full ref name), with the commits only it has. A local branch is
 /// deleted here only; git refuses one that's checked out, or being rebased or bisected, in any
@@ -24,7 +25,8 @@ use crate::features::remote::remote_name::remote_of;
 ///
 /// Its place in line among the writes is taken when it's called, not when it's first polled, as
 /// in TS: a write asked for after it waits for it.
-pub fn delete_branch(repo: &Repo, reference: &str) -> BoxFuture<'static, Result<()>> {
+pub fn delete_branch(repo: &Repo, reference: &BranchRef) -> BoxFuture<'static, Result<()>> {
+    let reference = reference.as_str();
     let Some(target) = branch_name(reference) else {
         let error = Error::Bug(format!("{reference} isn't a branch."));
         return Box::pin(std::future::ready(Err(error)));
@@ -188,7 +190,7 @@ mod tests {
     use regex::Regex;
 
     use super::*;
-    use crate::test_support::{Fixture, git};
+    use crate::test_support::{Fixture, git, valid};
 
     /// The full names of the refs under `prefix` in the repository at `path`.
     fn refs(path: &Path, prefix: &str) -> Vec<String> {
@@ -238,7 +240,9 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("delete-local").await.unwrap();
-            delete_branch(&repo, "refs/heads/other").await.unwrap();
+            delete_branch(&repo, &valid("refs/heads/other"))
+                .await
+                .unwrap();
         });
         assert_eq!(refs(&path, "refs/heads/"), strs(&["refs/heads/main"]));
         assert!(refs(&path, "refs/remotes/origin/").contains(&"refs/remotes/origin/other".into()));
@@ -259,7 +263,9 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("delete-unmerged").await.unwrap();
-            delete_branch(&repo, "refs/heads/other").await.unwrap();
+            delete_branch(&repo, &valid("refs/heads/other"))
+                .await
+                .unwrap();
         });
         assert_eq!(refs(&path, "refs/heads/"), strs(&["refs/heads/main"]));
     }
@@ -276,14 +282,18 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("delete-checked-out").await.unwrap();
 
-            let error = delete_branch(&repo, "refs/heads/main").await.unwrap_err();
+            let error = delete_branch(&repo, &valid("refs/heads/main"))
+                .await
+                .unwrap_err();
             assert!(
                 Regex::new("cannot delete branch 'main' used by worktree")
                     .unwrap()
                     .is_match(&error.to_string()),
                 "{error}"
             );
-            let error = delete_branch(&repo, "refs/heads/other").await.unwrap_err();
+            let error = delete_branch(&repo, &valid("refs/heads/other"))
+                .await
+                .unwrap_err();
             assert!(
                 Regex::new("cannot delete branch 'other' used by worktree")
                     .unwrap()
@@ -312,7 +322,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("delete-remote").await.unwrap();
-            delete_branch(&repo, "refs/remotes/origin/other")
+            delete_branch(&repo, &valid("refs/remotes/origin/other"))
                 .await
                 .unwrap();
         });
@@ -337,7 +347,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("delete-slashed").await.unwrap();
-            delete_branch(&repo, "refs/remotes/team/origin/other")
+            delete_branch(&repo, &valid("refs/remotes/team/origin/other"))
                 .await
                 .unwrap();
         });
@@ -369,7 +379,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("delete-mapped").await.unwrap();
-            delete_branch(&repo, "refs/remotes/origin/other")
+            delete_branch(&repo, &valid("refs/remotes/origin/other"))
                 .await
                 .unwrap();
         });
@@ -396,7 +406,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("delete-unmapped").await.unwrap();
-            let error = delete_branch(&repo, "refs/remotes/origin/other")
+            let error = delete_branch(&repo, &valid("refs/remotes/origin/other"))
                 .await
                 .unwrap_err();
             assert!(
@@ -424,7 +434,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("delete-remote-checked-out").await.unwrap();
-            let error = delete_branch(&repo, "refs/remotes/origin/other")
+            let error = delete_branch(&repo, &valid("refs/remotes/origin/other"))
                 .await
                 .unwrap_err();
             assert!(
@@ -452,7 +462,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("delete-in-turn").await.unwrap();
 
-            let deleting = delete_branch(&repo, "refs/remotes/origin/other");
+            let deleting = delete_branch(&repo, &valid("refs/remotes/origin/other"));
             let switching = repo.write(["switch", "other"]);
             deleting.await.unwrap();
             let error = switching.await.unwrap_err();
@@ -486,7 +496,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("delete-remote-rebasing").await.unwrap();
-            let error = delete_branch(&repo, "refs/remotes/origin/other")
+            let error = delete_branch(&repo, &valid("refs/remotes/origin/other"))
                 .await
                 .unwrap_err();
             assert!(
@@ -510,7 +520,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("delete-remote-bisecting").await.unwrap();
-            let error = delete_branch(&repo, "refs/remotes/origin/other")
+            let error = delete_branch(&repo, &valid("refs/remotes/origin/other"))
                 .await
                 .unwrap_err();
             assert!(
@@ -540,7 +550,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("delete-local-fails").await.unwrap();
-            let error = delete_branch(&repo, "refs/remotes/origin/other")
+            let error = delete_branch(&repo, &valid("refs/remotes/origin/other"))
                 .await
                 .unwrap_err();
             assert!(
@@ -561,7 +571,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("delete-remote-gone").await.unwrap();
-            delete_branch(&repo, "refs/remotes/origin/other")
+            delete_branch(&repo, &valid("refs/remotes/origin/other"))
                 .await
                 .unwrap();
         });
@@ -580,7 +590,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("delete-remote-removed").await.unwrap();
-            delete_branch(&repo, "refs/remotes/old/other")
+            delete_branch(&repo, &valid("refs/remotes/old/other"))
                 .await
                 .unwrap();
         });
@@ -603,7 +613,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("delete-remote-refused").await.unwrap();
-            let error = delete_branch(&repo, "refs/remotes/origin/other")
+            let error = delete_branch(&repo, &valid("refs/remotes/origin/other"))
                 .await
                 .unwrap_err();
             assert!(
@@ -625,9 +635,15 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("delete-other-refs").await.unwrap();
 
-            let error = delete_branch(&repo, "refs/tags/v1").await.unwrap_err();
+            // A tag is refused as the input's parsed: `delete_branch` takes a `BranchRef`.
+            assert!(BranchRef::parse("refs/tags/v1").is_err());
+            let error = delete_branch(&repo, &valid("refs/remotes/origin/HEAD"))
+                .await
+                .unwrap_err();
             assert!(
-                error.to_string().contains("refs/tags/v1 isn't a branch."),
+                error
+                    .to_string()
+                    .contains("refs/remotes/origin/HEAD isn't a branch."),
                 "{error}"
             );
         });

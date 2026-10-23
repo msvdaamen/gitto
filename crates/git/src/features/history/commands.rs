@@ -20,8 +20,8 @@ pub const MAX_PAGE: u32 = 10_000;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "RawPage")]
 pub struct Page {
-    pub limit: u32,
-    pub skip: u32,
+    limit: u32,
+    skip: u32,
 }
 
 impl Page {
@@ -33,6 +33,14 @@ impl Page {
             )));
         }
         Ok(Page { limit, skip })
+    }
+
+    pub fn limit(self) -> u32 {
+        self.limit
+    }
+
+    pub fn skip(self) -> u32 {
+        self.skip
     }
 }
 

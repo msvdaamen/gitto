@@ -10,9 +10,10 @@ use crate::core::errors::{Error, Result};
 use crate::core::git_dirs::real_path;
 use crate::core::repo::{GitCommand, Repo};
 use crate::features::branch::commands::{
-    Tracking, branch_name, has_non_space, is_ref, no_ref_syntax_advice, tracking_branch,
+    Tracking, branch_name, is_ref, no_ref_syntax_advice, tracking_branch,
 };
 use crate::features::refs::schema::RefKind;
+use crate::input::{BranchName, BranchRef, Folder};
 
 /// The worktrees: the main one first, then the linked ones by their paths, with the one the
 /// repository was opened as marked `current`.
@@ -27,21 +28,14 @@ pub async fn list_worktrees(repo: &Repo) -> Result<Vec<Worktree>> {
 /// or a new one that does, named after it without the remote (see `tracking_branch`). Git refuses
 /// a branch that's checked out in a worktree already, the main one included, and a folder that's
 /// in use, saying so.
-///
-/// Fails with `Error::InvalidInput` if `folder`, or `new_branch`, is only whitespace, as the UI's
-/// input is checked.
 pub async fn add_worktree(
     repo: &Repo,
-    folder: &str,
-    branch: &str,
-    new_branch: Option<&str>,
+    folder: &Folder,
+    branch: &BranchRef,
+    new_branch: Option<&BranchName>,
 ) -> Result<()> {
-    if !has_non_space(folder) {
-        return Err(Error::InvalidInput("The folder is empty.".to_owned()));
-    }
-    if new_branch.is_some_and(|name| !has_non_space(name)) {
-        return Err(Error::InvalidInput("The name is empty.".to_owned()));
-    }
+    let (folder, branch) = (folder.as_str(), branch.as_str());
+    let new_branch = new_branch.map(BranchName::as_str);
     let Some(target) = branch_name(branch) else {
         return Err(Error::Bug(format!("{branch} isn't a branch.")));
     };
@@ -223,7 +217,7 @@ mod tests {
     use std::fs;
 
     use super::*;
-    use crate::test_support::{Fixture, git};
+    use crate::test_support::{Fixture, git, valid};
 
     /// A repository with `a.txt` committed on `main`, and a `feature` branch, which `repos` opens
     /// as `name`.
@@ -343,9 +337,14 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("add").await.unwrap();
-            add_worktree(&repo, s(&folder), "refs/heads/feature", None)
-                .await
-                .unwrap();
+            add_worktree(
+                &repo,
+                &valid(s(&folder)),
+                &valid("refs/heads/feature"),
+                None,
+            )
+            .await
+            .unwrap();
             assert_eq!(git(&folder, ["symbolic-ref", "HEAD"]), "refs/heads/feature");
             assert!(folder.join("a.txt").exists());
             assert_eq!(
@@ -362,9 +361,14 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("relative").await.unwrap();
-            add_worktree(&repo, "../relative-feature", "refs/heads/feature", None)
-                .await
-                .unwrap();
+            add_worktree(
+                &repo,
+                &valid("../relative-feature"),
+                &valid("refs/heads/feature"),
+                None,
+            )
+            .await
+            .unwrap();
         });
         assert_eq!(
             git(fx.root().join("relative-feature"), ["symbolic-ref", "HEAD"]),
@@ -380,9 +384,14 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("new-branch").await.unwrap();
-            add_worktree(&repo, s(&folder), "refs/heads/main", Some("topic"))
-                .await
-                .unwrap();
+            add_worktree(
+                &repo,
+                &valid(s(&folder)),
+                &valid("refs/heads/main"),
+                Some(&valid("topic")),
+            )
+            .await
+            .unwrap();
         });
         assert_eq!(git(&folder, ["symbolic-ref", "HEAD"]), "refs/heads/topic");
         assert_eq!(
@@ -409,9 +418,14 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("remote-clone").await.unwrap();
 
-            add_worktree(&repo, s(&feature), "refs/remotes/origin/feature", None)
-                .await
-                .unwrap();
+            add_worktree(
+                &repo,
+                &valid(s(&feature)),
+                &valid("refs/remotes/origin/feature"),
+                None,
+            )
+            .await
+            .unwrap();
             assert_eq!(
                 git(&feature, ["symbolic-ref", "HEAD"]),
                 "refs/heads/feature"
@@ -426,9 +440,14 @@ mod tests {
 
             // `feature` tracks it now, and is checked out in that worktree.
             let again = fx.root().join("remote-clone-again");
-            let error = add_worktree(&repo, s(&again), "refs/remotes/origin/feature", None)
-                .await
-                .unwrap_err();
+            let error = add_worktree(
+                &repo,
+                &valid(s(&again)),
+                &valid("refs/remotes/origin/feature"),
+                None,
+            )
+            .await
+            .unwrap_err();
             assert!(
                 error
                     .to_string()
@@ -439,9 +458,9 @@ mod tests {
             let topic = fx.root().join("remote-clone-topic");
             add_worktree(
                 &repo,
-                s(&topic),
-                "refs/remotes/origin/feature",
-                Some("topic"),
+                &valid(s(&topic)),
+                &valid("refs/remotes/origin/feature"),
+                Some(&valid("topic")),
             )
             .await
             .unwrap();
@@ -463,7 +482,7 @@ mod tests {
             let repo = fx.repos.open("refused").await.unwrap();
 
             let main = fx.root().join("refused-main");
-            let error = add_worktree(&repo, s(&main), "refs/heads/main", None)
+            let error = add_worktree(&repo, &valid(s(&main)), &valid("refs/heads/main"), None)
                 .await
                 .unwrap_err();
             assert!(
@@ -473,7 +492,7 @@ mod tests {
                 )),
                 "{error}"
             );
-            let error = add_worktree(&repo, s(&path), "refs/heads/feature", None)
+            let error = add_worktree(&repo, &valid(s(&path)), &valid("refs/heads/feature"), None)
                 .await
                 .unwrap_err();
             assert!(
@@ -483,7 +502,7 @@ mod tests {
                 "{error}"
             );
             let x = fx.root().join("refused-x");
-            let error = add_worktree(&repo, s(&x), "refs/heads/gone", None)
+            let error = add_worktree(&repo, &valid(s(&x)), &valid("refs/heads/gone"), None)
                 .await
                 .unwrap_err();
             assert!(
@@ -492,9 +511,14 @@ mod tests {
                     .contains("refs/heads/gone isn't a branch."),
                 "{error}"
             );
-            let error = add_worktree(&repo, s(&x), "refs/heads/feature", Some("a..b"))
-                .await
-                .unwrap_err();
+            let error = add_worktree(
+                &repo,
+                &valid(s(&x)),
+                &valid("refs/heads/feature"),
+                Some(&valid("a..b")),
+            )
+            .await
+            .unwrap_err();
             assert_eq!(
                 error.to_string(),
                 "fatal: 'a..b' is not a valid branch name"
@@ -504,19 +528,11 @@ mod tests {
 
     #[test]
     fn refuses_a_folder_or_a_name_thats_only_whitespace() {
-        let fx = Fixture::new();
-        create_committed_repo(&fx, "blank");
-        smol::block_on(async {
-            let repo = fx.repos.open("blank").await.unwrap();
-            let error = add_worktree(&repo, " ", "refs/heads/feature", None)
-                .await
-                .unwrap_err();
-            assert_eq!(error.to_string(), "The folder is empty.");
-            let error = add_worktree(&repo, "../x", "refs/heads/feature", Some(" "))
-                .await
-                .unwrap_err();
-            assert_eq!(error.to_string(), "The name is empty.");
-        });
+        // Refused as the input's parsed: `add_worktree` takes a `Folder` and a `BranchName`.
+        let error = Folder::parse(" ").unwrap_err();
+        assert_eq!(error.to_string(), "The folder is empty.");
+        let error = BranchName::parse(" ").unwrap_err();
+        assert_eq!(error.to_string(), "The name is empty.");
     }
 
     // Removing a worktree.
