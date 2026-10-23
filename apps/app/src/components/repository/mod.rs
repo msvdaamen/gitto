@@ -10,13 +10,22 @@ pub mod diff;
 pub mod history;
 pub mod sidebar;
 
+pub mod add_worktree_dialog;
 pub mod branch_button;
+pub mod branch_form;
+pub mod branch_menu;
+pub mod create_branch_dialog;
+pub mod delete_branch_dialog;
 pub mod operation_bar;
 pub mod pull_button;
 pub mod push_button;
+pub mod row_menu;
 pub mod stash_buttons;
 pub mod toolbar;
 pub mod toolbar_button;
+
+#[cfg(test)]
+pub(crate) mod test_support;
 
 use std::rc::Rc;
 
