@@ -6,8 +6,8 @@ use std::time::Duration;
 use gpui_kit::component::v_flex;
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    Animation, AnimationExt as _, App, ElementId, FontWeight, Role, SharedString, Transformation,
-    Window, div, percentage,
+    Animation, AnimationExt as _, AnyElement, App, ElementId, FontWeight, Role, SharedString,
+    Transformation, Window, div, percentage,
 };
 
 use super::icons::{Icon, IconName};
@@ -18,7 +18,8 @@ use crate::theme::PaletteExt as _;
 pub const LOADING_SHOWN_AFTER: Duration = Duration::from_millis(150);
 
 /// A centered placeholder for an empty, loading or failed panel: an icon, a title, and what to
-/// know about it. An error's message is in coral; a loading one's icon spins.
+/// know about it. An error's message is in coral; a loading one's icon spins. What can be done
+/// about it, like a button, goes under the message (its children).
 #[derive(IntoElement)]
 pub struct EmptyState {
     id: ElementId,
@@ -28,6 +29,13 @@ pub struct EmptyState {
     error: bool,
     loading: bool,
     fill: bool,
+    children: Vec<AnyElement>,
+}
+
+impl ParentElement for EmptyState {
+    fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
+        self.children.extend(elements);
+    }
 }
 
 impl EmptyState {
@@ -40,6 +48,7 @@ impl EmptyState {
             error: false,
             loading: false,
             fill: false,
+            children: Vec::new(),
         }
     }
 
@@ -108,6 +117,9 @@ impl RenderOnce for EmptyState {
                         .when(self.error, |this| this.text_color(palette.coral))
                         .child(message),
                 )
+            })
+            .when(!self.children.is_empty(), |this| {
+                this.child(div().mt_1p5().children(self.children))
             })
     }
 }

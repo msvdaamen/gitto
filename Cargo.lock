@@ -197,14 +197,18 @@ dependencies = [
  "gitto-db",
  "gitto-git",
  "gitto-repository",
+ "gitto-ui",
  "gpui-kit",
  "log",
  "regex",
  "serde",
  "serde_json",
+ "similar",
  "smol",
+ "syntect",
  "tempfile",
  "thiserror 2.0.21",
+ "two-face",
  "uuid",
 ]
 
