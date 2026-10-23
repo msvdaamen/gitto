@@ -1,4 +1,4 @@
-import { queryOptions, useMutation, useQueryClient } from "@tanstack/solid-query";
+import { queryOptions, useMutation, useQueryClient, type QueryClient } from "@tanstack/solid-query";
 
 import { rpc } from "@/lib/rpc";
 
@@ -10,14 +10,33 @@ export function useCreateCommit(repositoryId: () => string) {
   return useMutation(() => ({
     mutationFn: (commit: { message: string; amend?: string }) =>
       rpc.git.commit.create({ repositoryId: repositoryId(), ...commit }),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: gitKeys.repository(repositoryId()) }),
+    ...refreshAfterCommit(queryClient, repositoryId()),
+  }));
+}
+
+/**
+ * Rewrites the message of HEAD's commit, `sha`, leaving what's staged out of it; resolves to the
+ * rewritten commit's SHA once the repository has reloaded.
+ */
+export function useRewordCommit(repositoryId: () => string) {
+  const queryClient = useQueryClient();
+  return useMutation(() => ({
+    mutationFn: (reword: { sha: string; message: string }) =>
+      rpc.git.commit.reword({ repositoryId: repositoryId(), ...reword }),
+    ...refreshAfterCommit(queryClient, repositoryId()),
+  }));
+}
+
+/** What a commit's mutation reloads once it's done, or has failed. */
+function refreshAfterCommit(queryClient: QueryClient, repositoryId: string) {
+  return {
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: gitKeys.repository(repositoryId) }),
     // A failure saying HEAD has moved means the status is behind; refetched without waiting for
     // it, so the error shows right away.
     onError: () => {
-      void queryClient.invalidateQueries({ queryKey: gitKeys.uncommitted(repositoryId()) });
+      void queryClient.invalidateQueries({ queryKey: gitKeys.uncommitted(repositoryId) });
     },
-  }));
+  };
 }
 
 /** A commit's full message, as written; it never changes. */

@@ -7,7 +7,7 @@ import { HeadMovedError, NotARepositoryError } from "../../core/errors";
 import type { Repo } from "../../core/repo";
 import { cloneRepo, createRepo, git, page, repos } from "../../test/fixtures";
 import { getLog } from "../history/commands";
-import { createCommit, getCommitMessage, getPushedTo } from "./commands";
+import { createCommit, getCommitMessage, getPushedTo, rewordCommit } from "./commands";
 
 describe("createCommit", () => {
   let path: string;
@@ -127,6 +127,34 @@ describe("createCommit", () => {
     await expect(
       createCommit(await repos.open("unborn"), "Amend", { amend: "a".repeat(40) }),
     ).rejects.toBeInstanceOf(HeadMovedError);
+  });
+});
+
+describe("rewordCommit", () => {
+  it("rewords the last commit only, leaving what's staged out of it and staged", async () => {
+    const path = createRepo("reword");
+    const repo = await repos.open("reword");
+    writeFileSync(join(path, "a.txt"), "a\n");
+    git(path, "add", "a.txt");
+    git(path, "commit", "-q", "-m", "First");
+    writeFileSync(join(path, "staged.txt"), "staged\n");
+    git(path, "add", "staged.txt");
+
+    const reworded = await rewordCommit(repo, git(path, "rev-parse", "HEAD"), "Reworded\n");
+    expect(reworded).toBe(git(path, "rev-parse", "HEAD"));
+    expect(await getCommitMessage(repo, "HEAD")).toBe("Reworded\n");
+    expect(git(path, "show", "--name-only", "--format=", "HEAD")).toBe("a.txt");
+    expect(git(path, "diff", "--cached", "--name-only")).toBe("staged.txt");
+  });
+
+  it("won't reword once HEAD has moved on", async () => {
+    const path = createRepo("reword-moved");
+    const repo = await repos.open("reword-moved");
+    git(path, "commit", "-q", "--allow-empty", "-m", "First");
+    const rewording = git(path, "rev-parse", "HEAD");
+    git(path, "commit", "-q", "--allow-empty", "-m", "Made in a terminal");
+    await expect(rewordCommit(repo, rewording, "Reworded")).rejects.toBeInstanceOf(HeadMovedError);
+    expect(await getCommitMessage(repo, "HEAD")).toBe("Made in a terminal\n");
   });
 });
 

@@ -1,5 +1,5 @@
 import { HeadMovedError } from "../../core/errors";
-import { currentBranch, resolveRef, type Repo } from "../../core/repo";
+import { currentBranch, resolveRef, type GitCommand, type Repo } from "../../core/repo";
 
 /**
  * Commits what's staged, with `message` as it's written. With `amend`, HEAD's SHA, replaces that
@@ -12,19 +12,40 @@ export async function createCommit(
   options: { amend?: string } = {},
 ): Promise<void> {
   const { amend } = options;
-  // One write, so no other commit of Gitto's can land between checking HEAD and amending it.
   await repo.exclusive(async (run) => {
-    if (amend && (await resolveRef(run, "HEAD")) !== amend) throw new HeadMovedError();
-    // An amended message is kept exactly as sent, whatever `commit.cleanup` says, as what wasn't
-    // edited of it is as it was written.
-    const args = [
-      "commit",
-      ...(amend ? ["--amend", "--allow-empty", "--cleanup=verbatim"] : []),
-      "-F",
-      "-",
-    ];
+    if (amend) return amendHead(run, amend, message);
     // A new commit's message is cleaned up by git, but for the spaces it'd leave before the subject.
-    await run(args, { stdin: amend ? message : message.trim() });
+    await run(["commit", "-F", "-"], { stdin: message.trim() });
+  });
+}
+
+/**
+ * Rewrites the message of HEAD's commit, `sha`, to `message` as it's written, as long as HEAD is
+ * still that commit; what's staged is left out of it, and stays staged. Resolves to the rewritten
+ * commit's SHA. The commit's hooks run as for `git commit --amend`, pre-commit too: as when git
+ * rewords a commit in a rebase.
+ */
+export async function rewordCommit(repo: Repo, sha: string, message: string): Promise<string> {
+  // One write, so no other commit of Gitto's can land before the rewritten one's SHA is read.
+  return repo.exclusive(async (run) => {
+    // With no paths, `--only` commits none of what's staged.
+    await amendHead(run, sha, message, ["--only"]);
+    // A commit was just made, so HEAD has one.
+    return (await resolveRef(run, "HEAD"))!;
+  });
+}
+
+/**
+ * Replaces HEAD's commit, `sha`, with one of `message`, and what's staged unless `args` say
+ * otherwise; fails if HEAD has moved on. Run in one write, so no other commit of Gitto's can land
+ * between checking HEAD and amending it.
+ */
+async function amendHead(run: GitCommand, sha: string, message: string, args: string[] = []) {
+  if ((await resolveRef(run, "HEAD")) !== sha) throw new HeadMovedError();
+  // An amended message is kept exactly as sent, whatever `commit.cleanup` says, as what wasn't
+  // edited of it is as it was written.
+  await run(["commit", "--amend", "--allow-empty", "--cleanup=verbatim", ...args, "-F", "-"], {
+    stdin: message,
   });
 }
 
