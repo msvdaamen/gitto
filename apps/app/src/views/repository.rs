@@ -298,8 +298,9 @@ impl RepositoryView {
         self.history.update(cx, |history, cx| {
             history.set_selection(selected.clone(), details.clone(), cx)
         });
-        self.commit_details
-            .update(cx, |commit, cx| commit.set_selected(details.clone(), cx));
+        self.commit_details.update(cx, |commit, cx| {
+            commit.set_selected(details.clone(), window, cx)
+        });
 
         if self.open_file.is_some() && self.shown_file(cx).is_none() {
             self.open_file = None;
