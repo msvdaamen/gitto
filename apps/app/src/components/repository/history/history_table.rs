@@ -16,15 +16,18 @@ use gitto_ui::git::ref_labels::checkouts;
 use gitto_ui::git::rows::{HistoryRow, history_graph, stash_sha, to_history_rows, with_stashes};
 use gitto_ui::git::search::{matches_search, search_needle};
 use gitto_ui::git::status::head_label;
+use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
-    KeyDownEvent, Rems, Role, ScrollStrategy, SharedString, Subscription, Task,
-    TestSupportExt as _, UniformListScrollHandle, WeakEntity, Window, div,
+    KeyDownEvent, Rems, Role, ScrollHandle, ScrollStrategy, SharedString, Subscription, Task,
+    TestSupportExt as _, UniformListScrollHandle, WeakEntity, Window, div, rems,
 };
 
-use super::columns::{CELL_PADDING, Column, HEADER_HEIGHT, LABEL_TEXT, ROW_HEIGHT, SMALL_TEXT};
+use super::columns::{
+    CELL_PADDING, Column, HEADER_HEIGHT, LABEL_TEXT, MIN_WIDTH, ROW_HEIGHT, SMALL_TEXT,
+};
 use super::commit_menu::CommitMenu;
 use super::commit_row::{HistoryCommitRow, RowProps};
 use super::history_graph::graph_width;
@@ -157,6 +160,8 @@ pub struct HistoryTable {
     /// is outlined then, while the list has the focus.
     keyboard: bool,
     scroll: UniformListScrollHandle,
+    /// Scrolls the table sideways when its pane is narrower than the table's least width.
+    sideways: ScrollHandle,
     _history_subscriptions: Vec<Subscription>,
     _subscriptions: Vec<Subscription>,
 }
@@ -245,6 +250,7 @@ impl HistoryTable {
             focus: cx.focus_handle(),
             keyboard: false,
             scroll: UniformListScrollHandle::new(),
+            sideways: ScrollHandle::new(),
             _history_subscriptions: Vec::new(),
             _subscriptions: subscriptions,
         };
@@ -923,26 +929,52 @@ impl Render for HistoryTable {
             self.render_rows(window, cx)
         };
         let footer = self.render_footer(cx);
+        // The table's least width: its other columns', plus the graph's. A narrower pane scrolls
+        // it sideways, header and all.
+        let min_width = rems(MIN_WIDTH.0 + graph.0);
         v_flex()
             .id("history")
             .size_full()
             .min_w_0()
             .min_h_0()
             .bg(palette.bg)
-            .child(self.render_header(graph, updating, cx))
             .child(
                 div()
-                    .id("history-list")
-                    .role(Role::ListBox)
-                    .test_support()
-                    .aria_label("Commit history")
-                    .track_focus(&self.focus)
-                    .key_context("HistoryList")
-                    .on_key_down(cx.listener(Self::on_key_down))
+                    .relative()
                     .flex_1()
                     .min_h_0()
                     .w_full()
-                    .child(body),
+                    .child(
+                        div()
+                            .id("history-sideways")
+                            .size_full()
+                            .overflow_x_scroll()
+                            // Not with the wheel's vertical turns, which scroll the rows.
+                            .restrict_scroll_to_axis()
+                            .track_scroll(&self.sideways)
+                            .child(
+                                v_flex()
+                                    .h_full()
+                                    .w_full()
+                                    .min_w(min_width)
+                                    .child(self.render_header(graph, updating, cx))
+                                    .child(
+                                        div()
+                                            .id("history-list")
+                                            .role(Role::ListBox)
+                                            .test_support()
+                                            .aria_label("Commit history")
+                                            .track_focus(&self.focus)
+                                            .key_context("HistoryList")
+                                            .on_key_down(cx.listener(Self::on_key_down))
+                                            .flex_1()
+                                            .min_h_0()
+                                            .w_full()
+                                            .child(body),
+                                    ),
+                            ),
+                    )
+                    .child(Scrollbar::horizontal(&self.sideways)),
             )
             .children(footer)
     }

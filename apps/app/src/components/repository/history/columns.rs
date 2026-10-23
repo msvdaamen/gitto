@@ -47,6 +47,9 @@ pub enum Column {
     Date,
 }
 
+/// The table's least width, less the graph's: the other columns' (445px).
+pub const MIN_WIDTH: Rems = Rems(445. / 15.);
+
 /// The date column's width (100px).
 const DATE_WIDTH: Rems = Rems(100. / 15.);
 
