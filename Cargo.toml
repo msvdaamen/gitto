@@ -7,6 +7,13 @@ edition = "2024"
 
 [workspace.dependencies]
 gpui-kit = { version = "0.8.0", features = ["gpui-fast"] }
+# apps/app's icon, where the app sets it itself: the X11 window's, and the Dock's on macOS (see
+# `apps/app/src/identity.rs`); and on Windows, the one built into the .exe (`apps/app/build.rs`).
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+objc2 = "0.6.5"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSImage", "NSResponder"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSData"] }
+winresource = "0.1.34"
 
 # crates/git: async without tokio (GPUI runs its own executor), with what the features need.
 async-channel = "2.5.0"
