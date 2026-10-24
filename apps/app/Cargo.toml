@@ -2,6 +2,56 @@
 name = "app"
 version = "0.1.0"
 edition.workspace = true
+description = "Gitto's desktop app: the GPUI UI, which calls the Rust crates directly."
+publish = false
+
+# A library, so the UI can be tested, and a thin binary that runs it.
+[lib]
+name = "app"
+path = "src/lib.rs"
+
+# Named as the Electron app's on Linux, so the OS and its task bar call the process Gitto's.
+[[bin]]
+name = "gitto"
+path = "src/main.rs"
 
 [dependencies]
-gpui-kit.workspace = true
+# The UI. `syntect` highlights the code in diffs and conflicts.
+gpui-kit = { workspace = true, features = ["syntect"] }
+
+# What the UI shows and changes, called directly (there's no RPC).
+gitto-db.workspace = true
+gitto-git.workspace = true
+gitto-repository.workspace = true
+# The UI's pure logic (TS's `apps/ui/src/git/*.ts` and the like).
+gitto-ui.workspace = true
+
+anyhow.workspace = true
+async-fs.workspace = true
+futures.workspace = true
+image.workspace = true
+log.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+smol.workspace = true
+thiserror.workspace = true
+# Diffs: syntax highlighting, and the words that changed in a line (see `components::repository::diff`).
+similar.workspace = true
+syntect.workspace = true
+two-face.workspace = true
+uuid.workspace = true
+
+# The Dock's icon, set as the app starts (see `identity.rs`).
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+objc2-app-kit.workspace = true
+objc2-foundation.workspace = true
+
+# The .exe's icon and the name Windows shows for it (see `build.rs`).
+[build-dependencies]
+winresource.workspace = true
+
+[dev-dependencies]
+gpui-kit = { workspace = true, features = ["syntect", "test-support"] }
+tempfile.workspace = true

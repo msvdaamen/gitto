@@ -1,0 +1,1082 @@
+//! Resolving the conflicted file on show, in its view. Ported from `conflict-resolution.tsx`.
+
+use std::rc::Rc;
+
+use gitto_git::FileStatus;
+use gitto_git::features::conflicts::schema::{Conflict, Side};
+use gitto_git::features::diff::schema::ChangedFile;
+use gitto_git::input::RepositoryId;
+use gitto_ui::git::conflicts::{ConflictKind, conflict_kind, describe_conflict};
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::{Disableable as _, Sizable as _};
+use gpui_kit::prelude::*;
+use gpui_kit::{AnyElement, Context, Entity, FontWeight, KeyDownEvent, Task, Window, div, rems};
+
+use super::conflict_sides::ConflictSides;
+use super::conflict_viewer::{
+    ConflictProgress, ConflictViewer, ConflictViewerEvent, DiskFile, Resolution, SaveFile,
+};
+use super::file_diff_view::{FileDiffEvent, FileDiffView};
+use super::markers_dialog::open_markers_dialog;
+use crate::components::ui::{EmptyState, IconButton, IconName, LoadingState, Notice};
+use crate::data::conflicts::{
+    ConflictResolution, FileToResolve, conflict_query, conflict_query_options,
+    resolve_file_mutation,
+};
+use crate::data::{Mutation, Query, QueryError, keys};
+use crate::theme::PaletteExt as _;
+use gitto_ui::git::diff_source::DiffSource;
+
+/// Resolves a conflicted file whole: keeps a side, or marks it resolved.
+pub type ResolveFileMutation = Entity<Mutation<FileToResolve>>;
+
+/// The view's resolving of a conflicted file (`useConflictResolution`): conflict by conflict when
+/// both sides changed it as text (see `ConflictViewer`), or by keeping one side whole, and then
+/// marking it resolved, which stages it. Only once it has no conflict markers left; never by
+/// itself. Once it's resolved, the next conflicted file opens, or this one's staged changes if it
+/// was the last.
+///
+/// In the view, `[` and `]` step through the conflicts, `O`, `T` and `B` keep ours, theirs or both
+/// of the current one, `N` opens the next conflicted file, and ⌘↵ marks the file resolved.
+pub struct FileResolution {
+    query: Query<Conflict>,
+    /// What the query is of: the file's path, and whether it's loaded at all.
+    query_of: (String, bool),
+    /// After editing, the file is read again before it's shown: what was read before is of the
+    /// edits saved so far, not the last. The loads the query had when editing stopped.
+    read_after: Option<u64>,
+    was_editing: bool,
+    /// The viewer's progress, of the file it says.
+    progress: Option<ConflictProgress>,
+    /// Why the last thing done to the conflict failed, and of which file (its key).
+    error: Option<(String, String)>,
+    resolving: bool,
+    resolve: ResolveFileMutation,
+    viewer: Option<Entity<ConflictViewer>>,
+}
+
+impl FileResolution {
+    pub fn new(
+        repository_id: &RepositoryId,
+        file: &ChangedFile,
+        active: bool,
+        cx: &mut Context<FileDiffView>,
+    ) -> Self {
+        let query = conflict_query(repository_id, &file.path, active, cx);
+        let resolve = resolve_file_mutation(cx);
+        cx.observe(&resolve, |_, _, cx| cx.notify()).detach();
+        FileResolution {
+            query,
+            query_of: (file.path.clone(), active),
+            read_after: None,
+            was_editing: false,
+            progress: None,
+            error: None,
+            resolving: false,
+            resolve,
+            viewer: None,
+        }
+    }
+
+    /// The conflicts' viewer, while the file's conflicts are shown one by one.
+    pub fn viewer(&self) -> Option<&Entity<ConflictViewer>> {
+        self.viewer.as_ref()
+    }
+
+    /// The conflicted file, as it was last read.
+    pub fn conflict(&self) -> Option<Conflict> {
+        self.query.data()
+    }
+
+    fn kind(&self) -> Option<ConflictKind> {
+        self.query.data().map(|conflict| conflict_kind(&conflict))
+    }
+
+    fn is_text(&self) -> bool {
+        matches!(self.kind(), Some(ConflictKind::Text { .. }))
+    }
+}
+
+impl FileDiffView {
+    /// Resolves files whole with `resolve` from now on: a test's.
+    pub fn set_resolve_mutation(&mut self, resolve: ResolveFileMutation, cx: &mut Context<Self>) {
+        cx.observe(&resolve, |_, _, cx| cx.notify()).detach();
+        self.resolution.resolve = resolve;
+    }
+
+    /// Whether the file on show is conflicted, its conflicts shown to resolve: an unstaged one.
+    pub(super) fn is_resolving(&self) -> bool {
+        *self.view.source() == DiffSource::Unstaged && self.view.conflicted()
+    }
+
+    /// Brings the conflict up to date with the file on show: what's loaded, what the viewer
+    /// shows, and whether it's edited.
+    pub(super) fn sync_resolution(
+        &mut self,
+        show: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let active = self.is_resolving();
+        let path = self.view.file().path;
+        if self.resolution.query_of != (path.clone(), active) {
+            let options = conflict_query_options(self.view.repository_id(), &path, active, cx);
+            self.resolution.query.set_options(options, cx);
+            self.resolution.query_of = (path.clone(), active);
+        }
+        // After editing, the file is read again before it's shown.
+        let editing = self.editing.is_editing();
+        if active && self.resolution.was_editing && !editing {
+            self.resolution.read_after = Some(self.resolution.query.updates());
+            let refetching = self.resolution.query.refetch(cx);
+            cx.spawn(async move |_, _| refetching.await).detach();
+        }
+        self.resolution.was_editing = editing;
+
+        if !(show && active && self.resolution.is_text()) {
+            if let Some(viewer) = self.resolution.viewer.take()
+                && viewer.read(cx).is_editing()
+            {
+                // Taken off the page while it's edited: that's over, and what's left is saved.
+                self.on_editing(None, cx);
+            }
+            return;
+        }
+        let viewer = match &self.resolution.viewer {
+            Some(viewer) => viewer.clone(),
+            None => self.make_conflict_viewer(cx),
+        };
+        let disk = self.disk();
+        let key = self.view.file_key();
+        viewer.update(cx, |viewer, cx| {
+            viewer.set_disk(&key, &path, disk, window, cx);
+            viewer.set_editing(editing, window, cx);
+        });
+    }
+
+    fn make_conflict_viewer(&mut self, cx: &mut Context<Self>) -> Entity<ConflictViewer> {
+        let view = cx.entity().downgrade();
+        let save: SaveFile = Rc::new(move |contents, version, cx| {
+            view.update(cx, |view, cx| view.save_conflict(contents, version, cx))
+                .unwrap_or_else(|_| Task::ready(Err(QueryError::msg("The file was closed."))))
+        });
+        let viewer = cx.new(|cx| ConflictViewer::new(save, cx));
+        cx.subscribe(&viewer, |this, _, event, cx| {
+            this.on_conflict_viewer(event, cx)
+        })
+        .detach();
+        self.resolution.viewer = Some(viewer.clone());
+        viewer
+    }
+
+    fn on_conflict_viewer(&mut self, event: &ConflictViewerEvent, cx: &mut Context<Self>) {
+        match event {
+            ConflictViewerEvent::Editing(session) => self.on_editing(session.clone(), cx),
+            ConflictViewerEvent::Edit(text) => self.on_edit(text.clone(), cx),
+            ConflictViewerEvent::EditFailed(message) => self.on_edit_failed(message.clone(), cx),
+            ConflictViewerEvent::Progress(progress) => {
+                self.resolution.progress = Some(progress.clone())
+            }
+            ConflictViewerEvent::Error(message) => {
+                self.resolution.error = message
+                    .clone()
+                    .map(|message| (self.view.file_key(), message));
+            }
+            ConflictViewerEvent::Shown => self.on_shown_for_editing(cx),
+        }
+        cx.notify();
+    }
+
+    /// The file as it was read from disk, for the viewer: not while it's edited, nor the last
+    /// file's, still on show while this one's loads, which the viewer would take for this one's;
+    /// nor what was read before editing stopped.
+    fn disk(&self) -> Option<DiskFile> {
+        let resolution = &self.resolution;
+        if self.editing.is_editing() || resolution.query.is_placeholder_data() {
+            return None;
+        }
+        if let Some(after) = resolution.read_after
+            && resolution.query.updates() <= after
+        {
+            return None;
+        }
+        match resolution.kind()? {
+            ConflictKind::Text { contents, version } => Some(DiskFile { contents, version }),
+            _ => None,
+        }
+    }
+
+    /// The viewer's progress, once it's of this file: the last one's is still on show while this
+    /// one's conflicts are being highlighted.
+    pub(super) fn shown_progress(&self) -> Option<&ConflictProgress> {
+        let progress = self.resolution.progress.as_ref()?;
+        (self.resolution.is_text()
+            && progress.file_key.as_deref() == Some(self.view.file_key().as_str()))
+        .then_some(progress)
+    }
+
+    /// Whether the file can't be resolved whole now: while it's being, nor while the last file's
+    /// still on show, as this one's loads, nor before this one's version on disk is known, which a
+    /// write is checked against (just after editing, say). Nor while it's edited: it's resolved
+    /// as the edits leave it, which is only known once editing stops.
+    fn is_resolution_busy(&self) -> bool {
+        let resolution = &self.resolution;
+        resolution.resolving
+            || self.editing.is_editing()
+            || resolution.query.is_placeholder_data()
+            || (resolution.is_text()
+                && self
+                    .shown_progress()
+                    .is_none_or(|shown| shown.saving || shown.version.is_none()))
+    }
+
+    /// The next conflicted file in the list after this one, or the first before it.
+    pub(super) fn next_conflicted(&self) -> Option<ChangedFile> {
+        let files = self.view.lists().files();
+        let path = self.view.file().path;
+        let at = files.iter().position(|file| file.path == path);
+        let ordered: Vec<&ChangedFile> = match at {
+            None => files.iter().collect(),
+            Some(at) => files[at + 1..].iter().chain(&files[..at]).collect(),
+        };
+        ordered
+            .into_iter()
+            .find(|file| file.status == FileStatus::Conflicted && file.path != path)
+            .cloned()
+    }
+
+    /// Whether it has no conflicts left in its text, so it's ready to be marked resolved. One
+    /// that has is only marked resolved with them once the user says they belong in it.
+    fn is_ready(&self) -> bool {
+        self.shown_progress()
+            .is_some_and(|shown| shown.left == 0 && shown.problem.is_none())
+    }
+
+    /// The version of the file to check before resolving it whole: the latest one written here.
+    fn resolution_version(&self) -> Option<String> {
+        self.shown_progress()
+            .and_then(|shown| shown.version.clone())
+            .or_else(|| {
+                self.resolution
+                    .conflict()
+                    .and_then(|conflict| conflict.version)
+            })
+    }
+
+    /// Resolves the file whole: marks it resolved, or keeps a side; then on to the next
+    /// conflicted file, or to its staged changes if it was the last. Not while it's busy.
+    fn resolve_whole(&mut self, resolution: ConflictResolution, cx: &mut Context<Self>) {
+        if self.is_resolution_busy() {
+            return;
+        }
+        let key = self.view.file_key();
+        let file = self.view.file();
+        self.resolution.resolving = true;
+        // Picked while the file's still in its list: it goes once it's resolved.
+        let target = self.next_conflicted();
+        self.resolution.error = None;
+        let input = FileToResolve {
+            repository_id: self.view.repository_id().clone(),
+            path: file.path.clone(),
+            resolution,
+        };
+        let resolving = self
+            .resolution
+            .resolve
+            .update(cx, |mutation, cx| mutation.mutate(input, cx));
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = resolving.await;
+            let _ = this.update(cx, |this, cx| {
+                this.resolution.resolving = false;
+                match result {
+                    Ok(Ok(())) if key == this.view.file_key() => match target {
+                        Some(target) => cx.emit(FileDiffEvent::Open {
+                            source: DiffSource::Unstaged,
+                            file: target,
+                        }),
+                        None => cx.emit(FileDiffEvent::Open {
+                            source: DiffSource::Staged,
+                            file: ChangedFile {
+                                status: FileStatus::Modified,
+                                ..file
+                            },
+                        }),
+                    },
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => this.resolution.error = Some((key, error.message())),
+                    Err(_) => {}
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Marks the file resolved, once it's ready; asks first if it has conflict markers left.
+    pub(super) fn mark_resolved(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.resolution.is_text() || self.is_resolution_busy() {
+            return;
+        }
+        let version = self.resolution_version();
+        if self.is_ready() {
+            self.resolve_whole(
+                ConflictResolution::Mark {
+                    version,
+                    with_markers: false,
+                },
+                cx,
+            );
+            return;
+        }
+        let left = self.shown_progress().map_or(0, |shown| shown.left);
+        let view = cx.entity().downgrade();
+        open_markers_dialog(
+            &self.view.file().path,
+            left,
+            move |_, cx| {
+                let _ = view.update(cx, |this, cx| {
+                    let version = this.resolution_version();
+                    this.resolve_whole(
+                        ConflictResolution::Mark {
+                            version,
+                            with_markers: true,
+                        },
+                        cx,
+                    )
+                });
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// Keeps `side` of `conflict` whole.
+    fn keep(&mut self, conflict: &Conflict, side: Side, cx: &mut Context<Self>) {
+        let version = self.resolution_version();
+        self.resolve_whole(
+            ConflictResolution::Keep {
+                side,
+                sides: conflict.sides(),
+                version,
+            },
+            cx,
+        );
+    }
+
+    /// Writes a resolved conflict's text over the file at `version`; resolves to its new version.
+    fn save_conflict(
+        &mut self,
+        contents: String,
+        version: String,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<String, QueryError>> {
+        let id = self.view.repository_id().clone();
+        let path = self.view.file().path;
+        let io = self.editing.io();
+        let saving = (io.save)(&id, &path, contents, version, false, cx);
+        cx.spawn(async move |_, cx| {
+            let saved = saving.await;
+            if saved.is_err() {
+                // Changed on disk since, say: shown as it is now.
+                cx.update(|cx| (io.reload)(keys::conflict(&id, &path), cx));
+            }
+            saved
+        })
+    }
+
+    /// The conflicts' keys: `[` and `]`, `O`, `T` and `B`, `N`, and ⌘↵ (or Ctrl+Enter). Not while
+    /// the file's edited.
+    pub(super) fn on_conflict_key(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.is_resolving() || self.editing.is_editing() {
+            return false;
+        }
+        let keystroke = &event.keystroke;
+        let modifiers = &keystroke.modifiers;
+        let key = keystroke.key.as_str();
+        if key == "enter" && (modifiers.platform || modifiers.control) {
+            self.mark_resolved(window, cx);
+            return true;
+        }
+        if modifiers.platform || modifiers.control || modifiers.alt {
+            return false;
+        }
+        let resolution = match key {
+            "o" => Some(Resolution::Ours),
+            "t" => Some(Resolution::Theirs),
+            "b" => Some(Resolution::Both),
+            _ => None,
+        };
+        match key {
+            "n" => {
+                let Some(target) = self.next_conflicted() else {
+                    return false;
+                };
+                cx.emit(FileDiffEvent::Open {
+                    source: DiffSource::Unstaged,
+                    file: target,
+                });
+                true
+            }
+            "]" | "[" => {
+                if let Some(viewer) = &self.resolution.viewer {
+                    viewer.update(cx, |viewer, cx| {
+                        if key == "]" {
+                            viewer.next(cx)
+                        } else {
+                            viewer.previous(cx)
+                        }
+                    });
+                }
+                true
+            }
+            _ => match resolution {
+                Some(resolution) if !self.is_resolution_busy() && self.resolution.is_text() => {
+                    if let Some(viewer) = &self.resolution.viewer {
+                        viewer.update(cx, |viewer, cx| viewer.resolve(resolution, window, cx));
+                    }
+                    true
+                }
+                _ => false,
+            },
+        }
+    }
+
+    /// Whether the file can be edited by hand: its text, once it's on show as it is on disk.
+    pub(super) fn is_conflict_editable(&self) -> bool {
+        self.resolution.is_text()
+            && self
+                .shown_progress()
+                .is_some_and(|shown| shown.version.is_some())
+            && !self.resolution.query.is_placeholder_data()
+    }
+
+    /// The conflicts left, stepping through them, marking the file resolved, and the next file.
+    pub(super) fn render_conflict_controls(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let palette = *cx.palette();
+        let editing = self.editing.is_editing();
+        let progress = self.shown_progress();
+        let left = progress
+            .filter(|shown| shown.problem.is_none())
+            .map(|shown| shown.left);
+        let mut controls = Vec::new();
+        if let Some(left) = left {
+            let text = conflicts_left_label(left);
+            controls.push(
+                div()
+                    .id("conflicts-left")
+                    .role(gpui_kit::Role::Status)
+                    .aria_label(text.clone())
+                    .mr_1()
+                    .whitespace_nowrap()
+                    .text_size(gpui_kit::rems(0.733))
+                    .text_color(palette.faint)
+                    .child(text)
+                    .into_any_element(),
+            );
+            controls.push(
+                IconButton::new(
+                    "previous-conflict",
+                    IconName::ChevronUp,
+                    "Previous conflict ([)",
+                )
+                .disabled(left == 0 || editing)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if let Some(viewer) = &this.resolution.viewer {
+                        viewer.update(cx, |viewer, cx| viewer.previous(cx));
+                    }
+                }))
+                .into_any_element(),
+            );
+            controls.push(
+                IconButton::new("next-conflict", IconName::ChevronDown, "Next conflict (])")
+                    .disabled(left == 0 || editing)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(viewer) = &this.resolution.viewer {
+                            viewer.update(cx, |viewer, cx| viewer.next(cx));
+                        }
+                    }))
+                    .into_any_element(),
+            );
+        }
+        if self.resolution.is_text() {
+            let ready = self.is_ready();
+            controls.push(
+                div()
+                    .ml_1()
+                    .child(
+                        Button::new("mark-resolved")
+                            .xsmall()
+                            // TS's: 26px high, 11.5px semibold.
+                            .h(rems(26. / 15.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .when(ready, |button| button.primary())
+                            .icon(crate::components::ui::Icon::new(IconName::Check))
+                            .label("Mark resolved")
+                            .disabled(self.is_resolution_busy())
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.mark_resolved(window, cx)),
+                            ),
+                    )
+                    .into_any_element(),
+            );
+        }
+        let next = self.next_conflicted();
+        controls.push(
+            IconButton::new(
+                "next-conflicted-file",
+                IconName::SkipForward,
+                "Next conflicted file (N)",
+            )
+            .disabled(next.is_none())
+            .on_click(cx.listener(move |_, _, _, cx| {
+                if let Some(target) = next.clone() {
+                    cx.emit(FileDiffEvent::Open {
+                        source: DiffSource::Unstaged,
+                        file: target,
+                    });
+                }
+            }))
+            .into_any_element(),
+        );
+        controls
+    }
+
+    /// What each side did with the file, and keeping one whole; or why that failed.
+    pub(super) fn render_conflict_banner(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let mut banners = Vec::new();
+        let busy = self.is_resolution_busy();
+        if self.resolution.is_text()
+            && let Some(conflict) = self.resolution.conflict()
+        {
+            let message = self
+                .shown_progress()
+                .and_then(|shown| shown.problem.clone())
+                .unwrap_or_else(|| describe_conflict(&conflict.sides()).to_owned());
+            let (ours, theirs) = (conflict.clone(), conflict);
+            banners.push(
+                Notice::new(message)
+                    .icon(IconName::GitMergeConflict)
+                    .child(
+                        Button::new("keep-all-ours")
+                            .ghost()
+                            .small()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .label("Keep all of ours")
+                            .disabled(busy)
+                            .on_click(
+                                cx.listener(move |this, _, _, cx| this.keep(&ours, Side::Ours, cx)),
+                            ),
+                    )
+                    .child(
+                        Button::new("keep-all-theirs")
+                            .ghost()
+                            .small()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .label("Keep all of theirs")
+                            .disabled(busy)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.keep(&theirs, Side::Theirs, cx)
+                            })),
+                    )
+                    .into_any_element(),
+            );
+        }
+        if let Some((key, message)) = &self.resolution.error
+            && *key == self.view.file_key()
+        {
+            banners.push(
+                Notice::new(message.clone())
+                    .alert()
+                    .icon(IconName::TriangleAlert)
+                    .into_any_element(),
+            );
+        }
+        banners
+    }
+
+    /// The conflicts, or the sides to keep one of.
+    pub(super) fn render_conflict_body(&self, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(error) = self.resolution.query.error() {
+            return EmptyState::new(
+                "conflict-error",
+                IconName::TriangleAlert,
+                "Couldn't load the conflict",
+            )
+            .message(error.message())
+            .error()
+            .fill()
+            .into_any_element();
+        }
+        let loading = || {
+            LoadingState::new("conflict-loading", "Loading the conflict…")
+                .fill()
+                .into_any_element()
+        };
+        let Some(conflict) = self.resolution.conflict() else {
+            return loading();
+        };
+        match conflict_kind(&conflict) {
+            ConflictKind::Resolved => EmptyState::new(
+                "conflict-resolved",
+                IconName::FileCheck,
+                "No longer conflicted",
+            )
+            .message("This file's conflict was resolved.")
+            .fill()
+            .into_any_element(),
+            ConflictKind::Sides => {
+                let busy = self.is_resolution_busy();
+                let kept = conflict.clone();
+                let view = cx.entity().downgrade();
+                ConflictSides::new(conflict, busy, move |side, _, cx| {
+                    let _ = view.update(cx, |this, cx| this.keep(&kept, side, cx));
+                })
+                .into_any_element()
+            }
+            // Loading until the viewer has the file on show, highlighted.
+            ConflictKind::Text { .. } => match &self.resolution.viewer {
+                Some(viewer) if viewer.read(cx).shown_text().is_some() => {
+                    viewer.clone().into_any_element()
+                }
+                _ => loading(),
+            },
+        }
+    }
+}
+
+/// What the header says of the conflicts left.
+fn conflicts_left_label(left: usize) -> String {
+    match left {
+        0 => "No conflicts left".to_owned(),
+        1 => "1 conflict left".to_owned(),
+        left => format!("{left} conflicts left"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gitto_git::features::conflicts::schema::ConflictSides;
+    use gpui_kit::{AppContext as _, TestAppContext};
+
+    use super::super::conflict_viewer::ConflictProgress;
+    use super::super::test_views::{
+        Opened, conflicted, id, init, open, reload_conflict_as, save, set_changes, set_conflict,
+        side, text_conflict,
+    };
+    use super::*;
+    use crate::components::ui::{ConfirmDialog, Tone};
+    use crate::data::QueryClient;
+    use crate::data::file_diff::{FilePatch, file_patch_key};
+
+    const MARKERS: &str = "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> side\n";
+
+    /// `count` conflicts, each after a numbered line.
+    fn conflicts(count: usize) -> String {
+        (1..=count)
+            .map(|line| format!("line {line}\n{MARKERS}"))
+            .collect()
+    }
+
+    fn unstaged(file: &str) -> FileDiffEvent {
+        FileDiffEvent::Open {
+            source: DiffSource::Unstaged,
+            file: conflicted(file),
+        }
+    }
+
+    /// `a.txt` with `contents` (and `b.txt` conflicted too), open.
+    fn open_conflict(contents: &str, cx: &mut TestAppContext) -> Opened {
+        set_changes(vec![], vec![conflicted("a.txt"), conflicted("b.txt")], cx);
+        set_conflict("a.txt", text_conflict(contents, "v1"), cx);
+        set_conflict("b.txt", text_conflict(MARKERS, "v1"), cx);
+        open(DiffSource::Unstaged, conflicted("a.txt"), cx)
+    }
+
+    /// What the header says of the conflicts left, if it does.
+    fn left(opened: &Opened, cx: &mut TestAppContext) -> Option<String> {
+        opened.read(cx, |view, _| {
+            view.shown_progress()
+                .filter(|shown| shown.problem.is_none())
+                .map(|shown| conflicts_left_label(shown.left))
+        })
+    }
+
+    fn progress(opened: &Opened, cx: &mut TestAppContext) -> Option<ConflictProgress> {
+        opened.read(cx, |view, _| view.shown_progress().cloned())
+    }
+
+    fn shown_text(opened: &Opened, cx: &mut TestAppContext) -> Option<String> {
+        opened.read(cx, |view, cx| {
+            let viewer = view.resolution.viewer()?;
+            viewer.read(cx).shown_text().map(str::to_owned)
+        })
+    }
+
+    fn error(opened: &Opened, cx: &mut TestAppContext) -> Option<String> {
+        opened.read(cx, |view, _| {
+            view.resolution
+                .error
+                .as_ref()
+                .filter(|(key, _)| *key == view.view.file_key())
+                .map(|(_, message)| message.clone())
+        })
+    }
+
+    fn mark(version: &str, with_markers: bool) -> FileToResolve {
+        FileToResolve {
+            repository_id: id(),
+            path: "a.txt".into(),
+            resolution: ConflictResolution::Mark {
+                version: Some(version.into()),
+                with_markers,
+            },
+        }
+    }
+
+    // A file with text conflicts.
+
+    #[gpui_kit::test]
+    fn shows_its_conflicts_rather_than_a_patch_and_how_many_are_left(cx: &mut TestAppContext) {
+        let _dir = init(cx);
+        let opened = open_conflict(&conflicts(2), cx);
+
+        assert_eq!(shown_text(&opened, cx), Some(conflicts(2)));
+        assert_eq!(left(&opened, cx).as_deref(), Some("2 conflicts left"));
+        // "Changed on both sides", with a side to keep whole.
+        assert!(opened.has("keep-all-ours", cx));
+        let patch = file_patch_key(&id(), &DiffSource::Unstaged, "a.txt");
+        let loaded = cx.update(|cx| {
+            QueryClient::get_entry::<FilePatch>(&patch, cx).is_some_and(|entry| {
+                let entry = entry.read(cx);
+                entry.is_fetching() || entry.data().is_some()
+            })
+        });
+        assert!(!loaded);
+        // Ours above theirs, one way only.
+        assert!(!opened.has("split", cx));
+        assert!(!opened.has("stage-file", cx));
+    }
+
+    #[gpui_kit::test]
+    fn is_only_marked_resolved_with_conflicts_left_once_the_user_says_they_belong_in_it(
+        cx: &mut TestAppContext,
+    ) {
+        let _dir = init(cx);
+        let opened = open_conflict(&conflicts(2), cx);
+
+        opened.press("ctrl-enter", cx);
+        assert!(opened.has_dialog(cx));
+        opened.click("cancel", cx);
+        assert!(!opened.has_dialog(cx));
+        assert_eq!(opened.resolve.calls(), []);
+
+        opened.click("mark-resolved", cx);
+        assert!(opened.has_dialog(cx));
+        opened.click(("action", 0usize), cx);
+        assert_eq!(opened.resolve.calls(), [mark("v1", true)]);
+        assert_eq!(opened.events(), [unstaged("b.txt")]);
+    }
+
+    #[gpui_kit::test]
+    fn doesnt_take_another_files_progress_for_its_own(cx: &mut TestAppContext) {
+        let _dir = init(cx);
+        let opened = open_conflict("resolved\n", cx);
+        assert_eq!(left(&opened, cx).as_deref(), Some("No conflicts left"));
+
+        // The viewer still says how the last file went, while this one's conflicts are highlighted.
+        opened.view.update(cx, |view, cx| {
+            view.on_conflict_viewer(
+                &ConflictViewerEvent::Progress(ConflictProgress {
+                    file_key: Some(gitto_ui::git::diff_source::diff_file_key(
+                        &DiffSource::Unstaged,
+                        "b.txt",
+                    )),
+                    left: 0,
+                    current: None,
+                    saving: false,
+                    version: Some("v9".into()),
+                    problem: None,
+                }),
+                cx,
+            )
+        });
+        assert!(!opened.is_enabled("mark-resolved", cx));
+        assert_ne!(left(&opened, cx).as_deref(), Some("No conflicts left"));
+    }
+
+    #[gpui_kit::test]
+    fn leaves_its_keys_to_a_dialog_or_menu_on_top_of_it(cx: &mut TestAppContext) {
+        let _dir = init(cx);
+        let opened = open_conflict(&conflicts(2), cx);
+        cx.update_window(opened.window, |_, window, cx| {
+            ConfirmDialog::new(IconName::TriangleAlert, Tone::Amber, "A dialog").open(window, cx)
+        })
+        .unwrap();
+        cx.run_until_parked();
+
+        opened.press("t", cx);
+        opened.press("]", cx);
+        assert_eq!(opened.tree.saves(), []);
+        assert_eq!(
+            progress(&opened, cx).and_then(|shown| shown.current),
+            Some(1)
+        );
+    }
+
+    #[gpui_kit::test]
+    fn is_marked_resolved_once_none_are_then_the_next_conflicted_file_opens(
+        cx: &mut TestAppContext,
+    ) {
+        let _dir = init(cx);
+        let opened = open_conflict("resolved\n", cx);
+        assert_eq!(left(&opened, cx).as_deref(), Some("No conflicts left"));
+
+        opened.click("mark-resolved", cx);
+        assert_eq!(opened.resolve.calls(), [mark("v1", false)]);
+        assert_eq!(opened.events(), [unstaged("b.txt")]);
+    }
+
+    #[gpui_kit::test]
+    fn opens_its_staged_changes_once_it_was_the_last_conflicted_file(cx: &mut TestAppContext) {
+        let _dir = init(cx);
+        set_changes(vec![], vec![conflicted("a.txt")], cx);
+        set_conflict("a.txt", text_conflict("resolved\n", "v1"), cx);
+        let opened = open(DiffSource::Unstaged, conflicted("a.txt"), cx);
+        assert_eq!(left(&opened, cx).as_deref(), Some("No conflicts left"));
+
+        opened.press("ctrl-enter", cx);
+        assert_eq!(
+            opened.events(),
+            [FileDiffEvent::Open {
+                source: DiffSource::Staged,
+                file: ChangedFile {
+                    status: FileStatus::Modified,
+                    ..conflicted("a.txt")
+                },
+            }]
+        );
+    }
+
+    #[gpui_kit::test]
+    fn says_why_it_couldnt_be_marked_resolved(cx: &mut TestAppContext) {
+        let _dir = init(cx);
+        let opened = open_conflict("resolved\n", cx);
+        opened.resolve.fail_once(
+            "a.txt still has conflict markers. Resolve its conflicts, then mark it resolved.",
+        );
+
+        opened.click("mark-resolved", cx);
+        assert_eq!(
+            error(&opened, cx).as_deref(),
+            Some("a.txt still has conflict markers. Resolve its conflicts, then mark it resolved.")
+        );
+        assert_eq!(opened.events(), []);
+    }
+
+    #[gpui_kit::test]
+    fn steps_through_its_conflicts_and_resolves_them_with_the_keyboard(cx: &mut TestAppContext) {
+        let _dir = init(cx);
+        let opened = open_conflict(&conflicts(3), cx);
+        let current = |cx: &mut TestAppContext| progress(&opened, cx).and_then(|p| p.current);
+        assert_eq!(current(cx), Some(1));
+
+        opened.press("]", cx);
+        assert_eq!(current(cx), Some(2));
+        opened.press("[", cx);
+        opened.press("[", cx);
+        // Round to the other end.
+        assert_eq!(current(cx), Some(3));
+
+        // Ours of the third, then on to the second: the one before, as it was the last.
+        opened.press("o", cx);
+        let third = conflicts(3).replace(&format!("line 3\n{MARKERS}"), "line 3\nours\n");
+        assert_eq!(opened.tree.saves(), [save("a.txt", &third, "v1", false)]);
+        assert_eq!(current(cx), Some(2));
+        opened.press("t", cx);
+        let second = third.replace(&format!("line 2\n{MARKERS}"), "line 2\ntheirs\n");
+        assert_eq!(
+            opened.tree.saves().last(),
+            Some(&save("a.txt", &second, "v2", false))
+        );
+        opened.press("b", cx);
+        let both = second.replace(&format!("line 1\n{MARKERS}"), "line 1\nours\ntheirs\n");
+        assert_eq!(
+            opened.tree.saves().last(),
+            Some(&save("a.txt", &both, "v2", false))
+        );
+        assert_eq!(left(&opened, cx).as_deref(), Some("No conflicts left"));
+
+        opened.press("n", cx);
+        assert_eq!(opened.events(), [unstaged("b.txt")]);
+    }
+
+    #[gpui_kit::test]
+    fn writes_a_resolved_conflict_over_the_version_it_was_read_at(cx: &mut TestAppContext) {
+        let _dir = init(cx);
+        let opened = open_conflict(MARKERS, cx);
+
+        opened.click(("keep-ours", 0usize), cx);
+        assert_eq!(opened.tree.saves(), [save("a.txt", "ours\n", "v1", false)]);
+        assert_eq!(
+            progress(&opened, cx).and_then(|p| p.version).as_deref(),
+            Some("v2")
+        );
+    }
+
+    #[gpui_kit::test]
+    fn says_why_a_conflict_couldnt_be_resolved(cx: &mut TestAppContext) {
+        let _dir = init(cx);
+        let opened = open_conflict(MARKERS, cx);
+        opened.tree.reply(|_| {
+            Err(QueryError::msg(
+                "a.txt was changed on disk since you started editing it.",
+            ))
+        });
+
+        opened.click(("keep-theirs", 0usize), cx);
+        assert_eq!(
+            error(&opened, cx).as_deref(),
+            Some("a.txt was changed on disk since you started editing it.")
+        );
+        // Read again, to be shown as it is now.
+        assert_eq!(opened.tree.reloads(), [keys::conflict(&id(), "a.txt")]);
+        // Still as it was.
+        assert_eq!(left(&opened, cx).as_deref(), Some("1 conflict left"));
+    }
+
+    #[gpui_kit::test]
+    fn keeps_a_side_whole_of_the_version_shown(cx: &mut TestAppContext) {
+        let _dir = init(cx);
+        let opened = open_conflict(&conflicts(2), cx);
+
+        opened.click("keep-all-theirs", cx);
+        assert_eq!(
+            opened.resolve.calls(),
+            [FileToResolve {
+                repository_id: id(),
+                path: "a.txt".into(),
+                resolution: ConflictResolution::Keep {
+                    side: Side::Theirs,
+                    sides: ConflictSides {
+                        base: Some(side("b1")),
+                        ours: Some(side("o1")),
+                        theirs: Some(side("t1")),
+                    },
+                    version: Some("v1".into()),
+                },
+            }]
+        );
+        assert_eq!(opened.events(), [unstaged("b.txt")]);
+    }
+
+    #[gpui_kit::test]
+    fn isnt_resolved_whole_while_its_edited_as_the_edits_arent_known_yet(cx: &mut TestAppContext) {
+        let _dir = init(cx);
+        let opened = open_conflict("resolved\n", cx);
+        assert_eq!(left(&opened, cx).as_deref(), Some("No conflicts left"));
+
+        opened.click("edit-file", cx);
+        assert!(opened.read(cx, |view, _| view.editing.is_editing()));
+        assert!(!opened.is_enabled("mark-resolved", cx));
+        assert!(!opened.is_enabled("keep-all-ours", cx));
+        opened.press("ctrl-enter", cx);
+        assert_eq!(opened.resolve.calls(), []);
+    }
+
+    #[gpui_kit::test]
+    fn is_edited_by_hand_and_read_again_once_that_stops_before_its_shown(cx: &mut TestAppContext) {
+        let _dir = init(cx);
+        let opened = open_conflict(&conflicts(2), cx);
+
+        opened.click("edit-file", cx);
+        assert!(opened.read(cx, |view, _| view.editing.is_editing()));
+        // What's read while it's edited isn't for the viewer.
+        assert_eq!(opened.read(cx, |view, _| view.disk()), None);
+        assert!(opened.read(cx, |view, cx| {
+            view.resolution
+                .viewer()
+                .is_some_and(|viewer| viewer.read(cx).whole_file().is_some())
+        }));
+
+        reload_conflict_as("a.txt", text_conflict("resolved\n", "v3"), cx);
+        opened.click("edit-file", cx);
+        assert_eq!(
+            opened.read(cx, |view, _| view.disk()),
+            Some(DiskFile {
+                contents: "resolved\n".into(),
+                version: "v3".into(),
+            })
+        );
+        assert_eq!(shown_text(&opened, cx).as_deref(), Some("resolved\n"));
+        assert_eq!(
+            progress(&opened, cx).and_then(|p| p.version).as_deref(),
+            Some("v3")
+        );
+    }
+
+    // A file that isn't text on both sides.
+
+    #[gpui_kit::test]
+    fn says_what_each_side_did_and_keeps_one_whole(cx: &mut TestAppContext) {
+        let _dir = init(cx);
+        set_changes(vec![], vec![conflicted("gone.txt")], cx);
+        let conflict = Conflict {
+            theirs: None,
+            ..text_conflict("ours\n", "v1")
+        };
+        assert_eq!(
+            describe_conflict(&conflict.sides()),
+            "Deleted in theirs, changed in ours"
+        );
+        set_conflict("gone.txt", conflict, cx);
+        let opened = open(DiffSource::Unstaged, conflicted("gone.txt"), cx);
+
+        opened.click("keep-theirs", cx);
+        let calls = opened.resolve.calls();
+        assert!(matches!(
+            &calls[..],
+            [FileToResolve {
+                path,
+                resolution: ConflictResolution::Keep {
+                    side: Side::Theirs,
+                    version: Some(version),
+                    ..
+                },
+                ..
+            }] if path == "gone.txt" && version == "v1"
+        ));
+        // It was the last one: its staged changes, its deletion, are next.
+        assert!(matches!(
+            &opened.events()[..],
+            [FileDiffEvent::Open { source: DiffSource::Staged, file }] if file.path == "gone.txt"
+        ));
+        assert!(!opened.has("mark-resolved", cx));
+    }
+
+    #[gpui_kit::test]
+    fn says_a_binary_file_cant_be_shown_as_text(cx: &mut TestAppContext) {
+        let _dir = init(cx);
+        set_changes(vec![], vec![conflicted("gone.txt")], cx);
+        set_conflict(
+            "gone.txt",
+            Conflict {
+                text: None,
+                binary: true,
+                unreadable: Some("This file is binary.".into()),
+                ..text_conflict(MARKERS, "v1")
+            },
+            cx,
+        );
+        let opened = open(DiffSource::Unstaged, conflicted("gone.txt"), cx);
+
+        assert!(opened.is_enabled("keep-ours", cx));
+        assert!(opened.is_enabled("keep-theirs", cx));
+        assert!(!opened.has("mark-resolved", cx));
+    }
+}

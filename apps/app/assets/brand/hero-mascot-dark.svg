@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="207.7" height="186.1" viewBox="-13.85 -17.05 207.7 186.1">
+  <!-- The home page's big mascot (welcome-hero.tsx's HeroDecoration): a 180x152 blob turned 12deg,
+       with eyes and a smile; the primary color is the dark theme's. -->
+  <defs>
+    <linearGradient id="g" x1="24.7" y1="-17.3" x2="155.3" y2="169.3" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#a879df"/>
+      <stop offset="1" stop-color="#5c62d5"/>
+    </linearGradient>
+  </defs>
+  <g transform="rotate(12 90 76)">
+    <path d="M79.2 0A100.8 57.8 0 0 1 180 57.8A111.6 94.2 0 0 1 68.4 152A68.4 80.6 0 0 1 0 71.4A79.2 71.4 0 0 1 79.2 0Z" fill="url(#g)"/>
+    <circle cx="66.5" cy="75.5" r="3.5" fill="#1e1525" fill-opacity=".8"/>
+    <circle cx="97.5" cy="75.5" r="3.5" fill="#1e1525" fill-opacity=".8"/>
+    <path d="M75 97.5Q84.5 102.5 94 97.5" fill="none" stroke="#1e1525" stroke-opacity=".7" stroke-width="2" stroke-linecap="round"/>
+  </g>
+</svg>
