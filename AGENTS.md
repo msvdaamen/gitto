@@ -68,6 +68,10 @@ In `gitto-git`:
 GPUI tests can't run git: a view's test gives every query it shows its data first
 (`components/repository/test_support.rs`), and fakes what changes it.
 
+The app's binary is `gitto`, and the OS knows it by the id and name in `apps/app/src/identity.rs`:
+Windows takes its icon and name from the .exe (`apps/app/build.rs`), and on Linux a build that isn't
+installed writes itself a desktop entry (`NoDisplay`) in `$XDG_DATA_HOME`, for the task bar.
+
 Dev builds optimize the dependencies (`[profile.dev.package."*"]` in the root `Cargo.toml`): GPUI
 is many times slower without, so the first build takes longer, and the app's speed is only judged
 in such a build or a `--release` one.

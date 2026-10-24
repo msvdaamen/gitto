@@ -18,6 +18,7 @@ pub mod app;
 pub mod assets;
 pub mod components;
 pub mod data;
+pub mod identity;
 pub mod services;
 pub mod state;
 pub mod theme;
