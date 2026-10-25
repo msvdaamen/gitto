@@ -6,7 +6,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use super::{Fixture, git};
+use super::{Fixture, git, valid};
+use crate::core::repo::Repo;
+use crate::features::conflicts::commands::{get_conflict, mark_resolved};
+use crate::features::diff::working_tree::{SaveExpectation, save_working_tree_file};
 
 /// Files to write, by path: their contents, or `None` to delete one.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -122,6 +125,25 @@ impl Fixture {
         try_git(&path, ["merge", "-q", "side"]);
         path
     }
+}
+
+/// Resolves `f.txt`'s text conflict as `contents`, and marks it resolved, as the resolver does.
+pub async fn resolve_text(repo: &Repo, contents: &str) {
+    let text = get_conflict(repo, &valid("f.txt"))
+        .await
+        .unwrap()
+        .text
+        .unwrap();
+    let expected = SaveExpectation {
+        version: text.version,
+        overwrite: false,
+    };
+    let version = save_working_tree_file(repo, "f.txt", contents, &expected)
+        .await
+        .unwrap();
+    mark_resolved(repo, &valid("f.txt"), Some(&version), false)
+        .await
+        .unwrap();
 }
 
 #[cfg(test)]

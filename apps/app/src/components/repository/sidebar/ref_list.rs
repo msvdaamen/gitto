@@ -323,11 +323,6 @@ impl RefList {
         self.stash_menu.open_for()
     }
 
-    /// The path of the worktree whose menu is open, if any.
-    pub fn worktree_menu_for(&self) -> Option<&SharedString> {
-        self.worktree_menu.open_for()
-    }
-
     /// The worktrees other than the one on show.
     fn other_worktrees(&self) -> Vec<Worktree> {
         self.worktrees
@@ -596,10 +591,15 @@ impl RefList {
     }
 }
 
+/// The items of a section in view: those in `range`, as far as there are any (see `VirtualList`).
+fn in_view<T>(items: &[T], range: Range<usize>) -> &[T] {
+    &items[range.start.min(items.len())..range.end.min(items.len())]
+}
+
 /// Renders the lines of a ref tree in `range`.
 fn tree_rows(lines: Rc<[TreeLine]>, rows: Rc<RowContext>) -> RenderRows {
     Rc::new(move |range: Range<usize>, _, _| {
-        lines[range.start.min(lines.len())..range.end.min(lines.len())]
+        in_view(&lines, range)
             .iter()
             .map(|line| tree_row(line, &rows))
             .collect()
@@ -727,7 +727,7 @@ impl Render for RefList {
                 tags.len(),
                 tags.len(),
                 Rc::new(move |range: Range<usize>, _, _| {
-                    tags[range.start.min(tags.len())..range.end.min(tags.len())]
+                    in_view(&tags, range)
                         .iter()
                         .map(|tag| {
                             SidebarRow::new(
@@ -748,7 +748,7 @@ impl Render for RefList {
             let stashes = Arc::clone(&stashes);
             let rows = Rc::clone(&rows);
             Rc::new(move |range: Range<usize>, _: &mut Window, _: &mut App| {
-                stashes[range.start.min(stashes.len())..range.end.min(stashes.len())]
+                in_view(&stashes, range)
                     .iter()
                     .map(|stash| stash_row(stash, &rows))
                     .collect()
@@ -764,7 +764,7 @@ impl Render for RefList {
             let worktrees = Arc::clone(&worktrees);
             let rows = Rc::clone(&rows);
             Rc::new(move |range: Range<usize>, _: &mut Window, _: &mut App| {
-                worktrees[range.start.min(worktrees.len())..range.end.min(worktrees.len())]
+                in_view(&worktrees, range)
                     .iter()
                     .map(|worktree| worktree_row(worktree, &rows))
                     .collect()

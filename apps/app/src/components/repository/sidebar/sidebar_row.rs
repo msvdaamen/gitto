@@ -22,7 +22,7 @@ pub const ROW_PX: f32 = 28. + ROW_GAP;
 /// [`ROW_PX`], in rems.
 pub const ROW_HEIGHT: Rems = base_px(ROW_PX);
 /// A row's own height, from [`ROW_HEIGHT`] so the two can't drift apart.
-const ROW_BOX: Rems = base_px(28.);
+const ROW_BOX: Rems = base_px(ROW_PX - ROW_GAP);
 /// Indentation per tree level (12px).
 const DEPTH_INDENT: f32 = 12.;
 /// The gap between a row's columns (5px).
@@ -145,10 +145,9 @@ pub struct RowTag {
     pub label: SharedString,
 }
 
-/// An item in a section: a ref, a stash or a worktree. Its icon, its label, then a tag, a meta
-/// (a branch's ahead count, say) and a count, each in its own lane whether or not the ones before
-/// it are there; the meta takes what it needs, up to half the row, as a worktree's branch can be
-/// long. Its tooltip is its `title`, or its label. Active, it stands out; highlighted (its menu
+/// An item in a section: a ref, a stash or a worktree. Its icon, its label, then whichever of a
+/// tag, a meta (a branch's ahead count, say) and a count it has: the label takes the space left,
+/// and the meta what it needs, up to half the row, as a worktree's branch can be long. Its tooltip is its `title`, or its label. Active, it stands out; highlighted (its menu
 /// open), it shows as if hovered; faded (a worktree whose folder is gone), it's dimmed.
 #[derive(IntoElement)]
 pub struct SidebarRow {

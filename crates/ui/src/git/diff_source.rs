@@ -68,7 +68,7 @@ pub fn shown_path_in<'a>(shown: Option<&'a ShownFile>, source: &DiffSource) -> O
 mod tests {
     use super::*;
 
-    fn opener(source: DiffSource, path: &str) -> ShownFile {
+    fn shown(source: DiffSource, path: &str) -> ShownFile {
         ShownFile {
             source,
             path: path.into(),
@@ -97,12 +97,12 @@ mod tests {
 
         #[test]
         fn mark_the_file_on_show_only_in_the_list_its_from() {
-            let files = opener(DiffSource::Staged, "a.txt");
+            let shown = shown(DiffSource::Staged, "a.txt");
             assert_eq!(
-                shown_path_in(Some(&files), &DiffSource::Staged),
+                shown_path_in(Some(&shown), &DiffSource::Staged),
                 Some("a.txt")
             );
-            assert_eq!(shown_path_in(Some(&files), &DiffSource::Unstaged), None);
+            assert_eq!(shown_path_in(Some(&shown), &DiffSource::Unstaged), None);
             assert_eq!(shown_path_in(None, &DiffSource::Staged), None);
         }
     }
