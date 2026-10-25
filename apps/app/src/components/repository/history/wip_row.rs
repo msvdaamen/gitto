@@ -154,7 +154,7 @@ impl RenderOnce for HistoryWipRow {
                 props.graph_width,
             ),
         )
-        .cell(Column::Graph.apply(
+        .graph_cell(Column::Graph.apply(
             div().h_full().overflow_hidden().children(graph),
             props.graph_width,
         ))
