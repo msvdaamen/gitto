@@ -217,23 +217,6 @@ async fn remove_empty_folders(root: &Path, paths: &[&str]) {
     .await;
 }
 
-/// `line` split at its first tab, as TS's `indexOf` and `slice` split it.
-fn split_at_tab(line: &str) -> (&str, &str) {
-    match line.find('\t') {
-        Some(tab) => (&line[..tab], &line[tab + 1..]),
-        // `slice(0, -1)` and `slice(0)`: never, as git writes the tab.
-        None => (all_but_last(line), line),
-    }
-}
-
-/// `line` without its last character.
-fn all_but_last(line: &str) -> &str {
-    match line.char_indices().next_back() {
-        Some((last, _)) => &line[..last],
-        None => line,
-    }
-}
-
 /// The index's files at `paths`, or below them.
 async fn index_entries(run: &GitCommand, paths: &[&str]) -> Result<Vec<Entry>> {
     let mut args = vec!["ls-files", "--stage", "-z", "--"];
@@ -241,18 +224,17 @@ async fn index_entries(run: &GitCommand, paths: &[&str]) -> Result<Vec<Entry>> {
     let output = run.run(args).await?;
     Ok(output
         .split('\0')
-        .filter(|line| !line.is_empty())
-        .map(|line| {
+        .filter_map(|line| {
             // `<mode> <object> <stage>\t<path>`
-            let (info, path) = split_at_tab(line);
+            let (info, path) = line.split_once('\t')?;
             let mut fields = info.split(' ');
             let mode = fields.next().unwrap_or("").to_owned();
             let stage = fields.nth(1).unwrap_or("").to_owned();
-            Entry {
+            Some(Entry {
                 path: path.to_owned(),
                 mode,
                 stage,
-            }
+            })
         })
         .collect())
 }
@@ -264,19 +246,15 @@ async fn head_entries(run: &GitCommand, paths: &[&str]) -> Result<Vec<Entry>> {
     let output = run.run(args).await?;
     Ok(output
         .split('\0')
-        .filter(|line| !line.is_empty())
-        .map(|line| {
+        .filter_map(|line| {
             // `<mode> <type> <object>\t<path>`
-            let (_, path) = split_at_tab(line);
-            let mode = match line.find(' ') {
-                Some(space) => &line[..space],
-                None => all_but_last(line),
-            };
-            Entry {
+            let (info, path) = line.split_once('\t')?;
+            let mode = info.split(' ').next().unwrap_or("");
+            Some(Entry {
                 path: path.to_owned(),
                 mode: mode.to_owned(),
                 stage: "0".to_owned(),
-            }
+            })
         })
         .collect())
 }
