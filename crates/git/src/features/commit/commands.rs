@@ -109,10 +109,11 @@ pub async fn get_pushed_to(repo: &Repo, sha: &Sha) -> Result<Option<String>> {
         })
     };
     let (branch, push) = futures::try_join!(current_branch(&run), push)?;
-    // Pushing to a branch of this repository (its remote is `.`) rewrites nothing published.
+    // HEAD is detached: amending rewrites no branch.
     let Some(branch) = branch else {
         return Ok(None);
     };
+    // Pushing to a branch of this repository (its remote is `.`) rewrites nothing published.
     if !push.is_empty() && !push.starts_with("refs/remotes/") {
         return Ok(None);
     }

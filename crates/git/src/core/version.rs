@@ -3,9 +3,10 @@
 
 use std::future::Future;
 use std::process::Stdio;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use futures::future::{BoxFuture, FutureExt, Shared};
+use regex::Regex;
 
 use super::errors::{Error, Result};
 use super::runner::lock;
@@ -17,31 +18,12 @@ pub const MIN_GIT_VERSION: &str = "2.41";
 /// The version in `git version`'s output, e.g. `2.45.1` from `git version 2.45.1.windows.1` or
 /// `2.39.3` from `git version 2.39.3 (Apple Git-146)`; `None` if there's none.
 pub fn parse_git_version(output: &str) -> Option<String> {
-    let rest = output.trim().strip_prefix("git version ")?;
-    // `\d+\.\d+(?:\.\d+)?`
-    let mut end = 0;
-    let mut parts = 0;
-    let bytes = rest.as_bytes();
-    while parts < 3 {
-        let digits = bytes[end..]
-            .iter()
-            .take_while(|b| b.is_ascii_digit())
-            .count();
-        if digits == 0 {
-            break;
-        }
-        let after = end + digits;
-        parts += 1;
-        end = after;
-        if parts == 3 || bytes.get(after) != Some(&b'.') {
-            break;
-        }
-        if !bytes.get(after + 1).is_some_and(u8::is_ascii_digit) {
-            break;
-        }
-        end = after + 1;
-    }
-    (parts >= 2).then(|| rest[..end].to_owned())
+    // `[0-9]` rather than `\d`, which is any Unicode digit here, and only ASCII ones in JS.
+    static VERSION: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^git version ([0-9]+\.[0-9]+(?:\.[0-9]+)?)").expect("a valid regex")
+    });
+    let captures = VERSION.captures(output.trim())?;
+    Some(captures[1].to_owned())
 }
 
 /// Whether `version` (e.g. `2.39.3`) is `MIN_GIT_VERSION` or newer.
@@ -183,6 +165,8 @@ mod tests {
         assert_eq!(parse("git version 2.50.0.rc1\n").as_deref(), Some("2.50.0"));
         assert_eq!(parse("git version 2.50\n").as_deref(), Some("2.50"));
         assert_eq!(parse("git version 2.\n"), None);
+        // Only ASCII digits, as JS's `\d` has it.
+        assert_eq!(parse("git version \u{0662}.\u{0664}\n"), None);
         assert_eq!(parse("something else"), None);
     }
 
