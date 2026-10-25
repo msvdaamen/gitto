@@ -46,6 +46,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.97.0
         with:
           components: rustfmt, clippy
+      # The dependencies' build, kept between runs: keyed by the toolchain and Cargo.lock, and
+      # restored from the closest match when those changed. A pull request restores its own cache,
+      # or else main's; base branches that aren't main never save one, as CI only runs on push to
+      # main. The workspace's crates are left out, as they're the ones that change.
+      - uses: Swatinem/rust-cache@v2
       # What GPUI links on Linux: xkbcommon for the keyboard (X11's too), Wayland, and fontconfig
       # (with FreeType) for fonts.
       - name: Install GPUI's system libraries
