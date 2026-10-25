@@ -20,10 +20,10 @@ use gpui_kit::{
     WeakEntity, Window, combine_highlights, div, font, point, px, rems, uniform_list,
 };
 
+use super::super::line_staging::{ChangedLine, SelectedRange, hunk_buttons, to_selection};
 use super::diff_metadata::{ChangeType, FileDiff, Side};
 use super::highlight::{DiffHighlights, highlight_name};
 use super::line_picker::{KeyOutcome, LinePicker, LineStaging, PickerKey, Viewport};
-use super::line_staging::{ChangedLine, SelectedRange, hunk_buttons, to_selection};
 use super::patch_files::{Expanded, carried_expansion};
 use super::viewer_rows::{
     ExpandDirection, Layout, LayoutOptions, LineAt, LineKind, Row, SeparatorButtons, Separators,
@@ -39,8 +39,8 @@ use crate::theme::{Palette, PaletteExt as _};
 
 /// The changes' font size and line height, as the TS viewer had them (12px on 20px lines, at the
 /// app's 15px base).
-pub(super) const FONT_REMS: f32 = 0.8;
-pub(super) const ROW_REMS: f32 = 4. / 3.;
+pub(in crate::components::repository::diff) const FONT_REMS: f32 = 0.8;
+pub(in crate::components::repository::diff) const ROW_REMS: f32 = 4. / 3.;
 
 /// Bytes of a line that are drawn: a longer one (a minified file's) is cut there, as shaping it
 /// whole would hold up every frame it's in view.
@@ -51,7 +51,7 @@ const TAB_WIDTH: usize = 4;
 
 /// A line of code as it's drawn, here and in the conflicts' viewer: its line end left off, tabs
 /// as spaces, a long one cut (with an ellipsis).
-pub(super) struct DrawnLine {
+pub(in crate::components::repository::diff) struct DrawnLine {
     pub text: String,
     /// The bytes of the line that are drawn.
     cut: usize,
@@ -112,7 +112,9 @@ impl DrawnLine {
 }
 
 /// The widest of `lines`, in characters as drawn (see [`DrawnLine`]).
-pub(super) fn widest_line<'a>(lines: impl IntoIterator<Item = &'a str>) -> usize {
+pub(in crate::components::repository::diff) fn widest_line<'a>(
+    lines: impl IntoIterator<Item = &'a str>,
+) -> usize {
     lines
         .into_iter()
         .map(|line| {
@@ -127,7 +129,11 @@ pub(super) fn widest_line<'a>(lines: impl IntoIterator<Item = &'a str>) -> usize
 }
 
 /// The width of a character of the code's font, at `font_size`.
-pub(super) fn code_char_width(font_size: Pixels, window: &mut Window, cx: &App) -> Pixels {
+pub(in crate::components::repository::diff) fn code_char_width(
+    font_size: Pixels,
+    window: &mut Window,
+    cx: &App,
+) -> Pixels {
     let sample: SharedString = "0000000000".into();
     let run = TextRun {
         len: sample.len(),
@@ -146,7 +152,7 @@ pub(super) fn code_char_width(font_size: Pixels, window: &mut Window, cx: &App) 
 
 /// Scrolls the list `scroll` tracks, of `rows` rows `row_height` high, by `down` pixels (up, if
 /// negative) and `across` right, within its contents.
-pub(super) fn scroll_list_by(
+pub(in crate::components::repository::diff) fn scroll_list_by(
     scroll: &UniformListScrollHandle,
     rows: usize,
     down: Pixels,

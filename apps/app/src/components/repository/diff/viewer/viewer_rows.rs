@@ -6,8 +6,8 @@
 
 use std::collections::HashMap;
 
+use super::super::line_staging::HunkButton;
 use super::diff_metadata::{ChangeType, FileDiff, HunkContent, Side, end_boundary, start_boundary};
-use super::line_staging::HunkButton;
 use super::patch_files::{Expanded, Expansion};
 use crate::state::diff_style::DiffStyle;
 
@@ -532,8 +532,8 @@ pub fn gap_size(diff: &FileDiff, index: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use super::super::super::line_staging::hunk_buttons;
     use super::super::diff_metadata::{LoadedSide, hydrate, parse_patch_files};
-    use super::super::line_staging::hunk_buttons;
     use super::*;
 
     fn numbered(count: usize, changed: usize) -> String {

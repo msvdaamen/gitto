@@ -16,15 +16,15 @@ use gpui_kit::{
     Task, Transformation, Window, div, percentage, px, rems,
 };
 
-use super::conflict_resolution::FileResolution;
-use super::conflict_viewer::prepare_conflicts;
-use super::diff_metadata::Side;
+use super::conflicts::conflict_resolution::FileResolution;
+use super::conflicts::conflict_viewer::prepare_conflicts;
 use super::file_editing::FileEditing;
 use super::file_staging::{FileStaging, StageFileMutation, StageLinesMutation};
-use super::patch_viewer::{PatchProps, PatchViewer, PatchViewerEvent};
 use super::shown_file::{ShownFile, patch_cache_key};
-use super::viewer_editing::{PatchEditor, PatchEditorEvent};
-use super::viewer_runtime::{LoadFile, LoadedFile, prepare_patch};
+use super::viewer::diff_metadata::Side;
+use super::viewer::patch_viewer::{PatchProps, PatchViewer, PatchViewerEvent};
+use super::viewer::viewer_editing::{PatchEditor, PatchEditorEvent};
+use super::viewer::viewer_runtime::{LoadFile, LoadedFile, prepare_patch};
 use crate::components::ui::{
     EmptyState, FileStatusBadge, Icon, IconButton, IconName, LineStats, LoadingState, Notice,
     action_button,
@@ -887,9 +887,9 @@ mod tests {
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{AppContext as _, TestAppContext};
 
-    use super::super::line_picker::LineStaging;
     use super::super::test_views::{DiffGit, init, set_patch_in, set_status, update_repository};
-    use super::super::viewer_runtime::ViewerRuntime;
+    use super::super::viewer::line_picker::LineStaging;
+    use super::super::viewer::viewer_runtime::ViewerRuntime;
     use super::*;
     use crate::components::repository::test_support::repository_entity;
     use crate::data::diff::{ChangedFiles, FilesOf};

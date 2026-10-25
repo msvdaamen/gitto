@@ -13,9 +13,9 @@ use gpui_kit::component::input::{
 use gpui_kit::prelude::*;
 use gpui_kit::{App, Context, Entity, EventEmitter, Subscription, Window, div};
 
-use super::conflict_whole_file::{code_editor, render_code_editor, reveal_line};
+use super::super::conflicts::conflict_whole_file::{code_editor, render_code_editor, reveal_line};
+use super::super::file_editing::EditSession;
 use super::diff_metadata::{ChangeType, FileDiff, HunkContent, Side};
-use super::file_editing::EditSession;
 use super::patch_files::fit_to_patch;
 use super::viewer_runtime::{LoadFile, LoadedFile};
 use crate::components::ui::LoadingState;

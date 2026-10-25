@@ -8,7 +8,7 @@
 use std::ops::Range;
 use std::sync::Arc;
 
-use super::diff_metadata::{ChangeType, FileDiff, Lines};
+use super::super::viewer::diff_metadata::{ChangeType, FileDiff, Lines};
 
 /// Unchanged lines shown around each conflict, as many as git shows around a change.
 pub const CONTEXT_LINES: usize = 3;
@@ -615,9 +615,9 @@ pub fn marker_label(marker: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::super::super::viewer::diff_metadata::Side;
+    use super::super::super::viewer::patch_files::Expanded;
     use super::super::conflict_rows::{ConflictRow, conflict_rows};
-    use super::super::diff_metadata::Side;
-    use super::super::patch_files::Expanded;
     use super::*;
 
     /// A file of `lines` numbered lines, with a conflict after each of `conflicts`, in git's merge

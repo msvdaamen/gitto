@@ -5,7 +5,7 @@
 
 use gitto_git::features::staging::schema::{LineRange, LineSelection};
 
-use super::diff_metadata::{FileDiff, HunkContent, Side};
+use super::viewer::diff_metadata::{FileDiff, HunkContent, Side};
 
 /// A removed or added line of a diff.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -245,7 +245,7 @@ pub fn hunk_buttons(diff: &FileDiff) -> Vec<HunkButton> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::diff_metadata::parse_patch_files;
+    use super::super::viewer::diff_metadata::parse_patch_files;
     use super::*;
 
     /// The rows lines are on, as the viewer numbers them, in unified or split view.

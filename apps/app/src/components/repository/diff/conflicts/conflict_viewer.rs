@@ -21,6 +21,17 @@ use gpui_kit::{
     uniform_list,
 };
 
+use super::super::file_editing::EditSession;
+use super::super::viewer::diff_metadata::Side;
+use super::super::viewer::highlight::DiffHighlights;
+use super::super::viewer::patch_files::Expanded;
+use super::super::viewer::patch_viewer::{
+    DrawnLine, FONT_REMS, ROW_REMS, code_char_width, scroll_list_by, widest_line,
+};
+use super::super::viewer::viewer_rows::{ExpandDirection, SeparatorButtons, expand};
+use super::super::viewer::viewer_runtime::{
+    HIGHLIGHT_WAIT, SharedHighlights, ViewHighlights, ViewerRuntime,
+};
 pub use super::conflict_diff::Resolution;
 use super::conflict_diff::{
     ConflictState, MarkerKind, ReadConflicts, conflicts_cache_key, conflicts_left, marker_label,
@@ -28,15 +39,6 @@ use super::conflict_diff::{
 };
 use super::conflict_rows::{ConflictRow, LineRole, actions_row, conflict_rows};
 use super::conflict_whole_file::WholeFile;
-use super::diff_metadata::Side;
-use super::file_editing::EditSession;
-use super::highlight::DiffHighlights;
-use super::patch_files::Expanded;
-use super::patch_viewer::{
-    DrawnLine, FONT_REMS, ROW_REMS, code_char_width, scroll_list_by, widest_line,
-};
-use super::viewer_rows::{ExpandDirection, SeparatorButtons, expand};
-use super::viewer_runtime::{HIGHLIGHT_WAIT, SharedHighlights, ViewHighlights, ViewerRuntime};
 use crate::components::ui::{Icon, IconName};
 use crate::data::DataError;
 use crate::theme::{Palette, PaletteExt as _};
@@ -137,7 +139,7 @@ pub struct ConflictViewer {
     running: bool,
     /// The work under way, which editing waits for.
     active: Shared<Task<()>>,
-    pub(super) whole: WholeFile,
+    pub(in crate::components::repository::diff) whole: WholeFile,
     /// The lines shown in each gap between the conflicts.
     expanded: Expanded,
     rows: Rc<Vec<ConflictRow>>,
@@ -1260,7 +1262,7 @@ fn line_text(
 mod tests {
     use gpui_kit::TestAppContext;
 
-    use super::super::test_views::{
+    use super::super::super::test_views::{
         Opened, conflicted, init, open, save, set_changes, set_conflict, text_conflict,
     };
     use super::*;

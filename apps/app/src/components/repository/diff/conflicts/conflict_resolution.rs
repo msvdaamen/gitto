@@ -12,12 +12,12 @@ use gpui_kit::component::{Disableable as _, Sizable as _};
 use gpui_kit::prelude::*;
 use gpui_kit::{AnyElement, Context, Entity, FontWeight, KeyDownEvent, Task, Window, div};
 
+use super::super::file_diff_view::{FileDiffEvent, FileDiffView};
+use super::super::file_editing::Reload;
 use super::conflict_sides::ConflictSides;
 use super::conflict_viewer::{
     ConflictProgress, ConflictViewer, ConflictViewerEvent, DiskFile, Resolution, SaveFile,
 };
-use super::file_diff_view::{FileDiffEvent, FileDiffView};
-use super::file_editing::Reload;
 use super::markers_dialog::open_markers_dialog;
 use crate::components::ui::{
     EmptyState, IconButton, IconName, LoadingState, Notice, action_button,
@@ -143,13 +143,13 @@ impl FileDiffView {
     }
 
     /// Whether the file on show is conflicted, its conflicts shown to resolve: an unstaged one.
-    pub(super) fn is_resolving(&self) -> bool {
+    pub(in crate::components::repository::diff) fn is_resolving(&self) -> bool {
         *self.view.source() == DiffSource::Unstaged && self.view.conflicted()
     }
 
     /// Brings the conflict up to date with the file on show: what's loaded, what the viewer
     /// shows, and whether it's edited.
-    pub(super) fn sync_resolution(
+    pub(in crate::components::repository::diff) fn sync_resolution(
         &mut self,
         show: bool,
         window: &mut Window,
@@ -251,7 +251,9 @@ impl FileDiffView {
 
     /// The viewer's progress, once it's of this file: the last one's is still on show while this
     /// one's conflicts are being highlighted.
-    pub(super) fn shown_progress(&self) -> Option<&ConflictProgress> {
+    pub(in crate::components::repository::diff) fn shown_progress(
+        &self,
+    ) -> Option<&ConflictProgress> {
         let progress = self.resolution.progress.as_ref()?;
         (self.resolution.is_text()
             && progress.file_key.as_deref() == Some(self.view.file_key().as_str()))
@@ -274,7 +276,7 @@ impl FileDiffView {
     }
 
     /// The next conflicted file in the list after this one, or the first before it.
-    pub(super) fn next_conflicted(&self) -> Option<ChangedFile> {
+    pub(in crate::components::repository::diff) fn next_conflicted(&self) -> Option<ChangedFile> {
         let files = self.view.lists().files();
         let path = self.view.file().path;
         let at = files.iter().position(|file| file.path == path);
@@ -357,7 +359,11 @@ impl FileDiffView {
     }
 
     /// Marks the file resolved, once it's ready; asks first if it has conflict markers left.
-    pub(super) fn mark_resolved(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::components::repository::diff) fn mark_resolved(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.resolution.is_text() || self.is_resolution_busy() {
             return;
         }
@@ -430,7 +436,7 @@ impl FileDiffView {
 
     /// The conflicts' keys: `[` and `]`, `O`, `T` and `B`, `N`, and ⌘↵ (or Ctrl+Enter). Not while
     /// the file's edited.
-    pub(super) fn on_conflict_key(
+    pub(in crate::components::repository::diff) fn on_conflict_key(
         &mut self,
         event: &KeyDownEvent,
         window: &mut Window,
@@ -491,7 +497,7 @@ impl FileDiffView {
     }
 
     /// Whether the file can be edited by hand: its text, once it's on show as it is on disk.
-    pub(super) fn is_conflict_editable(&self) -> bool {
+    pub(in crate::components::repository::diff) fn is_conflict_editable(&self) -> bool {
         self.resolution.is_text()
             && self
                 .shown_progress()
@@ -500,7 +506,10 @@ impl FileDiffView {
     }
 
     /// The conflicts left, stepping through them, marking the file resolved, and the next file.
-    pub(super) fn render_conflict_controls(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    pub(in crate::components::repository::diff) fn render_conflict_controls(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
         let palette = *cx.palette();
         let editing = self.editing.is_editing();
         let progress = self.shown_progress();
@@ -587,7 +596,10 @@ impl FileDiffView {
     }
 
     /// What each side did with the file, and keeping one whole; or why that failed.
-    pub(super) fn render_conflict_banner(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    pub(in crate::components::repository::diff) fn render_conflict_banner(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
         let mut banners = Vec::new();
         let busy = self.is_resolution_busy();
         if self.resolution.is_text()
@@ -640,7 +652,10 @@ impl FileDiffView {
     }
 
     /// The conflicts, or the sides to keep one of.
-    pub(super) fn render_conflict_body(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(in crate::components::repository::diff) fn render_conflict_body(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         if let Some(error) = self.resolution.load_error.clone() {
             return EmptyState::new(
                 "conflict-error",
@@ -703,11 +718,11 @@ mod tests {
     use gitto_git::features::conflicts::schema::ConflictSides;
     use gpui_kit::{AppContext as _, TestAppContext};
 
-    use super::super::conflict_viewer::ConflictProgress;
-    use super::super::test_views::{
+    use super::super::super::test_views::{
         Opened, conflicted, id, init, open, reload_conflict_as, save, set_changes, set_conflict,
         side, text_conflict,
     };
+    use super::super::conflict_viewer::ConflictProgress;
     use super::*;
     use crate::components::ui::{ConfirmDialog, Tone};
     use crate::data::Repositories;

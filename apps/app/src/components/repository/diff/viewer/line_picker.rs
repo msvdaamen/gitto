@@ -9,10 +9,10 @@ use std::rc::Rc;
 use gitto_git::features::staging::schema::LineSelection;
 use gpui_kit::{App, Task};
 
-use super::diff_metadata::{FileDiff, Side};
-use super::line_staging::{
+use super::super::line_staging::{
     ChangedLine, ChangedRow, SelectedRange, changed_lines, changed_rows, range_of, selected_lines,
 };
+use super::diff_metadata::{FileDiff, Side};
 use super::viewer_rows::Layout;
 use crate::data::DataError;
 use crate::data::staging::StageAction;
@@ -417,8 +417,8 @@ fn row_of(layout: &Layout) -> impl Fn(usize, Side) -> Option<usize> + '_ {
 
 #[cfg(test)]
 mod tests {
+    use super::super::super::line_staging::hunk_buttons;
     use super::super::diff_metadata::parse_patch_files;
-    use super::super::line_staging::hunk_buttons;
     use super::super::patch_files::Expanded;
     use super::super::viewer_rows::{LayoutOptions, Separators, layout};
     use super::*;

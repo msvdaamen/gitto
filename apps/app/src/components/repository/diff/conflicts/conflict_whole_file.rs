@@ -8,8 +8,8 @@ use gpui_kit::component::input::{Editor, EditorState, InputEvent, Position};
 use gpui_kit::prelude::*;
 use gpui_kit::{AnyElement, App, Context, Entity, Subscription, Window, point, rems};
 
+use super::super::viewer::patch_viewer::{FONT_REMS, ROW_REMS};
 use super::conflict_viewer::{ConflictViewer, ConflictViewerEvent};
-use super::patch_viewer::{FONT_REMS, ROW_REMS};
 
 /// The language a file's path names, for the editor's highlighting: its extension, or its whole
 /// name (`Makefile`), as the diff's highlighting finds it.

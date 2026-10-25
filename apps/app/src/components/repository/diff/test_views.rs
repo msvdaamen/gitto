@@ -21,7 +21,7 @@ use gpui_kit::{
     AnyWindowHandle, App, AppContext as _, Context, Entity, Global, Task, TestAppContext,
 };
 
-use super::conflict_resolution::ResolveFileMutation;
+use super::conflicts::conflict_resolution::ResolveFileMutation;
 use super::file_diff_view::{FileDiffEvent, FileDiffView};
 use super::file_editing::{FileIo, Reload};
 use crate::components::repository::test_support::{fake_git, repository_entity};

@@ -13,7 +13,7 @@ use gitto_ui_logic::git::patch::{has_hunks, staged_whole};
 use gpui_kit::{App, Context, Entity, Subscription, Task};
 
 use super::file_diff_view::{FileDiffEvent, FileDiffView};
-use super::line_picker::{LineStaging, StageLines};
+use super::viewer::line_picker::{LineStaging, StageLines};
 use crate::data::staging::{
     FileToStage, LinesToStage, StageAction, stage_file_mutation, stage_lines_mutation,
 };
