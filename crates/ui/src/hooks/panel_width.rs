@@ -1,7 +1,6 @@
 //! Ported from `hooks/panel-width.ts`: the width of a resizable panel.
 
 use super::Storage;
-use crate::js;
 
 /// The width a panel starts at, and the narrowest and widest it can be.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -18,14 +17,14 @@ pub fn storage_key(name: &str) -> String {
 
 /// `width` within `bounds`, in whole pixels.
 pub fn clamp(width: f64, bounds: PanelBounds) -> f64 {
-    js::round(bounds.max.min(bounds.min.max(width)))
+    width.clamp(bounds.min, bounds.max).round()
 }
 
 /// The width saved as `saved` (as `localStorage` had it), within `bounds`; the initial one if
 /// it's unreadable.
 pub fn parse_width(saved: Option<&str>, bounds: PanelBounds) -> f64 {
     // As `Number()` reads it: blank is 0.
-    let value = saved.and_then(|saved| match saved.trim_matches(js::is_whitespace) {
+    let value = saved.and_then(|saved| match saved.trim() {
         "" => Some(0.0),
         number => number.parse::<f64>().ok(),
     });

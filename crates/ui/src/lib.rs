@@ -16,4 +16,3 @@
 pub mod format;
 pub mod git;
 pub mod hooks;
-mod js;

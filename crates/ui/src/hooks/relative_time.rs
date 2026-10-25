@@ -36,7 +36,7 @@ mod tests {
         #[test]
         fn tells_a_time_again_as_time_passes() {
             let mut now = now_ms();
-            let made = now - 30_000;
+            let made = now - 20_000;
             assert_eq!(relative_time(made, now), "Just now");
             assert_eq!(relative_time_now(made), "Just now");
 
