@@ -157,7 +157,9 @@ impl DetailsList {
         let palette = *cx.palette();
         let shown = files.files().clone();
         match &self.shape {
-            Some((last, key)) if *last == shown => {
+            // No files is the same shape whichever empty list it's told: its owner makes another
+            // on each render while there are none.
+            Some((last, key)) if *last == shown || (last.is_empty() && shown.is_empty()) => {
                 if *key != top_key {
                     self.state.remeasure_items(0..1);
                 }
