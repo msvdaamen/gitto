@@ -376,6 +376,10 @@ impl PatchViewer {
         });
         // The lines shown around the last one's changes are by hunk, which another's don't match.
         self.expanded = expanded;
+        // Only the diff on show's failure matters: the others' would keep their diffs, and the
+        // files read into them, for as long as the view is open (a file saved again and again).
+        self.failures
+            .retain(|(failed, _)| Arc::ptr_eq(failed, &diff));
         self.dragging = false;
         self.relayout();
         let pickable = self.is_pickable();
