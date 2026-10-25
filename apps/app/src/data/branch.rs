@@ -87,10 +87,6 @@ impl<T: 'static, R: 'static> BranchChange<T, R> {
     pub fn is_blocked(&self, id: &str, cx: &App) -> bool {
         branches_changing(id, cx)
     }
-
-    pub fn operation(&self) -> &OneAtATime<T, R> {
-        &self.operation
-    }
 }
 
 /// Creates a branch, by its name, at HEAD and switches to it, taking the uncommitted changes

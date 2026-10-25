@@ -704,15 +704,6 @@ impl QueryClient {
         true
     }
 
-    /// When what's cached for `key` was last loaded or set, if it was.
-    pub fn data_updated_at(key: &QueryKey, cx: &App) -> Option<Instant> {
-        cx.global::<QueryClient>()
-            .entries
-            .get(key)?
-            .info(cx)
-            .data_updated_at
-    }
-
     /// How many times what's cached for `key` has been loaded or set (see `QueryEntry::updates`);
     /// 0 if nothing is.
     pub fn updates(key: &QueryKey, cx: &App) -> u64 {

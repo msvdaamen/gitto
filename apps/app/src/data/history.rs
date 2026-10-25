@@ -160,7 +160,6 @@ fn followed_by(log: &Log, commits: Vec<Commit>, complete: bool) -> Log {
 /// keeps one, made in its constructor, and makes another for another repository.
 pub struct LogQuery {
     id: RepositoryId,
-    get: GetLog,
     query: Query<Log>,
     more: Entity<Mutation<RepositoryId>>,
     _subscriptions: [Subscription; 2],
@@ -174,10 +173,7 @@ impl LogQuery {
     /// The log, read by `get`: e.g. a test's.
     pub fn with_get<V: 'static>(id: &RepositoryId, get: GetLog, cx: &mut Context<V>) -> Self {
         let query = Query::new(log_options(id, Rc::clone(&get)), cx);
-        let more = {
-            let get = Rc::clone(&get);
-            Mutation::new(move |id, cx: &mut App| load_more(id, &get, cx), cx)
-        };
+        let more = Mutation::new(move |id, cx: &mut App| load_more(id, &get, cx), cx);
         // Whether loading more failed, or is still under way, is of the log as it was: not of the
         // one reloaded since (`useResetOn`).
         let reset = {
@@ -193,7 +189,6 @@ impl LogQuery {
         let render = cx.observe(&more, |_, _, cx| cx.notify());
         LogQuery {
             id: id.clone(),
-            get,
             query,
             more,
             _subscriptions: [reset, render],
@@ -222,10 +217,6 @@ impl LogQuery {
                 drop(more.mutate(id, cx));
             });
         }
-    }
-
-    pub fn get(&self) -> &GetLog {
-        &self.get
     }
 }
 
