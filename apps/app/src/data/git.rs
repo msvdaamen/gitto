@@ -26,7 +26,7 @@ use gitto_git::input::{
 };
 use gitto_git::{ApiError, GitApi};
 
-use super::client::QueryError;
+use super::error::QueryError;
 
 /// What git does, and answers, as a future that runs on the background executor.
 pub type GitTask<T> = BoxFuture<'static, Result<T, QueryError>>;

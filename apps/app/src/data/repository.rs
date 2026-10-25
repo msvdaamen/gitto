@@ -37,15 +37,14 @@ use gitto_git::input::{FileInput, FullSha, NonEmpty, RepositoryId, Sha};
 use gitto_git::schema::FileStatus;
 use gpui_kit::{App, AppContext as _, Context, Entity, EventEmitter, Global, Subscription, Task};
 
-use super::client::QueryError;
 use super::diff::{ChangedFiles, FilesOf};
+use super::error::QueryError;
 use super::file_diff::FilePatch;
 use super::git::{GitRepository, GitTask, RepositoryGit};
 use super::history::{Log, NEXT_PAGE, followed_by, reload_limit};
 use super::keyed::{Hold, Keyed};
 use super::loaded::Loaded;
 use super::opaque::Opaque;
-use super::operation::OperationState;
 use crate::services::Services;
 use gitto_ui::git::diff_source::{DiffSource, diff_file_key, is_uncommitted};
 
@@ -90,6 +89,21 @@ pub enum Part {
 /// whether it's loading.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Changed(pub Part);
+
+/// Whether one of a repository's operations is running, and why it last failed (see
+/// [`Repository::run`]).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct OperationState {
+    pub running: bool,
+    pub error: Option<QueryError>,
+}
+
+impl OperationState {
+    /// Whether it's running (TanStack's `isPending`).
+    pub fn is_pending(&self) -> bool {
+        self.running
+    }
+}
 
 /// The loads a reload started: `.await` it to wait for them, or drop it not to (they run either
 /// way).

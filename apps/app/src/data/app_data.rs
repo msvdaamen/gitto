@@ -17,7 +17,7 @@ use gitto_git::features::version::check;
 use gitto_repository::Repository;
 use gpui_kit::{App, AppContext as _, Context, Entity, EventEmitter, Global};
 
-use super::client::QueryError;
+use super::error::QueryError;
 use super::git::GitTask;
 use super::loaded::Loaded;
 use crate::services::Services;

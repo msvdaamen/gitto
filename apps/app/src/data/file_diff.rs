@@ -9,11 +9,10 @@ use gitto_git::features::status::schema::Uncommitted;
 use gitto_git::input::RepositoryId;
 use gpui_kit::{App, AppContext as _, Entity, Task};
 
-use super::client::QueryError;
 use super::diff::{ChangedFiles, FilesOf, ShownFiles, WorkingTreeLists};
 use super::diff::{select_shown_files, select_working_tree_lists};
+use super::error::QueryError;
 use super::keyed::Hold;
-use super::keys::{self, UncommittedSide};
 use super::loaded::Loaded;
 use super::opaque::Opaque;
 use super::repository::{Part, Repositories, Repository};
@@ -148,16 +147,6 @@ impl DiffSourceFiles {
             .as_ref()
             .map(|lists| lists.unstaged().clone())
             .unwrap_or_else(|| Opaque::new(Vec::new()))
-    }
-}
-
-/// Where the patch of the file at `path` in `source` is cached.
-pub fn file_patch_key(id: &RepositoryId, source: &DiffSource, path: &str) -> super::QueryKey {
-    match source {
-        DiffSource::Unstaged => keys::uncommitted_file_patch(id, UncommittedSide::Unstaged, path),
-        DiffSource::Staged => keys::uncommitted_file_patch(id, UncommittedSide::Staged, path),
-        DiffSource::Commit { sha } => keys::commit_file_patch(id, sha, path),
-        DiffSource::Stash { sha } => keys::stash_file_patch(id, sha, path),
     }
 }
 

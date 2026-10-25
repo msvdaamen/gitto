@@ -5,23 +5,19 @@ use std::collections::HashSet;
 
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::features::status::schema::Uncommitted;
-use gitto_git::input::{FullSha, RepositoryId, Sha};
+use gitto_git::input::RepositoryId;
 use gitto_git::schema::FileStatus;
-use gpui_kit::{App, Context, Entity, Task};
+use gpui_kit::{App, Entity, Task};
 
-use super::call::loads;
-use super::client::{QueryError, QueryOptions, StaleTime};
+use super::error::QueryError;
 use super::keyed::Hold;
-use super::keys;
 use super::loaded::Loaded;
 use super::opaque::{Opaque, memoized};
-use super::query::Query;
 use super::repository::{Repositories, Repository};
-use super::status::uncommitted_options;
 use gitto_ui::git::changes::{LineCounts, line_totals};
 
 /// Whose changed files to load: a commit's, compared to its first parent, or a stash's, compared
-/// to the commit it was made on (TS's pair of a query key and a `FilesFetcher`).
+/// to the commit it was made on (TS's `FilesFetcher`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FilesOf {
     Commit,
@@ -35,48 +31,6 @@ pub struct ChangedFiles {
     pub sha: String,
     /// A commit can change tens of thousands of files.
     pub files: Opaque<Vec<ChangedFile>>,
-}
-
-/// Loads the files the commit or stash `sha` changed, which never change (`changedFilesQuery`).
-/// While another one's load (see `Query::set_options`), the previous ones stay on show; they come
-/// with the SHA they're of.
-pub fn changed_files_options(
-    id: &RepositoryId,
-    sha: &str,
-    of: FilesOf,
-    enabled: bool,
-    cx: &App,
-) -> QueryOptions<ChangedFiles> {
-    let sha = sha.to_owned();
-    let key = match of {
-        FilesOf::Commit => keys::commit_files(id, &sha),
-        FilesOf::Stash => keys::stash_files(id, &sha),
-    };
-    QueryOptions::new(
-        key,
-        loads(cx, id, move |repo| {
-            let sha = sha.clone();
-            async move {
-                let files = match of {
-                    FilesOf::Commit => {
-                        let commit = repo.input(Sha::parse(sha.clone()))?;
-                        repo.commit_files(commit).await?
-                    }
-                    FilesOf::Stash => {
-                        let stash = repo.input(FullSha::parse(sha.clone()))?;
-                        repo.stash_files(stash).await?
-                    }
-                };
-                Ok(ChangedFiles {
-                    sha,
-                    files: Opaque::new(files),
-                })
-            }
-        }),
-    )
-    .stale_time(StaleTime::Infinite)
-    .keep_previous_data()
-    .enabled(enabled)
 }
 
 /// What a view shows of [`ChangedFiles`]: the files, their line totals, and whose they are.
@@ -146,31 +100,6 @@ impl FilesOnShow {
     }
 }
 
-/// The files the commit or stash `sha` changed (see [`changed_files_options`];
-/// `useChangedFiles`); [`ShownFiles::shown_sha`] says whose are on show, so what's shown with them
-/// can match. To show another's, `Query::set_options` with [`changed_files_options`].
-pub fn changed_files_query<V: 'static>(
-    id: &RepositoryId,
-    sha: &str,
-    of: FilesOf,
-    cx: &mut Context<V>,
-) -> Query<ChangedFiles, ShownFiles> {
-    Query::with_select(
-        changed_files_options(id, sha, of, true, cx),
-        select_shown_files(),
-        cx,
-    )
-}
-
-/// Files changed by a commit, compared to its first parent (`useCommitFiles`).
-pub fn commit_files_query<V: 'static>(
-    id: &RepositoryId,
-    sha: &str,
-    cx: &mut Context<V>,
-) -> Query<ChangedFiles, ShownFiles> {
-    changed_files_query(id, sha, FilesOf::Commit, cx)
-}
-
 /// A file's contents by their object name, e.g. to show more of it around a patch's changes
 /// (`fetchBlob`).
 pub fn fetch_blob(id: &RepositoryId, oid: &str, cx: &mut App) -> Task<Result<String, QueryError>> {
@@ -230,29 +159,9 @@ impl WorkingTreeLists {
     }
 }
 
-/// [`WorkingTreeLists::of`], made once per status: for `Query::with_select`.
+/// [`WorkingTreeLists::of`], made once per status.
 pub fn select_working_tree_lists() -> impl Fn(&Opaque<Uncommitted>) -> WorkingTreeLists + 'static {
     memoized(WorkingTreeLists::of)
-}
-
-/// The uncommitted changes' lists (see [`WorkingTreeLists`]); only loaded while `enabled`. Whether
-/// they're loaded is whether `Query::data` has them.
-pub fn working_tree_lists_query<V: 'static>(
-    id: &RepositoryId,
-    enabled: bool,
-    cx: &mut Context<V>,
-) -> Query<Opaque<Uncommitted>, WorkingTreeLists> {
-    let options = uncommitted_options(id, super::status::git_status(cx)).enabled(enabled);
-    Query::with_select(options, select_working_tree_lists(), cx)
-}
-
-/// The uncommitted changes, split into what's staged for the next commit and what isn't
-/// (`useWorkingTreeChanges`). They come with the status, so this shares its query.
-pub fn working_tree_changes_query<V: 'static>(
-    id: &RepositoryId,
-    cx: &mut Context<V>,
-) -> Query<Opaque<Uncommitted>, WorkingTreeLists> {
-    working_tree_lists_query(id, true, cx)
 }
 
 /// The staged files to list: a conflict shows up on both sides, but it's resolved by staging it.

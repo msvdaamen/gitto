@@ -22,8 +22,8 @@ use crate::components::repository::operation_bar::{OperationBar, OperationBarEve
 use crate::components::repository::sidebar::refs_sidebar::RefsSidebar;
 use crate::components::repository::toolbar::{RepositoryToolbar, ToolbarEvent};
 use crate::components::ui::{HandleSide, PanelDrag, ResizeHandle, dragged_width};
+use crate::data::RepositoryWatcher;
 use crate::data::watch::WatchStreams;
-use crate::data::{QueryClient, RepositoryWatcher};
 use crate::services::Services;
 use crate::state::panel_width::{PanelBounds, PanelWidth};
 use crate::state::router::Router;
@@ -234,9 +234,8 @@ impl RepositoryView {
     ) -> Entity<RepositoryWatcher> {
         let git = Rc::clone(streams);
         let focused = window.is_window_active();
-        let shown_at = QueryClient::now(cx);
         let id = id.clone();
-        cx.new(|cx| RepositoryWatcher::new(id, git, focused, shown_at, cx))
+        cx.new(|cx| RepositoryWatcher::new(id, git, focused, cx))
     }
 
     /// What closing the file, or opening another, waits for: its edits saved (see
@@ -669,14 +668,14 @@ mod tests {
     use super::*;
     use crate::components::repository::history::columns::keyed;
     use crate::components::repository::test_support::{
-        Repositories, repository, repository_id, set_files, set_log, set_operation,
+        Repositories, repository, repository_id, set_files, set_log, set_operation, set_patch,
         set_push_target, set_refs, set_remotes, set_stashes, set_status, set_worktrees, setup_with,
         uncommitted,
     };
+    use crate::data::Opaque;
     use crate::data::diff::{ChangedFiles, FilesOf};
-    use crate::data::file_diff::{FilePatch, file_patch_key};
+    use crate::data::file_diff::FilePatch;
     use crate::data::history::Log;
-    use crate::data::{Opaque, QueryClient};
 
     fn commit(sha: &str, subject: &str, parents: &[&str], committed_at: i64) -> Commit {
         Commit {
@@ -784,7 +783,7 @@ mod tests {
                 )
                 .into(),
             };
-            cx.update(|cx| QueryClient::set_data(&file_patch_key(&id, &source, path), patch, cx));
+            set_patch(&id, &source, patch, cx);
         }
         let (window, view) = crate::test_support::open(cx, |window, cx| {
             RepositoryView::with_streams(id, Rc::new(Unchanged), window, cx)

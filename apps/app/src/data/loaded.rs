@@ -5,7 +5,7 @@
 use futures::channel::oneshot;
 use gpui_kit::Task;
 
-use super::client::QueryError;
+use super::error::QueryError;
 
 /// What's loaded of something (see the module's doc). A load that brings data equal to what's
 /// there keeps what's there, so nothing selected from it changes; data too big to compare is an

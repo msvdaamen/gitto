@@ -710,8 +710,7 @@ mod tests {
     };
     use super::*;
     use crate::components::ui::{ConfirmDialog, Tone};
-    use crate::data::QueryClient;
-    use crate::data::file_diff::{FilePatch, file_patch_key};
+    use crate::data::Repositories;
 
     const MARKERS: &str = "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> side\n";
 
@@ -789,12 +788,11 @@ mod tests {
         assert_eq!(left(&opened, cx).as_deref(), Some("2 conflicts left"));
         // "Changed on both sides", with a side to keep whole.
         assert!(opened.has("keep-all-ours", cx));
-        let patch = file_patch_key(&id(), &DiffSource::Unstaged, "a.txt");
         let loaded = cx.update(|cx| {
-            QueryClient::get_entry::<FilePatch>(&patch, cx).is_some_and(|entry| {
-                let entry = entry.read(cx);
-                entry.is_fetching() || entry.data().is_some()
-            })
+            let repository = Repositories::open(&id(), cx).read(cx);
+            repository
+                .patch(&DiffSource::Unstaged, "a.txt")
+                .is_some_and(|patch| patch.is_fetching() || patch.data().is_some())
         });
         assert!(!loaded);
         // Ours above theirs, one way only.

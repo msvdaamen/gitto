@@ -12,7 +12,7 @@ use std::rc::Rc;
 use futures::channel::oneshot;
 use gpui_kit::{App, AppContext as _, Context, Entity, Task};
 
-use super::client::QueryError;
+use super::error::QueryError;
 
 /// Runs a mutation with its input, on the main thread; its task runs the slow part on the
 /// background executor, and settles once what it reloads is reloaded, if it waits for that.

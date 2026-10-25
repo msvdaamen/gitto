@@ -1,64 +1,11 @@
-//! A conflicted file, and resolving it whole. Ported from `git/queries/conflicts.ts`.
+//! Resolving a conflicted file whole. Ported from `git/queries/conflicts.ts`.
 
-use std::time::Duration;
+use gitto_git::features::conflicts::schema::{ConflictSides, Side};
+use gitto_git::input::RepositoryId;
+use gpui_kit::{App, Entity};
 
-use gitto_git::features::conflicts::schema::{Conflict, ConflictSides, Side};
-use gitto_git::input::{NonEmpty, RepositoryId};
-use gpui_kit::{App, Context, Entity};
-
-use super::call::loads;
-use super::client::{QueryOptions, StaleTime};
-use super::keys;
 use super::mutation::Mutation;
-use super::query::Query;
 use super::repository::Repositories;
-
-/// How long a conflicted file is kept once nothing shows it, rather than queries' five minutes.
-pub const CONFLICT_GC: Duration = Duration::from_secs(60);
-
-/// Loads a conflicted file's sides, and its text with the conflict markers if it's text
-/// (`conflictQuery`).
-pub fn conflict_options(id: &RepositoryId, path: &str, cx: &App) -> QueryOptions<Conflict> {
-    let path = path.to_owned();
-    QueryOptions::new(
-        keys::conflict(id, &path),
-        loads(cx, id, move |repo| {
-            let path = path.clone();
-            async move { repo.conflict(repo.input(NonEmpty::parse(path))?).await }
-        }),
-    )
-    // Only reloaded once it's invalidated: like the status, whenever the working tree or the
-    // index changes (see `file_diff::file_patch_options`).
-    .stale_time(StaleTime::Infinite)
-    // Not kept long once nothing shows it, as a blob isn't (see `diff::fetch_blob`): it's the whole
-    // file, and one is loaded ahead whenever the pointer rests on a conflicted file.
-    .gc_time(CONFLICT_GC)
-}
-
-/// [`conflict_options`] as [`conflict_query`] shows them, for `Query::set_options` when the file
-/// on show changes.
-pub fn conflict_query_options(
-    id: &RepositoryId,
-    path: &str,
-    enabled: bool,
-    cx: &App,
-) -> QueryOptions<Conflict> {
-    conflict_options(id, path, cx)
-        .keep_previous_data()
-        .enabled(enabled)
-}
-
-/// A conflicted file (see [`conflict_options`]), kept up to date as it's resolved (`useConflict`).
-/// While another one's loads (see `Query::set_options` and [`conflict_query_options`]), the last
-/// one's stays, as `Query::is_placeholder_data` says: what's on show stays until it's in.
-pub fn conflict_query<V: 'static>(
-    id: &RepositoryId,
-    path: &str,
-    enabled: bool,
-    cx: &mut Context<V>,
-) -> Query<Conflict> {
-    Query::new(conflict_query_options(id, path, enabled, cx), cx)
-}
 
 /// Resolving a conflicted file whole: keeping one side, or marking it resolved as it is.
 #[derive(Debug, Clone, PartialEq)]

@@ -127,17 +127,12 @@
 //! `hooks/repositories.ts` as [`repositories`].
 
 pub mod app_data;
-mod call;
-pub mod client;
+pub mod error;
 pub mod git;
-pub mod key;
 pub mod keyed;
-pub mod keys;
 pub mod loaded;
 pub mod mutation;
 pub mod opaque;
-pub mod operation;
-pub mod query;
 pub mod repository;
 
 pub mod branch;
@@ -147,39 +142,25 @@ pub mod conflicts;
 pub mod diff;
 pub mod file_diff;
 pub mod history;
-pub mod overview;
-pub mod progress;
-pub mod refs;
 pub mod remote;
 pub mod repositories;
 pub mod staging;
-pub mod stash;
 pub mod status;
-pub mod user;
-pub mod version;
 pub mod watch;
 pub mod worktree;
 
 pub use self::app_data::{AppChanged, AppData, AppPart};
 pub use self::changes::Done;
-pub use self::client::{
-    QueryClient, QueryDefaults, QueryEntry, QueryError, QueryOptions, QueryStatus, RefetchOnFocus,
-    Reloading, StaleTime,
-};
-pub use self::key::QueryKey;
+pub use self::error::QueryError;
 pub use self::loaded::Loaded;
 pub use self::mutation::Mutation;
 pub use self::opaque::Opaque;
-pub use self::operation::{OneAtATime, OperationState, Operations, RepositoryOperation, reloading};
-pub use self::query::Query;
 pub use self::repository::{
-    Changed, Part, Repositories, Repository, Shown, observe_parts, observe_selected,
+    Changed, OperationState, Part, Repositories, Repository, Shown, observe_parts, observe_selected,
 };
 pub use self::watch::RepositoryWatcher;
 
-/// Sets up the data layer's globals: the query cache and the operations' state.
+/// Sets up the data layer's globals: the app's data, and the repositories' entities.
 pub fn init(cx: &mut gpui_kit::App) {
-    QueryClient::init(cx);
     app_data::AppData::init(cx);
-    cx.set_global(Operations::default());
 }

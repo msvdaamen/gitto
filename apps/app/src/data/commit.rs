@@ -1,13 +1,9 @@
-//! Committing, rewording, and what's read of a commit. Ported from `git/queries/commit.ts`.
+//! Committing and rewording. Ported from `git/queries/commit.ts`.
 
-use gitto_git::input::{RepositoryId, Sha};
-use gpui_kit::{App, Context, Entity};
+use gitto_git::input::RepositoryId;
+use gpui_kit::{App, Entity};
 
-use super::call::loads;
-use super::client::{QueryOptions, StaleTime};
-use super::keys;
 use super::mutation::Mutation;
-use super::query::Query;
 use super::repository::Repositories;
 
 /// A commit to make: of what's staged, with `message`; with `amend`, HEAD's SHA, it replaces that
@@ -46,49 +42,4 @@ pub fn reword_commit_mutation(cx: &mut App) -> Entity<Mutation<(RepositoryId, Re
         },
         cx,
     )
-}
-
-/// A commit's full message, as written; it never changes.
-pub fn commit_message_options(id: &RepositoryId, sha: &str, cx: &App) -> QueryOptions<String> {
-    let sha = sha.to_owned();
-    QueryOptions::new(
-        keys::commit_message(id, &sha),
-        loads(cx, id, move |repo| {
-            let sha = sha.clone();
-            async move { repo.commit_message(repo.input(Sha::parse(sha))?).await }
-        }),
-    )
-    .stale_time(StaleTime::Infinite)
-}
-
-/// A commit's message's query.
-pub fn commit_message_query<V: 'static>(
-    id: &RepositoryId,
-    sha: &str,
-    cx: &mut Context<V>,
-) -> Query<String> {
-    Query::new(commit_message_options(id, sha, cx), cx)
-}
-
-/// The remote branch `git push` would update that has the commit; `None` if it has no need to.
-pub fn pushed_to_options(id: &RepositoryId, sha: &str, cx: &App) -> QueryOptions<Option<String>> {
-    let sha = sha.to_owned();
-    QueryOptions::new(
-        keys::pushed_to(id, &sha),
-        loads(cx, id, move |repo| {
-            let sha = sha.clone();
-            async move { repo.pushed_to(repo.input(Sha::parse(sha))?).await }
-        }),
-    )
-    // Reloaded when the refs change (it's under `keys::repository`), not on every window focus.
-    .stale_time(StaleTime::Infinite)
-}
-
-/// Where a commit was pushed to's query.
-pub fn pushed_to_query<V: 'static>(
-    id: &RepositoryId,
-    sha: &str,
-    cx: &mut Context<V>,
-) -> Query<Option<String>> {
-    Query::new(pushed_to_options(id, sha, cx), cx)
 }

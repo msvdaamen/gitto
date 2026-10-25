@@ -26,9 +26,9 @@ use gpui_kit::{AppContext as _, Context, Task};
 
 use super::app_data::{AppData, AppPart};
 use super::branch::{Merge, NewBranchFrom, Rebase};
-use super::client::QueryError;
 use super::commit::{NewCommit, Reword};
 use super::conflicts::ConflictResolution;
+use super::error::QueryError;
 use super::git::GitTask;
 use super::repository::{Changed, Part, Repository};
 use super::staging::{DiscardTarget, StageAction, StagingTarget};
@@ -807,4 +807,162 @@ fn up_to_date_message(branch: &str, reference: &str) -> String {
         "Already up to date: {branch} has every commit of {}.",
         branch_name(reference)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    use futures::FutureExt as _;
+    use gitto_git::features::refs::schema::Ref;
+    use gitto_git::features::status::schema::{Head, StatusCounts, Uncommitted, WorkingTreeFiles};
+    use gpui_kit::{Entity, TestAppContext};
+
+    use super::*;
+    use crate::data::git::RepositoryGit;
+
+    fn repository_id() -> RepositoryId {
+        RepositoryId::parse("01890a5d-ac96-774b-bcce-b302099a8057").unwrap()
+    }
+
+    /// A repository's git that merges as `merged` says, deletes a branch when the test says, and
+    /// counts how often the branches are loaded: once for each reload of the repository.
+    #[derive(Default)]
+    struct Git {
+        merged: Cell<Option<MergeOutcome>>,
+        deleting: RefCell<Option<oneshot::Receiver<()>>>,
+        refs: Cell<usize>,
+    }
+
+    impl RepositoryGit for Git {
+        fn refs(&self) -> GitTask<Vec<Ref>> {
+            self.refs.set(self.refs.get() + 1);
+            async { Ok(vec![]) }.boxed()
+        }
+
+        fn merge_branch(&self, _: BranchRef, _: NonEmpty) -> GitTask<MergeOutcome> {
+            let outcome = self.merged.get().unwrap();
+            async move { Ok(outcome) }.boxed()
+        }
+
+        fn delete_branch(&self, _: BranchRef) -> GitTask<()> {
+            let deleted = self.deleting.borrow_mut().take().unwrap();
+            async move {
+                let _ = deleted.await;
+                Ok(())
+            }
+            .boxed()
+        }
+    }
+
+    /// The repository, showing its branches.
+    fn open(git: &Rc<Git>, cx: &mut TestAppContext) -> Entity<Repository> {
+        let shared: Rc<dyn RepositoryGit> = git.clone();
+        let repository = cx.new(|_| Repository::new(repository_id(), shared));
+        repository.update(cx, |repository, cx| repository.show(Part::Refs, cx));
+        cx.run_until_parked();
+        assert_eq!(git.refs.get(), 1);
+        repository
+    }
+
+    fn merge_feature() -> Merge {
+        Merge {
+            reference: "refs/heads/feature".into(),
+            into: "main".into(),
+        }
+    }
+
+    // `git/queries/branch.test.ts`.
+
+    #[gpui_kit::test]
+    fn fails_a_merge_that_changed_nothing_without_reloading(cx: &mut TestAppContext) {
+        let git = Rc::new(Git::default());
+        git.merged.set(Some(MergeOutcome::UpToDate));
+        let repository = open(&git, cx);
+        let done = repository
+            .update(cx, |repository, cx| repository.merge(merge_feature(), cx))
+            .unwrap();
+        cx.run_until_parked();
+        let error = done.now_or_never().unwrap().unwrap().unwrap_err();
+        assert_eq!(
+            error.message(),
+            "Already up to date: main has every commit of feature."
+        );
+        assert_eq!(git.refs.get(), 1);
+    }
+
+    #[gpui_kit::test]
+    fn reloads_after_a_merge_that_stopped_at_conflicts(cx: &mut TestAppContext) {
+        let git = Rc::new(Git::default());
+        git.merged.set(Some(MergeOutcome::Conflicts));
+        let repository = open(&git, cx);
+        let done = repository
+            .update(cx, |repository, cx| repository.merge(merge_feature(), cx))
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(
+            done.now_or_never().unwrap().unwrap().unwrap(),
+            MergeOutcome::Conflicts
+        );
+        assert_eq!(git.refs.get(), 2);
+    }
+
+    #[gpui_kit::test]
+    fn switching_to_the_checked_out_branch_does_nothing(cx: &mut TestAppContext) {
+        let git = Rc::new(Git::default());
+        let repository = open(&git, cx);
+        let status = Uncommitted {
+            head: Head::Branch {
+                name: "main".into(),
+                sha: "abc".into(),
+            },
+            upstream: None,
+            ahead: 0,
+            behind: 0,
+            counts: StatusCounts {
+                files: 0,
+                staged: 0,
+                unstaged: 0,
+                conflicted: 0,
+            },
+            changes: WorkingTreeFiles {
+                staged: vec![],
+                unstaged: vec![],
+                uncounted: false,
+                marker_free: vec![],
+            },
+            version: "v1".into(),
+        };
+        // Switching would fail: this git doesn't.
+        let done = repository
+            .update(cx, |repository, cx| {
+                repository.set_status(status, cx);
+                repository.switch_branch("refs/heads/main".into(), cx)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert!(done.now_or_never().unwrap().unwrap().is_ok());
+        assert_eq!(git.refs.get(), 1);
+    }
+
+    #[gpui_kit::test]
+    fn changes_one_branch_at_a_time(cx: &mut TestAppContext) {
+        let git = Rc::new(Git::default());
+        git.merged.set(Some(MergeOutcome::Merged));
+        let (finish, finished) = oneshot::channel();
+        *git.deleting.borrow_mut() = Some(finished);
+        let repository = open(&git, cx);
+        let _deleting = repository
+            .update(cx, |repository, cx| {
+                repository.delete_branch("refs/heads/old".into(), cx)
+            })
+            .unwrap();
+        assert!(repository.read_with(cx, |repository, _| repository.branches_changing()));
+        let merging = repository.update(cx, |repository, cx| repository.merge(merge_feature(), cx));
+        assert!(merging.is_none());
+        finish.send(()).unwrap();
+        cx.run_until_parked();
+        assert!(!repository.read_with(cx, |repository, _| repository.branches_changing()));
+    }
 }

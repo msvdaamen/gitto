@@ -5,7 +5,7 @@
 //! when the window gets or loses focus ([`RepositoryWatcher::set_window_focused`]).
 
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use futures::StreamExt as _;
 use futures::channel::mpsc;
@@ -15,22 +15,11 @@ use gitto_git::input::RepositoryId;
 use gitto_git::{ApiError, GitApi};
 use gpui_kit::{AppContext as _, Context, Task};
 
-use super::client::{QueryClient, QueryOptions, RefetchOnFocus, StaleTime};
-use super::keys;
 use super::repository::Repositories;
 
 /// How long the working tree stays watched after the window loses focus. Starting to watch walks
 /// the whole tree, so switching to an editor and back shouldn't start over every time.
 pub const UNWATCH_AFTER: Duration = Duration::from_secs(5 * 60);
-
-/// `options`, for a query of a repository that isn't watched, like those on the home page: loaded
-/// again whenever it's shown, and when the window gets focus, rather than only when the watcher
-/// says it changed (see `QueryClient::init`; `UNWATCHED`).
-pub fn unwatched<T: 'static>(options: QueryOptions<T>) -> QueryOptions<T> {
-    options
-        .stale_time(StaleTime::Zero)
-        .refetch_on_window_focus(RefetchOnFocus::IfStale)
-}
 
 /// What a repository's watches stream: git's (`rpc.git.watch`), or a test's.
 pub trait WatchStreams {
@@ -55,7 +44,7 @@ impl WatchStreams for GitApi {
 }
 
 /// Loads the repository's git data again when it changes on disk; nothing else does (see
-/// `QueryClient::init`). The git directory (commits, checkouts, staging) is watched all the time.
+/// `super::repository`). The git directory (commits, checkouts, staging) is watched all the time.
 /// The working tree is watched while the window has focus and for a while after; changes to it
 /// while the window doesn't have focus are loaded once it gets focus back, and not at all if there
 /// weren't any. A watch that stopped (e.g. Linux ran out of file watches) is started again, with a
@@ -72,13 +61,12 @@ pub struct RepositoryWatcher {
 }
 
 impl RepositoryWatcher {
-    /// Starts watching the repository `id`, which came on show at `shown_at` (see
-    /// `QueryClient::now`), with the window focused or not.
+    /// Starts watching the repository `id`, which just came on show, with the window focused or
+    /// not.
     pub fn new(
         id: RepositoryId,
         streams: Rc<dyn WatchStreams>,
         focused: bool,
-        shown_at: Instant,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut watcher = RepositoryWatcher {
@@ -91,13 +79,8 @@ impl RepositoryWatcher {
             unwatch_timer: None,
         };
         // Nothing watched the repository until now, so what was loaded from it before (when it was
-        // last on show) may be out of date. What's loading for the first time isn't loaded twice
-        // (see `QueryEntry::fetch`), nor what was loaded since it came on show.
-        QueryClient::invalidate_where(
-            &keys::repository(&watcher.id),
-            |entry| entry.data_updated_at.is_none_or(|at| at < shown_at),
-            cx,
-        );
+        // last on show) may be out of date. What's loading isn't loaded twice: it's loading since
+        // it came on show (see `Repository::reload_when_shown`).
         if let Some(repository) = Repositories::get(&watcher.id, cx) {
             repository.update(cx, |repository, cx| repository.reload_when_shown(cx));
         }
@@ -155,11 +138,15 @@ impl RepositoryWatcher {
     }
 
     fn reload_all(&self, cx: &mut Context<Self>) {
-        QueryClient::invalidate(&keys::repository(&self.id), cx);
+        Repositories::open(&self.id, cx).update(cx, |repository, cx| {
+            drop(repository.reload_all(cx));
+        });
     }
 
     fn reload_uncommitted(&self, cx: &mut Context<Self>) {
-        QueryClient::invalidate(&keys::uncommitted(&self.id), cx);
+        Repositories::open(&self.id, cx).update(cx, |repository, cx| {
+            drop(repository.reload_uncommitted(cx));
+        });
     }
 
     fn watch_git_dir(&mut self, cx: &mut Context<Self>) {
@@ -289,15 +276,24 @@ impl Watch {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use futures::stream;
-    use gpui_kit::{Entity, TestAppContext};
+    use gpui_kit::{AppContext as _, Entity, TestAppContext};
+
+    use futures::FutureExt as _;
+    use gitto_git::features::history::commands::Page;
+    use gitto_git::features::history::schema::Commit;
+    use gitto_git::features::refs::schema::Ref;
+    use gitto_git::features::status::schema::{
+        Head, StatusCounts, StatusReply, Uncommitted, WorkingTreeFiles,
+    };
 
     use super::*;
-    use crate::data::key::QueryKey;
+    use crate::data::git::{GitTask, RepositoryGit};
+    use crate::data::{Part, Repository};
 
     /// A watch stream whose items the test pushes; counts how many are open.
     struct Procedure<T> {
@@ -383,20 +379,99 @@ mod tests {
         RepositoryId::parse("01890a5d-ac96-774b-bcce-b302099a8057").unwrap()
     }
 
+    fn uncommitted() -> Uncommitted {
+        Uncommitted {
+            head: Head::Branch {
+                name: "main".into(),
+                sha: "abc".into(),
+            },
+            upstream: None,
+            ahead: 0,
+            behind: 0,
+            counts: StatusCounts {
+                files: 0,
+                staged: 0,
+                unstaged: 0,
+                conflicted: 0,
+            },
+            changes: WorkingTreeFiles {
+                staged: vec![],
+                unstaged: vec![],
+                uncounted: false,
+                marker_free: vec![],
+            },
+            version: "v1".into(),
+        }
+    }
+
+    /// A repository's git that counts what's loaded: the status, the branches, and the log, which
+    /// never loads.
+    #[derive(Default)]
+    struct Git {
+        status: Cell<usize>,
+        refs: Cell<usize>,
+        log: Cell<usize>,
+    }
+
+    impl RepositoryGit for Git {
+        fn status(&self, _: Option<String>) -> GitTask<StatusReply> {
+            self.status.set(self.status.get() + 1);
+            async { Ok(StatusReply::Status(Box::new(uncommitted()))) }.boxed()
+        }
+
+        fn refs(&self) -> GitTask<Vec<Ref>> {
+            self.refs.set(self.refs.get() + 1);
+            async { Ok(vec![]) }.boxed()
+        }
+
+        fn log(&self, _: Page) -> GitTask<Vec<Commit>> {
+            self.log.set(self.log.get() + 1);
+            futures::future::pending().boxed()
+        }
+    }
+
+    /// What the watcher loaded again of the repository.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Reloaded {
+        Nothing,
+        /// What changes with the working tree and the index: the status.
+        Uncommitted,
+        /// Everything shown, the branches among it.
+        All,
+    }
+
+    /// The repository `repository_id()`, showing its status and its branches, with `git`.
+    fn open(git: &Rc<Git>, cx: &mut TestAppContext) -> Entity<Repository> {
+        let shared: Rc<dyn RepositoryGit> = git.clone();
+        let repository = cx.update(|cx| Repositories::insert(&repository_id(), shared, cx));
+        repository.update(cx, |repository, cx| {
+            repository.show(Part::Status, cx);
+            repository.show(Part::Refs, cx);
+        });
+        cx.run_until_parked();
+        repository
+    }
+
     struct Watched {
+        git: Rc<Git>,
         streams: Rc<Streams>,
         watcher: Option<Entity<RepositoryWatcher>>,
         /// What starting to watch reloaded; the tests are about what's reloaded after.
-        initial: Vec<QueryKey>,
+        initial: Reloaded,
     }
 
     impl Watched {
-        fn invalidated(&self, cx: &mut TestAppContext) -> Vec<QueryKey> {
-            cx.update(|cx| cx.global::<QueryClient>().invalidated.clone())
-        }
-
-        fn clear(&self, cx: &mut TestAppContext) {
-            cx.update(|cx| cx.global_mut::<QueryClient>().invalidated.clear());
+        /// What was loaded again since it was last asked.
+        fn reloaded(&self) -> Reloaded {
+            let status = self.git.status.replace(0);
+            let refs = self.git.refs.replace(0);
+            if refs > 0 {
+                Reloaded::All
+            } else if status > 0 {
+                Reloaded::Uncommitted
+            } else {
+                Reloaded::Nothing
+            }
         }
 
         fn set_focused(&self, focused: bool, cx: &mut TestAppContext) {
@@ -414,67 +489,53 @@ mod tests {
     }
 
     fn watch(focused: bool, cx: &mut TestAppContext) -> Watched {
-        cx.update(QueryClient::init);
+        let git = Rc::new(Git::default());
+        let _repository = open(&git, cx);
+        git.status.set(0);
+        git.refs.set(0);
         let streams = Rc::new(Streams {
             git_dir: Procedure::new(),
             working_tree: Procedure::new(),
         });
-        let shown_at = cx.update(|cx| QueryClient::now(cx));
         let watcher = cx.new({
             let streams: Rc<dyn WatchStreams> = streams.clone();
-            move |cx| RepositoryWatcher::new(repository_id(), streams, focused, shown_at, cx)
+            move |cx| RepositoryWatcher::new(repository_id(), streams, focused, cx)
         });
         cx.run_until_parked();
-        let watched = Watched {
+        let mut watched = Watched {
+            git,
             streams,
             watcher: Some(watcher),
-            initial: Vec::new(),
+            initial: Reloaded::Nothing,
         };
-        let initial = watched.invalidated(cx);
-        watched.clear(cx);
-        Watched { initial, ..watched }
-    }
-
-    fn id() -> String {
-        repository_id().to_string()
+        watched.initial = watched.reloaded();
+        watched
     }
 
     #[gpui_kit::test]
     fn refetches_what_was_loaded_before_it_was_watched(cx: &mut TestAppContext) {
         let mut watched = watch(true, cx);
-        assert_eq!(watched.initial, [keys::repository(&id())]);
+        assert_eq!(watched.initial, Reloaded::All);
         watched.cleanup(cx);
     }
 
     #[gpui_kit::test]
     fn doesnt_refetch_what_was_loaded_while_switching_to_the_repository(cx: &mut TestAppContext) {
-        cx.update(QueryClient::init);
-        // Loaded when the repository was last on show.
-        cx.update(|cx| QueryClient::set_data(&keys::refs(&id()), 1, cx));
-        cx.executor().advance_clock(Duration::from_secs(1));
-        let shown_at = cx.update(|cx| QueryClient::now(cx));
-        cx.executor().advance_clock(Duration::from_millis(100));
-        // Loaded since it came on show, before the watcher started.
-        cx.update(|cx| QueryClient::set_data(&keys::log(&id()), 2, cx));
+        // The branches were loaded when the repository was last on show.
+        let git = Rc::new(Git::default());
+        let repository = open(&git, cx);
+        // The log, loading since it came on show, before the watcher started.
+        repository.update(cx, |repository, cx| repository.show(Part::Log, cx));
+        cx.run_until_parked();
+        assert_eq!((git.refs.get(), git.log.get()), (1, 1));
 
         let streams: Rc<dyn WatchStreams> = Rc::new(Streams {
             git_dir: Procedure::new(),
             working_tree: Procedure::new(),
         });
-        let watcher =
-            cx.new(|cx| RepositoryWatcher::new(repository_id(), streams, true, shown_at, cx));
+        let watcher = cx.new(|cx| RepositoryWatcher::new(repository_id(), streams, true, cx));
         cx.run_until_parked();
-
-        let invalidated = |key: QueryKey, cx: &mut TestAppContext| {
-            cx.update(|cx| {
-                QueryClient::get_entry::<i32>(&key, cx)
-                    .unwrap()
-                    .read(cx)
-                    .is_invalidated()
-            })
-        };
-        assert!(invalidated(keys::refs(&id()), cx));
-        assert!(!invalidated(keys::log(&id()), cx));
+        assert_eq!((git.refs.get(), git.log.get()), (2, 1));
         drop(watcher);
     }
 
@@ -485,15 +546,14 @@ mod tests {
 
         watched.streams.git_dir.push(vec![GitDirChange::Index]);
         cx.run_until_parked();
-        assert_eq!(watched.invalidated(cx), [keys::uncommitted(&id())]);
+        assert_eq!(watched.reloaded(), Reloaded::Uncommitted);
 
-        watched.clear(cx);
         watched
             .streams
             .git_dir
             .push(vec![GitDirChange::Index, GitDirChange::Refs]);
         cx.run_until_parked();
-        assert_eq!(watched.invalidated(cx), [keys::repository(&id())]);
+        assert_eq!(watched.reloaded(), Reloaded::All);
 
         watched.cleanup(cx);
         assert_eq!(watched.streams.git_dir.open(), 0);
@@ -505,11 +565,11 @@ mod tests {
     ) {
         let mut watched = watch(true, cx);
         assert_eq!(watched.streams.working_tree.open(), 1);
-        assert_eq!(watched.invalidated(cx), []);
+        assert_eq!(watched.reloaded(), Reloaded::Nothing);
 
         watched.streams.working_tree.push(());
         cx.run_until_parked();
-        assert_eq!(watched.invalidated(cx), [keys::uncommitted(&id())]);
+        assert_eq!(watched.reloaded(), Reloaded::Uncommitted);
 
         watched.cleanup(cx);
         assert_eq!(watched.streams.working_tree.open(), 0);
@@ -525,7 +585,7 @@ mod tests {
         // Nothing changed: nothing to reload, and no new watch.
         watched.set_focused(false, cx);
         watched.set_focused(true, cx);
-        assert_eq!(watched.invalidated(cx), []);
+        assert_eq!(watched.reloaded(), Reloaded::Nothing);
         assert_eq!(watched.streams.working_tree.open(), 1);
 
         // Changes while unfocused are reloaded once, when the window gets focus back.
@@ -536,14 +596,13 @@ mod tests {
         cx.executor()
             .advance_clock(UNWATCH_AFTER - Duration::from_millis(1));
         cx.run_until_parked();
-        assert_eq!(watched.invalidated(cx), []);
+        assert_eq!(watched.reloaded(), Reloaded::Nothing);
         watched.set_focused(true, cx);
-        assert_eq!(watched.invalidated(cx), [keys::uncommitted(&id())]);
+        assert_eq!(watched.reloaded(), Reloaded::Uncommitted);
 
-        watched.clear(cx);
         watched.set_focused(false, cx);
         watched.set_focused(true, cx);
-        assert_eq!(watched.invalidated(cx), []);
+        assert_eq!(watched.reloaded(), Reloaded::Nothing);
 
         watched.cleanup(cx);
     }
@@ -562,7 +621,7 @@ mod tests {
         assert_eq!(watched.streams.git_dir.open(), 1);
 
         watched.set_focused(true, cx);
-        assert_eq!(watched.invalidated(cx), [keys::uncommitted(&id())]);
+        assert_eq!(watched.reloaded(), Reloaded::Uncommitted);
         assert_eq!(watched.streams.working_tree.open(), 1);
 
         watched.cleanup(cx);
@@ -576,7 +635,7 @@ mod tests {
 
         watched.set_focused(true, cx);
         assert_eq!(watched.streams.working_tree.open(), 1);
-        assert_eq!(watched.invalidated(cx), [keys::uncommitted(&id())]);
+        assert_eq!(watched.reloaded(), Reloaded::Uncommitted);
 
         watched.cleanup(cx);
     }
@@ -592,7 +651,7 @@ mod tests {
 
         watched.set_focused(false, cx);
         watched.set_focused(true, cx);
-        assert_eq!(watched.invalidated(cx), [keys::uncommitted(&id())]);
+        assert_eq!(watched.reloaded(), Reloaded::Uncommitted);
         assert_eq!(watched.streams.working_tree.open(), 1);
 
         watched.cleanup(cx);
@@ -609,7 +668,7 @@ mod tests {
         cx.run_until_parked();
         watched.set_focused(false, cx);
         watched.set_focused(true, cx);
-        assert_eq!(watched.invalidated(cx), [keys::uncommitted(&id())]);
+        assert_eq!(watched.reloaded(), Reloaded::Uncommitted);
         assert_eq!(watched.streams.working_tree.open(), 1);
 
         watched.cleanup(cx);
@@ -628,7 +687,7 @@ mod tests {
 
         watched.set_focused(false, cx);
         watched.set_focused(true, cx);
-        assert_eq!(watched.invalidated(cx), [keys::repository(&id())]);
+        assert_eq!(watched.reloaded(), Reloaded::All);
         assert_eq!(watched.streams.git_dir.open(), 1);
 
         watched.cleanup(cx);

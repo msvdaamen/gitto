@@ -11,9 +11,7 @@ use gitto_repository::{Repository, RepositoryService};
 use gpui_kit::{App, AppContext as _, Context, Entity, Task};
 
 use super::app_data::{AppData, AppPart};
-use super::client::{QueryClient, QueryError, QueryOptions};
-use super::keys;
-use super::query::Query;
+use super::error::QueryError;
 use super::repository::Repositories;
 use crate::services::{Services, SystemContext};
 use crate::state::router::{Route, Router};
@@ -51,18 +49,6 @@ impl RepositorySource for RepositoryService {
     }
 }
 
-/// The repositories added to Gitto (name and path), in the order of their tabs. A reload equal to
-/// what was there keeps it, so nothing shown of it renders again (TS's `reconcile: "id"`).
-pub fn repositories_options(cx: &App) -> QueryOptions<Vec<Repository>> {
-    let source = Services::global(cx).repository_source().clone();
-    QueryOptions::new(keys::repositories(), move |_, _| source.list())
-}
-
-/// The repositories' query (`useRepositories`).
-pub fn repositories_query<V: 'static>(cx: &mut Context<V>) -> Query<Vec<Repository>> {
-    Query::new(repositories_options(cx), cx)
-}
-
 /// The repository with `id` among `repositories` (`useRepository`).
 pub fn find<'a>(repositories: &'a [Repository], id: &str) -> Option<&'a Repository> {
     repositories.iter().find(|repository| repository.id == id)
@@ -82,11 +68,7 @@ pub fn add_repository(cx: &mut App) -> Task<Result<Option<Repository>, QueryErro
         }
         .await;
         match &result {
-            Ok(_) => {
-                cx.update(|cx| QueryClient::invalidate(&keys::repositories(), cx))
-                    .await;
-                cx.update(reload_list);
-            }
+            Ok(_) => cx.update(reload_list),
             // The UI shows only the message; the rest is for whoever looks into it.
             Err(error) => log::error!("Couldn't add the repository: {error:?}"),
         }
@@ -100,14 +82,10 @@ pub fn remove_repository(id: String, cx: &mut App) -> Task<Result<(), QueryError
     cx.spawn(async move |cx| {
         let result = removing.await;
         match &result {
-            Ok(()) => {
-                cx.update(|cx| QueryClient::invalidate(&keys::repositories(), cx))
-                    .await;
-                cx.update(|cx| {
-                    Repositories::close(&id, cx);
-                    reload_list(cx);
-                });
-            }
+            Ok(()) => cx.update(|cx| {
+                Repositories::close(&id, cx);
+                reload_list(cx);
+            }),
             Err(error) => log::error!("Couldn't remove the repository: {error:?}"),
         }
         result
@@ -123,8 +101,6 @@ pub fn reorder_repositories(ids: Vec<String>, cx: &mut App) -> Task<Result<(), Q
         if let Err(error) = &result {
             log::error!("Couldn't reorder the repositories: {error:?}");
         }
-        cx.update(|cx| QueryClient::invalidate(&keys::repositories(), cx))
-            .await;
         cx.update(reload_list);
         result
     })

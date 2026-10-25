@@ -8,13 +8,13 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    App, Context, Entity, FontWeight, HighlightStyle, Role, SharedString, StyledText, Subscription,
+    App, Context, Entity, FontWeight, HighlightStyle, Role, StyledText, Subscription,
     TestSupportExt as _, Window, div,
 };
 
 use crate::components::ui::dialog::CONFIRM_WIDTH;
 use crate::components::ui::{DialogHeading, Icon, IconName, Tone};
-use crate::data::{AppChanged, AppData, AppPart, QueryClient, QueryKey, Repositories, keys};
+use crate::data::{AppChanged, AppData, AppPart, Repositories};
 use crate::theme::PaletteExt as _;
 
 pub const GIT_DOWNLOAD_URL: &str = "https://git-scm.com/downloads";
@@ -67,12 +67,6 @@ impl GitVersionDialog {
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let supported = self.installed(cx).map(|install| install.supported);
         if supported == Some(true) && self.was_supported == Some(false) {
-            let git_version = keys::git_version();
-            let _ = QueryClient::invalidate_where(
-                &QueryKey::new(Vec::<SharedString>::new()),
-                move |entry| entry.key != git_version,
-                cx,
-            );
             Repositories::reload_all(cx);
             self.data.update(cx, |data, cx| data.reload_shown(cx));
         }
@@ -354,7 +348,6 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let (_dir, installed, window, _) = open(Some("2.39.3"), cx);
-        cx.update(|cx| QueryClient::set_data(&QueryKey::new(["git", "repo", "status"]), 1, cx));
         let id = RepositoryId::parse(uuid::Uuid::now_v7().to_string()).unwrap();
         let statuses = Rc::new(Statuses::default());
         let repository = cx.update(|cx| Repositories::insert(&id, statuses.clone(), cx));
@@ -385,15 +378,7 @@ mod tests {
             .unwrap();
         cx.run_until_parked();
         assert!(!has_dialog(window, cx));
-        // What failed meanwhile is loaded again.
-        let invalidated = cx.update(|cx| {
-            QueryClient::get_entry::<i32>(&QueryKey::new(["git", "repo", "status"]), cx)
-                .unwrap()
-                .read(cx)
-                .is_invalidated()
-        });
-        assert!(invalidated);
-        // And what an open repository shows of itself.
+        // What failed meanwhile is loaded again: what an open repository shows of itself.
         assert_eq!(statuses.0.get(), 2);
         assert!(!repository.read_with(cx, |repository, _| repository.status().is_fetching()));
     }

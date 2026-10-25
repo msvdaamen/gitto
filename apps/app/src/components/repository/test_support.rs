@@ -1,11 +1,11 @@
 //! For the repository area's tests: the app's globals, made-up repositories, and what their
-//! queries hold. GPUI tests can't run git (see `crate::data`), so every query a view shows is
-//! given its data first, and stays fresh: nothing loads it from git.
+//! entities hold. GPUI tests can't run git (see `crate::data`), so all a view shows of a
+//! repository is given to its entity first, and stays fresh: its git, `NoGit`, fails, and
+//! nothing reloads it.
 
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use futures::FutureExt as _;
 use futures::future::BoxFuture;
@@ -24,11 +24,13 @@ use gpui_kit::test::{TestEventExt as _, TestQueryExt as _};
 use gpui_kit::{AnyWindowHandle, AppContext as _, MouseButton, Pixels, Point, TestAppContext};
 use tempfile::TempDir;
 
+use crate::data::QueryError;
 use crate::data::diff::{ChangedFiles, FilesOf};
+use crate::data::file_diff::FilePatch;
 use crate::data::git::{NoGit, RepositoryGit};
 use crate::data::history::Log;
 use crate::data::repositories::RepositorySource;
-use crate::data::{Opaque, QueryClient, QueryError, keys};
+use gitto_ui::git::diff_source::DiffSource;
 
 /// The repository list, answered at once: what the test puts in it.
 #[derive(Default)]
@@ -178,73 +180,59 @@ fn update(
 }
 
 pub fn set_status(id: &RepositoryId, status: Uncommitted, cx: &mut TestAppContext) {
-    update(id, cx, |repository, cx| {
-        repository.set_status(status.clone(), cx)
-    });
-    cx.update(|cx| QueryClient::set_data(&keys::status(id), Opaque::new(status), cx));
+    update(id, cx, |repository, cx| repository.set_status(status, cx));
 }
 
 pub fn set_stashes(id: &RepositoryId, stashes: Vec<Stash>, cx: &mut TestAppContext) {
-    update(id, cx, |repository, cx| {
-        repository.set_stashes(stashes.clone(), cx)
-    });
-    let stashes: Arc<[Stash]> = stashes.into();
-    cx.update(|cx| QueryClient::set_data(&keys::stashes(id), stashes, cx));
+    update(id, cx, |repository, cx| repository.set_stashes(stashes, cx));
 }
 
 pub fn set_push_target(id: &RepositoryId, target: PushTarget, cx: &mut TestAppContext) {
     update(id, cx, |repository, cx| {
-        repository.set_push_target(target.clone(), cx)
+        repository.set_push_target(target, cx)
     });
-    cx.update(|cx| QueryClient::set_data(&keys::push_target(id), target, cx));
 }
 
 pub fn set_operation(id: &RepositoryId, operation: Option<Operation>, cx: &mut TestAppContext) {
     update(id, cx, |repository, cx| {
-        repository.set_operation(operation.clone(), cx)
+        repository.set_operation(operation, cx)
     });
-    cx.update(|cx| QueryClient::set_data(&keys::operation(id), operation, cx));
 }
 
 pub fn set_refs(id: &RepositoryId, refs: Vec<Ref>, cx: &mut TestAppContext) {
-    update(id, cx, |repository, cx| {
-        repository.set_refs(refs.clone(), cx)
-    });
-    let refs: Arc<[Ref]> = refs.into();
-    cx.update(|cx| QueryClient::set_data(&keys::refs(id), refs, cx));
+    update(id, cx, |repository, cx| repository.set_refs(refs, cx));
 }
 
 pub fn set_worktrees(id: &RepositoryId, worktrees: Vec<Worktree>, cx: &mut TestAppContext) {
     update(id, cx, |repository, cx| {
-        repository.set_worktrees(worktrees.clone(), cx)
+        repository.set_worktrees(worktrees, cx)
     });
-    let worktrees: Arc<[Worktree]> = worktrees.into();
-    cx.update(|cx| QueryClient::set_data(&keys::worktrees(id), worktrees, cx));
 }
 
 pub fn set_remotes(id: &RepositoryId, remotes: &[&str], cx: &mut TestAppContext) {
     let remotes: Vec<String> = remotes.iter().map(|remote| (*remote).to_owned()).collect();
-    update(id, cx, |repository, cx| {
-        repository.set_remotes(remotes.clone(), cx)
-    });
-    cx.update(|cx| QueryClient::set_data(&keys::remotes(id), remotes, cx));
+    update(id, cx, |repository, cx| repository.set_remotes(remotes, cx));
 }
 
 pub fn set_log(id: &RepositoryId, log: Log, cx: &mut TestAppContext) {
-    update(id, cx, |repository, cx| repository.set_log(log.clone(), cx));
-    cx.update(|cx| QueryClient::set_data(&keys::log(id), log, cx));
+    update(id, cx, |repository, cx| repository.set_log(log, cx));
 }
 
 /// The files the commit or stash `files.sha` changed, as `of`'s.
 pub fn set_files(id: &RepositoryId, of: FilesOf, files: ChangedFiles, cx: &mut TestAppContext) {
+    update(id, cx, |repository, cx| repository.set_files(of, files, cx));
+}
+
+/// The patch of a file in `source`, as if it had loaded.
+pub fn set_patch(
+    id: &RepositoryId,
+    source: &DiffSource,
+    patch: FilePatch,
+    cx: &mut TestAppContext,
+) {
     update(id, cx, |repository, cx| {
-        repository.set_files(of, files.clone(), cx)
+        repository.set_patch(source, patch, cx)
     });
-    let key = match of {
-        FilesOf::Commit => keys::commit_files(id, &files.sha),
-        FilesOf::Stash => keys::stash_files(id, &files.sha),
-    };
-    cx.update(|cx| QueryClient::set_data(&key, files, cx));
 }
 
 /// The repository `id` at `path`, named after its folder.
