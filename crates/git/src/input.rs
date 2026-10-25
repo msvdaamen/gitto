@@ -223,7 +223,7 @@ impl Deref for Paths {
 
 /// Whether `value` has a character JS's `\S` matches: one that isn't whitespace as JS has it,
 /// which is Unicode's but for U+0085 (NEL), and with the byte order mark.
-pub(crate) fn has_non_space(value: &str) -> bool {
+fn has_non_space(value: &str) -> bool {
     value
         .chars()
         .any(|c| !(c.is_whitespace() && c != '\u{85}') && c != '\u{feff}')

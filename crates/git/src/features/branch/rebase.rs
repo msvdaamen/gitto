@@ -1,9 +1,5 @@
 //! Rebasing the checked-out branch onto another. Ported from `rebase.ts`.
 
-use std::sync::LazyLock;
-
-use regex::Regex;
-
 use super::commands::{branch_name, is_ref};
 use super::merge::{
     RefusalKind, Wording, list, nul_separated, parse_refusal, refusal_message, staged_files,
@@ -178,29 +174,22 @@ pub async fn rebase_branch(
 async fn why_refused(run: &GitCommand, failure: &GitError, onto: &str) -> Result<Option<String>> {
     if let Some(changes) = parse_uncommitted(&failure.stderr) {
         // Git doesn't name them: it checks the working tree first, then the index.
-        let files = match changes {
-            Uncommitted::Unstaged => nul_separated(&run.run(["diff", "--name-only", "-z"]).await?),
-            Uncommitted::Staged => staged_files(run).await?,
+        let (files, what, to) = match changes {
+            Uncommitted::Unstaged => (
+                nul_separated(&run.run(["diff", "--name-only", "-z"]).await?),
+                "there are uncommitted changes",
+                " to",
+            ),
+            Uncommitted::Staged => (staged_files(run).await?, "changes are staged", ", to"),
         };
-        let named = !files.is_empty();
-        return Ok(Some(match changes {
-            Uncommitted::Unstaged => format!(
-                "Git won't rebase while there are uncommitted changes{}. Commit or stash them, then rebase.",
-                if named {
-                    format!(" to {}", list(&files))
-                } else {
-                    String::new()
-                }
-            ),
-            Uncommitted::Staged => format!(
-                "Git won't rebase while changes are staged{}. Commit or stash them, then rebase.",
-                if named {
-                    format!(", to {}", list(&files))
-                } else {
-                    String::new()
-                }
-            ),
-        }));
+        let named = if files.is_empty() {
+            String::new()
+        } else {
+            format!("{to} {}", list(&files))
+        };
+        return Ok(Some(format!(
+            "Git won't rebase while {what}{named}. Commit or stash them, then rebase."
+        )));
     }
     let Some(refused) = parse_refusal(&failure.stderr) else {
         return Ok(None);
@@ -230,22 +219,14 @@ pub enum Uncommitted {
     Staged,
 }
 
-static UNSTAGED_CHANGES: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"cannot rebase: You have unstaged changes\.").expect("a valid regex")
-});
-
-static STAGED_CHANGES: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"cannot rebase: Your index contains uncommitted changes\.").expect("a valid regex")
-});
-
 /// Whether git refused to rebase over uncommitted changes, going by what it printed, and which:
 /// unstaged ones ("You have unstaged changes") or staged ones ("Your index contains uncommitted
 /// changes"); `None` if it failed otherwise.
 pub fn parse_uncommitted(stderr: &str) -> Option<Uncommitted> {
-    if UNSTAGED_CHANGES.is_match(stderr) {
+    if stderr.contains("cannot rebase: You have unstaged changes.") {
         return Some(Uncommitted::Unstaged);
     }
-    if STAGED_CHANGES.is_match(stderr) {
+    if stderr.contains("cannot rebase: Your index contains uncommitted changes.") {
         return Some(Uncommitted::Staged);
     }
     None
@@ -257,20 +238,17 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::*;
-    use crate::features::conflicts::commands::{
-        ShownConflict, get_conflict, keep_side, mark_resolved,
-    };
+    use crate::features::conflicts::commands::{ShownConflict, get_conflict, keep_side};
     use crate::features::conflicts::schema::Side;
-    use crate::features::diff::working_tree::{SaveExpectation, save_working_tree_file};
     use crate::features::operation::commands::{
         abort_operation, continue_operation, get_operation,
     };
     use crate::features::operation::schema::{Operation, OperationKind, Steps};
     use crate::features::stash::commands::pop_stash;
     use crate::test_support::conflicts::{
-        Files, Sides, commit_files, files, text_conflict, try_git,
+        Files, Sides, commit_files, files, resolve_text, text_conflict, try_git,
     };
-    use crate::test_support::{Fixture, git, valid};
+    use crate::test_support::{Fixture, git, valid, write_script};
 
     /// `side` changed `s.txt`, `main` changed `m.txt`: `side` rebases onto `main` without
     /// conflicts.
@@ -311,37 +289,8 @@ mod tests {
         }
     }
 
-    /// Resolves `f.txt`'s text conflict as `contents`, and marks it resolved, as the resolver does.
-    async fn resolve_text(repo: &Repo, contents: &str) {
-        let text = get_conflict(repo, &valid("f.txt"))
-            .await
-            .unwrap()
-            .text
-            .unwrap();
-        let expected = SaveExpectation {
-            version: text.version,
-            overwrite: false,
-        };
-        let version = save_working_tree_file(repo, "f.txt", contents, &expected)
-            .await
-            .unwrap();
-        mark_resolved(repo, &valid("f.txt"), Some(&version), false)
-            .await
-            .unwrap();
-    }
-
     fn read(path: &Path, file: &str) -> String {
         fs::read_to_string(path.join(file)).unwrap()
-    }
-
-    /// Writes the executable script `file`.
-    fn write_script(file: &Path, script: &str) {
-        fs::write(file, script).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(file, fs::Permissions::from_mode(0o755)).unwrap();
-        }
     }
 
     /// Asserts `error` is an `Error::RebaseBlocked` saying `message`.
@@ -560,7 +509,7 @@ mod tests {
         });
         let text = read(&path, "f.txt");
         assert!(
-            Regex::new(
+            regex::Regex::new(
                 r"^one\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> [0-9a-f]+ \(theirs\)\nthree\n$"
             )
             .unwrap()
@@ -960,7 +909,7 @@ mod tests {
                 .unwrap_err();
             assert!(matches!(error, Error::RebaseUndone(_)), "{error:?}");
             assert!(
-                Regex::new(
+                regex::Regex::new(
                     r"(?s)^Rebasing side onto main stopped partway, and was undone:\n.*failed to write commit object\nFix that, then rebase again\.$"
                 )
                 .unwrap()
@@ -1006,7 +955,7 @@ mod tests {
                 .unwrap_err();
             assert!(matches!(error, Error::RebaseStopped(_)), "{error:?}");
             assert!(
-                Regex::new(
+                regex::Regex::new(
                     r"(?s)^Rebasing side onto main stopped partway:\n.*failed to write commit object\nFinish the rebase in a terminal, or abort it\.$"
                 )
                 .unwrap()
