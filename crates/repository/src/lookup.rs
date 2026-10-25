@@ -31,12 +31,9 @@ impl RepositoryLookup for RepositoryService {
 /// `error` as gitto-git says it: the same message, as both say it as `packages/repository` did.
 fn list_error(error: &Error) -> RepositoryListError {
     let action = match error {
-        Error::List {
-            action: ListAction::Update,
-            ..
-        } => gitto_git::ListAction::Update,
+        Error::List { action, .. } => *action,
         // Looking a repository up only reads the list, which is all that can fail then.
-        Error::List { .. } | Error::NotAGitRepository { .. } => gitto_git::ListAction::Read,
+        Error::NotAGitRepository { .. } => ListAction::Read,
     };
     RepositoryListError {
         action,
@@ -208,7 +205,7 @@ mod tests {
             ),
         );
         let list = list_error(&error);
-        assert_eq!(list.action, gitto_git::ListAction::Update);
+        assert_eq!(list.action, ListAction::Update);
         assert_eq!(list.to_string(), error.to_string());
     }
 }
