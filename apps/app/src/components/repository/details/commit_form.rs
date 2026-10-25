@@ -508,19 +508,25 @@ mod tests {
             cx.update_window(self.window, |_, window, cx| {
                 summary.update(cx, |input, cx| input.focus(window, cx));
                 window.render_frame(cx);
-                window.press(if replace { "ctrl-a" } else { "end" }, cx);
+                window.press(if replace { "secondary-a" } else { "end" }, cx);
                 window.input(text, cx);
             })
             .unwrap();
             cx.run_until_parked();
         }
 
+        /// Moves to the end of a multi-line input: there's no key for it every platform shares.
+        #[cfg(target_os = "macos")]
+        const TO_END: &str = "cmd-down";
+        #[cfg(not(target_os = "macos"))]
+        const TO_END: &str = "ctrl-end";
+
         fn type_description(&self, text: &str, cx: &mut TestAppContext) {
             let description = self.form.read_with(cx, |form, _| form.description.clone());
             cx.update_window(self.window, |_, window, cx| {
                 description.update(cx, |input, cx| input.focus(window, cx));
                 window.render_frame(cx);
-                window.press("ctrl-end", cx);
+                window.press(Self::TO_END, cx);
                 window.input(text, cx);
             })
             .unwrap();
