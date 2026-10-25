@@ -172,7 +172,9 @@ async fn listed(root: &Path, run: &GitCommand) -> Result<(Vec<Worktree>, Vec<Pat
 }
 
 /// Orders `a` and `b` roughly as JavaScript's `localeCompare` does: by their letters regardless of
-/// case first, then lowercase before uppercase.
+/// case first, then lowercase before uppercase. Punctuation is ordered by code point, where ICU has
+/// an order of its own (`a-b`, `a.b`, `a_b` here; `a_b`, `a-b`, `a.b` in TS), which only moves a
+/// worktree about in the list.
 fn locale_compare(a: &str, b: &str) -> Ordering {
     // Lowercase first, as ICU's tertiary strength has it.
     let swap_case = |text: &str| -> String {
@@ -606,6 +608,13 @@ mod tests {
             assert!(error.to_string().contains("lock reason: busy"), "{error}");
         });
         assert!(linked.exists());
+    }
+
+    #[test]
+    fn orders_paths_regardless_of_case_then_lowercase_first() {
+        let mut paths = ["/r/b", "/r/A", "/r/a", "/r/B", "/r/ab"];
+        paths.sort_by(|a, b| locale_compare(a, b));
+        assert_eq!(paths, ["/r/a", "/r/A", "/r/ab", "/r/b", "/r/B"]);
     }
 
     #[test]

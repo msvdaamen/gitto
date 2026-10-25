@@ -6,6 +6,7 @@
 //! functions that run their async part with `smol::block_on`.
 
 pub mod conflicts;
+pub mod status;
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -206,6 +207,16 @@ pub async fn wait_for(timeout: Duration, mut done: impl FnMut() -> bool) {
     while !done() {
         assert!(start.elapsed() < timeout, "not done within {timeout:?}");
         async_io::Timer::after(Duration::from_millis(20)).await;
+    }
+}
+
+/// Writes the executable script `file`, a hook, say.
+pub fn write_script(file: &Path, script: &str) {
+    fs::write(file, script).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(file, fs::Permissions::from_mode(0o755)).unwrap();
     }
 }
 

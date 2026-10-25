@@ -120,7 +120,10 @@ impl<T> Batches<T> {
         loop {
             let (listener, due) = {
                 let mut state = lock(&self.state);
-                if let Some(batch) = state.ready.pop_front() {
+                // Before the error: a batch whose time came had been handed over in TS already.
+                if !state.closed
+                    && let Some(batch) = state.take(Instant::now())
+                {
                     return Some(Ok(batch));
                 }
                 if let Some(error) = state.error.take() {
@@ -129,9 +132,6 @@ impl<T> Batches<T> {
                 }
                 if state.closed {
                     return None;
-                }
-                if let Some(batch) = state.take(Instant::now()) {
-                    return Some(Ok(batch));
                 }
                 (self.changed.listen(), state.due)
             };
@@ -248,6 +248,19 @@ mod tests {
             batches.add(3);
             batches.close();
             assert!(batches.next().await.is_none());
+        });
+    }
+
+    #[test]
+    fn hands_over_a_batch_whose_time_came_before_an_error_ends_them() {
+        smol::block_on(async {
+            let batches = Batches::new();
+            batches.add(1);
+            // Not asked for until after its time came, and the batches failed.
+            Timer::after(DEBOUNCE + Duration::from_millis(50)).await;
+            batches.fail(Error::Bug("no watches left".into()));
+            assert_eq!(batches.next().await.unwrap().unwrap(), [1]);
+            assert!(batches.next().await.unwrap().is_err());
         });
     }
 

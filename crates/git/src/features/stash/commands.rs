@@ -311,33 +311,9 @@ mod tests {
 
     use super::*;
     use crate::core::repo::{How, Observed};
-    use crate::features::status::parse::{STATUS_ARGS, parse_status};
     use crate::schema::FileStatus;
+    use crate::test_support::status::{rows, status_files};
     use crate::test_support::{Fixture, git};
-
-    type Row = (String, Option<&'static str>, Option<&'static str>);
-
-    /// Each changed file, with how it changed in the index and the working tree:
-    /// `parseStatus(await repo.read(STATUS_ARGS)).files`.
-    async fn status_files(repo: &Repo) -> Vec<Row> {
-        parse_status(&repo.read(STATUS_ARGS).await.unwrap())
-            .files
-            .into_iter()
-            .map(|file| {
-                (
-                    file.path,
-                    file.staged.map(FileStatus::as_str),
-                    file.unstaged.map(FileStatus::as_str),
-                )
-            })
-            .collect()
-    }
-
-    fn rows(rows: &[(&str, Option<&'static str>, Option<&'static str>)]) -> Vec<Row> {
-        rows.iter()
-            .map(|(path, staged, unstaged)| (path.to_string(), *staged, *unstaged))
-            .collect()
-    }
 
     /// A repository with `a.txt` and `b.txt` committed, which `repos` opens as `name`.
     fn create_committed_repo(fx: &Fixture, name: &str) -> PathBuf {

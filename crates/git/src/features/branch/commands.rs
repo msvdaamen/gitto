@@ -332,7 +332,7 @@ mod tests {
     use std::time::{Duration, UNIX_EPOCH};
 
     use super::*;
-    use crate::test_support::{Fixture, git, wait_for};
+    use crate::test_support::{Fixture, git, wait_for, write_script};
 
     /// A repository with `a.txt` committed on `main`, which `repos` opens as `name`.
     fn create_committed_repo(fx: &Fixture, name: &str) -> PathBuf {
@@ -361,16 +361,6 @@ mod tests {
 
     fn read(path: &Path, file: &str) -> String {
         fs::read_to_string(path.join(file)).unwrap()
-    }
-
-    /// Writes the executable script `file`.
-    fn write_script(file: &Path, script: &str) {
-        fs::write(file, script).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(file, fs::Permissions::from_mode(0o755)).unwrap();
-        }
     }
 
     fn message(error: &Error) -> String {
