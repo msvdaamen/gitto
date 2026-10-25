@@ -820,13 +820,14 @@ impl PatchViewer {
             Some((start.min(end), start.max(end)))
         });
         let to_stage = self.picker.to_stage();
+        let pickable = self.is_pickable() && self.is_live();
         // The button in the gutter: by the last line selected, or else the changed line the
-        // pointer is on.
+        // pointer is on. Only where lines can be picked: it takes the line number's place.
         let stage_button = to_stage
             .iter()
             .filter_map(|line| Some((layout.row_of(line.line_number, line.side)?, line.side)))
             .max_by_key(|(row, _)| *row)
-            .filter(|_| self.is_live());
+            .filter(|_| pickable);
         Some(Rc::new(Frame {
             entity: cx.entity().downgrade(),
             layout,
@@ -844,7 +845,7 @@ impl PatchViewer {
                 .staging
                 .as_ref()
                 .map(|staging| (staging.action, staging.busy)),
-            pickable: self.is_pickable() && self.is_live(),
+            pickable,
             palette: *cx.palette(),
             mono: cx.theme().mono_font_family.clone(),
         }))
@@ -1407,4 +1408,66 @@ fn line_text(
     });
     let combined: Vec<_> = combine_highlights(syntax, words).collect();
     (text.into(), combined)
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::{AppContext as _, TestAppContext};
+
+    use super::*;
+    use crate::data::QueryError;
+
+    const PATCH: &str = "diff --git a/f.txt b/f.txt\nindex 1111111..2222222 100644\n--- a/f.txt\n+++ b/f.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+TWO\n";
+
+    /// Where the gutter's stage button is once the pointer is on the added line, with `staging`.
+    fn stage_button_on_hover(staging: Option<LineStaging>, cx: &mut TestAppContext) -> bool {
+        let _dir = crate::test_support::init(cx, |services| services);
+        let load_file: LoadFile =
+            Rc::new(|_, _, _| Task::ready(Err(QueryError::msg("Not read in tests."))));
+        let (window, viewer) =
+            crate::test_support::open(cx, |_, cx| PatchViewer::new(load_file, cx));
+        cx.update(|cx| {
+            viewer.update(cx, |viewer, cx| {
+                viewer.set_props(
+                    PatchProps {
+                        patch: PATCH.into(),
+                        file_key: "f.txt".into(),
+                        cache_key: "test:f.txt".into(),
+                        style: DiffStyle::Unified,
+                        staging,
+                    },
+                    cx,
+                )
+            })
+        });
+        cx.run_until_parked();
+        cx.update_window(window, |_, window, cx| {
+            viewer.update(cx, |viewer, cx| {
+                assert!(viewer.shown_diff().is_some());
+                viewer.hover_line(2, Side::Additions, true, cx);
+                viewer
+                    .frame(window, cx)
+                    .expect("a patch on show")
+                    .stage_button
+                    .is_some()
+            })
+        })
+        .unwrap()
+    }
+
+    #[gpui_kit::test]
+    fn offers_to_stage_the_changed_line_the_pointer_is_on(cx: &mut TestAppContext) {
+        let staging = LineStaging {
+            action: StageAction::Stage,
+            busy: false,
+            stage: Rc::new(|_, _, _| Task::ready(Ok(()))),
+        };
+        assert!(stage_button_on_hover(Some(staging), cx));
+    }
+
+    #[gpui_kit::test]
+    fn keeps_the_line_numbers_of_a_patch_whose_lines_cant_be_staged(cx: &mut TestAppContext) {
+        // A commit's, say: the button would take the number's place, with nothing in it.
+        assert!(!stage_button_on_hover(None, cx));
+    }
 }
