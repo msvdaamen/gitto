@@ -10,7 +10,7 @@ use gitto_ui::git::conflicts::{ConflictKind, conflict_kind, describe_conflict};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{Disableable as _, Sizable as _};
 use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, Context, Entity, FontWeight, KeyDownEvent, Task, Window, div, rems};
+use gpui_kit::{AnyElement, Context, Entity, FontWeight, KeyDownEvent, Task, Window, div};
 
 use super::conflict_sides::ConflictSides;
 use super::conflict_viewer::{
@@ -18,7 +18,9 @@ use super::conflict_viewer::{
 };
 use super::file_diff_view::{FileDiffEvent, FileDiffView};
 use super::markers_dialog::open_markers_dialog;
-use crate::components::ui::{EmptyState, IconButton, IconName, LoadingState, Notice};
+use crate::components::ui::{
+    EmptyState, IconButton, IconName, LoadingState, Notice, action_button,
+};
 use crate::data::conflicts::{
     ConflictResolution, FileToResolve, conflict_query, conflict_query_options,
     resolve_file_mutation,
@@ -510,11 +512,7 @@ impl FileDiffView {
                 div()
                     .ml_1()
                     .child(
-                        Button::new("mark-resolved")
-                            .xsmall()
-                            // TS's: 26px high, 11.5px semibold.
-                            .h(rems(26. / 15.))
-                            .font_weight(FontWeight::SEMIBOLD)
+                        action_button("mark-resolved")
                             .when(ready, |button| button.primary())
                             .icon(crate::components::ui::Icon::new(IconName::Check))
                             .label("Mark resolved")

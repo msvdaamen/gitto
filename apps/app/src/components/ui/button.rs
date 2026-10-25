@@ -2,16 +2,26 @@
 //!
 //! `Button` is GPUI Kit's, with Gitto's look from the theme: `.primary()` is the gradient one
 //! (the decision area's default commit), the default is TS's `secondary`, `.ghost()` its `ghost`.
-//! The two TS shapes Kit has no name for are here: [`IconButton`] and [`LinkButton`].
+//! The TS shapes Kit has no name for are here: [`IconButton`], [`LinkButton`], and the compact
+//! [`action_button`].
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{Disableable as _, Selectable as _, Sizable as _};
 use gpui_kit::prelude::*;
-use gpui_kit::{App, ClickEvent, ElementId, SharedString, Window};
+use gpui_kit::{App, ClickEvent, ElementId, FontWeight, SharedString, Window, rems};
 
 use super::icons::{Icon, IconName};
 
 type OnClick = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+
+/// A compact button for an action in a bar, e.g. the operation bar's Abort or a diff's Stage
+/// file: TS's, 26px high, its label 11.5px and semibold.
+pub fn action_button(id: impl Into<ElementId>) -> Button {
+    Button::new(id)
+        .xsmall()
+        .h(rems(26. / 15.))
+        .font_weight(FontWeight::SEMIBOLD)
+}
 
 /// A square, icon-only button, named by its `label`, which its tooltip says too. `active` shows
 /// it pressed, e.g. while the panel it toggles is open.

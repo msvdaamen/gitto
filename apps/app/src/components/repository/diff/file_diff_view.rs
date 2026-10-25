@@ -27,6 +27,7 @@ use super::viewer_editing::{PatchEditor, PatchEditorEvent};
 use super::viewer_runtime::{LoadFile, LoadedFile, prepare_patch};
 use crate::components::ui::{
     EmptyState, FileStatusBadge, Icon, IconButton, IconName, LineStats, LoadingState, Notice,
+    action_button,
 };
 use crate::data::QueryClient;
 use crate::data::conflicts::conflict_options;
@@ -673,11 +674,7 @@ impl FileDiffView {
                             StageAction::Unstage => (IconName::Minus, "Unstage file"),
                         };
                         this.child(
-                            Button::new("stage-file")
-                                .xsmall()
-                                // TS's: 26px high, 11.5px semibold.
-                                .h(rems(26. / 15.))
-                                .font_weight(FontWeight::SEMIBOLD)
+                            action_button("stage-file")
                                 .icon(Icon::new(icon))
                                 .label(label)
                                 .disabled(staging_disabled)

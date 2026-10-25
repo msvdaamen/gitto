@@ -5,8 +5,8 @@ use gitto_git::features::operation::schema::{Operation, OperationKind};
 use gitto_git::features::status::schema::Uncommitted;
 use gitto_git::input::RepositoryId;
 use gitto_ui::git::conflicts::{operation_name, operation_progress, operation_title};
-use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
-use gpui_kit::component::{Disableable as _, Sizable as _, h_flex};
+use gpui_kit::component::button::{ButtonVariant, ButtonVariants as _};
+use gpui_kit::component::{Disableable as _, h_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     App, Context, EventEmitter, FontWeight, Role, SharedString, Subscription, Task, Window, div,
@@ -14,7 +14,7 @@ use gpui_kit::{
 };
 
 use super::BeforeChange;
-use crate::components::ui::{ConfirmDialog, FailurePopover, Icon, IconName, Tone};
+use crate::components::ui::{ConfirmDialog, FailurePopover, Icon, IconName, Tone, action_button};
 use crate::data::progress::{OperationActions, operation_actions, operation_in_progress_query};
 use crate::data::status::{
     ConflictedFiles, conflicted_files_query, first_conflicted_file, first_to_resolve,
@@ -282,11 +282,7 @@ impl Render for OperationBar {
                         "abort-failure",
                         format!("Abort {name}"),
                         abort_state.error,
-                        Button::new("abort")
-                            .xsmall()
-                            // TS's: 26px high, 11.5px semibold.
-                            .h(rems(26. / 15.))
-                            .font_weight(FontWeight::SEMIBOLD)
+                        action_button("abort")
                             .label("Abort")
                             .disabled(pending)
                             .on_click(cx.listener(move |this, _, window, cx| {
@@ -300,12 +296,8 @@ impl Render for OperationBar {
                         "continue-failure",
                         format!("Continue {name}"),
                         proceed_state.error,
-                        Button::new("continue")
+                        action_button("continue")
                             .primary()
-                            .xsmall()
-                            // TS's: 26px high, 11.5px semibold.
-                            .h(rems(26. / 15.))
-                            .font_weight(FontWeight::SEMIBOLD)
                             .label(label)
                             .disabled(pending || !files.is_empty())
                             .on_click(cx.listener(move |this, _, _, cx| this.go_on(kind, cx))),
@@ -373,12 +365,8 @@ impl Render for OperationBar {
                     .gap_1p5()
                     .when_some(first, |this, file| {
                         this.child(
-                            Button::new("resolve-conflicts")
+                            action_button("resolve-conflicts")
                                 .ghost()
-                                .xsmall()
-                                // TS's: 26px high, 11.5px semibold.
-                                .h(rems(26. / 15.))
-                                .font_weight(FontWeight::SEMIBOLD)
                                 .label("Resolve conflicts")
                                 .on_click(cx.listener(move |_, _, _, cx| {
                                     cx.emit(OperationBarEvent::Resolve(file.clone()))
