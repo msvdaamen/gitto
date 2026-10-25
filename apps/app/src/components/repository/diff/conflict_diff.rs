@@ -248,6 +248,21 @@ fn parse(contents: &str) -> Result<Parsed, String> {
             Some(MarkerKind::Start) => {
                 return Err("A conflict starts inside another.".to_owned());
             }
+            // A second base marker, or one after the separator, or a second separator (a side's
+            // line that looks like one, as a heading's underline can): which lines are whose can't
+            // be told, and resolving would drop some.
+            Some(MarkerKind::Base) if current.stage != Stage::Ours => {
+                return Err(format!(
+                    "Conflict {} has a base marker out of place.",
+                    regions.len()
+                ));
+            }
+            Some(MarkerKind::Separator) if current.stage == Stage::Theirs => {
+                return Err(format!(
+                    "Conflict {} has more than one separator marker.",
+                    regions.len()
+                ));
+            }
             Some(MarkerKind::Base) => {
                 current.stage = Stage::Base;
                 current.base_marker = Some(line.to_owned());
@@ -820,6 +835,19 @@ mod tests {
         assert_eq!(marker_type("||||||| base\n"), Some(MarkerKind::Base));
         assert_eq!(marker_type(">>>>>>> side"), Some(MarkerKind::End));
         assert_eq!(marker_type("<<<<<< six\n"), None);
+    }
+
+    #[test]
+    fn throws_for_a_conflict_whose_lines_cant_be_told_apart_rather_than_drop_some() {
+        // A side's line that reads as a separator: what's between the two would be lost.
+        let separators = "<<<<<<< HEAD\nours\n=======\nTitle\n=======\ntheirs\n>>>>>>> side\n";
+        assert!(parse_conflicts("f.rst", separators, "f:1").is_err());
+        let base_after = "<<<<<<< HEAD\nours\n=======\ntheirs\n||||||| base\nb\n>>>>>>> side\n";
+        assert!(parse_conflicts("f.txt", base_after, "f:1").is_err());
+        let two_bases =
+            "<<<<<<< HEAD\nours\n||||||| a\nb\n||||||| c\nd\n=======\nt\n>>>>>>> side\n";
+        assert!(parse_conflicts("f.txt", two_bases, "f:1").is_err());
+        assert!(read_conflicts("f.rst", separators, "f:1").problem.is_some());
     }
 
     #[test]
