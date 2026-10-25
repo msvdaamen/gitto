@@ -17,6 +17,7 @@ use gpui_kit::{
     App, Context, Entity, Focusable as _, FontWeight, SharedString, Subscription, Window, div, rems,
 };
 
+use super::branch_form::NAME_PLACEHOLDER;
 use crate::components::ui::{FormField, Icon, IconName};
 use crate::data::refs::refs_query;
 use crate::data::repositories::{find, repositories_query};
@@ -28,8 +29,6 @@ use crate::theme::PaletteExt as _;
 
 /// How wide the dialog is (`max-w-[400px]`), in rems of the 15px base.
 const WIDTH: f32 = 26.67;
-/// The new branch's placeholder when one has to be named.
-const NEW_BRANCH_PLACEHOLDER: &str = "feature/my-change";
 
 /// Places a new worktree for a branch, by its full ref name, and adds it. The folder is suggested
 /// beside the repository, named after it and the branch, and can be typed or picked. The branch is
@@ -261,7 +260,7 @@ impl AddWorktreeDialog {
             )
         };
         let placeholder: SharedString = if needs_new_branch {
-            NEW_BRANCH_PLACEHOLDER.into()
+            NAME_PLACEHOLDER.into()
         } else {
             format!("Keep {name}").into()
         };

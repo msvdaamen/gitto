@@ -126,12 +126,12 @@ impl Services {
         &self.repositories
     }
 
-    /// Git, for the repositories added to Gitto (see `GitApi::call`).
     /// The list of repositories as the UI reads and changes it (see `data::repositories`).
     pub fn repository_source(&self) -> &Rc<dyn RepositorySource> {
         &self.repository_source
     }
 
+    /// Git, for the repositories added to Gitto (see `GitApi::call`).
     pub fn git(&self) -> &GitApi {
         &self.git
     }

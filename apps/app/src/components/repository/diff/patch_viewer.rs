@@ -62,15 +62,8 @@ pub(super) struct DrawnLine {
 impl DrawnLine {
     pub fn new(line: &str) -> Self {
         let content = line.trim_end_matches(['\n', '\r']);
-        let (cut, ellipsis) = if content.len() > MAX_DRAWN_LINE {
-            let mut end = MAX_DRAWN_LINE;
-            while !content.is_char_boundary(end) {
-                end -= 1;
-            }
-            (&content[..end], true)
-        } else {
-            (content, false)
-        };
+        let cut = &content[..content.floor_char_boundary(MAX_DRAWN_LINE)];
+        let ellipsis = cut.len() < content.len();
         let tabs: Vec<usize> = cut
             .bytes()
             .enumerate()
@@ -123,9 +116,11 @@ pub(super) fn widest_line<'a>(lines: impl IntoIterator<Item = &'a str>) -> usize
     lines
         .into_iter()
         .map(|line| {
+            // As `DrawnLine` draws it: cut, with an ellipsis, and its tabs as spaces.
             let line = line.trim_end_matches(['\n', '\r']);
-            let tabs = line.bytes().filter(|byte| *byte == b'\t').count();
-            line.len().min(MAX_DRAWN_LINE) + tabs * (TAB_WIDTH - 1)
+            let cut = &line[..line.floor_char_boundary(MAX_DRAWN_LINE)];
+            let tabs = cut.bytes().filter(|byte| *byte == b'\t').count();
+            cut.chars().count() + usize::from(cut.len() < line.len()) + tabs * (TAB_WIDTH - 1)
         })
         .max()
         .unwrap_or(0)
@@ -322,16 +317,6 @@ impl PatchViewer {
         self.shown.as_ref().map(|shown| &*shown.patch.patch)
     }
 
-    /// The rows on show.
-    pub fn layout(&self) -> &Layout {
-        &self.layout
-    }
-
-    /// The lines selected, picked to stage.
-    pub fn picked(&self) -> &[ChangedLine] {
-        self.picker.picked()
-    }
-
     /// Reads the file on show whole with `load_file` from now on.
     pub fn set_load_file(&mut self, load_file: LoadFile) {
         self.load_file = load_file;
@@ -500,6 +485,10 @@ impl PatchViewer {
         });
         // The lines shown around the last one's changes are by hunk, which another's don't match.
         self.expanded = expanded;
+        // Only the diff on show's failure matters: the others' would keep their diffs, and the
+        // files read into them, for as long as the view is open (a file saved again and again).
+        self.failures
+            .retain(|(failed, _)| Arc::ptr_eq(failed, &diff));
         self.dragging = false;
         self.relayout();
         let pickable = self.is_pickable();
@@ -920,13 +909,14 @@ impl PatchViewer {
             Some((start.min(end), start.max(end)))
         });
         let to_stage = self.picker.to_stage();
+        let pickable = self.is_pickable() && self.is_live();
         // The button in the gutter: by the last line selected, or else the changed line the
-        // pointer is on.
+        // pointer is on. Only where lines can be picked: it takes the line number's place.
         let stage_button = to_stage
             .iter()
             .filter_map(|line| Some((layout.row_of(line.line_number, line.side)?, line.side)))
             .max_by_key(|(row, _)| *row)
-            .filter(|_| self.is_live());
+            .filter(|_| pickable);
         Some(Rc::new(Frame {
             entity: cx.entity().downgrade(),
             layout,
@@ -944,7 +934,7 @@ impl PatchViewer {
                 .staging
                 .as_ref()
                 .map(|staging| (staging.action, staging.busy)),
-            pickable: self.is_pickable() && self.is_live(),
+            pickable,
             palette: *cx.palette(),
             mono: cx.theme().mono_font_family.clone(),
         }))
@@ -1462,4 +1452,81 @@ fn line_text(
     });
     let combined: Vec<_> = combine_highlights(syntax, words).collect();
     (drawn.text.into(), combined)
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::{AppContext as _, TestAppContext};
+
+    use super::*;
+    use crate::data::QueryError;
+
+    const PATCH: &str = "diff --git a/f.txt b/f.txt\nindex 1111111..2222222 100644\n--- a/f.txt\n+++ b/f.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+TWO\n";
+
+    /// Where the gutter's stage button is once the pointer is on the added line, with `staging`.
+    fn stage_button_on_hover(staging: Option<LineStaging>, cx: &mut TestAppContext) -> bool {
+        let _dir = crate::test_support::init(cx, |services| services);
+        let load_file: LoadFile =
+            Rc::new(|_, _, _| Task::ready(Err(QueryError::msg("Not read in tests."))));
+        let (window, viewer) =
+            crate::test_support::open(cx, |_, cx| PatchViewer::new(load_file, cx));
+        cx.update(|cx| {
+            viewer.update(cx, |viewer, cx| {
+                viewer.set_props(
+                    PatchProps {
+                        patch: PATCH.into(),
+                        file_key: "f.txt".into(),
+                        cache_key: "test:f.txt".into(),
+                        style: DiffStyle::Unified,
+                        staging,
+                    },
+                    cx,
+                )
+            })
+        });
+        cx.run_until_parked();
+        cx.update_window(window, |_, window, cx| {
+            viewer.update(cx, |viewer, cx| {
+                assert!(viewer.shown_diff().is_some());
+                viewer.hover_line(2, Side::Additions, true, cx);
+                viewer
+                    .frame(window, cx)
+                    .expect("a patch on show")
+                    .stage_button
+                    .is_some()
+            })
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn measures_lines_in_characters_as_drawn() {
+        let patch = "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-\u{e9}\u{e9}\u{e9}\n+\ta\n";
+        let diff = super::super::diff_metadata::parse_patch_files(patch, None).remove(0);
+        // Three characters of two bytes each, and a tab drawn as four spaces before a letter.
+        assert_eq!(measure(&diff).0, TAB_WIDTH + 1);
+        let long = format!(
+            "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-a\n+{}\n",
+            "\u{e9}".repeat(MAX_DRAWN_LINE)
+        );
+        let diff = super::super::diff_metadata::parse_patch_files(&long, None).remove(0);
+        // Cut at as many bytes, with an ellipsis.
+        assert_eq!(measure(&diff).0, MAX_DRAWN_LINE / 2 + 1);
+    }
+
+    #[gpui_kit::test]
+    fn offers_to_stage_the_changed_line_the_pointer_is_on(cx: &mut TestAppContext) {
+        let staging = LineStaging {
+            action: StageAction::Stage,
+            busy: false,
+            stage: Rc::new(|_, _, _| Task::ready(Ok(()))),
+        };
+        assert!(stage_button_on_hover(Some(staging), cx));
+    }
+
+    #[gpui_kit::test]
+    fn keeps_the_line_numbers_of_a_patch_whose_lines_cant_be_staged(cx: &mut TestAppContext) {
+        // A commit's, say: the button would take the number's place, with nothing in it.
+        assert!(!stage_button_on_hover(None, cx));
+    }
 }

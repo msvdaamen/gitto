@@ -176,11 +176,6 @@ impl ViewerRuntime {
         cx.default_global::<ViewerRuntime>()
     }
 
-    /// `patch` parsed with `key`, if it was lately.
-    pub fn cached_patch(patch: &str, key: &str, cx: &mut App) -> Option<Arc<FileDiff>> {
-        Self::global(cx).parsed.get(patch, key)
-    }
-
     /// `patch`, parsed with `key` off the main thread, or as it was lately: a patch can be
     /// megabytes.
     pub fn parse(
@@ -188,7 +183,7 @@ impl ViewerRuntime {
         key: String,
         cx: &mut App,
     ) -> Task<Result<Arc<FileDiff>, String>> {
-        if let Some(diff) = Self::cached_patch(&patch, &key, cx) {
+        if let Some(diff) = Self::global(cx).parsed.get(&patch, &key) {
             return Task::ready(Ok(diff));
         }
         cx.spawn(async move |cx| {

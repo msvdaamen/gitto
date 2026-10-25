@@ -19,9 +19,9 @@ use super::stash_buttons::StashButtons;
 use super::toolbar_button::{HideBelow, SMALL, ToolbarButton};
 use crate::components::ui::{Divider, FailurePopover, Icon, IconButton, IconName, TextInput};
 use crate::data::branch::{
-    delete_branch_state, merge_branch_state, rebase_branch_state, switch_branch_state,
+    self, delete_branch_state, merge_branch_state, rebase_branch_state, switch_branch_state,
 };
-use crate::data::remote::{fetch_mutation, pull_branch_state};
+use crate::data::remote::{self, fetch_mutation, pull_branch_state};
 use crate::data::repositories::{find, repositories_query};
 use crate::data::status::status_query;
 use crate::data::{Mutation, Opaque, OperationState, Operations, Query, QueryError};
@@ -84,11 +84,11 @@ impl BranchChangeKind {
     /// The name of its operation (see `data::branch` and `data::remote`).
     fn operation(self) -> &'static str {
         match self {
-            BranchChangeKind::Merge => "merge",
-            BranchChangeKind::Rebase => "rebase",
-            BranchChangeKind::Switch => "switch",
-            BranchChangeKind::Delete => "delete-branch",
-            BranchChangeKind::Pull => "pull-branch",
+            BranchChangeKind::Merge => branch::MERGE,
+            BranchChangeKind::Rebase => branch::REBASE,
+            BranchChangeKind::Switch => branch::SWITCH,
+            BranchChangeKind::Delete => branch::DELETE,
+            BranchChangeKind::Pull => remote::PULL_BRANCH,
         }
     }
 }

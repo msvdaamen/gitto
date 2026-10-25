@@ -417,16 +417,13 @@ async fn run(cwd: PathBuf, args: Vec<OsString>, options: RunOptions) -> Result<V
     if code == Some(0) {
         return Ok(out);
     }
-    let mut error = command_error(
+    Err(Error::Git(command_error(
         &cwd.to_string_lossy(),
         &shown_args,
         code,
-        &String::from_utf8_lossy(&out),
+        &out,
         &String::from_utf8_lossy(&err),
-    );
-    // As git printed it, rather than lossily UTF-8.
-    error.stdout = out;
-    Err(Error::Git(error))
+    )))
 }
 
 /// Runs tasks for a key (a repository's path, say) one at a time, in the order they're asked for:

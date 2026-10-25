@@ -86,6 +86,8 @@ impl Router {
 
     fn go(&mut self, route: Route, cx: &mut Context<Self>) {
         if route == self.route {
+            // Staying: a navigation still waiting on the blocker is called off.
+            self.pending = None;
             return;
         }
         let Some(blocker) = self.blocker.clone() else {
@@ -127,6 +129,28 @@ mod tests {
         let blocker: Blocker = Rc::new(|cx| cx.background_spawn(async { true }));
         cx.update(|cx| Router::set_blocker(Some(blocker), cx));
         cx.update(|cx| Router::navigate(Route::Home, cx));
+        cx.run_until_parked();
+        assert_eq!(cx.update(|cx| Router::current(cx)), Route::Home);
+    }
+
+    #[gpui_kit::test]
+    fn stays_when_told_to_go_back_before_the_page_lets_it_leave(cx: &mut TestAppContext) {
+        cx.update(|cx| Router::init(Route::Home, cx));
+        let (allow, allowed) = futures::channel::oneshot::channel::<bool>();
+        let allowed = std::cell::RefCell::new(Some(allowed));
+        let blocker: Blocker = Rc::new(move |cx| {
+            let allowed = allowed.borrow_mut().take();
+            cx.background_spawn(async move {
+                match allowed {
+                    Some(allowed) => allowed.await.unwrap_or(false),
+                    None => true,
+                }
+            })
+        });
+        cx.update(|cx| Router::set_blocker(Some(blocker), cx));
+        cx.update(|cx| Router::navigate(Route::Settings, cx));
+        cx.update(|cx| Router::navigate(Route::Home, cx));
+        let _ = allow.send(true);
         cx.run_until_parked();
         assert_eq!(cx.update(|cx| Router::current(cx)), Route::Home);
     }

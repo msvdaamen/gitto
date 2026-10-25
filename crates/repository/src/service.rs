@@ -91,7 +91,9 @@ pub fn resolve(path: &Path) -> PathBuf {
     };
     // On Windows this also works out `..`, and a drive-relative path such as `C:repo`, as Node's
     // `path.win32.resolve` does; on Unix, it only joins the current directory.
-    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let Ok(absolute) = std::path::absolute(path) else {
+        return path.to_path_buf();
+    };
     let mut resolved = PathBuf::new();
     for component in absolute.components() {
         match component {

@@ -229,6 +229,7 @@ impl OperationBar {
         let name = operation_name(&operation);
         let kind = operation.kind();
         let this = cx.entity();
+        let id = self.repository_id.clone();
         ConfirmDialog::new(
             IconName::TriangleAlert,
             Tone::Coral,
@@ -239,7 +240,12 @@ impl OperationBar {
                  you've resolved so far are lost."
         ))
         .action("Abort", ButtonVariant::Primary, move |_, cx| {
-            this.update(cx, |this, cx| this.abort(kind, cx));
+            this.update(cx, |this, cx| {
+                // Not once another repository is on show: the operation asked about is this one's.
+                if this.repository_id == id {
+                    this.abort(kind, cx);
+                }
+            });
         })
         .open(window, cx);
     }
@@ -393,7 +399,7 @@ mod tests {
 
     use super::*;
     use crate::components::repository::test_support::{
-        conflicted, repository_id, set_operation, set_status, setup, status, with_conflicts,
+        self, conflicted, repository_id, set_operation, set_status, setup, status, with_conflicts,
     };
     use crate::data::{QueryError, RepositoryOperation};
 
@@ -512,21 +518,17 @@ mod tests {
     }
 
     fn has_dialog(bar: &Bar, cx: &mut TestAppContext) -> bool {
-        use gpui_kit::component::WindowExt as _;
-        cx.update_window(bar.window, |_, window, cx| window.has_active_dialog(cx))
-            .unwrap()
+        test_support::has_dialog(bar.window, cx)
     }
 
     /// Clicks the dialog's button labelled `label`.
     fn click_label(bar: &Bar, label: &str, cx: &mut TestAppContext) {
-        cx.update_window(bar.window, |_, window, cx| {
-            use gpui_kit::test::{TestEventExt as _, TestQueryExt as _};
-            let center = window.find_by_label(label).bounds().center();
-            window.pointer_down(center, gpui_kit::MouseButton::Left, cx);
-            window.pointer_up(center, gpui_kit::MouseButton::Left, cx);
-        })
-        .unwrap();
-        cx.run_until_parked();
+        test_support::click_label(bar.window, label, cx);
+    }
+
+    /// Clicks the last of what's labelled `label`: the dialog's own Abort, under the bar's.
+    fn click_last_label(bar: &Bar, label: &str, cx: &mut TestAppContext) {
+        test_support::click_last_label(bar.window, label, cx);
     }
 
     #[gpui_kit::test]
@@ -620,17 +622,27 @@ mod tests {
 
         click(&bar, "abort", cx);
         assert!(has_dialog(&bar, cx));
-        // The dialog's own Abort, under the bar's.
-        cx.update_window(bar.window, |_, window, cx| {
-            use gpui_kit::test::{TestEventExt as _, TestQueryExt as _};
-            let buttons = window.find_all_by_label("Abort");
-            let center = buttons.last().unwrap().bounds().center();
-            window.pointer_down(center, gpui_kit::MouseButton::Left, cx);
-            window.pointer_up(center, gpui_kit::MouseButton::Left, cx);
-        })
-        .unwrap();
-        cx.run_until_parked();
+        click_last_label(&bar, "Abort", cx);
         assert_eq!(*bar.calls.aborted.borrow(), [OperationKind::Merge]);
+    }
+
+    #[gpui_kit::test]
+    fn doesnt_abort_another_repositorys_operation_than_the_one_it_asked_about(
+        cx: &mut TestAppContext,
+    ) {
+        let bar = render(cx, Some(merge()), with_conflicts(status(), &["a.txt"], &[]));
+        click(&bar, "abort", cx);
+        assert!(has_dialog(&bar, cx));
+
+        // Another repository, merging too, comes on show under the dialog.
+        let other = repository_id();
+        set_operation(&other, Some(merge()), cx);
+        set_status(&other, with_conflicts(status(), &["b.txt"], &[]), cx);
+        bar.bar
+            .update(cx, |bar, cx| bar.set_repository(other.clone(), cx));
+        cx.run_until_parked();
+        click_last_label(&bar, "Abort", cx);
+        assert!(bar.calls.aborted.borrow().is_empty());
     }
 
     #[gpui_kit::test]

@@ -8,6 +8,7 @@ use gitto_git::features::stash::schema::Stash;
 
 use super::graph::{GraphCommit, GraphRow, compute_graph};
 use super::ref_labels::{Checkouts, RefLabel, to_ref_labels};
+use super::short_sha;
 use crate::format::{avatar_color, initials};
 
 /// Row id of the uncommitted changes, shown above the history when there are any.
@@ -255,7 +256,7 @@ pub fn to_commit_row(
     CommitRow {
         id: commit.sha.clone(),
         repository_id: repository_id.clone(),
-        short_sha: commit.sha.chars().take(7).collect(),
+        short_sha: short_sha(&commit.sha).to_owned(),
         graph,
         message: commit.subject.clone(),
         description: (!commit.body.is_empty()).then(|| commit.body.clone()),

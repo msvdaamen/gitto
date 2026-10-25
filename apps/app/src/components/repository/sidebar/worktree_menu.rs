@@ -44,10 +44,6 @@ impl WorktreeMenu {
         WorktreeMenu { actions }
     }
 
-    pub fn actions(&self) -> &WorktreeActions {
-        &self.actions
-    }
-
     /// Whether a worktree is being added, opened or removed on the repository `id`.
     pub fn is_busy(&self, id: &str, cx: &App) -> bool {
         WorktreeActions::is_pending(id, cx)

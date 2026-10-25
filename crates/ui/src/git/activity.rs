@@ -2,6 +2,8 @@
 
 use gitto_git::features::overview::schema::{Activity, ActivityKind};
 
+use super::short_sha;
+
 /// A commit's full SHA, as git names one when there's no branch to name: 40 hex digits, or 64.
 fn is_full_sha(target: &str) -> bool {
     matches!(target.len(), 40 | 64)
@@ -13,7 +15,7 @@ fn is_full_sha(target: &str) -> bool {
 /// A branch or commit as git named it, with a commit's SHA shortened.
 fn short_name(target: &str) -> &str {
     if is_full_sha(target) {
-        &target[..7]
+        short_sha(target)
     } else {
         target
     }

@@ -12,7 +12,6 @@ use gpui_kit::{App, Task};
 use super::diff_metadata::{FileDiff, Side};
 use super::line_staging::{
     ChangedLine, ChangedRow, SelectedRange, changed_lines, changed_rows, range_of, selected_lines,
-    to_selection,
 };
 use super::viewer_rows::Layout;
 use crate::data::QueryError;
@@ -187,8 +186,9 @@ impl LinePicker {
         hunk
     }
 
-    /// Lines to stage now, if they can be: none while another stage is under way, nor of a patch
-    /// other than the one picked from, nor none. Remembers where the keyboard staged from.
+    /// `changed`, to stage with `action`, unless there are none. Remembers where the keyboard
+    /// staged from. Whether lines can be staged now (not while another stage is under way, nor
+    /// from a patch other than the one picked from) is the viewer's to check first.
     pub fn stage_request(
         &mut self,
         changed: Vec<ChangedLine>,
@@ -407,11 +407,6 @@ impl LinePicker {
                 KeyOutcome::Handled { reveal: None }
             }
         }
-    }
-
-    /// The lines picked, as the git crate takes them.
-    pub fn selection_of(lines: &[ChangedLine]) -> LineSelection {
-        to_selection(lines)
     }
 }
 

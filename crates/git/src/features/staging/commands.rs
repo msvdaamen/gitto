@@ -273,14 +273,15 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::super::schema::LineRange;
-    use super::super::test_status::{StatusFile, status_files};
     use super::*;
     use crate::core::errors::GitErrorKind;
     use crate::core::repo::Observed;
     use crate::features::diff::schema::ChangedFile;
     use crate::features::status::commands::get_status;
+    use crate::features::status::schema::StatusFile;
     use crate::features::status::schema::WorkingTreeFiles;
     use crate::schema::FileStatus::{self, *};
+    use crate::test_support::status::status_entries;
     use crate::test_support::{Fixture, git, non_utf8_names};
 
     fn strings(paths: &[&str]) -> Paths {
@@ -419,7 +420,7 @@ mod tests {
 
             stage(&repo, &strings(&["x y.txt"])).await.unwrap();
             assert_eq!(
-                status_files(&repo).await,
+                status_entries(&repo).await,
                 [entry("x y.txt", Some(Added), None)]
             );
             assert_eq!(
@@ -434,7 +435,7 @@ mod tests {
 
             unstage(&repo, &strings(&["x y.txt"])).await.unwrap();
             assert_eq!(
-                status_files(&repo).await,
+                status_entries(&repo).await,
                 [entry("x y.txt", None, Some(Untracked))]
             );
         });
@@ -502,7 +503,7 @@ mod tests {
             let repo = fx.repos.open("all").await.unwrap();
 
             stage_all(&repo).await.unwrap();
-            let files: Vec<_> = status_files(&repo)
+            let files: Vec<_> = status_entries(&repo)
                 .await
                 .into_iter()
                 .map(|file| (file.path, file.staged, file.unstaged))
@@ -519,7 +520,7 @@ mod tests {
 
             unstage_all(&repo).await.unwrap();
             assert_eq!(get_status(&repo).await.unwrap().changes.staged, []);
-            let files: Vec<_> = status_files(&repo)
+            let files: Vec<_> = status_entries(&repo)
                 .await
                 .into_iter()
                 .map(|file| (file.path, file.unstaged))
@@ -562,7 +563,7 @@ mod tests {
 
             unstage_all(&repo).await.unwrap();
             assert_eq!(
-                status_files(&repo).await,
+                status_entries(&repo).await,
                 [
                     entry("other.txt", None, Some(Modified)),
                     StatusFile::conflicted("both.txt", "UU", "100644", "100644"),
@@ -677,7 +678,7 @@ mod tests {
             assert_eq!(pathspecs, Vec::<String>::new());
             assert!(!commands.lock().unwrap().is_empty());
             assert_eq!(
-                status_files(&repo).await,
+                status_entries(&repo).await,
                 [
                     entry("a.txt", None, Some(Modified)),
                     entry("b.txt", None, Some(Untracked)),
@@ -699,7 +700,7 @@ mod tests {
             assert_eq!(get_status(&repo).await.unwrap().changes.staged.len(), 1);
             unstage_all(&repo).await.unwrap();
             assert_eq!(
-                status_files(&repo).await,
+                status_entries(&repo).await,
                 [entry("a.txt", None, Some(Untracked))]
             );
         });
@@ -912,7 +913,7 @@ mod tests {
             assert_eq!(left, unstaged_patch(&repo, "x y.txt", false, None).await);
             assert!(left.contains("@@ -1,2 +1,3 @@\n a\n+b\n c\n"), "{left}");
             assert_eq!(
-                status_files(&repo).await,
+                status_entries(&repo).await,
                 [entry("x y.txt", Some(Added), Some(Modified))]
             );
         });
@@ -956,7 +957,7 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(
-                status_files(&repo).await,
+                status_entries(&repo).await,
                 [entry("f.txt", None, Some(Untracked))]
             );
         });
@@ -983,7 +984,7 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(
-                status_files(&repo).await,
+                status_entries(&repo).await,
                 [entry("f.txt", Some(Deleted), None)]
             );
 
@@ -1028,7 +1029,7 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(
-                status_files(&repo).await,
+                status_entries(&repo).await,
                 [StatusFile::new(
                     "new name.txt",
                     Some("old name.txt"),
@@ -1073,7 +1074,7 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(
-                status_files(&repo).await,
+                status_entries(&repo).await,
                 [StatusFile::new(
                     "new.txt",
                     Some("old.txt"),

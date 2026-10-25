@@ -21,15 +21,6 @@ pub enum Side {
     Additions,
 }
 
-impl Side {
-    pub fn other(self) -> Side {
-        match self {
-            Side::Deletions => Side::Additions,
-            Side::Additions => Side::Deletions,
-        }
-    }
-}
-
 /// How a file changed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChangeType {
@@ -370,11 +361,16 @@ pub fn diff_from_files(
         (Some(old), Some(new)) => Some(format!("{old}:{new}")),
         _ => None,
     };
-    process_file(&patch, cache_key, false, Some((old.contents, new.contents))).unwrap_or_else(
-        || FileDiff {
+    // Without changes, the patch is empty, headers and all: the files are the same.
+    if patch.is_empty() {
+        return FileDiff {
             name: new_name.to_owned(),
-            prev_name: None,
-            kind: ChangeType::Change,
+            prev_name: (old_name != new_name).then(|| old_name.to_owned()),
+            kind: if old_name == new_name {
+                ChangeType::Change
+            } else {
+                ChangeType::RenamePure
+            },
             hunks: Vec::new(),
             deletion_lines: Arc::new(Lines::of(old.contents)),
             addition_lines: Arc::new(Lines::of(new.contents)),
@@ -383,9 +379,11 @@ pub fn diff_from_files(
             mode: None,
             prev_mode: None,
             is_partial: false,
-            cache_key: None,
-        },
-    )
+            cache_key,
+        };
+    }
+    process_file(&patch, cache_key, false, Some((old.contents, new.contents)))
+        .expect("a patch with a file's headers")
 }
 
 /// `diff`, a partial one, filled in with both files whole (`hydratePartialDiff`): its sides are
@@ -1173,6 +1171,20 @@ mod tests {
         assert_eq!(hydrated.hunks[0].deletion_line_index, 1);
         assert_eq!(hydrated.cache_key.as_deref(), Some("test:0:hydrated"));
         assert!(hydrate(&hydrated, None, None).is_err());
+    }
+
+    #[test]
+    fn makes_a_diff_of_two_whole_files_that_are_the_same() {
+        let same = LoadedSide {
+            contents: "one\n",
+            cache_key: Some("1"),
+        };
+        let diff = diff_from_files("a.txt", same, "a.txt", same);
+        assert_eq!(diff.name, "a.txt");
+        assert_eq!(diff.kind, ChangeType::Change);
+        assert!(diff.hunks.is_empty());
+        assert_eq!(diff.addition_lines.len(), 1);
+        assert_eq!(diff.cache_key.as_deref(), Some("1:1"));
     }
 
     #[test]
