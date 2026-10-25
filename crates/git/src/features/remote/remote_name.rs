@@ -14,13 +14,7 @@ pub fn remote_of<'a, S: AsRef<str>>(remotes: &'a [S], name: &str) -> Option<&'a 
                     .strip_prefix(remote)
                     .is_some_and(|rest| rest.starts_with('/'))
         })
-        .fold(None, |longest: Option<&str>, remote| {
-            if remote.len() > longest.map_or(0, str::len) {
-                Some(remote)
-            } else {
-                longest
-            }
-        })
+        .max_by_key(|remote| remote.len())
 }
 
 #[cfg(test)]

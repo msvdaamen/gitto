@@ -3,6 +3,7 @@
 use gitto_git::features::refs::schema::{Ref, RefKind};
 use gitto_git::features::worktree::schema::Worktree;
 
+use super::short_sha;
 use super::status::branch_name;
 use crate::js;
 
@@ -108,7 +109,7 @@ pub fn describe_worktree(worktree: &Worktree) -> String {
     } else if let Some(branch) = worktree.branch.as_deref().filter(|b| !b.is_empty()) {
         lines.push(format!("On {}", branch_name(branch)));
     } else if let Some(head) = worktree.head.as_deref().filter(|h| !h.is_empty()) {
-        lines.push(format!("Detached at {}", head.get(..7).unwrap_or(head)));
+        lines.push(format!("Detached at {}", short_sha(head)));
     }
     if worktree.current {
         lines.push("Open here".to_owned());

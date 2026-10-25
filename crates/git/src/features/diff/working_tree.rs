@@ -402,12 +402,9 @@ async fn replace_file(target: PathBuf, bytes: Vec<u8>, mode: Option<u32>) -> Res
             std::fs::rename(&temporary, &target)
         })();
         if let Err(error) = written {
-            match std::fs::remove_file(&temporary) {
-                Err(removing) if removing.kind() != io::ErrorKind::NotFound => {
-                    return Err(removing.into());
-                }
-                _ => return Err(error.into()),
-            }
+            // Cleaned up if it can be, failing with why the save did, as TS's `rm(…, { force })`.
+            let _ = std::fs::remove_file(&temporary);
+            return Err(error.into());
         }
         Ok(())
     })

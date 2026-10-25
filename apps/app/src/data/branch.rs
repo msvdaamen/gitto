@@ -87,10 +87,6 @@ impl<T: 'static, R: 'static> BranchChange<T, R> {
     pub fn is_blocked(&self, id: &str, cx: &App) -> bool {
         branches_changing(id, cx)
     }
-
-    pub fn operation(&self) -> &OneAtATime<T, R> {
-        &self.operation
-    }
 }
 
 /// Creates a branch, by its name, at HEAD and switches to it, taking the uncommitted changes
@@ -209,11 +205,7 @@ pub fn merge_branch_operation() -> BranchChange<Merge, MergeOutcome> {
     BranchChange::new(RepositoryOperation::new(
         MERGE,
         |id, input: Merge, cx: &mut App| {
-            let up_to_date = format!(
-                "Already up to date: {} has every commit of {}.",
-                input.into,
-                branch_name(&input.reference)
-            );
+            let up_to_date = up_to_date_message(&input.into, &input.reference);
             let action = call(cx, "branch.merge", &id, move |repo| async move {
                 let reference = parse::<BranchRef>(input.reference)?;
                 let into = parse::<NonEmpty>(input.into)?;
@@ -231,6 +223,15 @@ pub fn merge_branch_operation() -> BranchChange<Merge, MergeOutcome> {
             })
         },
     ))
+}
+
+/// Why a merge or a rebase that changed nothing fails: `branch`, as the user saw it, had every
+/// commit of the branch `reference`, by its full ref name, already.
+fn up_to_date_message(branch: &str, reference: &str) -> String {
+    format!(
+        "Already up to date: {branch} has every commit of {}.",
+        branch_name(reference)
+    )
 }
 
 /// Runs `action`, a merge or a rebase on the repository `id`, then reloads the repository, also
@@ -284,11 +285,7 @@ pub fn rebase_branch_operation() -> BranchChange<Rebase, RebaseOutcome> {
     BranchChange::new(RepositoryOperation::new(
         REBASE,
         |id, input: Rebase, cx: &mut App| {
-            let up_to_date = format!(
-                "Already up to date: {} has every commit of {}.",
-                input.branch,
-                branch_name(&input.reference)
-            );
+            let up_to_date = up_to_date_message(&input.branch, &input.reference);
             let action = call(cx, "branch.rebase", &id, move |repo| async move {
                 let reference = parse::<BranchRef>(input.reference)?;
                 let branch = parse::<NonEmpty>(input.branch)?;

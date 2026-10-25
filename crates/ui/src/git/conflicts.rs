@@ -2,8 +2,9 @@
 //! repository, in the user's words.
 
 use gitto_git::features::conflicts::schema::{Conflict, ConflictSide, ConflictSides, Side};
-use gitto_git::features::operation::schema::Operation;
+use gitto_git::features::operation::schema::{CommitName, Operation};
 
+use super::short_sha;
 use crate::js;
 
 /// What one side of a conflict has at the file's path.
@@ -33,14 +34,20 @@ pub enum ConflictKind {
 }
 
 pub fn conflict_kind(conflict: &Conflict) -> ConflictKind {
-    let (Some(ours), Some(theirs)) = (&conflict.ours, &conflict.theirs) else {
-        if conflict.base.is_none() && conflict.ours.is_none() && conflict.theirs.is_none() {
-            return ConflictKind::Resolved;
-        }
-        return ConflictKind::Sides;
-    };
-    match &conflict.text {
-        Some(text) if side_kind(ours) == SideKind::File && side_kind(theirs) == SideKind::File => {
+    let Conflict {
+        base,
+        ours,
+        theirs,
+        text,
+        ..
+    } = conflict;
+    if base.is_none() && ours.is_none() && theirs.is_none() {
+        return ConflictKind::Resolved;
+    }
+    match (ours, theirs, text) {
+        (Some(ours), Some(theirs), Some(text))
+            if side_kind(ours) == SideKind::File && side_kind(theirs) == SideKind::File =>
+        {
             ConflictKind::Text {
                 contents: text.contents.clone(),
                 version: text.version.clone(),
@@ -71,17 +78,10 @@ pub fn describe_side(side: Option<&ConflictSide>) -> String {
     };
     match side_kind(side) {
         SideKind::Link => "A symbolic link".to_owned(),
-        SideKind::Submodule => format!("A submodule at {}", prefix(&side.oid, 7)),
+        SideKind::Submodule => format!("A submodule at {}", short_sha(&side.oid)),
         SideKind::File if side.mode == "100755" => "An executable file".to_owned(),
         SideKind::File => "A file".to_owned(),
     }
-}
-
-/// The first `chars` characters of `text`, as `slice(0, chars)` takes them of a SHA.
-fn prefix(text: &str, chars: usize) -> &str {
-    text.char_indices()
-        .nth(chars)
-        .map_or(text, |(end, _)| &text[..end])
 }
 
 /// The button that keeps a side whole: "Keep ours", or "Delete, as theirs does".
@@ -111,21 +111,20 @@ pub fn operation_title(operation: &Operation) -> String {
                 branch.as_deref().unwrap_or("HEAD")
             )
         }
-        Operation::CherryPick { commit, .. } | Operation::Revert { commit, .. } => {
-            let verb = if matches!(operation, Operation::CherryPick { .. }) {
-                "Cherry-picking"
-            } else {
-                "Reverting"
-            };
-            // None between the commits of a series, once one was committed by hand.
-            match commit {
-                Some(commit) => {
-                    js::trim_end(&format!("{verb} {} {}", commit.sha, commit.subject)).to_owned()
-                }
-                None => format!("{verb} commits"),
-            }
-        }
+        Operation::CherryPick { commit, .. } => picking("Cherry-picking", commit.as_ref()),
+        Operation::Revert { commit, .. } => picking("Reverting", commit.as_ref()),
         Operation::Am { .. } => "Applying patches".to_owned(),
+    }
+}
+
+/// A cherry-pick's or revert's title: `verb` and the commit it's at, e.g. "Reverting 1a2b3c4 Fix
+/// it"; `None` between the commits of a series, once one was committed by hand.
+fn picking(verb: &str, commit: Option<&CommitName>) -> String {
+    match commit {
+        Some(commit) => {
+            js::trim_end(&format!("{verb} {} {}", commit.sha, commit.subject)).to_owned()
+        }
+        None => format!("{verb} commits"),
     }
 }
 
@@ -153,7 +152,7 @@ pub fn operation_name(operation: &Operation) -> String {
 #[cfg(test)]
 mod tests {
     use gitto_git::features::conflicts::schema::ConflictText;
-    use gitto_git::features::operation::schema::{CommitName, Steps};
+    use gitto_git::features::operation::schema::Steps;
 
     use super::*;
 

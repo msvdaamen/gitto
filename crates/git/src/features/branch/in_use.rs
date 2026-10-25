@@ -25,7 +25,8 @@ async fn read(path: PathBuf) -> String {
         .unwrap_or_default()
 }
 
-/// The ids of the linked worktrees in the git directory `common_dir`; none if it has none.
+/// The git directories of the linked worktrees of the git directory `common_dir`; none if it has
+/// none.
 async fn linked_worktrees(common_dir: &Path) -> Vec<PathBuf> {
     let Ok(mut entries) = async_fs::read_dir(common_dir.join("worktrees")).await else {
         return Vec::new();
@@ -78,26 +79,21 @@ pub async fn branches_in_use(run: &GitCommand) -> Result<HashMap<String, InUse>>
     .await;
     for (rebase_merge, rebase_apply, bisect) in states {
         for rebased in [rebase_merge, rebase_apply] {
-            if rebased.starts_with("refs/heads/") && !in_use.contains_key(&rebased) {
-                in_use.insert(
-                    rebased,
-                    InUse {
-                        state: "is being rebased".to_owned(),
-                        fix: "Finish or abort the rebase first.".to_owned(),
-                    },
-                );
+            if rebased.starts_with("refs/heads/") {
+                in_use.entry(rebased).or_insert_with(|| InUse {
+                    state: "is being rebased".to_owned(),
+                    fix: "Finish or abort the rebase first.".to_owned(),
+                });
             }
         }
         // The branch's short name; a commit's SHA when bisecting started detached.
-        let bisected = format!("refs/heads/{bisect}");
-        if !bisect.is_empty() && !in_use.contains_key(&bisected) {
-            in_use.insert(
-                bisected,
-                InUse {
+        if !bisect.is_empty() {
+            in_use
+                .entry(format!("refs/heads/{bisect}"))
+                .or_insert_with(|| InUse {
                     state: "is being bisected".to_owned(),
                     fix: "Stop bisecting first.".to_owned(),
-                },
-            );
+                });
         }
     }
     Ok(in_use)
