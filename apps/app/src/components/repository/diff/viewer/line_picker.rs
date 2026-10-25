@@ -14,8 +14,8 @@ use super::super::line_staging::{
 };
 use super::diff_metadata::{FileDiff, Side};
 use super::viewer_rows::Layout;
-use crate::data::DataError;
-use crate::data::staging::StageAction;
+use gitto_app_data::data::DataError;
+use gitto_app_data::data::staging::StageAction;
 
 /// Stages `lines` of `patch`, the patch on show they were picked from; resolves once they're
 /// staged, and fails if they couldn't be.
@@ -422,7 +422,7 @@ mod tests {
     use super::super::patch_files::Expanded;
     use super::super::viewer_rows::{LayoutOptions, Separators, layout};
     use super::*;
-    use crate::state::diff_style::DiffStyle;
+    use gitto_app_data::state::diff_style::DiffStyle;
 
     fn diff() -> FileDiff {
         parse_patch_files(

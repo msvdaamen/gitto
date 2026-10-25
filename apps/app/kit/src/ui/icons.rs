@@ -2,7 +2,7 @@
 //! components imported, and `components/ui/gitto-icon.tsx`.
 //!
 //! [`IconName`] is the whole Lucide catalog, named as `lucide-solid` named them
-//! (`lucide-solid/icons/git-branch` is `IconName::GitBranch`); `crate::assets::AppAssets` serves
+//! (`lucide-solid/icons/git-branch` is `IconName::GitBranch`); the app's `assets::AppAssets` serves
 //! them all. Draw one with GPUI Kit's `Icon`: `Icon::new(IconName::GitBranch).size_3()`.
 
 use gpui_kit::prelude::*;

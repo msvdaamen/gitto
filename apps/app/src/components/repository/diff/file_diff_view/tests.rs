@@ -15,9 +15,9 @@ use super::super::viewer::line_picker::LineStaging;
 use super::super::viewer::viewer_runtime::ViewerRuntime;
 use super::*;
 use crate::components::repository::test_support::repository_entity;
-use crate::data::diff::{ChangedFiles, FilesOf};
-use crate::data::staging::{FileToStage, LinesToStage};
-use crate::data::{DataError, Loaded, Mutation, Opaque};
+use gitto_app_data::data::diff::{ChangedFiles, FilesOf};
+use gitto_app_data::data::staging::{FileToStage, LinesToStage};
+use gitto_app_data::data::{DataError, Loaded, Mutation, Opaque};
 
 fn id() -> RepositoryId {
     RepositoryId::parse("01890a5d-ac96-774b-bcce-b302099a8057").unwrap()

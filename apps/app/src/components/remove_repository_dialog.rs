@@ -5,7 +5,7 @@ use gitto_repository::Repository;
 use gpui_kit::component::button::ButtonVariant;
 use gpui_kit::{App, Window};
 
-use crate::components::ui::{ConfirmDialog, IconName, Tone};
+use gitto_app_kit::ui::{ConfirmDialog, IconName, Tone};
 
 /// Asks before removing `repository` from Gitto, which leaves its folder as it is; `on_remove`
 /// removes it. Escape, or clicking outside, cancels.

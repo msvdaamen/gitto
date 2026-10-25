@@ -7,12 +7,12 @@ use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{App, Context, Entity, FontWeight, Subscription, Window, div};
 
-use crate::components::ui::dialog::LIST_WIDTH;
-use crate::components::ui::{Badge, DialogHeading, IconName, Tone};
-use crate::services::system::{Change, ChangeType, UpdateChannel, VersionChanges};
-use crate::state::whats_new::WhatsNew;
-use crate::theme::PaletteExt as _;
 use crate::util::format::{capitalize, short_date};
+use gitto_app_data::services::system::{Change, ChangeType, UpdateChannel, VersionChanges};
+use gitto_app_data::state::whats_new::WhatsNew;
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::dialog::LIST_WIDTH;
+use gitto_app_kit::ui::{Badge, DialogHeading, IconName, Tone};
 
 /// How a change is marked: breaking ones first, whatever their type.
 pub fn kind_of(change: &Change) -> (&'static str, Tone) {
@@ -245,8 +245,8 @@ mod tests {
     use gpui_kit::{AnyWindowHandle, AppContext as _, IntoElement, Render, TestAppContext};
 
     use super::*;
-    use crate::services::system::{SystemContext, WhatsNew as WhatsNewSource};
     use crate::test_support;
+    use gitto_app_data::services::system::{SystemContext, WhatsNew as WhatsNewSource};
 
     /// The changelog as a test has it, counting the times it's told it's seen.
     struct Changelog {

@@ -12,11 +12,11 @@ use gpui_kit::{App, Context, Entity, EventEmitter, FontWeight, Subscription, Win
 use super::changed_file_list::{ChangedFileList, HoverIntent};
 use super::commit_details::{CommitDetailsEvent, ShownFile, openable_files};
 use super::details_sections::{DetailsError, DetailsList, FileTotals, RenderTop};
-use crate::components::ui::{Icon, IconName, LoadingState, Tone};
-use crate::data::diff::{FilesOf, FilesOnShow};
-use crate::data::{Opaque, Part, Shown};
-use crate::state::clock::{Clock, relative_time};
-use crate::theme::PaletteExt as _;
+use gitto_app_data::data::diff::{FilesOf, FilesOnShow};
+use gitto_app_data::data::{Opaque, Part, Shown};
+use gitto_app_data::state::clock::{Clock, relative_time};
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{Icon, IconName, LoadingState, Tone};
 use gitto_ui_logic::git::changes::LineCounts;
 use gitto_ui_logic::git::diff_source::DiffSource;
 

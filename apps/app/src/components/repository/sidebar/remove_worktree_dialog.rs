@@ -6,7 +6,7 @@ use gitto_ui_logic::git::status::branch_name;
 use gpui_kit::component::button::ButtonVariant;
 use gpui_kit::{App, Window};
 
-use crate::components::ui::{ConfirmDialog, IconName, Tone};
+use gitto_app_kit::ui::{ConfirmDialog, IconName, Tone};
 
 /// What removing `worktree` does, as the dialog says it: its folder goes, with any uncommitted
 /// changes in it; its branch, if it's on one, is kept.

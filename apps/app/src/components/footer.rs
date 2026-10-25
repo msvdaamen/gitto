@@ -6,11 +6,11 @@ use gpui_kit::prelude::*;
 use gpui_kit::{App, Context, Entity, Subscription, Window, div, rems};
 
 use super::app_version::AppVersion;
-use crate::components::ui::{Divider, GittoIcon, Icon, IconName, StatusDot};
-use crate::data::{Part, Repositories, Repository, observe_selected};
-use crate::state::router::Router;
-use crate::state::update::UpdateStatus;
-use crate::theme::PaletteExt as _;
+use gitto_app_data::data::{Part, Repositories, Repository, observe_selected};
+use gitto_app_data::state::router::Router;
+use gitto_app_data::state::update::UpdateStatus;
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{Divider, GittoIcon, Icon, IconName, StatusDot};
 use gitto_ui_logic::git::status::{head_label, sync_label};
 
 /// The footer's height (TS's grid row, 27px).

@@ -14,9 +14,9 @@ use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::{App, Entity, Window};
 
 use super::sidebar_section::SectionFailure;
-use crate::components::ui::{IconName, context_menu_item};
-use crate::data::Repository;
-use crate::data::changes::{ADD_WORKTREE, OPEN_WORKTREE, REMOVE_WORKTREE};
+use gitto_app_data::data::Repository;
+use gitto_app_data::data::changes::{ADD_WORKTREE, OPEN_WORKTREE, REMOVE_WORKTREE};
+use gitto_app_kit::ui::{IconName, context_menu_item};
 
 /// The menu of what can be done with a worktree. Opening it adds it to Gitto's repositories, as a
 /// repository of its own, and shows it; not for the one on show, a bare one, which has no files,

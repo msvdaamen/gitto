@@ -15,14 +15,14 @@ use crate::components::repository::test_support::{
     set_stashes, set_status, set_worktrees, setup_with, uncommitted,
 };
 use crate::components::repository::toolbar::RepositoryToolbar;
-use crate::data::DataError;
-use crate::data::branch::{Merge, NewBranchFrom, Rebase};
-use crate::data::changes::{POP, POP_PICKED};
-use crate::data::git::{GitTask, RepositoryGit};
-use crate::data::repositories::RepositorySource;
-use crate::data::worktree::AddWorktreeInput;
 use futures::FutureExt as _;
 use futures::future::BoxFuture;
+use gitto_app_data::data::DataError;
+use gitto_app_data::data::branch::{Merge, NewBranchFrom, Rebase};
+use gitto_app_data::data::changes::{POP, POP_PICKED};
+use gitto_app_data::data::git::{GitTask, RepositoryGit};
+use gitto_app_data::data::repositories::RepositorySource;
+use gitto_app_data::data::worktree::AddWorktreeInput;
 use gitto_git::features::status::schema::Uncommitted;
 use gitto_git::input::{BranchName, BranchRef, Folder, FullSha, NonEmpty};
 use gitto_repository::Repository;
@@ -417,7 +417,7 @@ impl Fixture {
     }
 
     /// The repository on show's entity.
-    fn repository(&self, cx: &mut TestAppContext) -> Entity<crate::data::Repository> {
+    fn repository(&self, cx: &mut TestAppContext) -> Entity<gitto_app_data::data::Repository> {
         let list = self.list(cx);
         list.read_with(cx, |list, _| list.repository.entity().clone())
     }

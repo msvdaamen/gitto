@@ -14,12 +14,12 @@ use gpui_kit::{
     TestSupportExt as _, Window, div, rems,
 };
 
-use crate::components::ui::{
+use gitto_app_data::data::Opaque;
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{
     ContextMenuExt as _, FileStatusBadge, Icon, IconName, LineStats, PopupMenu, VirtualList,
     menu_frame,
 };
-use crate::data::Opaque;
-use crate::theme::PaletteExt as _;
 
 /// How long the pointer rests on a file before it's taken for one about to be opened.
 pub const HOVER: Duration = Duration::from_millis(80);

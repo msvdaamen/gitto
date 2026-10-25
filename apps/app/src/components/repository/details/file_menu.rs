@@ -8,7 +8,7 @@ use gitto_git::schema::FileStatus;
 use gitto_ui_logic::git::changes::is_nested_repository;
 use gpui_kit::{App, Context, DismissEvent, Window};
 
-use crate::components::ui::{IconName, PopupMenu, context_menu_item};
+use gitto_app_kit::ui::{IconName, PopupMenu, context_menu_item};
 
 /// Told which file's menu is open, by its path; `None` once it's closed.
 pub type OnOpenFor = Rc<dyn Fn(Option<String>, &mut App)>;

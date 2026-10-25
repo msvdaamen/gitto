@@ -12,11 +12,11 @@ use gpui_kit::{
 };
 
 use super::BeforeChange;
-use crate::components::ui::{ConfirmDialog, FailurePopover, Icon, IconName, Tone, action_button};
-use crate::data::changes::{ABORT, CONTINUE};
-use crate::data::status::{ConflictedFiles, first_to_resolve, select_conflicted};
-use crate::data::{Part, Repository, Shown};
-use crate::theme::PaletteExt as _;
+use gitto_app_data::data::changes::{ABORT, CONTINUE};
+use gitto_app_data::data::status::{ConflictedFiles, first_to_resolve, select_conflicted};
+use gitto_app_data::data::{Part, Repository, Shown};
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{ConfirmDialog, FailurePopover, Icon, IconName, Tone, action_button};
 
 /// What the operation bar asks of the page.
 #[derive(Debug, Clone, PartialEq)]
@@ -390,8 +390,8 @@ mod tests {
         self, conflicted, fake_git, repository_id, set_operation, set_status, setup, status,
         with_conflicts,
     };
-    use crate::data::DataError;
-    use crate::data::git::{GitTask, RepositoryGit};
+    use gitto_app_data::data::DataError;
+    use gitto_app_data::data::git::{GitTask, RepositoryGit};
 
     fn merge() -> Operation {
         Operation::Merge {

@@ -13,11 +13,11 @@ use gpui_kit::{
 };
 
 use super::remove_repository_dialog::open_remove_repository_dialog;
-use crate::components::ui::{FailurePopover, GittoIcon, Icon, IconName};
-use crate::data::repositories::{OpenRepository, remove_repository, reorder_repositories};
-use crate::data::{AppChanged, AppData, AppPart, DataError};
-use crate::state::router::{Route, Router};
-use crate::theme::PaletteExt as _;
+use gitto_app_data::data::repositories::{OpenRepository, remove_repository, reorder_repositories};
+use gitto_app_data::data::{AppChanged, AppData, AppPart, DataError};
+use gitto_app_data::state::router::{Route, Router};
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{FailurePopover, GittoIcon, Icon, IconName};
 
 /// Below these window widths the home tab shows its icon alone (`md`), and the repositories' tabs
 /// can be narrower (`sm`).
@@ -533,8 +533,8 @@ mod ui_tests {
     use gpui_kit::{AnyWindowHandle, AppContext as _, IntoElement, Render, TestAppContext};
 
     use super::*;
-    use crate::data::repositories::RepositorySource;
     use crate::test_support;
+    use gitto_app_data::data::repositories::RepositorySource;
 
     /// The repositories as saved, which `reorder` changes, unless it's told to fail (TS's mocked
     /// `rpc.repository`).

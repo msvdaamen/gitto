@@ -9,10 +9,10 @@ use gpui_kit::prelude::*;
 use gpui_kit::{App, Context, Entity, Focusable as _, Subscription, Window, rems};
 
 use super::branch_form::{BranchForm, NAME_PLACEHOLDER, submitted_name};
-use crate::data::branch::NewBranchFrom;
-use crate::data::changes::SWITCH;
-use crate::data::{Part, Shown};
-use crate::state::lingering::Lingering;
+use gitto_app_data::data::branch::NewBranchFrom;
+use gitto_app_data::data::changes::SWITCH;
+use gitto_app_data::data::{Part, Shown};
+use gitto_app_data::state::lingering::Lingering;
 
 /// How wide the dialog is (`max-w-[320px]`), in rems of the 15px base.
 const WIDTH: f32 = 21.33;
@@ -207,7 +207,7 @@ mod tests {
     use crate::components::repository::test_support::{
         changed, fake_git, repository_id, set_status, setup, status,
     };
-    use crate::data::git::{GitTask, RepositoryGit};
+    use gitto_app_data::data::git::{GitTask, RepositoryGit};
 
     /// A repository's git that records the branches asked to be created.
     #[derive(Default)]

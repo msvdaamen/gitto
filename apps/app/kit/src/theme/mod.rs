@@ -23,7 +23,7 @@ use gpui_kit::component::{Colorize as _, Theme, ThemeConfig, ThemeMode};
 use gpui_kit::{App, Global, Hsla, Rgba};
 
 pub use self::palette::Palette;
-use crate::services::LocalStorage;
+use gitto_app_data::services::LocalStorage;
 
 /// The key the theme is saved under, as `hooks/theme.ts` saved it in `localStorage`.
 pub const STORAGE_KEY: &str = "gitto-theme";

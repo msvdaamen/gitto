@@ -18,7 +18,7 @@ use super::diff_metadata::{
 };
 use super::highlight::DiffHighlights;
 use super::patch_files::{fit_to_patch, has_matching_ends};
-use crate::data::DataError;
+use gitto_app_data::data::DataError;
 
 /// How long a diff waits for its highlighting before it's shown without, until it's
 /// highlighted: long enough for most, which then show highlighted at once rather than flicker

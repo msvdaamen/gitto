@@ -14,14 +14,14 @@ use gpui_kit::{
 };
 
 use super::branch_form::NAME_PLACEHOLDER;
-use crate::components::ui::{FormField, Icon, IconName};
-use crate::data::changes::ADD_WORKTREE;
-use crate::data::repositories::find;
-use crate::data::worktree::AddWorktreeInput;
-use crate::data::{AppData, AppPart, Part, Shown};
-use crate::services::SystemContext;
-use crate::state::lingering::Lingering;
-use crate::theme::PaletteExt as _;
+use gitto_app_data::data::changes::ADD_WORKTREE;
+use gitto_app_data::data::repositories::find;
+use gitto_app_data::data::worktree::AddWorktreeInput;
+use gitto_app_data::data::{AppData, AppPart, Part, Shown};
+use gitto_app_data::services::SystemContext;
+use gitto_app_data::state::lingering::Lingering;
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{FormField, Icon, IconName};
 
 /// How wide the dialog is (`max-w-[400px]`), in rems of the 15px base.
 const WIDTH: f32 = 26.67;
@@ -388,7 +388,7 @@ mod tests {
     use crate::components::repository::test_support::{
         Repositories, fake_git, repository, repository_id, set_refs, set_worktrees, setup_with,
     };
-    use crate::data::git::{GitTask, RepositoryGit};
+    use gitto_app_data::data::git::{GitTask, RepositoryGit};
 
     /// A repository's git that records the worktrees asked to be added.
     #[derive(Default)]

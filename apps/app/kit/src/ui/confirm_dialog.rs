@@ -155,7 +155,7 @@ mod tests {
 
     /// A dialog asking to remove something, counting the removes and the cancels.
     fn open(cx: &mut TestAppContext) -> (tempfile::TempDir, AnyWindowHandle, Counts) {
-        let dir = test_support::init(cx, |services| services);
+        let dir = test_support::init(cx);
         let (window, _) = test_support::open(cx, |_, _| Host);
         let counts = Counts::default();
         let (removed, cancelled) = (Rc::clone(&counts.removed), Rc::clone(&counts.cancelled));

@@ -19,15 +19,13 @@ use super::changed_file_list::{ChangedFileList, HoverIntent};
 use super::details_sections::{DetailsError, DetailsList, FileTotals, RenderTop};
 use super::stash_details::StashDetails;
 use super::working_tree_details::WorkingTreeDetails;
-use crate::components::ui::{
-    Avatar, AvatarSize, EmptyState, Icon, IconButton, IconName, LoadingState,
-};
-use crate::data::diff::{FilesOf, FilesOnShow, ShownFiles};
-use crate::data::keyed::Hold;
-use crate::data::{DataError, Opaque, Part, Shown};
-use crate::state::clock::{Clock, relative_time};
-use crate::theme::PaletteExt as _;
 use crate::util::format::{avatar_color, initials};
+use gitto_app_data::data::diff::{FilesOf, FilesOnShow, ShownFiles};
+use gitto_app_data::data::keyed::Hold;
+use gitto_app_data::data::{DataError, Opaque, Part, Shown};
+use gitto_app_data::state::clock::{Clock, relative_time};
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{Avatar, AvatarSize, EmptyState, Icon, IconButton, IconName, LoadingState};
 use gitto_ui_logic::git::diff_source::{DiffSource, is_same_source};
 use gitto_ui_logic::git::rows::WIP_ID;
 

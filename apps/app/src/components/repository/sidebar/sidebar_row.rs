@@ -12,8 +12,8 @@ use gpui_kit::{
 };
 
 use super::base_px;
-use crate::components::ui::{Icon, IconName, Tone, menu_frame};
-use crate::theme::PaletteExt as _;
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{Icon, IconName, Tone, menu_frame};
 
 /// Space below every row in a section.
 const ROW_GAP: f32 = 1.;

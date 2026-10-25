@@ -8,8 +8,8 @@ use gpui_kit::component::{Disableable as _, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{App, Entity, FontWeight, SharedString, Window, div};
 
-use crate::components::ui::{FormField, Icon, IconName};
-use crate::theme::PaletteExt as _;
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{FormField, Icon, IconName};
 
 /// The name field's placeholder: made with the field's `InputState`.
 pub const NAME_PLACEHOLDER: &str = "feature/my-change";

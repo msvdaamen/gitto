@@ -15,10 +15,12 @@ use gitto_ui_logic::git::changes::{
 use gitto_ui_logic::git::patch::{PatchSummary, is_link, summarize_patch};
 use gpui_kit::{AppContext as _, Context, Entity, Subscription};
 
-use crate::data::file_diff::{DiffSourceFiles, FilePatch};
-use crate::data::keyed::Hold;
-use crate::data::{DataError, Loaded, Opaque, Part, Repositories, Repository, observe_parts};
-use crate::state::delayed::{DELAY, Delayed};
+use gitto_app_data::data::file_diff::{DiffSourceFiles, FilePatch};
+use gitto_app_data::data::keyed::Hold;
+use gitto_app_data::data::{
+    DataError, Loaded, Opaque, Part, Repositories, Repository, observe_parts,
+};
+use gitto_app_data::state::delayed::{DELAY, Delayed};
 use gitto_ui_logic::git::diff_source::{DiffSource, diff_file_key, is_same_source, is_uncommitted};
 
 /// Changed lines above which a file's changes are only shown when asked: reading and parsing them

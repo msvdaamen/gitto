@@ -21,14 +21,14 @@ use crate::components::repository::history::history_table::{HistoryEvent, Histor
 use crate::components::repository::operation_bar::{OperationBar, OperationBarEvent};
 use crate::components::repository::sidebar::refs_sidebar::RefsSidebar;
 use crate::components::repository::toolbar::{RepositoryToolbar, ToolbarEvent};
-use crate::components::ui::{HandleSide, PanelDrag, ResizeHandle, dragged_width};
-use crate::data::RepositoryWatcher;
-use crate::data::watch::WatchStreams;
-use crate::services::Services;
-use crate::state::panel_width::{PanelBounds, PanelWidth};
-use crate::state::router::Router;
-use crate::state::settled::{SETTLE_AFTER, Settled};
-use crate::theme::PaletteExt as _;
+use gitto_app_data::data::RepositoryWatcher;
+use gitto_app_data::data::watch::WatchStreams;
+use gitto_app_data::services::Services;
+use gitto_app_data::state::panel_width::{PanelBounds, PanelWidth};
+use gitto_app_data::state::router::Router;
+use gitto_app_data::state::settled::{SETTLE_AFTER, Settled};
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{HandleSide, PanelDrag, ResizeHandle, dragged_width};
 use gitto_ui_logic::git::diff_source::{DiffSource, is_same_source};
 use gitto_ui_logic::git::rows::WIP_ID;
 
@@ -672,10 +672,10 @@ mod tests {
         set_push_target, set_refs, set_remotes, set_stashes, set_status, set_worktrees, setup_with,
         uncommitted,
     };
-    use crate::data::Opaque;
-    use crate::data::diff::{ChangedFiles, FilesOf};
-    use crate::data::file_diff::FilePatch;
-    use crate::data::history::Log;
+    use gitto_app_data::data::Opaque;
+    use gitto_app_data::data::diff::{ChangedFiles, FilesOf};
+    use gitto_app_data::data::file_diff::FilePatch;
+    use gitto_app_data::data::history::Log;
 
     fn commit(sha: &str, subject: &str, parents: &[&str], committed_at: i64) -> Commit {
         Commit {

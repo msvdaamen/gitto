@@ -12,12 +12,12 @@ use gpui_kit::prelude::*;
 use gpui_kit::{App, Context, Entity, SharedString, Subscription, Window, div};
 
 use super::toolbar_button::ToolbarButton;
-use crate::components::ui::dialog::CONFIRM_WIDTH;
-use crate::components::ui::{DialogHeading, IconName, Tone};
-use crate::data::changes::PUSH;
-use crate::data::remote::{PushRejection, push_rejection};
-use crate::data::{Changed, Part, Repository, Shown};
-use crate::state::lingering::Lingering;
+use gitto_app_data::data::changes::PUSH;
+use gitto_app_data::data::remote::{PushRejection, push_rejection};
+use gitto_app_data::data::{Changed, Part, Repository, Shown};
+use gitto_app_data::state::lingering::Lingering;
+use gitto_app_kit::ui::dialog::CONFIRM_WIDTH;
+use gitto_app_kit::ui::{DialogHeading, IconName, Tone};
 
 /// Why the remote branch turned a push down, and how git put it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -314,8 +314,8 @@ mod tests {
     use crate::components::repository::test_support::{
         fake_git, has_dialog, repository_id, set_push_target, set_status, setup, status,
     };
-    use crate::data::DataError;
-    use crate::data::git::{GitTask, RepositoryGit};
+    use gitto_app_data::data::DataError;
+    use gitto_app_data::data::git::{GitTask, RepositoryGit};
 
     const REWRITTEN: &str = "origin/main still has main's commits from before a rebase or amend.";
     const BEHIND: &str = "origin/main has commits you haven't pulled yet.";

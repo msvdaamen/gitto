@@ -9,8 +9,8 @@ use gpui_kit::component::{Disableable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{App, FontWeight, Window, div, rems};
 
-use crate::components::ui::{Icon, IconName};
-use crate::theme::PaletteExt as _;
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{Icon, IconName};
 
 type OnKeep = Rc<dyn Fn(Side, &mut Window, &mut App) + 'static>;
 

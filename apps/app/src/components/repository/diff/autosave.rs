@@ -8,7 +8,7 @@ use futures::future::Shared;
 use gitto_git::ApiCode;
 use gpui_kit::{App, Context, Task};
 
-use crate::data::DataError;
+use gitto_app_data::data::DataError;
 
 /// Where saving a file that's being edited is at.
 #[derive(Debug, Clone, PartialEq, Eq)]

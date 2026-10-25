@@ -1,5 +1,5 @@
 //! For the repository area's tests: the app's globals, made-up repositories, and what their
-//! entities hold. GPUI tests can't run git (see `crate::data`), so all a view shows of a
+//! entities hold. GPUI tests can't run git (see `gitto_app_data::data`), so all a view shows of a
 //! repository is given to its entity first, and stays fresh: its git, `NoGit`, fails, and
 //! nothing reloads it.
 
@@ -24,12 +24,12 @@ use gpui_kit::test::{TestEventExt as _, TestQueryExt as _};
 use gpui_kit::{AnyWindowHandle, AppContext as _, MouseButton, Pixels, Point, TestAppContext};
 use tempfile::TempDir;
 
-use crate::data::DataError;
-use crate::data::diff::{ChangedFiles, FilesOf};
-use crate::data::file_diff::FilePatch;
-use crate::data::git::{NoGit, RepositoryGit};
-use crate::data::history::Log;
-use crate::data::repositories::RepositorySource;
+use gitto_app_data::data::DataError;
+use gitto_app_data::data::diff::{ChangedFiles, FilesOf};
+use gitto_app_data::data::file_diff::FilePatch;
+use gitto_app_data::data::git::{NoGit, RepositoryGit};
+use gitto_app_data::data::history::Log;
+use gitto_app_data::data::repositories::RepositorySource;
 use gitto_ui_logic::git::diff_source::DiffSource;
 
 /// The repository list, answered at once: what the test puts in it.
@@ -158,8 +158,8 @@ pub fn with_conflicts(
 pub fn repository_entity(
     id: &RepositoryId,
     cx: &mut gpui_kit::App,
-) -> gpui_kit::Entity<crate::data::Repository> {
-    use crate::data::Repositories as Open;
+) -> gpui_kit::Entity<gitto_app_data::data::Repository> {
+    use gitto_app_data::data::Repositories as Open;
     Open::get(id, cx).unwrap_or_else(|| Open::insert(id, Rc::new(NoGit), cx))
 }
 
@@ -174,7 +174,10 @@ pub fn fake_git(id: &RepositoryId, git: Rc<dyn RepositoryGit>, cx: &mut TestAppC
 fn update(
     id: &RepositoryId,
     cx: &mut TestAppContext,
-    update: impl FnOnce(&mut crate::data::Repository, &mut gpui_kit::Context<crate::data::Repository>),
+    update: impl FnOnce(
+        &mut gitto_app_data::data::Repository,
+        &mut gpui_kit::Context<gitto_app_data::data::Repository>,
+    ),
 ) {
     cx.update(|cx| repository_entity(id, cx).update(cx, update));
 }

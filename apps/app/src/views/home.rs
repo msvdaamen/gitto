@@ -10,10 +10,10 @@ use crate::components::home::recent_activity::RecentActivity;
 use crate::components::home::repository_list::RepositoryList;
 use crate::components::home::summaries::RepositorySummaries;
 use crate::components::home::welcome_hero::WelcomeHero;
-use crate::data::repositories::OpenRepository;
-use crate::data::{AppChanged, AppData, AppPart};
-use crate::state::clock::Clock;
-use crate::theme::PaletteExt as _;
+use gitto_app_data::data::repositories::OpenRepository;
+use gitto_app_data::data::{AppChanged, AppData, AppPart};
+use gitto_app_data::state::clock::Clock;
+use gitto_app_kit::theme::PaletteExt as _;
 
 /// The widest the page's content gets (`max-w-322.5`, 1290px), in rems.
 pub const CONTENT_MAX_WIDTH: f32 = 86.;

@@ -15,13 +15,15 @@ use super::pull_button::PullButton;
 use super::push_button::PushButton;
 use super::stash_buttons::StashButtons;
 use super::toolbar_button::{HideBelow, SMALL, ToolbarButton};
-use crate::components::ui::{Divider, FailurePopover, Icon, IconButton, IconName, TextInput};
-use crate::data::changes::{DELETE_BRANCH, MERGE, PULL_BRANCH, REBASE, SWITCH};
-use crate::data::remote::fetch_mutation;
-use crate::data::repositories::find;
-use crate::data::{AppData, AppPart, Changed, DataError, Mutation, Part, Repository, Shown};
-use crate::theme::PaletteExt as _;
 use crate::views::repository::MEDIUM;
+use gitto_app_data::data::changes::{DELETE_BRANCH, MERGE, PULL_BRANCH, REBASE, SWITCH};
+use gitto_app_data::data::remote::fetch_mutation;
+use gitto_app_data::data::repositories::find;
+use gitto_app_data::data::{
+    AppData, AppPart, Changed, DataError, Mutation, Part, Repository, Shown,
+};
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{Divider, FailurePopover, Icon, IconButton, IconName, TextInput};
 
 /// The toolbar's height (TS's grid row, 49px).
 pub const TOOLBAR_HEIGHT: f32 = 3.25;
@@ -495,8 +497,8 @@ mod tests {
         Repositories, repository, repository_id, set_operation, set_push_target, set_refs,
         set_remotes, set_stashes, set_status, set_worktrees, setup_with, status,
     };
-    use crate::data::branch::Merge;
-    use crate::data::git::{GitTask, RepositoryGit};
+    use gitto_app_data::data::branch::Merge;
+    use gitto_app_data::data::git::{GitTask, RepositoryGit};
     use gitto_git::features::branch::schema::MergeOutcome;
     use gitto_git::input::{BranchRef, NonEmpty};
 
@@ -648,7 +650,7 @@ mod tests {
 
         let (_dir, a, _, _, _, toolbar) = render(cx);
         fake_git(&a, Rc::new(Failing), cx);
-        let repository = cx.update(|cx| crate::data::Repositories::open(&a, cx));
+        let repository = cx.update(|cx| gitto_app_data::data::Repositories::open(&a, cx));
         repository.update(cx, |repository, cx| {
             let merge = Merge {
                 reference: "refs/heads/feature".into(),

@@ -9,9 +9,9 @@ use gpui_kit::{Anchor, App, Context, Entity, Focusable as _, Subscription, Windo
 
 use super::branch_form::{BranchForm, NAME_PLACEHOLDER, submitted_name};
 use super::toolbar_button::{HideBelow, ToolbarButton};
-use crate::components::ui::IconName;
-use crate::data::changes::CREATE_BRANCH;
-use crate::data::{Part, Shown};
+use gitto_app_data::data::changes::CREATE_BRANCH;
+use gitto_app_data::data::{Part, Shown};
+use gitto_app_kit::ui::IconName;
 
 /// Creates a branch from the current one and switches to it, with a popover to name it, and says
 /// why if that failed. Uncommitted changes come along to the new branch. An entity: it keeps the
@@ -199,8 +199,8 @@ mod tests {
     use crate::components::repository::test_support::{
         changed, fake_git, repository_id, set_status, setup, status, uncommitted,
     };
-    use crate::data::DataError;
-    use crate::data::git::{GitTask, RepositoryGit};
+    use gitto_app_data::data::DataError;
+    use gitto_app_data::data::git::{GitTask, RepositoryGit};
 
     /// A repository's git that records the branches asked to be created, and what settles each.
     #[derive(Default)]

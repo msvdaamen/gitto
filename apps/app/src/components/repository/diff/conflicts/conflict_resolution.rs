@@ -19,13 +19,11 @@ use super::conflict_viewer::{
     ConflictProgress, ConflictViewer, ConflictViewerEvent, DiskFile, Resolution, SaveFile,
 };
 use super::markers_dialog::open_markers_dialog;
-use crate::components::ui::{
-    EmptyState, IconButton, IconName, LoadingState, Notice, action_button,
-};
-use crate::data::conflicts::{ConflictResolution, FileToResolve, resolve_file_mutation};
-use crate::data::keyed::Hold;
-use crate::data::{DataError, Loaded, Mutation, Repositories, Repository};
-use crate::theme::PaletteExt as _;
+use gitto_app_data::data::conflicts::{ConflictResolution, FileToResolve, resolve_file_mutation};
+use gitto_app_data::data::keyed::Hold;
+use gitto_app_data::data::{DataError, Loaded, Mutation, Repositories, Repository};
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{EmptyState, IconButton, IconName, LoadingState, Notice, action_button};
 use gitto_ui_logic::git::diff_source::DiffSource;
 
 /// Resolves a conflicted file whole: keeps a side, or marks it resolved.
@@ -564,7 +562,7 @@ impl FileDiffView {
                     .child(
                         action_button("mark-resolved")
                             .when(ready, |button| button.primary())
-                            .icon(crate::components::ui::Icon::new(IconName::Check))
+                            .icon(gitto_app_kit::ui::Icon::new(IconName::Check))
                             .label("Mark resolved")
                             .disabled(self.is_resolution_busy())
                             .on_click(

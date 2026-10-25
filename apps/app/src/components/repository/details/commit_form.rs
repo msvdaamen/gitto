@@ -10,11 +10,13 @@ use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, v_fl
 use gpui_kit::prelude::*;
 use gpui_kit::{App, Context, Entity, FontWeight, SharedString, Subscription, Window, div, rems};
 
-use crate::components::ui::{FormField, Icon, IconName};
-use crate::data::commit::{NewCommit, create_commit_mutation};
-use crate::data::keyed::Hold;
-use crate::data::{DataError, Loaded, Mutation, Part, Repositories, Repository, observe_parts};
-use crate::theme::PaletteExt as _;
+use gitto_app_data::data::commit::{NewCommit, create_commit_mutation};
+use gitto_app_data::data::keyed::Hold;
+use gitto_app_data::data::{
+    DataError, Loaded, Mutation, Part, Repositories, Repository, observe_parts,
+};
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{FormField, Icon, IconName};
 
 /// The shortcut that commits, as the button shows it.
 const SHORTCUT: &str = if cfg!(target_os = "macos") {

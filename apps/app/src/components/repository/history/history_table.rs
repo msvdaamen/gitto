@@ -39,16 +39,16 @@ use super::reword_dialog::RewordEvent;
 use super::stash_row::HistoryStashRow;
 use super::wip_row::{HistoryWipRow, WipSummary};
 use crate::components::repository::branch_menu::BranchMenuProvider;
-use crate::components::ui::{
+use gitto_app_data::data::diff::{ChangedFiles, FilesOf, ShownFiles, select_shown_files};
+use gitto_app_data::data::history::History;
+use gitto_app_data::data::keyed::Hold;
+use gitto_app_data::data::{Changed, Part, Shown};
+use gitto_app_data::state::clock::Clock;
+use gitto_app_data::state::delayed::{DELAY, Delayed};
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{
     EmptyState, IconName, LoadingState, UpdatingIndicator, VirtualList, is_near_end,
 };
-use crate::data::diff::{ChangedFiles, FilesOf, ShownFiles, select_shown_files};
-use crate::data::history::History;
-use crate::data::keyed::Hold;
-use crate::data::{Changed, Part, Shown};
-use crate::state::clock::Clock;
-use crate::state::delayed::{DELAY, Delayed};
-use crate::theme::PaletteExt as _;
 use gitto_ui_logic::git::changes::LineCounts;
 
 /// How many rows from the end of the history loaded so far the rows in view come before more is

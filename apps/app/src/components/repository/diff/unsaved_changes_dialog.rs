@@ -6,7 +6,7 @@ use gpui_kit::component::button::ButtonVariant;
 use gpui_kit::{App, Window};
 
 use super::conflicts::markers_dialog::file_name;
-use crate::components::ui::{ConfirmDialog, IconName, Tone};
+use gitto_app_kit::ui::{ConfirmDialog, IconName, Tone};
 
 /// What to do with edits that couldn't be saved, before going on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

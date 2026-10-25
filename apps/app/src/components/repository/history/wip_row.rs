@@ -15,8 +15,8 @@ use super::columns::{
 use super::commit_row::RowProps;
 use super::history_graph::{GraphNode, HistoryGraph};
 use super::history_option::{HistoryOption, RowKindBadge, RowLook};
-use crate::components::ui::{IconName, Tone};
-use crate::theme::{Palette, PaletteExt as _, mixed};
+use gitto_app_kit::theme::{Palette, PaletteExt as _, mixed};
+use gitto_app_kit::ui::{IconName, Tone};
 
 /// What the uncommitted changes' row says of them: how many files are staged, unstaged and
 /// conflicted, and the branch they're on.

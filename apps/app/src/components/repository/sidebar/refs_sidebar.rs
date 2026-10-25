@@ -9,9 +9,9 @@ use gpui_kit::{Context, Entity, SharedString, Window, div};
 use super::agent_placeholder::AgentPlaceholder;
 use super::base_px;
 use super::ref_list::RefList;
-use crate::components::ui::{Icon, IconName, SegmentedControl};
-use crate::theme::PaletteExt as _;
 use crate::views::repository::MEDIUM;
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{Icon, IconName, SegmentedControl};
 
 /// What the sidebar shows: the refs, or the agents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

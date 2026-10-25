@@ -12,10 +12,10 @@ use gpui_kit::{
 
 use super::demo_action::demo_action;
 use super::summaries::RepositorySummary;
-use crate::components::ui::{FailurePopover, Icon, IconName};
-use crate::data::DataError;
-use crate::state::clock::relative_time;
-use crate::theme::{AppTheme, PaletteExt as _};
+use gitto_app_data::data::DataError;
+use gitto_app_data::state::clock::relative_time;
+use gitto_app_kit::theme::{AppTheme, PaletteExt as _};
+use gitto_app_kit::ui::{FailurePopover, Icon, IconName};
 
 type Handler = Rc<dyn Fn(&mut Window, &mut App) + 'static>;
 

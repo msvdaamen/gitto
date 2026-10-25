@@ -7,7 +7,7 @@ use gpui_kit::{
     App, Div, ElementId, KeyDownEvent, Role, Stateful, TestSupportExt as _, Window, div,
 };
 
-use crate::state::router::{Route, Router};
+use gitto_app_data::state::router::{Route, Router};
 
 /// A link to the repository with `repository`'s id, as the element `id`: Tab stops at it, and a
 /// click, Enter or Space opens the repository. Its look is the caller's.

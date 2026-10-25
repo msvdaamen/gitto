@@ -1,0 +1,27 @@
+[package]
+name = "gitto-app-data"
+version = "0.1.0"
+edition.workspace = true
+description = "Gitto app's data layer, services and state: what the GPUI UI shows, loaded off the main thread."
+publish = false
+
+[dependencies]
+gpui-kit.workspace = true
+
+# What the UI shows and changes, called directly (there's no RPC).
+gitto-db.workspace = true
+gitto-git.workspace = true
+gitto-repository.workspace = true
+gitto-ui-logic.workspace = true
+
+anyhow.workspace = true
+async-fs.workspace = true
+futures.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+smol.workspace = true
+
+[dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }
+tempfile.workspace = true

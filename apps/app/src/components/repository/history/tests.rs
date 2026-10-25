@@ -37,11 +37,11 @@ use crate::components::repository::test_support::{
     Repositories, fake_git, repository_entity, repository_id, set_files, set_operation, set_refs,
     set_remotes, set_stashes, set_status, set_worktrees, setup_with, uncommitted,
 };
-use crate::data::branch::{Merge, NewBranchFrom, Rebase};
-use crate::data::commit::Reword;
-use crate::data::diff::{ChangedFiles, FilesOf};
-use crate::data::git::{GitTask, RepositoryGit};
-use crate::data::{DataError, Opaque, Part};
+use gitto_app_data::data::branch::{Merge, NewBranchFrom, Rebase};
+use gitto_app_data::data::commit::Reword;
+use gitto_app_data::data::diff::{ChangedFiles, FilesOf};
+use gitto_app_data::data::git::{GitTask, RepositoryGit};
+use gitto_app_data::data::{DataError, Opaque, Part};
 use gitto_git::features::history::commands::Page;
 use gitto_git::features::status::schema::StatusReply;
 use gitto_git::input::{BranchName, BranchRef, FullSha, Message, NonEmpty};

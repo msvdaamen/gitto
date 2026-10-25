@@ -7,8 +7,8 @@ use super::super::super::test_views::{
 };
 use super::super::conflict_viewer::ConflictProgress;
 use super::*;
-use crate::components::ui::{ConfirmDialog, Tone};
-use crate::data::Repositories;
+use gitto_app_data::data::Repositories;
+use gitto_app_kit::ui::{ConfirmDialog, Tone};
 
 const MARKERS: &str = "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> side\n";
 

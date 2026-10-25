@@ -23,17 +23,17 @@ use super::commit_form::CommitForm;
 use super::details_sections::DetailsError;
 use super::discard_dialog::{DiscardPrompt, open_discard_dialog};
 use super::file_menu::file_menu;
-use crate::components::ui::{
-    Badge, IconButton, IconName, LinkButton, Mascot, SectionHeader, Tone, UpdatingIndicator,
-};
-use crate::data::diff::{WorkingTreeLists, select_working_tree_lists};
-use crate::data::staging::{
+use gitto_app_data::data::diff::{WorkingTreeLists, select_working_tree_lists};
+use gitto_app_data::data::staging::{
     DiscardTarget, StagingTarget, discard_mutation, stage_mutation, unstage_mutation,
 };
-use crate::data::status::head_sha;
-use crate::data::{Changed, DataError, Mutation, Opaque, Part, Shown};
-use crate::state::delayed::{DELAY, Delayed};
-use crate::theme::PaletteExt as _;
+use gitto_app_data::data::status::head_sha;
+use gitto_app_data::data::{Changed, DataError, Mutation, Opaque, Part, Shown};
+use gitto_app_data::state::delayed::{DELAY, Delayed};
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{
+    Badge, IconButton, IconName, LinkButton, Mascot, SectionHeader, Tone, UpdatingIndicator,
+};
 use gitto_ui_logic::git::changes::staging_paths;
 use gitto_ui_logic::git::diff_source::DiffSource;
 

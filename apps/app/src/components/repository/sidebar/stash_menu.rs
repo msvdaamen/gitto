@@ -15,9 +15,9 @@ use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::{App, Entity, Window};
 
 use super::sidebar_section::SectionFailure;
-use crate::components::ui::{IconName, context_menu_item};
-use crate::data::Repository;
-use crate::data::changes::{DROP_STASH, POP_PICKED};
+use gitto_app_data::data::Repository;
+use gitto_app_data::data::changes::{DROP_STASH, POP_PICKED};
+use gitto_app_kit::ui::{IconName, context_menu_item};
 
 /// The menu of what can be done with a stash: popping it puts its changes back and drops it;
 /// deleting it asks first, as its changes are lost. Like the toolbar's, one at a time. The

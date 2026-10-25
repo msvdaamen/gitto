@@ -12,9 +12,9 @@ use gpui_kit::{App, ElementId, FontWeight, SharedString, TestSupportExt as _, Wi
 
 use super::repository_link::repository_link;
 use super::summaries::RepositorySummary;
-use crate::components::ui::{Card, Icon, IconName, Tone};
-use crate::state::clock::relative_time;
-use crate::theme::PaletteExt as _;
+use gitto_app_data::state::clock::relative_time;
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{Card, Icon, IconName, Tone};
 
 /// How many of the latest things done, across all repositories, are shown.
 pub const SHOWN: usize = 6;
@@ -185,8 +185,8 @@ mod tests {
     use gpui_kit::{Context, IntoElement, Render, TestAppContext, Window};
 
     use super::*;
-    use crate::state::router::{Route, Router};
     use crate::test_support;
+    use gitto_app_data::state::router::{Route, Router};
 
     const GITTO: &str = "0190a6c8-0000-7000-8000-000000000001";
     const NOTES: &str = "0190a6c8-0000-7000-8000-000000000002";

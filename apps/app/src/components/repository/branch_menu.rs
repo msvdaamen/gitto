@@ -41,11 +41,11 @@ use super::add_worktree_dialog::AddWorktreeDialog;
 use super::create_branch_dialog::CreateBranchDialog;
 use super::delete_branch_dialog::{BranchDeletion, Unpushed, open_delete_branch_dialog};
 use super::row_menu::RowMenu;
-use crate::components::ui::{IconName, context_menu_item};
-use crate::data::branch::{Merge, Rebase};
-use crate::data::changes::{OPEN_WORKTREE, PULL, PULL_BRANCH};
-use crate::data::status::{first_to_resolve, select_conflicted};
-use crate::data::{Done, Part, Repository, Shown};
+use gitto_app_data::data::branch::{Merge, Rebase};
+use gitto_app_data::data::changes::{OPEN_WORKTREE, PULL, PULL_BRANCH};
+use gitto_app_data::data::status::{first_to_resolve, select_conflicted};
+use gitto_app_data::data::{Done, Part, Repository, Shown};
+use gitto_app_kit::ui::{IconName, context_menu_item};
 
 /// What the branch menus ask of the page.
 #[derive(Debug, Clone, PartialEq)]

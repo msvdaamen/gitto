@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use super::super::line_staging::HunkButton;
 use super::diff_metadata::{ChangeType, FileDiff, HunkContent, Side, end_boundary, start_boundary};
 use super::patch_files::{Expanded, Expansion};
-use crate::state::diff_style::DiffStyle;
+use gitto_app_data::state::diff_style::DiffStyle;
 
 /// How many unchanged lines a separator's buttons show at a time (`expansionLineCount`).
 pub const EXPANSION_LINES: usize = 100;

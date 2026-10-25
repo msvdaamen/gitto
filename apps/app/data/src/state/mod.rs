@@ -8,7 +8,7 @@
 //! - [`update`], [`whats_new`]: the app's own version and changes.
 //! - [`lingering`]: a value that lingers once it's gone; a plain value a view keeps (most dialogs
 //!   are built with what they're about and keep it while they close).
-//! - `theme.ts` is `crate::theme`.
+//! - `theme.ts` is `gitto_app_kit::theme`.
 //!
 //! Hooks with no counterpart, as GPUI does what they did: `connected.ts` (elements are laid out
 //! before they're measured), `reset-on.ts` (a view resets its state where it changes repository,

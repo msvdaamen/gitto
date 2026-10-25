@@ -17,10 +17,10 @@ use gpui_kit::{AnyElement, App, Context, Entity, KeyDownEvent, Task, Window, div
 use super::autosave::{AUTOSAVE_DELAY, Autosave, SaveFile, SaveState};
 use super::file_diff_view::FileDiffView;
 use super::unsaved_changes_dialog::{UnsavedChoice, open_unsaved_changes_dialog};
-use crate::components::ui::{IconButton, IconName, Notice};
-use crate::data::file_diff::{fetch_working_tree_file, save_working_tree_file};
-use crate::data::{DataError, Repositories};
-use crate::theme::PaletteExt as _;
+use gitto_app_data::data::file_diff::{fetch_working_tree_file, save_working_tree_file};
+use gitto_app_data::data::{DataError, Repositories};
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{IconButton, IconName, Notice};
 
 /// Editing the file on show: the version of it on disk the edits are of (see
 /// `read_working_tree_file`).

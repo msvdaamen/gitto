@@ -8,7 +8,7 @@ use gitto_git::input::RepositoryId;
 use gitto_repository::Repository;
 use gpui_kit::{App, Context, Entity, Subscription};
 
-use crate::data::{Changed, DataError, Part, Repositories};
+use gitto_app_data::data::{Changed, DataError, Part, Repositories};
 
 /// A repository on the home page, with what's loaded of it so far.
 #[derive(Debug, Clone, PartialEq)]
@@ -26,7 +26,7 @@ pub struct RepositorySummary {
 /// One repository, as it's shown.
 struct Entry {
     repository: Repository,
-    data: Entity<crate::data::Repository>,
+    data: Entity<gitto_app_data::data::Repository>,
     _subscription: Subscription,
 }
 
@@ -46,7 +46,7 @@ impl RepositorySummaries {
     }
 
     /// Loads again what's shown of `repository`, which nothing watches here.
-    fn reload(repository: &Entity<crate::data::Repository>, cx: &mut App) {
+    fn reload(repository: &Entity<gitto_app_data::data::Repository>, cx: &mut App) {
         repository.update(cx, |repository, cx| {
             if !repository.status().is_fetching() {
                 drop(repository.reload(Part::Status, cx));

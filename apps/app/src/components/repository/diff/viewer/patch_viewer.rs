@@ -32,10 +32,10 @@ use super::viewer_rows::{
 use super::viewer_runtime::{
     HIGHLIGHT_WAIT, LoadFile, SharedHighlights, ViewHighlights, ViewerRuntime, load_files,
 };
-use crate::components::ui::{Icon, IconName};
-use crate::data::staging::StageAction;
-use crate::state::diff_style::DiffStyle;
-use crate::theme::{Palette, PaletteExt as _};
+use gitto_app_data::data::staging::StageAction;
+use gitto_app_data::state::diff_style::DiffStyle;
+use gitto_app_kit::theme::{Palette, PaletteExt as _};
+use gitto_app_kit::ui::{Icon, IconName};
 
 /// The changes' font size and line height, as the TS viewer had them (12px on 20px lines, at the
 /// app's 15px base).
@@ -1474,7 +1474,7 @@ mod tests {
     use gpui_kit::{AppContext as _, TestAppContext};
 
     use super::*;
-    use crate::data::DataError;
+    use gitto_app_data::data::DataError;
 
     const PATCH: &str = "diff --git a/f.txt b/f.txt\nindex 1111111..2222222 100644\n--- a/f.txt\n+++ b/f.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+TWO\n";
 

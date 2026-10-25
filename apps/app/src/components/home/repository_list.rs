@@ -11,8 +11,8 @@ use gpui_kit::{AnyElement, App, Entity, SharedString, TestSupportExt as _, Windo
 
 use super::repository_card::RepositoryCard;
 use super::summaries::RepositorySummary;
-use crate::components::ui::{Icon, IconName, TextInput};
-use crate::theme::PaletteExt as _;
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{Icon, IconName, TextInput};
 
 type Handler = Rc<dyn Fn(&mut Window, &mut App) + 'static>;
 
@@ -204,8 +204,8 @@ mod tests {
     use gpui_kit::{AppContext as _, Context, IntoElement, Render, TestAppContext, Window};
 
     use super::*;
-    use crate::state::router::{Route, Router};
     use crate::test_support;
+    use gitto_app_data::state::router::{Route, Router};
 
     const GITTO: &str = "0190a6c8-0000-7000-8000-000000000001";
     const NOTES: &str = "0190a6c8-0000-7000-8000-000000000002";

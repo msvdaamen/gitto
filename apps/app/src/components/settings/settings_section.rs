@@ -4,8 +4,8 @@ use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{AnyElement, App, SharedString, Window, div};
 
-use crate::components::ui::{Icon, IconName};
-use crate::theme::PaletteExt as _;
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{Icon, IconName};
 
 /// A group of settings on the settings page, like Privacy: its title, what it's about, and its
 /// settings (its children), each in a row of its own, with a line between them.

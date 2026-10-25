@@ -193,7 +193,6 @@ impl Repository {
     }
 
     /// Asks `git` from now on: for tests, which make up what a repository's git answers.
-    #[cfg(test)]
     pub fn set_git(&mut self, git: Rc<dyn RepositoryGit>) {
         self.git = git;
     }

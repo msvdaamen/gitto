@@ -25,10 +25,10 @@ use super::conflicts::conflict_resolution::ResolveFileMutation;
 use super::file_diff_view::{FileDiffEvent, FileDiffView};
 use super::file_editing::{FileIo, Reload};
 use crate::components::repository::test_support::{fake_git, repository_entity};
-use crate::data::conflicts::FileToResolve;
-use crate::data::file_diff::FilePatch;
-use crate::data::git::{GitTask, RepositoryGit};
-use crate::data::{DataError, Mutation, Repository};
+use gitto_app_data::data::conflicts::FileToResolve;
+use gitto_app_data::data::file_diff::FilePatch;
+use gitto_app_data::data::git::{GitTask, RepositoryGit};
+use gitto_app_data::data::{DataError, Mutation, Repository};
 use gitto_ui_logic::git::diff_source::{DiffSource, diff_file_key};
 
 pub fn id() -> RepositoryId {

@@ -6,9 +6,9 @@ use gpui_kit::prelude::*;
 use gpui_kit::{App, Context, Window};
 
 use super::toolbar_button::ToolbarButton;
-use crate::components::ui::IconName;
-use crate::data::changes::PULL;
-use crate::data::{Part, Shown};
+use gitto_app_data::data::changes::PULL;
+use gitto_app_data::data::{Part, Shown};
+use gitto_app_kit::ui::IconName;
 
 /// Pulls the current branch's upstream, and says why if that failed or was left to finish. An
 /// entity: it shows the status (how many commits there are to pull, and why it can't) and the
@@ -81,8 +81,8 @@ mod tests {
     use crate::components::repository::test_support::{
         fake_git, repository_id, set_status, setup, status,
     };
-    use crate::data::DataError;
-    use crate::data::git::{GitTask, RepositoryGit};
+    use gitto_app_data::data::DataError;
+    use gitto_app_data::data::git::{GitTask, RepositoryGit};
 
     /// A repository's git whose pulls the test settles.
     #[derive(Default)]

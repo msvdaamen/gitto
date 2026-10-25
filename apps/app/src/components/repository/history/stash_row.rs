@@ -12,9 +12,9 @@ use super::columns::{CELL_PADDING, Column, MESSAGE_TEXT, SMALL_TEXT, keyed, tint
 use super::commit_row::RowProps;
 use super::history_graph::{GraphNode, HistoryGraph};
 use super::history_option::{HistoryOption, RowKindBadge, RowLook, RowTotals};
-use crate::components::ui::IconName;
-use crate::state::clock::relative_time;
-use crate::theme::{Palette, PaletteExt as _};
+use gitto_app_data::state::clock::relative_time;
+use gitto_app_kit::theme::{Palette, PaletteExt as _};
+use gitto_app_kit::ui::IconName;
 
 /// A stash in the history: a box in the graph, with a dashed line to the commit it was made on.
 #[derive(IntoElement)]

@@ -39,9 +39,9 @@ use super::conflict_diff::{
 };
 use super::conflict_rows::{ConflictRow, LineRole, actions_row, conflict_rows};
 use super::conflict_whole_file::WholeFile;
-use crate::components::ui::{Icon, IconName};
-use crate::data::DataError;
-use crate::theme::{Palette, PaletteExt as _};
+use gitto_app_data::data::DataError;
+use gitto_app_kit::theme::{Palette, PaletteExt as _};
+use gitto_app_kit::ui::{Icon, IconName};
 
 /// How resolving the file on show is going.
 #[derive(Debug, Clone, PartialEq, Default)]

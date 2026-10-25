@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["apps/app", "crates/*"]
+members = ["apps/app", "apps/app/data", "apps/app/kit", "crates/*"]
 
 [workspace.package]
 edition = "2024"
@@ -74,6 +74,8 @@ gitto-db = { path = "crates/db" }
 gitto-git = { path = "crates/git" }
 gitto-repository = { path = "crates/repository" }
 gitto-ui-logic = { path = "crates/ui-logic" }
+gitto-app-data = { path = "apps/app/data" }
+gitto-app-kit = { path = "apps/app/kit" }
 
 # Dependencies are built optimized in dev builds too: GPUI (its layout, text and rendering) and
 # syntect are many times slower unoptimized, which makes `cargo run -p app` feel sluggish, while

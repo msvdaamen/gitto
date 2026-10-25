@@ -13,8 +13,8 @@ use gpui_kit::prelude::*;
 use gpui_kit::{AnyView, App, FontWeight, Hsla, SharedString, TestSupportExt as _, Window, div};
 
 use super::columns::TOOLTIP_TEXT;
-use crate::components::ui::Avatar;
-use crate::theme::PaletteExt as _;
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::Avatar;
 
 /// Who a commit is by, as its tooltip shows them.
 #[derive(Debug, Clone, PartialEq)]

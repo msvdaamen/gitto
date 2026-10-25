@@ -14,10 +14,10 @@ use gpui_kit::prelude::*;
 use gpui_kit::{App, Window, div};
 
 use super::changed_file_list::name_and_folder;
-use crate::components::ui::dialog::CONFIRM_WIDTH;
-use crate::components::ui::{DialogHeading, IconName, Tone};
-use crate::data::staging::DiscardTarget;
-use crate::state::lingering::Lingering;
+use gitto_app_data::data::staging::DiscardTarget;
+use gitto_app_data::state::lingering::Lingering;
+use gitto_app_kit::ui::dialog::CONFIRM_WIDTH;
+use gitto_app_kit::ui::{DialogHeading, IconName, Tone};
 
 /// What the dialog asks about: the changes to discard and, for a file's unstaged ones, whether it
 /// has staged ones too, `also_staged`, which it's put back as; else as the last commit has it.

@@ -14,10 +14,10 @@ use gpui_kit::{App, Context, Entity, Subscription, Task};
 
 use super::file_diff_view::{FileDiffEvent, FileDiffView};
 use super::viewer::line_picker::{LineStaging, StageLines};
-use crate::data::staging::{
+use gitto_app_data::data::staging::{
     FileToStage, LinesToStage, StageAction, stage_file_mutation, stage_lines_mutation,
 };
-use crate::data::{DataError, Mutation};
+use gitto_app_data::data::{DataError, Mutation};
 use gitto_ui_logic::git::diff_source::{DiffSource, is_uncommitted};
 
 /// Stages, or unstages, a file's lines; resolves to the patch they leave.

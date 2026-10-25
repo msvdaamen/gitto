@@ -3,10 +3,10 @@
 use gpui_kit::prelude::*;
 use gpui_kit::{Context, Role, Task, TestSupportExt as _, Window, div};
 
-use crate::components::ui::SettingSwitch;
-use crate::services::Services;
-use crate::services::system::TelemetryState;
-use crate::theme::PaletteExt as _;
+use gitto_app_data::services::Services;
+use gitto_app_data::services::system::TelemetryState;
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::SettingSwitch;
 
 /// Whether Gitto sends error reports: a switch, saved through `Services::system().telemetry`
 /// (which keeps the user's setting; see its stub). An entity, as it keeps whether it's saving and
@@ -111,8 +111,8 @@ mod tests {
     use gpui_kit::{AnyWindowHandle, Entity, TestAppContext};
 
     use super::*;
-    use crate::services::system::Telemetry;
     use crate::test_support;
+    use gitto_app_data::services::system::Telemetry;
 
     /// The setting as a test says it is, with what saving it gives, and what was saved.
     struct TestTelemetry {

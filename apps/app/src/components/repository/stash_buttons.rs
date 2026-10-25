@@ -7,9 +7,9 @@ use gpui_kit::prelude::*;
 use gpui_kit::{App, Context, Window};
 
 use super::toolbar_button::{HideBelow, ToolbarButton};
-use crate::components::ui::IconName;
-use crate::data::changes::{POP, STASH};
-use crate::data::{Part, Shown};
+use gitto_app_data::data::changes::{POP, STASH};
+use gitto_app_data::data::{Part, Shown};
+use gitto_app_kit::ui::IconName;
 
 /// Stashes every change, untracked files included, and pops the newest stash; each says why if it
 /// failed. One at a time, along with the stashes popped and deleted from the sidebar: a pop names
@@ -123,8 +123,8 @@ mod tests {
     use crate::components::repository::test_support::{
         changed, fake_git, repository_id, set_stashes, set_status, setup, stash, status,
     };
-    use crate::data::DataError;
-    use crate::data::git::{GitTask, RepositoryGit};
+    use gitto_app_data::data::DataError;
+    use gitto_app_data::data::git::{GitTask, RepositoryGit};
 
     /// What the buttons were asked to do, and what settles the stash under way.
     #[derive(Default)]

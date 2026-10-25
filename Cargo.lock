@@ -194,6 +194,8 @@ dependencies = [
  "anyhow",
  "async-fs",
  "futures",
+ "gitto-app-data",
+ "gitto-app-kit",
  "gitto-db",
  "gitto-git",
  "gitto-repository",
@@ -2122,6 +2124,36 @@ name = "gimli"
 version = "0.32.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
+
+[[package]]
+name = "gitto-app-data"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-fs",
+ "futures",
+ "gitto-db",
+ "gitto-git",
+ "gitto-repository",
+ "gitto-ui-logic",
+ "gpui-kit",
+ "log",
+ "serde",
+ "serde_json",
+ "smol",
+ "tempfile",
+]
+
+[[package]]
+name = "gitto-app-kit"
+version = "0.1.0"
+dependencies = [
+ "gitto-app-data",
+ "gitto-git",
+ "gpui-kit",
+ "serde_json",
+ "tempfile",
+]
 
 [[package]]
 name = "gitto-db"

@@ -13,9 +13,9 @@ use gpui_kit::{
 
 use super::repository_link::repository_link;
 use super::summaries::RepositorySummary;
-use crate::components::ui::{Badge, Icon, IconName, Tone};
-use crate::state::clock::relative_time;
-use crate::theme::PaletteExt as _;
+use gitto_app_data::state::clock::relative_time;
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{Badge, Icon, IconName, Tone};
 
 /// Below this window width the card leaves out when it was last committed to (TS's `max-sm`).
 const SMALL: f32 = 640.;

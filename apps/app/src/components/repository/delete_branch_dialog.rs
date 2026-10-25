@@ -5,7 +5,7 @@ use gitto_ui_logic::git::status::branch_name;
 use gpui_kit::component::button::ButtonVariant;
 use gpui_kit::{App, Window};
 
-use crate::components::ui::{ConfirmDialog, IconName, Tone};
+use gitto_app_kit::ui::{ConfirmDialog, IconName, Tone};
 
 /// A branch, by its short name, with how many commits it has that its remote one doesn't.
 #[derive(Debug, Clone, PartialEq, Eq)]

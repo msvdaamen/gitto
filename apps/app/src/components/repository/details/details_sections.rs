@@ -12,9 +12,9 @@ use gpui_kit::{
 };
 
 use super::changed_file_list::{ChangedFileList, ROW_PITCH};
-use crate::components::ui::{Icon, IconName, LineStats, SectionHeader};
-use crate::data::{DataError, Opaque};
-use crate::theme::PaletteExt as _;
+use gitto_app_data::data::{DataError, Opaque};
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{Icon, IconName, LineStats, SectionHeader};
 use gitto_ui_logic::git::changes::LineCounts;
 
 /// Why some of the details couldn't be loaded, e.g. "Couldn't load the commit", above the rest;

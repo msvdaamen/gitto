@@ -9,9 +9,9 @@ use gpui_kit::{
 
 use crate::assets::AppAssets;
 use crate::identity;
-use crate::services::{AppPaths, Services, logger};
-use crate::state::router::{Route, Router};
 use crate::views::root::AppShell;
+use gitto_app_data::services::{AppPaths, Services, logger};
+use gitto_app_data::state::router::{Route, Router};
 
 actions!(
     gitto,
@@ -73,8 +73,8 @@ fn start_services() -> anyhow::Result<Services> {
 pub fn init(services: Services, route: Route, cx: &mut App) {
     let storage = services.storage().clone();
     cx.set_global(services);
-    crate::theme::init(Some(storage), cx);
-    crate::data::init(cx);
+    gitto_app_kit::theme::init(Some(storage), cx);
+    gitto_app_data::data::init(cx);
     Router::init(route, cx);
     cx.bind_keys([KeyBinding::new("secondary-q", Quit, None)]);
     cx.on_action(|_: &Quit, cx| cx.quit());

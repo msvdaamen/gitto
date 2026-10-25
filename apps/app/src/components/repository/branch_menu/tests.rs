@@ -16,8 +16,8 @@ use crate::components::repository::test_support::{
     click_label, conflicted, fake_git, has_dialog, repository_id, set_operation, set_refs,
     set_remotes, set_status, set_worktrees, setup, status, uncommitted, with_conflicts,
 };
-use crate::data::DataError;
-use crate::data::git::{GitTask, RepositoryGit};
+use gitto_app_data::data::DataError;
+use gitto_app_data::data::git::{GitTask, RepositoryGit};
 
 /// A sidebar's row for each branch, with its menu.
 struct Host {

@@ -14,7 +14,7 @@ use gpui_kit::{
 
 use super::author_tooltip::{GraphAuthor, author_tooltip};
 use super::columns::{ROW_HEIGHT, part};
-use crate::theme::{Palette, PaletteExt as _};
+use gitto_app_kit::theme::{Palette, PaletteExt as _};
 
 /// Width of a lane, and the space left and right of the lanes.
 const LANE: f32 = 20.;

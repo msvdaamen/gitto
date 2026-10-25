@@ -7,7 +7,7 @@ use gpui_kit::{Context, Entity, Window, rems};
 use super::notifications::Notifications;
 use super::profile::Profile;
 use super::tabs::Tabs;
-use crate::theme::PaletteExt as _;
+use gitto_app_kit::theme::PaletteExt as _;
 
 /// The header's height (TS's grid row, 49px).
 pub const HEADER_HEIGHT: f32 = 3.25;

@@ -12,10 +12,10 @@ use gpui_kit::{
     TestSupportExt as _, Window, div,
 };
 
-use crate::components::ui::dialog::CONFIRM_WIDTH;
-use crate::components::ui::{DialogHeading, Icon, IconName, Tone};
-use crate::data::{AppChanged, AppData, AppPart, Repositories};
-use crate::theme::PaletteExt as _;
+use gitto_app_data::data::{AppChanged, AppData, AppPart, Repositories};
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::dialog::CONFIRM_WIDTH;
+use gitto_app_kit::ui::{DialogHeading, Icon, IconName, Tone};
 
 pub const GIT_DOWNLOAD_URL: &str = "https://git-scm.com/downloads";
 
@@ -273,9 +273,9 @@ mod tests {
     };
 
     use super::*;
-    use crate::data::git::{GitTask, RepositoryGit};
-    use crate::data::{DataError, Part};
     use crate::test_support;
+    use gitto_app_data::data::git::{GitTask, RepositoryGit};
+    use gitto_app_data::data::{DataError, Part};
 
     /// A repository's git that counts how many times it's asked for the status, which it can't
     /// give.

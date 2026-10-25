@@ -15,11 +15,11 @@ use gpui_kit::{
 };
 
 use super::columns::SMALL_TEXT;
-use crate::components::ui::{FormField, Icon, IconName};
-use crate::data::commit::{Reword, reword_commit_mutation};
-use crate::data::keyed::Hold;
-use crate::data::{Changed, DataError, Loaded, Mutation, Part, Repositories, Repository};
-use crate::theme::PaletteExt as _;
+use gitto_app_data::data::commit::{Reword, reword_commit_mutation};
+use gitto_app_data::data::keyed::Hold;
+use gitto_app_data::data::{Changed, DataError, Loaded, Mutation, Part, Repositories, Repository};
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{FormField, Icon, IconName};
 
 /// How wide the dialog is (`max-w-[440px]`), in rems of the 15px base.
 const WIDTH: Rems = Rems(440. / 15.);

@@ -37,7 +37,7 @@ Gitto is moving to Rust, with a GPUI ([gpui-kit](https://crates.io/crates/gpui-k
   repositories added to Gitto.
 - `gitto-ui-logic` (`crates/ui-logic`): what `apps/ui/src` works out without Solid or the DOM,
   for the app's screens: `git/*.ts` outside `git/queries/` in `src/git/`, and `lib/format.ts`. It
-  has no GPUI dependency. The hooks are the app's `state/`.
+  has no GPUI dependency. The hooks are the app's `state/` (in `gitto-app-data`).
 
 In `gitto-git`:
 
@@ -51,12 +51,15 @@ In `gitto-git`:
   (`commands.ts` → `commands.rs`, `in-use.ts` → `in_use.rs`), declared in that feature's `mod.rs`.
 - `src/test_support/`: `packages/git/src/test/` (real repositories in a temp dir), for tests only.
 
-`apps/app` is laid out as `apps/ui/src` is, one module per TS file:
+`apps/app` is laid out as `apps/ui/src` is, one module per TS file, in three crates: the app
+(`apps/app/src`), `gitto-app-data` (`apps/app/data`: `data/`, `services/`, `state/`) and
+`gitto-app-kit` (`apps/app/kit`: `ui/`, `theme/`). The app builds on both, and the kit on the data
+crate only for what it shows of it; neither knows of the app's pages or areas.
 
 - `views/`: the pages (`routes/`) and the window around them. `views/repository.rs` lays out a
   repository's areas and wires them together: the selection, the file on show, the watcher.
-- `components/<area>/`: what pages are made of (`components/`); the primitives are in
-  `components/ui/`. An area that keeps state is an entity, made with a repository's id, told of
+- `components/<area>/`: what pages are made of (`components/`); the primitives are the kit's
+  `ui/` (`components/ui/`). An area that keeps state is an entity, made with a repository's id, told of
   another with `set_repository`, and talking back through its events.
 - `data/`: the data layer, in place of TanStack Query: a `Repository` entity per repository (in
   the `Repositories` global) holds what's loaded of it as fields and makes the changes to it, a

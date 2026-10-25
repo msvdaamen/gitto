@@ -18,8 +18,8 @@ use super::super::file_editing::EditSession;
 use super::diff_metadata::{ChangeType, FileDiff, HunkContent, Side};
 use super::patch_files::fit_to_patch;
 use super::viewer_runtime::{LoadFile, LoadedFile};
-use crate::components::ui::LoadingState;
-use crate::theme::PaletteExt as _;
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::LoadingState;
 
 /// What editing the file tells the file's view.
 #[derive(Debug, Clone, PartialEq)]

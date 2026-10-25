@@ -25,16 +25,16 @@ use super::viewer::diff_metadata::Side;
 use super::viewer::patch_viewer::{PatchProps, PatchViewer, PatchViewerEvent};
 use super::viewer::viewer_editing::{PatchEditor, PatchEditorEvent};
 use super::viewer::viewer_runtime::{LoadFile, LoadedFile, prepare_patch};
-use crate::components::ui::{
+use gitto_app_data::data::Repositories;
+use gitto_app_data::data::diff::fetch_blob;
+use gitto_app_data::data::file_diff::{FilePatch, fetch_file_patch};
+use gitto_app_data::data::staging::StageAction;
+use gitto_app_data::state::diff_style::{DiffStyle, DiffStyleSetting};
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{
     EmptyState, FileStatusBadge, Icon, IconButton, IconName, LineStats, LoadingState, Notice,
     action_button,
 };
-use crate::data::Repositories;
-use crate::data::diff::fetch_blob;
-use crate::data::file_diff::{FilePatch, fetch_file_patch};
-use crate::data::staging::StageAction;
-use crate::state::diff_style::{DiffStyle, DiffStyleSetting};
-use crate::theme::PaletteExt as _;
 use gitto_ui_logic::git::diff_source::{DiffSource, diff_file_key};
 
 /// What a file's changes ask of the page.

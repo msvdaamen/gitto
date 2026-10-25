@@ -30,12 +30,12 @@ use super::stash_menu::StashMenu;
 use super::worktree_menu::WorktreeMenu;
 use crate::components::repository::branch_menu::{BranchMenuProvider, branch_menu};
 use crate::components::repository::row_menu::RowMenu;
-use crate::components::ui::{EmptyState, IconName, LoadingState};
-use crate::data::{Part, Shown};
-use crate::services::Services;
-use crate::state::clock::Clock;
-use crate::state::collapsed::Collapsed;
 use crate::views::repository::MEDIUM;
+use gitto_app_data::data::{Part, Shown};
+use gitto_app_data::services::Services;
+use gitto_app_data::state::clock::Clock;
+use gitto_app_data::state::collapsed::Collapsed;
+use gitto_app_kit::ui::{EmptyState, IconName, LoadingState};
 
 /// The sections, by the id their collapsed state is saved under.
 const LOCAL: &str = "local";
@@ -507,7 +507,7 @@ impl RefList {
                 .and_then(|provider| provider.read(cx).open_for().cloned()),
             stash_menu_for: self.stash_menu.open_for().cloned(),
             worktree_menu_for: self.worktree_menu.open_for().cloned(),
-            now: crate::state::clock::now_ms(),
+            now: gitto_app_data::state::clock::now_ms(),
         })
     }
 

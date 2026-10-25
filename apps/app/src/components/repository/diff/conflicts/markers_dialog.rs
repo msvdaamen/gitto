@@ -4,7 +4,7 @@
 use gpui_kit::component::button::ButtonVariant;
 use gpui_kit::{App, Window};
 
-use crate::components::ui::{ConfirmDialog, IconName, Tone};
+use gitto_app_kit::ui::{ConfirmDialog, IconName, Tone};
 
 /// The name a path ends with.
 pub fn file_name(path: &str) -> &str {

@@ -16,9 +16,9 @@ use gpui_kit::{
 
 use super::base_px;
 use super::sidebar_row::{ROW_HEIGHT, ROW_PX, RowAction};
-use crate::components::ui::{FailurePopover, Icon, IconName, VirtualList};
-use crate::data::DataError;
-use crate::theme::PaletteExt as _;
+use gitto_app_data::data::DataError;
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{FailurePopover, Icon, IconName, VirtualList};
 
 /// Height of a section's header.
 const HEADER_HEIGHT: f32 = 30.;

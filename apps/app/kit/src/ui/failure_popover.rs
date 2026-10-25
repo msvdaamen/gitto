@@ -10,8 +10,8 @@ use gpui_kit::prelude::*;
 use gpui_kit::{Anchor, App, ElementId, FontWeight, SharedString, Window, div};
 
 use super::icons::{Icon, IconName};
-use crate::data::DataError;
 use crate::theme::{PaletteExt as _, mixed};
+use gitto_app_data::data::DataError;
 
 type OnDismiss = Rc<dyn Fn(&mut Window, &mut App) + 'static>;
 

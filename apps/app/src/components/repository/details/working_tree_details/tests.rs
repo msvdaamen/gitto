@@ -13,7 +13,7 @@ use crate::components::repository::details::test_fakes::{
 };
 use gitto_git::features::operation::schema::Operation;
 
-use crate::data::Repositories;
+use gitto_app_data::data::Repositories;
 
 struct Details {
     _dir: tempfile::TempDir,

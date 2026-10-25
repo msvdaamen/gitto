@@ -15,8 +15,8 @@ use gpui_kit::{
 
 use super::columns::{LABEL_ICON, LABEL_LINE, LABEL_TEXT, part, tinted};
 use crate::components::repository::branch_menu::branch_menu;
-use crate::components::ui::{Icon, IconName, menu_frame};
-use crate::theme::{Palette, PaletteExt as _, mixed};
+use gitto_app_kit::theme::{Palette, PaletteExt as _, mixed};
+use gitto_app_kit::ui::{Icon, IconName, menu_frame};
 
 /// Switches to a branch, by its full ref name; or opens a worktree, by its path.
 pub type OnRef = Rc<dyn Fn(String, &mut Window, &mut App)>;

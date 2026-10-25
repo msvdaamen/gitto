@@ -9,10 +9,10 @@ use gpui_kit::component::{Disableable as _, Selectable, Sizable as _, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{App, ClickEvent, ElementId, FontWeight, SharedString, Window, div, rems};
 
-use crate::components::ui::{FailurePopover, Icon, IconName};
-use crate::data::DataError;
-use crate::theme::PaletteExt as _;
 use crate::views::repository::{LARGE, MEDIUM};
+use gitto_app_data::data::DataError;
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{FailurePopover, Icon, IconName};
 
 /// The window width below which the toolbar's gaps tighten and the buttons hidden below `Small`
 /// go (`index.css`'s `sm` breakpoint).

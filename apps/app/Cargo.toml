@@ -25,6 +25,9 @@ gitto-git.workspace = true
 gitto-repository.workspace = true
 # The UI's pure logic (TS's `apps/ui/src/git/*.ts` and the like).
 gitto-ui-logic.workspace = true
+# The data layer, services and state, and the primitives and theme: the app's own crates.
+gitto-app-data.workspace = true
+gitto-app-kit.workspace = true
 
 anyhow.workspace = true
 async-fs.workspace = true

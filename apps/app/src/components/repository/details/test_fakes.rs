@@ -26,10 +26,10 @@ use gpui_kit::{
 };
 
 use crate::components::repository::test_support::fake_git;
-use crate::data::DataError;
-use crate::data::commit::NewCommit;
-use crate::data::git::{GitTask, RepositoryGit};
-use crate::data::staging::{DiscardTarget, StagingTarget};
+use gitto_app_data::data::DataError;
+use gitto_app_data::data::commit::NewCommit;
+use gitto_app_data::data::git::{GitTask, RepositoryGit};
+use gitto_app_data::data::staging::{DiscardTarget, StagingTarget};
 
 pub fn repository_id() -> RepositoryId {
     RepositoryId::parse("01890a5d-ac96-774b-bcce-b302099a8057").unwrap()

@@ -10,8 +10,8 @@ use gpui_kit::{
 
 use super::reword_dialog::{RewordDialog, RewordEvent};
 use crate::components::repository::row_menu::RowMenu;
-use crate::components::ui::{IconName, context_menu_item};
-use crate::data::{Part, Shown};
+use gitto_app_data::data::{Part, Shown};
+use gitto_app_kit::ui::{IconName, context_menu_item};
 
 /// What the commit menu shows of the repository: HEAD, and whether an operation is under way.
 const PARTS: &[Part] = &[Part::Status, Part::Operation];

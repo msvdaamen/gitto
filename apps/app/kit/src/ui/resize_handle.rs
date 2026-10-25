@@ -24,7 +24,7 @@ use gpui_kit::{
     Role, SharedString, Window,
 };
 
-use crate::state::panel_width::PanelBounds;
+use gitto_app_data::state::panel_width::PanelBounds;
 
 /// How far an arrow key moves the edge, in pixels.
 pub const KEYBOARD_STEP: f32 = 16.;
@@ -225,9 +225,9 @@ mod tests {
     use gpui_kit::{AnyWindowHandle, Context, IntoElement, TestAppContext, div, point, px};
 
     use super::*;
-    use crate::services::LocalStorage;
-    use crate::state::panel_width::PanelWidth;
     use crate::test_support;
+    use gitto_app_data::services::LocalStorage;
+    use gitto_app_data::state::panel_width::PanelWidth;
 
     const BOUNDS: PanelBounds = PanelBounds::new(220., 160., 480.);
 
@@ -283,7 +283,7 @@ mod tests {
         AnyWindowHandle,
         Entity<Host>,
     ) {
-        let dir = test_support::init(cx, |services| services);
+        let dir = test_support::init(cx);
         let storage = Rc::new(LocalStorage::in_memory());
         let panel = PanelWidth::new("test", BOUNDS, Rc::clone(&storage));
         let (window, host) = test_support::open(cx, |_, _| Host { panel, side });
