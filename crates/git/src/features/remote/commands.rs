@@ -141,10 +141,17 @@ fn short_name(reference: &str) -> &str {
         .unwrap_or(reference)
 }
 
-/// Whether `config` still has `branch` pull from `upstream`.
-fn still_tracks(config: &RemoteConfig, branch: &str, upstream: &Upstream) -> bool {
-    config.get(&format!("branch.{branch}.remote")) == Some(upstream.remote.as_str())
+/// Checks that `config` still has `branch` pull from `upstream`, as it did before fetching; fails
+/// with `Error::RepositoryChanged` if it doesn't.
+fn check_still_tracks(config: &RemoteConfig, branch: &str, upstream: &Upstream) -> Result<()> {
+    if config.get(&format!("branch.{branch}.remote")) == Some(upstream.remote.as_str())
         && config.get(&format!("branch.{branch}.merge")) == Some(upstream.merge.as_str())
+    {
+        return Ok(());
+    }
+    Err(Error::RepositoryChanged(format!(
+        "{branch}'s upstream changed while pulling it. Pull again."
+    )))
 }
 
 /// Moves `branch`, which isn't checked out, to its upstream's commit, as one write; fails if
@@ -171,11 +178,7 @@ async fn fast_forward(repo: &Repo, branch: &str, upstream: &Upstream) -> Result<
                 "{branch} was deleted while pulling it."
             )));
         };
-        if !still_tracks(&config, &branch, &upstream) {
-            return Err(Error::RepositoryChanged(format!(
-                "{branch}'s upstream changed while pulling it. Pull again."
-            )));
-        }
+        check_still_tracks(&config, &branch, &upstream)?;
         // A branch that isn't checked out has commits, so `for-each-ref` named its tracking
         // branch.
         let Some(tracking) = upstream.tracking.as_deref() else {
@@ -233,11 +236,7 @@ async fn integrate(
                 "Switched from {branch} while pulling it. Pull again."
             )));
         }
-        if !still_tracks(&config, &branch, &upstream) {
-            return Err(Error::RepositoryChanged(format!(
-                "{branch}'s upstream changed while pulling it. Pull again."
-            )));
-        }
+        check_still_tracks(&config, &branch, &upstream)?;
         let tracking = match upstream.tracking {
             Some(tracking) => Some(tracking),
             None => tracking_branch(&run, &branch).await?,
