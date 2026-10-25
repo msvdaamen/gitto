@@ -95,9 +95,10 @@ impl From<std::io::Error> for QueryError {
     }
 }
 
+/// With its causes (`{:#}`), which its `Display` alone leaves out.
 impl From<anyhow::Error> for QueryError {
     fn from(error: anyhow::Error) -> Self {
-        QueryError::msg(error.to_string())
+        QueryError::msg(format!("{error:#}"))
     }
 }
 
