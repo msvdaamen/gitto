@@ -198,16 +198,6 @@ impl PatchViewer {
         self.shown.as_ref().map(|shown| &*shown.patch.patch)
     }
 
-    /// The rows on show.
-    pub fn layout(&self) -> &Layout {
-        &self.layout
-    }
-
-    /// The lines selected, picked to stage.
-    pub fn picked(&self) -> &[ChangedLine] {
-        self.picker.picked()
-    }
-
     /// Reads the file on show whole with `load_file` from now on.
     pub fn set_load_file(&mut self, load_file: LoadFile) {
         self.load_file = load_file;
@@ -862,9 +852,11 @@ fn measure(diff: &FileDiff) -> (usize, usize) {
         .iter()
         .flat_map(|lines| lines.iter())
         .map(|line| {
+            // As `line_text` draws it: cut, with an ellipsis, and its tabs as spaces.
             let line = line.trim_end_matches(['\n', '\r']);
-            let tabs = line.bytes().filter(|byte| *byte == b'\t').count();
-            line.len().min(MAX_DRAWN_LINE) + tabs * (TAB_WIDTH - 1)
+            let cut = &line[..line.floor_char_boundary(MAX_DRAWN_LINE)];
+            let tabs = cut.bytes().filter(|byte| *byte == b'\t').count();
+            cut.chars().count() + usize::from(cut.len() < line.len()) + tabs * (TAB_WIDTH - 1)
         })
         .max()
         .unwrap_or(0);

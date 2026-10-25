@@ -21,15 +21,6 @@ pub enum Side {
     Additions,
 }
 
-impl Side {
-    pub fn other(self) -> Side {
-        match self {
-            Side::Deletions => Side::Additions,
-            Side::Additions => Side::Deletions,
-        }
-    }
-}
-
 /// How a file changed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChangeType {
