@@ -308,15 +308,13 @@ impl<T: Clone + PartialEq + Send + 'static> QueryEntry<T> {
         self.data_updated_at
     }
 
-    /// Takes on `options`' way of loading, as the latest `Query` to show it gives them.
+    /// Takes on `options`' way of loading, as the latest `Query` to show it gives them: their
+    /// settings, or the client's defaults for the ones they leave out, so what an earlier `Query`
+    /// set (an unwatched one's stale time, say) doesn't stick to a watched one of the same key.
     pub(crate) fn set_options(&mut self, options: &QueryOptions<T>) {
         self.fetch = Some(options.fetch.clone());
-        if options.stale_time.is_some() {
-            self.stale_time = options.stale_time.clone();
-        }
-        if options.refetch_on_window_focus.is_some() {
-            self.refetch_on_window_focus = options.refetch_on_window_focus.clone();
-        }
+        self.stale_time = options.stale_time.clone();
+        self.refetch_on_window_focus = options.refetch_on_window_focus.clone();
     }
 
     pub(crate) fn observe(&mut self, enabled: Rc<std::cell::Cell<bool>>) {
@@ -760,6 +758,28 @@ mod tests {
         });
         cx.run_until_parked();
         assert_eq!(loads.get(), 2);
+    }
+
+    #[gpui_kit::test]
+    fn a_watched_query_doesnt_keep_an_unwatched_ones_settings(cx: &mut TestAppContext) {
+        cx.update(QueryClient::init);
+        let loads = Rc::new(Cell::new(0));
+        // The home page's, loaded whenever it's shown.
+        let home = cx.new(|cx| Probe {
+            _query: Query::new(crate::data::watch::unwatched(options(&loads)), cx),
+        });
+        cx.run_until_parked();
+        drop(home);
+        cx.update(|_| {});
+
+        // The repository's page's, of the same key: only loaded again once invalidated.
+        let _repository = cx.new(|cx| Probe {
+            _query: Query::new(options(&loads), cx),
+        });
+        cx.run_until_parked();
+        cx.update(QueryClient::window_focused);
+        cx.run_until_parked();
+        assert_eq!(loads.get(), 1);
     }
 
     #[gpui_kit::test]
