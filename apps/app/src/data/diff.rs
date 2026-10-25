@@ -152,11 +152,6 @@ impl WorkingTreeLists {
     pub fn marker_free(&self) -> &HashSet<String> {
         &self.marker_free
     }
-
-    /// The whole status they're of.
-    pub fn status(&self) -> &Opaque<Uncommitted> {
-        &self.status
-    }
 }
 
 /// [`WorkingTreeLists::of`], made once per status.

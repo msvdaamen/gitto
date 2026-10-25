@@ -1,5 +1,5 @@
 //! A change a view makes, with its state: TanStack Query's `useMutation`, for the changes that
-//! aren't a repository's operations (see `super::operation`), like committing or staging.
+//! aren't a repository's operations (see `super::changes`), like committing or staging.
 //!
 //! A [`Mutation`] is an entity a view makes in its constructor and observes
 //! (`cx.observe(&mutation, |_, _, cx| cx.notify())`): whether it's running, why it last failed,

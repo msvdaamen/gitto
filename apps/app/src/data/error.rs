@@ -33,10 +33,6 @@ impl QueryError {
     pub fn has_code(&self, code: ApiCode) -> bool {
         self.api().is_some_and(|error| error.code() == code)
     }
-
-    pub fn inner(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
-        &*self.0
-    }
 }
 
 /// The same error, not merely one that says the same.

@@ -98,24 +98,12 @@ pub struct OperationState {
     pub error: Option<QueryError>,
 }
 
-impl OperationState {
-    /// Whether it's running (TanStack's `isPending`).
-    pub fn is_pending(&self) -> bool {
-        self.running
-    }
-}
-
 /// The loads a reload started: `.await` it to wait for them, or drop it not to (they run either
 /// way).
 #[must_use = "awaiting it waits for the reloads; drop it not to"]
 pub struct Reloading(Vec<oneshot::Receiver<()>>);
 
-impl Reloading {
-    /// What it waits for, to wait for with others.
-    pub fn into_waits(self) -> Vec<oneshot::Receiver<()>> {
-        self.0
-    }
-}
+impl Reloading {}
 
 impl std::future::IntoFuture for Reloading {
     type Output = ();
@@ -923,12 +911,6 @@ impl Repository {
         self.changed(Part::PushTarget, cx);
     }
 
-    pub fn set_overview(&mut self, overview: Overview, cx: &mut Context<Self>) {
-        self.overview.cancel();
-        self.overview.set(overview);
-        self.changed(Part::Overview, cx);
-    }
-
     pub fn set_pushed_to(&mut self, sha: &str, remote: Option<String>, cx: &mut Context<Self>) {
         self.pushed_to.set(sha.to_owned(), remote);
         self.changed(Part::PushedTo, cx);
@@ -962,11 +944,6 @@ impl Repository {
         self.changed(Part::Conflicts, cx);
     }
 
-    pub fn set_commit(&mut self, commit: Commit, cx: &mut Context<Self>) {
-        self.commits.set(commit.sha.clone(), commit);
-        self.changed(Part::Commits, cx);
-    }
-
     pub fn set_files(&mut self, of: FilesOf, files: ChangedFiles, cx: &mut Context<Self>) {
         self.files.set((of, files.sha.clone()), files);
         self.changed(Part::Commits, cx);
@@ -975,19 +952,6 @@ impl Repository {
     pub fn set_message(&mut self, sha: &str, message: String, cx: &mut Context<Self>) {
         self.messages.set(sha.to_owned(), message);
         self.changed(Part::Commits, cx);
-    }
-
-    /// Changes the status with `update`, if it's loaded, as a change knows it changed it, ahead of
-    /// the reload that follows; a load under way, from before the change, is dropped.
-    pub fn update_status(
-        &mut self,
-        update: impl FnOnce(&Uncommitted) -> Uncommitted,
-        cx: &mut Context<Self>,
-    ) {
-        self.status.cancel();
-        if self.status.update(|status| Opaque::new(update(status))) {
-            self.changed(Part::Status, cx);
-        }
     }
 
     fn changed(&mut self, part: Part, cx: &mut Context<Self>) {

@@ -80,11 +80,6 @@ impl<K: Clone + Eq + Hash, T> Keyed<K, T> {
         Hold(hold)
     }
 
-    /// Whether something holds `key`'s entry.
-    pub fn is_held(&self, key: &K) -> bool {
-        self.entries.get(key).is_some_and(Entry::is_held)
-    }
-
     /// The keys of the entries `pick` picks that something holds, to reload; those nothing holds
     /// are dropped, as they're out of date.
     pub fn held_and_drop_rest(&mut self, pick: impl Fn(&K) -> bool) -> Vec<K> {

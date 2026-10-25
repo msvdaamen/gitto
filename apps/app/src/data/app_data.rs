@@ -173,20 +173,4 @@ impl AppData {
             cx.emit(AppChanged(AppPart::Focus));
         });
     }
-
-    /// Sets the repository list, as if it had loaded: for tests.
-    pub fn set_repositories(&mut self, repositories: Vec<Repository>, cx: &mut Context<Self>) {
-        self.repositories.cancel();
-        self.repositories.set(repositories);
-        cx.emit(AppChanged(AppPart::Repositories));
-        cx.notify();
-    }
-
-    /// Sets the installed git, as if it had loaded: for tests.
-    pub fn set_git_version(&mut self, install: GitInstall, cx: &mut Context<Self>) {
-        self.git_version.cancel();
-        self.git_version.set(install);
-        cx.emit(AppChanged(AppPart::GitVersion));
-        cx.notify();
-    }
 }

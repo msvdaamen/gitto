@@ -652,7 +652,7 @@ impl Render for RepositoryView {
 #[cfg(test)]
 mod tests {
     //! The page as a whole: its areas, each tested on its own, wired together. GPUI tests can't
-    //! run git, so every query the page shows is given its data first (see
+    //! run git, so all the page shows is given to the repository's entity first (see
     //! `components::repository::test_support`).
 
     use std::rc::Rc;

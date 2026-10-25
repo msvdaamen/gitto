@@ -77,11 +77,6 @@ impl<T> Loaded<T> {
         self.load.is_some()
     }
 
-    /// Loading for the first time: nothing of it to show yet.
-    pub fn is_loading(&self) -> bool {
-        self.is_fetching() && self.data.is_none()
-    }
-
     /// Loading again, with what was loaded before on show.
     pub fn is_refetching(&self) -> bool {
         self.is_fetching() && self.data.is_some()
@@ -121,17 +116,6 @@ impl<T> Loaded<T> {
         self.stale = false;
         self.updates += 1;
         changed
-    }
-
-    /// Changes its data with `update`, if it has any; whether that changed it.
-    pub fn update(&mut self, update: impl FnOnce(&T) -> T) -> bool
-    where
-        T: PartialEq,
-    {
-        match self.data.as_ref().map(update) {
-            Some(data) => self.set(data),
-            None => false,
-        }
     }
 
     /// Starts `load`, the task loading it, in place of (and so cancelling) one under way.

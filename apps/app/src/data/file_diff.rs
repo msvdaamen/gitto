@@ -100,10 +100,6 @@ impl DiffSourceFiles {
         }
     }
 
-    pub fn source(&self) -> &DiffSource {
-        &self.source
-    }
-
     /// The files: none until they've loaded.
     pub fn files(&self) -> Opaque<Vec<ChangedFile>> {
         let files = match &self.source {

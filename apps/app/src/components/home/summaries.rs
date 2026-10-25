@@ -57,7 +57,7 @@ impl RepositorySummaries {
         });
     }
 
-    /// Follows `repositories`: their queries are kept for the ones still there, made for new ones,
+    /// Follows `repositories`: what's shown of them is kept for the ones still there, opened for new ones,
     /// and dropped for those that are gone (`mapArray`).
     pub fn sync<V: 'static>(&mut self, repositories: &[Repository], cx: &mut Context<V>) {
         let mut previous = std::mem::take(&mut self.entries);

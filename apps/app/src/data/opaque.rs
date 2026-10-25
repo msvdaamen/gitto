@@ -1,11 +1,10 @@
-//! A query's result that's shared rather than compared. Ported from `git/queries/opaque.ts`.
+//! What's loaded that's shared rather than compared. Ported from `git/queries/opaque.ts`.
 //!
-//! The data layer compares what a query loads with what it had, and what a view selects from it
-//! with what it selected, so data that didn't change doesn't render again (see
-//! `super::client`). For a list of thousands of files, comparing takes long enough to stall the
+//! The data layer compares what it loads with what it had, and a view what it shows with what it
+//! showed, so data that didn't change doesn't render again (see `super::loaded`). For a list of thousands of files, comparing takes long enough to stall the
 //! UI, and gains nothing: the list is replaced as a whole when it changes, never changed in place.
 //! An `Opaque` is equal only to itself, a clone of the same `Arc`: comparing it costs nothing, and
-//! a query that answers "unchanged" hands back the same one (see `super::status`).
+//! a status that git says is unchanged keeps the same one (see `super::repository`).
 
 use std::fmt;
 use std::ops::Deref;
@@ -17,10 +16,6 @@ pub struct Opaque<T>(Arc<T>);
 impl<T> Opaque<T> {
     pub fn new(value: T) -> Self {
         Opaque(Arc::new(value))
-    }
-
-    pub fn value(&self) -> &T {
-        &self.0
     }
 
     /// Whether `a` and `b` are the same value, not merely equal ones.
@@ -56,9 +51,9 @@ impl<T: fmt::Debug> fmt::Debug for Opaque<T> {
 }
 
 /// `select`, run once per `Opaque` it's given: what it picks of the last one is kept, and handed
-/// back while it's given the same one again. For a `Query::with_select` whose selection takes
-/// work (filtering a list of files, say): a `Query` selects again whenever its query changes,
-/// loading or not, and a selection made again would be another `Opaque`, unequal to the last.
+/// back while it's given the same one again. For what a view picks of what's loaded that takes
+/// work (filtering a list of files, say): a view picks again whenever it renders, and a pick
+/// made again would be another `Opaque`, unequal to the last.
 pub fn memoized<T: 'static, S: Clone + 'static>(
     select: impl Fn(&Opaque<T>) -> S + 'static,
 ) -> impl Fn(&Opaque<T>) -> S + 'static {

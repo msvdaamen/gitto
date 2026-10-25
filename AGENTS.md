@@ -58,15 +58,16 @@ In `gitto-git`:
 - `components/<area>/`: what pages are made of (`components/`); the primitives are in
   `components/ui/`. An area that keeps state is an entity, made with a repository's id, told of
   another with `set_repository`, and talking back through its events.
-- `data/`: the data layer, in place of TanStack Query: `QueryClient` (a global) caches queries by
-  their `keys` (`keys.ts`'s), a view holds a `Query` (`useQuery`), `RepositoryOperation` runs a
-  change to a repository, and `RepositoryWatcher` reloads what changes on disk. Queries call
-  gitto-git and the other crates off the main thread.
+- `data/`: the data layer, in place of TanStack Query: a `Repository` entity per repository (in
+  the `Repositories` global) holds what's loaded of it as fields and makes the changes to it, a
+  view shows parts of it with `Shown`, `AppData` holds what isn't a repository's, and
+  `RepositoryWatcher` reloads what changes on disk. Git and the other crates run off the main
+  thread.
 - `state/` (what outlives a view, and the hooks GPUI needs as state), `services/` (what's started
   at launch, in the `Services` global), and `theme/` (`index.css`).
 
-GPUI tests can't run git: a view's test gives every query it shows its data first
-(`components/repository/test_support.rs`), and fakes what changes it.
+GPUI tests can't run git: a view's test gives the repository's entity what it shows first
+(`components/repository/test_support.rs`), and fakes what changes it with a `RepositoryGit`.
 
 The app's binary is `gitto`, and the OS knows it by the id and name in `apps/app/src/identity.rs`:
 Windows takes its icon and name from the .exe (`apps/app/build.rs`), and on Linux a build that isn't

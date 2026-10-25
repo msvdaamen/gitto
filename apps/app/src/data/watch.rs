@@ -89,10 +89,6 @@ impl RepositoryWatcher {
         watcher
     }
 
-    pub fn repository_id(&self) -> &RepositoryId {
-        &self.id
-    }
-
     /// Tells it whether the window has focus.
     pub fn set_window_focused(&mut self, focused: bool, cx: &mut Context<Self>) {
         if self.focused == focused {
@@ -101,11 +97,6 @@ impl RepositoryWatcher {
         let was_focused = self.focused;
         self.focused = focused;
         self.focus_changed(Some(was_focused), cx);
-    }
-
-    /// Whether each watch is running: the git directory's, and the working tree's.
-    pub fn is_watching(&self) -> (bool, bool) {
-        (self.git_dir.is_running(), self.working_tree.is_running())
     }
 
     fn focus_changed(&mut self, was_focused: Option<bool>, cx: &mut Context<Self>) {

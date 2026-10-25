@@ -4,7 +4,8 @@
 //! - [`views`]: the pages (`routes/`), and the window's shell around them.
 //! - [`components`]: what pages are made of (`components/`), with the primitives in
 //!   [`components::ui`].
-//! - [`data`]: the queries and operations (`git/queries/`, TanStack Query).
+//! - [`data`]: what's loaded from git and the database, and the changes to a repository, as
+//!   entities (`git/queries/` and TanStack Query).
 //! - [`state`]: what outlives a view (the router), and the hooks GPUI needs as state (`hooks/`).
 //! - [`services`]: what's started at launch (`apps/electron/src/main.ts`): the database, the
 //!   repositories, git, the system.
