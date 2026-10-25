@@ -36,10 +36,9 @@ ported).
   (`commands.ts` → `commands.rs`, `in-use.ts` → `in_use.rs`), declared in that feature's `mod.rs`.
 - `src/test_support/`: `packages/git/src/test/` (real repositories in a temp dir), for tests only.
 
-`packages/db` is ported to `gitto-db` (`crates/db`). Both apps share one `gitto.db` while both
-ship, so `gitto-db` embeds the migrations drizzle-kit makes in `apps/electron/migrations` and
-applies them exactly as Drizzle's migrator does: make migrations with `pnpm db:generate` only, never
-by hand in Rust.
+`gitto-db` (`crates/db`) is Gitto's SQLite database. Its schema is its own, not the Electron app's
+Drizzle one: change it by adding a migration to `crates/db/migrations` and `MIGRATIONS`, never by
+editing one that's shipped.
 
 Porting a TS file: keep its behavior, including error messages, and the reasoning in its doc
 comments, which say why as much as what. Port its tests one for one, as `#[cfg(test)] mod tests`
