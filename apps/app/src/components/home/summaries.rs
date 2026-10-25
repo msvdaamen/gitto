@@ -8,7 +8,7 @@ use gitto_git::input::RepositoryId;
 use gitto_repository::Repository;
 use gpui_kit::{App, Context, Entity, Subscription};
 
-use crate::data::{Changed, Part, QueryError, Repositories};
+use crate::data::{Changed, DataError, Part, Repositories};
 
 /// A repository on the home page, with what's loaded of it so far.
 #[derive(Debug, Clone, PartialEq)]
@@ -18,7 +18,7 @@ pub struct RepositorySummary {
     pub status: Option<StatusSummary>,
     pub overview: Option<Overview>,
     /// Why the repository couldn't be read, e.g. its folder is gone.
-    pub error: Option<QueryError>,
+    pub error: Option<DataError>,
     /// Whether its status is loaded, or couldn't be.
     pub settled: bool,
 }

@@ -18,7 +18,7 @@ use super::columns::SMALL_TEXT;
 use crate::components::ui::{FormField, Icon, IconName};
 use crate::data::commit::{Reword, reword_commit_mutation};
 use crate::data::keyed::Hold;
-use crate::data::{Changed, Loaded, Mutation, Part, QueryError, Repositories, Repository};
+use crate::data::{Changed, DataError, Loaded, Mutation, Part, Repositories, Repository};
 use crate::theme::PaletteExt as _;
 
 /// How wide the dialog is (`max-w-[440px]`), in rems of the 15px base.
@@ -323,7 +323,7 @@ impl RewordDialog {
 
     /// Why it can't be reworded, or its message couldn't be loaded; not whether it's been
     /// pushed: that only decides the warning.
-    fn error(&self, cx: &App) -> Option<QueryError> {
+    fn error(&self, cx: &App) -> Option<DataError> {
         self.reword
             .read(cx)
             .error()

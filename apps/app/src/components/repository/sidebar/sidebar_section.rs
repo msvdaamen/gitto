@@ -17,7 +17,7 @@ use gpui_kit::{
 use super::base_px;
 use super::sidebar_row::{ROW_HEIGHT, ROW_PX, RowAction};
 use crate::components::ui::{FailurePopover, Icon, IconName, VirtualList};
-use crate::data::QueryError;
+use crate::data::DataError;
 use crate::theme::PaletteExt as _;
 
 /// Height of a section's header.
@@ -45,7 +45,7 @@ pub type RenderRows = Rc<dyn Fn(Range<usize>, &mut Window, &mut App) -> Vec<AnyE
 /// Why an action on a section's items failed, shown beside the section until dismissed.
 pub struct SectionFailure {
     pub title: SharedString,
-    pub error: Option<QueryError>,
+    pub error: Option<DataError>,
     pub on_dismiss: RowAction,
 }
 

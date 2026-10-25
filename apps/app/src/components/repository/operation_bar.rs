@@ -390,7 +390,7 @@ mod tests {
         self, conflicted, fake_git, repository_id, set_operation, set_status, setup, status,
         with_conflicts,
     };
-    use crate::data::QueryError;
+    use crate::data::DataError;
     use crate::data::git::{GitTask, RepositoryGit};
 
     fn merge() -> Operation {
@@ -436,7 +436,7 @@ mod tests {
             let now = self.now.borrow().clone();
             async move {
                 now.map(|(operation, _)| operation)
-                    .ok_or(QueryError::msg("Unchanged."))
+                    .ok_or(DataError::msg("Unchanged."))
             }
             .boxed()
         }
@@ -445,7 +445,7 @@ mod tests {
             let now = self.now.borrow().clone();
             async move {
                 now.map(|(_, status)| StatusReply::Status(Box::new(status)))
-                    .ok_or(QueryError::msg("Unchanged."))
+                    .ok_or(DataError::msg("Unchanged."))
             }
             .boxed()
         }

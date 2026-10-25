@@ -13,7 +13,7 @@ use gpui_kit::{
 
 use super::changed_file_list::{ChangedFileList, ROW_PITCH};
 use crate::components::ui::{Icon, IconName, LineStats, SectionHeader};
-use crate::data::{Opaque, QueryError};
+use crate::data::{DataError, Opaque};
 use crate::theme::PaletteExt as _;
 use gitto_ui::git::changes::LineCounts;
 
@@ -23,14 +23,14 @@ use gitto_ui::git::changes::LineCounts;
 pub struct DetailsError {
     id: ElementId,
     title: SharedString,
-    error: Option<QueryError>,
+    error: Option<DataError>,
 }
 
 impl DetailsError {
     pub fn new(
         id: impl Into<ElementId>,
         title: impl Into<SharedString>,
-        error: Option<QueryError>,
+        error: Option<DataError>,
     ) -> Self {
         DetailsError {
             id: id.into(),

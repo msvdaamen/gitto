@@ -11,7 +11,7 @@ use gitto_repository::{Repository, RepositoryService};
 use gpui_kit::{App, AppContext as _, Context, Entity, Task};
 
 use super::app_data::{AppData, AppPart};
-use super::error::QueryError;
+use super::error::DataError;
 use super::repository::Repositories;
 use crate::services::{Services, SystemContext};
 use crate::state::router::{Route, Router};
@@ -19,31 +19,31 @@ use crate::state::router::{Route, Router};
 /// Where the list of repositories is kept: `RepositoryService` (the database), or a test's.
 pub trait RepositorySource {
     /// In the order of their tabs.
-    fn list(&self) -> BoxFuture<'static, Result<Vec<Repository>, QueryError>>;
+    fn list(&self) -> BoxFuture<'static, Result<Vec<Repository>, DataError>>;
     /// Adds the git repository at `path` (see `RepositoryService::add_repository`).
-    fn add(&self, path: PathBuf) -> BoxFuture<'static, Result<Repository, QueryError>>;
-    fn remove(&self, id: String) -> BoxFuture<'static, Result<(), QueryError>>;
+    fn add(&self, path: PathBuf) -> BoxFuture<'static, Result<Repository, DataError>>;
+    fn remove(&self, id: String) -> BoxFuture<'static, Result<(), DataError>>;
     /// Puts the tabs in the order of `ids`.
-    fn reorder(&self, ids: Vec<String>) -> BoxFuture<'static, Result<(), QueryError>>;
+    fn reorder(&self, ids: Vec<String>) -> BoxFuture<'static, Result<(), DataError>>;
 }
 
 impl RepositorySource for RepositoryService {
-    fn list(&self) -> BoxFuture<'static, Result<Vec<Repository>, QueryError>> {
+    fn list(&self) -> BoxFuture<'static, Result<Vec<Repository>, DataError>> {
         let service = self.clone();
         async move { Ok(service.get_repositories().await?) }.boxed()
     }
 
-    fn add(&self, path: PathBuf) -> BoxFuture<'static, Result<Repository, QueryError>> {
+    fn add(&self, path: PathBuf) -> BoxFuture<'static, Result<Repository, DataError>> {
         let service = self.clone();
         async move { Ok(service.add_repository(path).await?) }.boxed()
     }
 
-    fn remove(&self, id: String) -> BoxFuture<'static, Result<(), QueryError>> {
+    fn remove(&self, id: String) -> BoxFuture<'static, Result<(), DataError>> {
         let service = self.clone();
         async move { Ok(service.remove_repository(&id).await?) }.boxed()
     }
 
-    fn reorder(&self, ids: Vec<String>) -> BoxFuture<'static, Result<(), QueryError>> {
+    fn reorder(&self, ids: Vec<String>) -> BoxFuture<'static, Result<(), DataError>> {
         let service = self.clone();
         async move { Ok(service.reorder_repositories(&ids).await?) }.boxed()
     }
@@ -56,7 +56,7 @@ pub fn find<'a>(repositories: &'a [Repository], id: &str) -> Option<&'a Reposito
 
 /// Asks for a folder and adds the repository in it; resolves to the repository, or `None` when the
 /// folder picker was cancelled (`useAddRepository`). The list is loaded again once it's added.
-pub fn add_repository(cx: &mut App) -> Task<Result<Option<Repository>, QueryError>> {
+pub fn add_repository(cx: &mut App) -> Task<Result<Option<Repository>, DataError>> {
     let source = Services::global(cx).repository_source().clone();
     let folder = SystemContext::select_folder(cx);
     cx.spawn(async move |cx| {
@@ -64,7 +64,7 @@ pub fn add_repository(cx: &mut App) -> Task<Result<Option<Repository>, QueryErro
             let Some(path) = folder.await? else {
                 return Ok(None);
             };
-            Ok::<_, QueryError>(Some(source.add(path).await?))
+            Ok::<_, DataError>(Some(source.add(path).await?))
         }
         .await;
         match &result {
@@ -77,7 +77,7 @@ pub fn add_repository(cx: &mut App) -> Task<Result<Option<Repository>, QueryErro
 }
 
 /// Removes a repository from Gitto; the folder on disk is left untouched (`useRemoveRepository`).
-pub fn remove_repository(id: String, cx: &mut App) -> Task<Result<(), QueryError>> {
+pub fn remove_repository(id: String, cx: &mut App) -> Task<Result<(), DataError>> {
     let removing = Services::global(cx).repository_source().remove(id.clone());
     cx.spawn(async move |cx| {
         let result = removing.await;
@@ -94,7 +94,7 @@ pub fn remove_repository(id: String, cx: &mut App) -> Task<Result<(), QueryError
 
 /// Puts the repositories' tabs in the order of `ids`; the list is loaded again whether that went
 /// through or not (`useReorderRepositories`).
-pub fn reorder_repositories(ids: Vec<String>, cx: &mut App) -> Task<Result<(), QueryError>> {
+pub fn reorder_repositories(ids: Vec<String>, cx: &mut App) -> Task<Result<(), DataError>> {
     let reordering = Services::global(cx).repository_source().reorder(ids);
     cx.spawn(async move |cx| {
         let result = reordering.await;
@@ -117,7 +117,7 @@ fn reload_list(cx: &mut App) {
 /// button.
 #[derive(Default)]
 pub struct OpenRepository {
-    error: Option<QueryError>,
+    error: Option<DataError>,
     task: Option<Task<()>>,
 }
 
@@ -127,7 +127,7 @@ impl OpenRepository {
     }
 
     /// Why it last failed, until it's dismissed or tried again.
-    pub fn error(&self) -> Option<&QueryError> {
+    pub fn error(&self) -> Option<&DataError> {
         self.error.as_ref()
     }
 

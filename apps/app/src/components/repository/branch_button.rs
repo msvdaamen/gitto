@@ -199,14 +199,14 @@ mod tests {
     use crate::components::repository::test_support::{
         changed, fake_git, repository_id, set_status, setup, status, uncommitted,
     };
-    use crate::data::QueryError;
+    use crate::data::DataError;
     use crate::data::git::{GitTask, RepositoryGit};
 
     /// A repository's git that records the branches asked to be created, and what settles each.
     #[derive(Default)]
     struct Creates {
         calls: RefCell<Vec<String>>,
-        settle: RefCell<Vec<oneshot::Sender<Result<(), QueryError>>>>,
+        settle: RefCell<Vec<oneshot::Sender<Result<(), DataError>>>>,
     }
 
     impl RepositoryGit for Creates {
@@ -214,7 +214,7 @@ mod tests {
             self.calls.borrow_mut().push(name.as_str().to_owned());
             let (settle, settled) = oneshot::channel();
             self.settle.borrow_mut().push(settle);
-            async move { settled.await.unwrap_or(Err(QueryError::msg("dropped"))) }.boxed()
+            async move { settled.await.unwrap_or(Err(DataError::msg("dropped"))) }.boxed()
         }
     }
 
@@ -310,13 +310,13 @@ mod tests {
         click(window, "create-branch", cx);
         let settle = creates.settle.borrow_mut().remove(0);
         settle
-            .send(Err(QueryError::msg(
+            .send(Err(DataError::msg(
                 "fatal: cannot switch branch while merging",
             )))
             .unwrap();
         cx.run_until_parked();
         let failure = button.read_with(cx, |button, cx| {
-            button.button(cx).shown_failure().map(QueryError::message)
+            button.button(cx).shown_failure().map(DataError::message)
         });
         assert_eq!(
             failure.as_deref(),
@@ -369,13 +369,13 @@ mod tests {
         assert!(button.read_with(cx, |button, cx| button.button(cx).is_busy()));
         let settle = creates.settle.borrow_mut().remove(0);
         settle
-            .send(Err(QueryError::msg(
+            .send(Err(DataError::msg(
                 "fatal: a branch named 'topic' already exists",
             )))
             .unwrap();
         cx.run_until_parked();
         let failure = button.read_with(cx, |button, cx| {
-            button.button(cx).shown_failure().map(QueryError::message)
+            button.button(cx).shown_failure().map(DataError::message)
         });
         assert_eq!(
             failure.as_deref(),

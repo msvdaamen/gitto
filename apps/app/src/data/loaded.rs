@@ -5,14 +5,14 @@
 use futures::channel::oneshot;
 use gpui_kit::Task;
 
-use super::error::QueryError;
+use super::error::DataError;
 
 /// What's loaded of something (see the module's doc). A load that brings data equal to what's
 /// there keeps what's there, so nothing selected from it changes; data too big to compare is an
 /// `Opaque`.
 pub struct Loaded<T> {
     data: Option<T>,
-    error: Option<QueryError>,
+    error: Option<DataError>,
     /// The load under way: dropped to cancel it.
     load: Option<Task<()>>,
     /// Told once the load under way is done, or cancelled.
@@ -54,7 +54,7 @@ impl<T> Loaded<T> {
     }
 
     /// Why the last load failed, if it did.
-    pub fn error(&self) -> Option<&QueryError> {
+    pub fn error(&self) -> Option<&DataError> {
         self.error.as_ref()
     }
 
@@ -133,7 +133,7 @@ impl<T> Loaded<T> {
 
     /// Takes what a load brought: the data (kept as it was if it's equal), or why it failed (with
     /// what was there before kept).
-    pub(crate) fn settle(&mut self, result: Result<T, QueryError>)
+    pub(crate) fn settle(&mut self, result: Result<T, DataError>)
     where
         T: PartialEq,
     {
@@ -179,7 +179,7 @@ mod tests {
     #[test]
     fn keeps_what_it_had_when_a_load_fails() {
         let mut loaded = Loaded::with(1);
-        loaded.settle(Err(QueryError::msg("No.")));
+        loaded.settle(Err(DataError::msg("No.")));
         assert_eq!(loaded.data(), Some(&1));
         assert_eq!(loaded.error().unwrap().message(), "No.");
         assert!(!loaded.is_success());

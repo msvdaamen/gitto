@@ -81,20 +81,20 @@ mod tests {
     use crate::components::repository::test_support::{
         fake_git, repository_id, set_status, setup, status,
     };
-    use crate::data::QueryError;
+    use crate::data::DataError;
     use crate::data::git::{GitTask, RepositoryGit};
 
     /// A repository's git whose pulls the test settles.
     #[derive(Default)]
     struct Pulls {
-        settle: RefCell<Vec<oneshot::Sender<Result<(), QueryError>>>>,
+        settle: RefCell<Vec<oneshot::Sender<Result<(), DataError>>>>,
     }
 
     impl RepositoryGit for Pulls {
         fn pull(&self, _: Option<NonEmpty>) -> GitTask<()> {
             let (settle, settled) = oneshot::channel();
             self.settle.borrow_mut().push(settle);
-            async move { settled.await.unwrap_or(Err(QueryError::msg("dropped"))) }.boxed()
+            async move { settled.await.unwrap_or(Err(DataError::msg("dropped"))) }.boxed()
         }
     }
 
@@ -148,9 +148,7 @@ mod tests {
         cx.run_until_parked();
         let settle = pulls.settle.borrow_mut().remove(0);
         settle
-            .send(Err(QueryError::msg(
-                "Pulling origin/main caused conflicts.",
-            )))
+            .send(Err(DataError::msg("Pulling origin/main caused conflicts.")))
             .unwrap();
         cx.run_until_parked();
         let error = shown(&button, cx).shown_failure().cloned();
@@ -204,9 +202,7 @@ mod tests {
         // …and doesn't show why it failed.
         let settle = pulls.settle.borrow_mut().remove(0);
         settle
-            .send(Err(QueryError::msg(
-                "Pulling origin/main caused conflicts.",
-            )))
+            .send(Err(DataError::msg("Pulling origin/main caused conflicts.")))
             .unwrap();
         cx.run_until_parked();
         assert!(shown(&button, cx).shown_failure().is_none());

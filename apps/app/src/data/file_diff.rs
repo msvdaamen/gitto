@@ -11,7 +11,7 @@ use gpui_kit::{App, AppContext as _, Entity, Task};
 
 use super::diff::{ChangedFiles, FilesOf, ShownFiles, WorkingTreeLists};
 use super::diff::{select_shown_files, select_working_tree_lists};
-use super::error::QueryError;
+use super::error::DataError;
 use super::keyed::Hold;
 use super::loaded::Loaded;
 use super::opaque::Opaque;
@@ -153,7 +153,7 @@ pub fn fetch_file_patch(
     source: &DiffSource,
     file: &ChangedFile,
     cx: &mut App,
-) -> Task<Result<FilePatch, QueryError>> {
+) -> Task<Result<FilePatch, DataError>> {
     Repositories::open(id, cx).update(cx, |repository, cx| {
         repository.fetch_patch(source, file, cx)
     })
@@ -166,7 +166,7 @@ pub fn fetch_working_tree_file(
     id: &RepositoryId,
     path: &str,
     cx: &mut App,
-) -> Task<Result<WorkingTreeFile, QueryError>> {
+) -> Task<Result<WorkingTreeFile, DataError>> {
     let git = Repositories::open(id, cx).read(cx).git().clone();
     cx.background_spawn(git.working_tree_file(path.to_owned()))
 }
@@ -181,7 +181,7 @@ pub fn save_working_tree_file(
     version: String,
     overwrite: bool,
     cx: &mut App,
-) -> Task<Result<String, QueryError>> {
+) -> Task<Result<String, DataError>> {
     let git = Repositories::open(id, cx).read(cx).git().clone();
     let expected = SaveExpectation { version, overwrite };
     cx.background_spawn(git.save_working_tree_file(path.to_owned(), contents, expected))

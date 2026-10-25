@@ -8,7 +8,7 @@ use futures::future::Shared;
 use gitto_git::ApiCode;
 use gpui_kit::{App, Context, Task};
 
-use crate::data::QueryError;
+use crate::data::DataError;
 
 /// Where saving a file that's being edited is at.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,7 +36,7 @@ impl SaveState {
 /// Saves `text` over the file as it was at `version`, or whatever it is if `overwrite`; resolves
 /// to the version saved.
 pub type SaveFile =
-    Rc<dyn Fn(String, String, bool, &mut App) -> Task<Result<String, QueryError>> + 'static>;
+    Rc<dyn Fn(String, String, bool, &mut App) -> Task<Result<String, DataError>> + 'static>;
 
 /// How long after the last edit it's saved: long enough not to write on every key.
 pub const AUTOSAVE_DELAY: Duration = Duration::from_millis(600);
@@ -119,10 +119,7 @@ impl Autosave {
     /// Sends the edits that are left at once, as the app quits: not after a save under way, whose
     /// answer may come too late. Over the version that save started from, which the save takes as
     /// the one it's saving (see `save_working_tree_file`).
-    pub fn flush_now(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) -> Option<Task<Result<String, QueryError>>> {
+    pub fn flush_now(&mut self, cx: &mut Context<Self>) -> Option<Task<Result<String, DataError>>> {
         self.clear_timer();
         let (text, version) = (self.unsaved.clone()?, self.version.clone()?);
         if matches!(self.state, SaveState::ChangedOnDisk(_)) {
@@ -200,7 +197,7 @@ impl Autosave {
         &mut self,
         overwrite: bool,
         cx: &mut Context<Self>,
-    ) -> Option<(String, Task<Result<String, QueryError>>)> {
+    ) -> Option<(String, Task<Result<String, DataError>>)> {
         let (text, version) = (self.unsaved.clone()?, self.version.clone()?);
         if !overwrite && matches!(self.state, SaveState::ChangedOnDisk(_)) {
             return None;
@@ -211,7 +208,7 @@ impl Autosave {
     }
 
     /// `text` was saved, or not.
-    fn saved(&mut self, text: String, result: Result<String, QueryError>, cx: &mut Context<Self>) {
+    fn saved(&mut self, text: String, result: Result<String, DataError>, cx: &mut Context<Self>) {
         // Stopped meanwhile: nothing left to save, nor to say about it.
         if self.version.is_none() {
             return;
@@ -245,7 +242,7 @@ impl Autosave {
 
 /// Whether saving failed because the file changed, or went, on disk since it was read: git's API
 /// error for that (`Error::FileChangedOnDisk`, a `CONFLICT`), which an overwrite doesn't get.
-fn is_changed_on_disk(error: &QueryError) -> bool {
+fn is_changed_on_disk(error: &DataError) -> bool {
     error.has_code(ApiCode::Conflict)
 }
 
@@ -267,7 +264,7 @@ mod tests {
 
     fn autosave(
         cx: &mut TestAppContext,
-        respond: impl Fn(&str, &str, bool, &mut App) -> Task<Result<String, QueryError>> + 'static,
+        respond: impl Fn(&str, &str, bool, &mut App) -> Task<Result<String, DataError>> + 'static,
     ) -> (Entity<Autosave>, Calls) {
         let calls: Calls = Rc::default();
         let recorded = Rc::clone(&calls);
@@ -285,7 +282,7 @@ mod tests {
     }
 
     /// An error as git's API makes it for a file changed on disk.
-    fn changed_on_disk() -> QueryError {
+    fn changed_on_disk() -> DataError {
         ApiError::from(Error::FileChangedOnDisk {
             path: "a.txt".into(),
             how: DiskChange::Changed,
@@ -381,7 +378,7 @@ mod tests {
         let (autosave, _) = autosave(cx, move |_, _, _, _| {
             let first = !failed.replace(true);
             Task::ready(if first {
-                Err(QueryError::msg("The disk is full."))
+                Err(DataError::msg("The disk is full."))
             } else {
                 Ok("v1".into())
             })
@@ -411,7 +408,7 @@ mod tests {
             }
             let (send, receive) = oneshot::channel::<String>();
             *pending.borrow_mut() = Some(send);
-            cx.spawn(async move |_| receive.await.map_err(|_| QueryError::msg("Dropped.")))
+            cx.spawn(async move |_| receive.await.map_err(|_| DataError::msg("Dropped.")))
         });
         autosave.update(cx, |autosave, cx| {
             autosave.start("v0".into(), cx);

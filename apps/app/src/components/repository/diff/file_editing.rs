@@ -19,7 +19,7 @@ use super::file_diff_view::FileDiffView;
 use super::unsaved_changes_dialog::{UnsavedChoice, open_unsaved_changes_dialog};
 use crate::components::ui::{IconButton, IconName, Notice};
 use crate::data::file_diff::{fetch_working_tree_file, save_working_tree_file};
-use crate::data::{QueryError, Repositories};
+use crate::data::{DataError, Repositories};
 use crate::theme::PaletteExt as _;
 
 /// Editing the file on show: the version of it on disk the edits are of (see
@@ -31,12 +31,12 @@ pub struct EditSession {
 
 /// Reads a file in the working tree, with its version.
 pub type ReadWorkingTreeFile =
-    Rc<dyn Fn(&RepositoryId, &str, &mut App) -> Task<Result<WorkingTreeFile, QueryError>>>;
+    Rc<dyn Fn(&RepositoryId, &str, &mut App) -> Task<Result<WorkingTreeFile, DataError>>>;
 
 /// Saves a file's text over it in the working tree, if it's still at `version` or to `overwrite`
 /// it; resolves to its new version.
 pub type SaveWorkingTreeFile = Rc<
-    dyn Fn(&RepositoryId, &str, String, String, bool, &mut App) -> Task<Result<String, QueryError>>,
+    dyn Fn(&RepositoryId, &str, String, String, bool, &mut App) -> Task<Result<String, DataError>>,
 >;
 
 /// What of a repository is loaded again, as what it's of changed.
@@ -111,7 +111,7 @@ impl FileEditing {
             let (io, target) = (Rc::clone(&io), Rc::clone(&target));
             Rc::new(move |text, version, overwrite, cx| {
                 let Some((id, path)) = target.borrow().clone() else {
-                    return Task::ready(Err(QueryError::msg("Nothing is being edited.")));
+                    return Task::ready(Err(DataError::msg("Nothing is being edited.")));
                 };
                 let save = Rc::clone(&io.borrow().save);
                 save(&id, &path, text, version, overwrite, cx)
@@ -570,7 +570,7 @@ mod tests {
     use gitto_ui::git::diff_source::{DiffSource, diff_file_key};
 
     /// Saving fails as git's API says the file changed on disk.
-    fn changed_on_disk() -> QueryError {
+    fn changed_on_disk() -> DataError {
         ApiError::from(Error::FileChangedOnDisk {
             path: "a.txt".into(),
             how: DiskChange::Changed,
@@ -800,7 +800,7 @@ mod tests {
         cx.update(|cx| {
             DiffGit::get(cx).set_patch(
                 diff_file_key(&DiffSource::Unstaged, "a.txt"),
-                Err(QueryError::msg("These changes are over 10 MB.")),
+                Err(DataError::msg("These changes are over 10 MB.")),
             )
         });
         update_repository(cx, |repository, cx| drop(repository.reload_uncommitted(cx)));

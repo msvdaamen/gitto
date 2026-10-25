@@ -24,7 +24,7 @@ use crate::components::ui::{
 };
 use crate::data::diff::{FilesOf, FilesOnShow, ShownFiles};
 use crate::data::keyed::Hold;
-use crate::data::{Opaque, Part, QueryError, Shown};
+use crate::data::{DataError, Opaque, Part, Shown};
 use crate::state::clock::{Clock, relative_time};
 use crate::theme::PaletteExt as _;
 use crate::util::format::{avatar_color, initials};
@@ -384,7 +384,7 @@ impl SelectedCommit {
     fn update_shown(
         &mut self,
         cx: &App,
-    ) -> (Option<QueryError>, Option<QueryError>, Option<ShownFiles>) {
+    ) -> (Option<DataError>, Option<DataError>, Option<ShownFiles>) {
         let repository = self.repository.read(cx);
         if let Some(commit) = repository.commit(&self.sha) {
             self.commit = Some(commit.clone());

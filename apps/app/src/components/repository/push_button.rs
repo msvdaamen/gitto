@@ -314,7 +314,7 @@ mod tests {
     use crate::components::repository::test_support::{
         fake_git, has_dialog, repository_id, set_push_target, set_status, setup, status,
     };
-    use crate::data::QueryError;
+    use crate::data::DataError;
     use crate::data::git::{GitTask, RepositoryGit};
 
     const REWRITTEN: &str = "origin/main still has main's commits from before a rebase or amend.";
@@ -330,14 +330,14 @@ mod tests {
     }
 
     /// A push turned down as the UI gets it (see `push_rejection`).
-    fn rejected(forcible: bool) -> QueryError {
-        QueryError::from(gitto_git::Error::PushRejected {
+    fn rejected(forcible: bool) -> DataError {
+        DataError::from(gitto_git::Error::PushRejected {
             message: if forcible { REWRITTEN } else { BEHIND }.to_owned(),
             forcible,
         })
     }
 
-    type Answer = Box<dyn Fn(bool, usize) -> Result<(), QueryError>>;
+    type Answer = Box<dyn Fn(bool, usize) -> Result<(), DataError>>;
 
     /// A repository's git that records the pushes asked for (whether forced), each answered by
     /// `answer`, and the pulls.
@@ -360,7 +360,7 @@ mod tests {
         }
     }
 
-    fn operations(answer: impl Fn(bool, usize) -> Result<(), QueryError> + 'static) -> Rc<Calls> {
+    fn operations(answer: impl Fn(bool, usize) -> Result<(), DataError> + 'static) -> Rc<Calls> {
         Rc::new(Calls {
             pushes: RefCell::new(Vec::new()),
             pulls: RefCell::new(0),
@@ -498,13 +498,13 @@ mod tests {
 
     #[gpui_kit::test]
     fn says_why_a_push_failed_otherwise(cx: &mut TestAppContext) {
-        let calls = operations(|_, _| Err(QueryError::msg("Permission denied (publickey).")));
+        let calls = operations(|_, _| Err(DataError::msg("Permission denied (publickey).")));
         let (_dir, window, button) = render(cx, target(), &calls);
 
         click(window, "push", cx);
         let shown = button.read_with(cx, |button, cx| button.button(cx));
         assert_eq!(
-            shown.shown_failure().map(QueryError::message).as_deref(),
+            shown.shown_failure().map(DataError::message).as_deref(),
             Some("Permission denied (publickey).")
         );
         assert!(!has_dialog(window, cx));

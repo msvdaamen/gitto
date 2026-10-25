@@ -38,7 +38,7 @@ use gitto_git::schema::FileStatus;
 use gpui_kit::{App, AppContext as _, Context, Entity, EventEmitter, Global, Subscription, Task};
 
 use super::diff::{ChangedFiles, FilesOf};
-use super::error::QueryError;
+use super::error::DataError;
 use super::file_diff::FilePatch;
 use super::git::{GitRepository, GitTask, RepositoryGit};
 use super::history::{Log, NEXT_PAGE, followed_by, reload_limit};
@@ -95,7 +95,7 @@ pub struct Changed(pub Part);
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct OperationState {
     pub running: bool,
-    pub error: Option<QueryError>,
+    pub error: Option<DataError>,
 }
 
 /// The loads a reload started: `.await` it to wait for them, or drop it not to (they run either
@@ -151,7 +151,7 @@ pub struct Repository {
 #[derive(Default)]
 struct LoadingMore {
     task: Option<Task<()>>,
-    error: Option<QueryError>,
+    error: Option<DataError>,
 }
 
 impl EventEmitter<Changed> for Repository {}
@@ -301,7 +301,7 @@ impl Repository {
                             // Only ever the answer when there was a previous status to compare
                             // with.
                             StatusReply::Unchanged { .. } => previous.ok_or_else(|| {
-                                QueryError::msg("The status was unchanged, from none.")
+                                DataError::msg("The status was unchanged, from none.")
                             }),
                             StatusReply::Status(status) => Ok(Opaque::new(*status)),
                         }
@@ -476,7 +476,7 @@ impl Repository {
     }
 
     /// Why loading more of the log last failed, if it did, since it last reloaded.
-    pub fn more_error(&self) -> Option<&QueryError> {
+    pub fn more_error(&self) -> Option<&DataError> {
         self.more.error.as_ref()
     }
 
@@ -583,7 +583,7 @@ impl Repository {
         source: &DiffSource,
         file: &ChangedFile,
         cx: &mut Context<Self>,
-    ) -> Task<Result<FilePatch, QueryError>> {
+    ) -> Task<Result<FilePatch, DataError>> {
         let key = (source.clone(), file.path.clone());
         let wait = {
             let loaded = self.patches.entry(key.clone());
@@ -678,7 +678,7 @@ impl Repository {
         &mut self,
         path: &str,
         cx: &mut Context<Self>,
-    ) -> Task<Result<Conflict, QueryError>> {
+    ) -> Task<Result<Conflict, DataError>> {
         let path = path.to_owned();
         let wait = {
             let loaded = self.conflicts.entry(path.clone());
@@ -722,7 +722,7 @@ impl Repository {
         &mut self,
         oid: &str,
         cx: &mut Context<Self>,
-    ) -> Task<Result<String, QueryError>> {
+    ) -> Task<Result<String, DataError>> {
         let oid = oid.to_owned();
         let wait = {
             let loaded = self.blobs.entry(oid.clone());
@@ -762,7 +762,7 @@ impl Repository {
     }
 
     /// Why loading the commit `sha` failed, if it did.
-    pub fn commit_error(&self, sha: &str) -> Option<&QueryError> {
+    pub fn commit_error(&self, sha: &str) -> Option<&DataError> {
         self.commits.get(&sha.to_owned()).and_then(Loaded::error)
     }
 
@@ -988,9 +988,9 @@ impl Repository {
     pub fn run<R: 'static>(
         &mut self,
         name: &'static str,
-        work: impl FnOnce(&mut Self, &mut Context<Self>) -> Task<Result<R, QueryError>>,
+        work: impl FnOnce(&mut Self, &mut Context<Self>) -> Task<Result<R, DataError>>,
         cx: &mut Context<Self>,
-    ) -> Option<oneshot::Receiver<Result<R, QueryError>>> {
+    ) -> Option<oneshot::Receiver<Result<R, DataError>>> {
         if self.operation_state(name).running {
             return None;
         }
@@ -1033,7 +1033,7 @@ impl Repository {
         &mut self,
         action: GitTask<R>,
         cx: &mut Context<Self>,
-    ) -> Task<Result<R, QueryError>> {
+    ) -> Task<Result<R, DataError>> {
         let action = cx.background_spawn(action);
         cx.spawn(async move |this, cx| {
             let result = action.await;
@@ -1170,17 +1170,17 @@ fn log_commits(git: &dyn RepositoryGit, skip: u32, limit: u32) -> GitTask<Vec<Co
     }
 }
 
-fn failed<T: Send + 'static>(error: QueryError) -> GitTask<T> {
+fn failed<T: Send + 'static>(error: DataError) -> GitTask<T> {
     async move { Err(error) }.boxed()
 }
 
 /// What `loaded` has, or why it doesn't: for one that was just loaded.
-fn loaded_result<T: Clone>(loaded: Option<&Loaded<T>>) -> Result<T, QueryError> {
-    let loaded = loaded.ok_or_else(|| QueryError::msg("It was dropped as it loaded."))?;
+fn loaded_result<T: Clone>(loaded: Option<&Loaded<T>>) -> Result<T, DataError> {
+    let loaded = loaded.ok_or_else(|| DataError::msg("It was dropped as it loaded."))?;
     match (loaded.error(), loaded.data()) {
         (Some(error), _) => Err(error.clone()),
         (None, Some(data)) => Ok(data.clone()),
-        (None, None) => Err(QueryError::msg("The load was cancelled.")),
+        (None, None) => Err(DataError::msg("The load was cancelled.")),
     }
 }
 
@@ -1359,7 +1359,7 @@ mod tests {
 
         fn overview(&self) -> GitTask<Overview> {
             self.overviews.set(self.overviews.get() + 1);
-            async { Err(QueryError::msg("No overview.")) }.boxed()
+            async { Err(DataError::msg("No overview.")) }.boxed()
         }
     }
 
@@ -1468,7 +1468,7 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(git.overviews.get(), 1);
         let failed = repository.read_with(cx, |repository, _| {
-            repository.overview().error().map(QueryError::message)
+            repository.overview().error().map(DataError::message)
         });
         assert_eq!(failed.as_deref(), Some("No overview."));
         // Shown again, it's out of date.
@@ -1572,7 +1572,7 @@ mod tests {
     fn runs_one_at_a_time_per_repository_and_says_why_it_failed(cx: &mut TestAppContext) {
         let git = Rc::new(Git::default());
         let repository = open(&git, cx);
-        let (finish, finished) = oneshot::channel::<Result<(), QueryError>>();
+        let (finish, finished) = oneshot::channel::<Result<(), DataError>>();
         let finished = Cell::new(Some(finished));
         let pull = |repository: &mut Repository, cx: &mut Context<Repository>| {
             repository.run(
@@ -1599,7 +1599,7 @@ mod tests {
                 .is_none()
         );
 
-        finish.send(Err(QueryError::msg("No upstream."))).unwrap();
+        finish.send(Err(DataError::msg("No upstream."))).unwrap();
         cx.run_until_parked();
         let state = repository.read_with(cx, |repository, _| repository.operation_state("pull"));
         assert!(!state.running);

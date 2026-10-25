@@ -18,7 +18,7 @@ use super::diff_metadata::{
 };
 use super::highlight::DiffHighlights;
 use super::patch_files::{fit_to_patch, has_matching_ends};
-use crate::data::QueryError;
+use crate::data::DataError;
 
 /// How long a diff waits for its highlighting before it's shown without, until it's
 /// highlighted: long enough for most, which then show highlighted at once rather than flicker
@@ -64,7 +64,7 @@ impl LoadedFile {
 }
 
 /// Reads one side of the file on show in full, by the object name the patch has for it.
-pub type LoadFile = Rc<dyn Fn(Side, &str, &mut App) -> Task<Result<LoadedFile, QueryError>>>;
+pub type LoadFile = Rc<dyn Fn(Side, &str, &mut App) -> Task<Result<LoadedFile, DataError>>>;
 
 /// The one file in `patch` (`parsePatch`). A file that changed type, e.g. from a symbolic link, is
 /// a deletion and an addition to git, each with the whole of its side: shown as one change, from

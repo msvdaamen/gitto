@@ -24,7 +24,7 @@ use gpui_kit::test::{TestEventExt as _, TestQueryExt as _};
 use gpui_kit::{AnyWindowHandle, AppContext as _, MouseButton, Pixels, Point, TestAppContext};
 use tempfile::TempDir;
 
-use crate::data::QueryError;
+use crate::data::DataError;
 use crate::data::diff::{ChangedFiles, FilesOf};
 use crate::data::file_diff::FilePatch;
 use crate::data::git::{NoGit, RepositoryGit};
@@ -41,22 +41,22 @@ pub struct Repositories {
 }
 
 impl RepositorySource for Repositories {
-    fn list(&self) -> BoxFuture<'static, Result<Vec<Repository>, QueryError>> {
+    fn list(&self) -> BoxFuture<'static, Result<Vec<Repository>, DataError>> {
         let list = self.list.borrow().clone();
         async move { Ok(list) }.boxed()
     }
 
-    fn add(&self, path: PathBuf) -> BoxFuture<'static, Result<Repository, QueryError>> {
+    fn add(&self, path: PathBuf) -> BoxFuture<'static, Result<Repository, DataError>> {
         self.added.borrow_mut().push(path);
-        async { Err(QueryError::msg("Not in this test.")) }.boxed()
+        async { Err(DataError::msg("Not in this test.")) }.boxed()
     }
 
-    fn remove(&self, _: String) -> BoxFuture<'static, Result<(), QueryError>> {
-        async { Err(QueryError::msg("Not in this test.")) }.boxed()
+    fn remove(&self, _: String) -> BoxFuture<'static, Result<(), DataError>> {
+        async { Err(DataError::msg("Not in this test.")) }.boxed()
     }
 
-    fn reorder(&self, _: Vec<String>) -> BoxFuture<'static, Result<(), QueryError>> {
-        async { Err(QueryError::msg("Not in this test.")) }.boxed()
+    fn reorder(&self, _: Vec<String>) -> BoxFuture<'static, Result<(), DataError>> {
+        async { Err(DataError::msg("Not in this test.")) }.boxed()
     }
 }
 

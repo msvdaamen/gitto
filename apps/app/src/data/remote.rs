@@ -6,7 +6,7 @@ use gitto_git::input::RepositoryId;
 use gpui_kit::{App, Entity};
 
 use super::Repositories;
-use super::error::QueryError;
+use super::error::DataError;
 use super::mutation::Mutation;
 
 /// Fetches every remote of the repository whose id it's given (`useFetch`). The id is the
@@ -33,7 +33,7 @@ pub enum PushRejection {
 
 /// Why the remote branch turned a push down, if `error` says it has commits the branch doesn't
 /// (`pushRejection`).
-pub fn push_rejection(error: Option<&QueryError>) -> Option<PushRejection> {
+pub fn push_rejection(error: Option<&DataError>) -> Option<PushRejection> {
     let error = error?;
     if error.has_code(ApiCode::PushRewritten) {
         Some(PushRejection::Rewritten)
@@ -51,7 +51,7 @@ mod tests {
     #[test]
     fn tells_why_a_push_was_turned_down() {
         let rejected = |forcible: bool| {
-            QueryError::from(gitto_git::Error::PushRejected {
+            DataError::from(gitto_git::Error::PushRejected {
                 message: "Rejected.".to_owned(),
                 forcible,
             })
@@ -64,7 +64,7 @@ mod tests {
             push_rejection(Some(&rejected(false))),
             Some(PushRejection::Behind)
         );
-        assert_eq!(push_rejection(Some(&QueryError::msg("Offline."))), None);
+        assert_eq!(push_rejection(Some(&DataError::msg("Offline."))), None);
         assert_eq!(push_rejection(None), None);
     }
 }

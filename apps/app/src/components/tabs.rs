@@ -15,7 +15,7 @@ use gpui_kit::{
 use super::remove_repository_dialog::open_remove_repository_dialog;
 use crate::components::ui::{FailurePopover, GittoIcon, Icon, IconName};
 use crate::data::repositories::{OpenRepository, remove_repository, reorder_repositories};
-use crate::data::{AppChanged, AppData, AppPart, QueryError};
+use crate::data::{AppChanged, AppData, AppPart, DataError};
 use crate::state::router::{Route, Router};
 use crate::theme::PaletteExt as _;
 
@@ -92,10 +92,10 @@ pub struct Tabs {
     moved_order: Option<Vec<String>>,
     /// The tab last moved, which says why if the new order couldn't be saved.
     moved: Option<String>,
-    move_error: Option<QueryError>,
+    move_error: Option<DataError>,
     /// The repository last tried to be removed, and why that failed.
     removing: Option<String>,
-    remove_error: Option<QueryError>,
+    remove_error: Option<DataError>,
     focus: HashMap<String, FocusHandle>,
     _subscriptions: Vec<Subscription>,
 }
@@ -546,23 +546,23 @@ mod ui_tests {
     }
 
     impl RepositorySource for Saved {
-        fn list(&self) -> BoxFuture<'static, Result<Vec<Repository>, QueryError>> {
+        fn list(&self) -> BoxFuture<'static, Result<Vec<Repository>, DataError>> {
             let repositories = self.repositories.borrow().clone();
             async move { Ok(repositories) }.boxed()
         }
 
-        fn add(&self, _: PathBuf) -> BoxFuture<'static, Result<Repository, QueryError>> {
-            async { Err(QueryError::msg("Not in this test.")) }.boxed()
+        fn add(&self, _: PathBuf) -> BoxFuture<'static, Result<Repository, DataError>> {
+            async { Err(DataError::msg("Not in this test.")) }.boxed()
         }
 
-        fn remove(&self, _: String) -> BoxFuture<'static, Result<(), QueryError>> {
-            async { Err(QueryError::msg("Not in this test.")) }.boxed()
+        fn remove(&self, _: String) -> BoxFuture<'static, Result<(), DataError>> {
+            async { Err(DataError::msg("Not in this test.")) }.boxed()
         }
 
-        fn reorder(&self, ids: Vec<String>) -> BoxFuture<'static, Result<(), QueryError>> {
+        fn reorder(&self, ids: Vec<String>) -> BoxFuture<'static, Result<(), DataError>> {
             self.reorders.borrow_mut().push(ids.clone());
             if self.fail.get() {
-                return async { Err(QueryError::msg("The database is locked.")) }.boxed();
+                return async { Err(DataError::msg("The database is locked.")) }.boxed();
             }
             let mut repositories = self.repositories.borrow_mut();
             repositories.sort_by_key(|repository| {

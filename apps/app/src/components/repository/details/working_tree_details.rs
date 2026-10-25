@@ -31,7 +31,7 @@ use crate::data::staging::{
     DiscardTarget, StagingTarget, discard_mutation, stage_mutation, unstage_mutation,
 };
 use crate::data::status::head_sha;
-use crate::data::{Changed, Mutation, Opaque, Part, QueryError, Shown};
+use crate::data::{Changed, DataError, Mutation, Opaque, Part, Shown};
 use crate::state::delayed::{DELAY, Delayed};
 use crate::theme::PaletteExt as _;
 use gitto_ui::git::changes::staging_paths;
@@ -317,7 +317,7 @@ impl WorkingTreeDetails {
 
     /// The error to show, if any: why the changes couldn't be loaded, or why the latest change to
     /// them failed.
-    fn error(&self, cx: &App) -> Option<QueryError> {
+    fn error(&self, cx: &App) -> Option<DataError> {
         self.repository
             .read(cx)
             .status()
@@ -970,7 +970,7 @@ mod tests {
         details
             .fakes
             .discards
-            .once(Err(QueryError::msg("Couldn't discard it.")));
+            .once(Err(DataError::msg("Couldn't discard it.")));
 
         details.open_menu("unstaged-files", "a.txt", cx);
         details.choose_discard(cx);

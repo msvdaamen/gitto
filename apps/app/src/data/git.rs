@@ -26,10 +26,10 @@ use gitto_git::input::{
 };
 use gitto_git::{ApiError, GitApi};
 
-use super::error::QueryError;
+use super::error::DataError;
 
 /// What git does, and answers, as a future that runs on the background executor.
-pub type GitTask<T> = BoxFuture<'static, Result<T, QueryError>>;
+pub type GitTask<T> = BoxFuture<'static, Result<T, DataError>>;
 
 /// Writes [`RepositoryGit`], with a method for each `fn`: each `GitRepo`'s method of that name,
 /// which [`GitRepository`] runs, and which fails by default, for tests.
@@ -50,7 +50,7 @@ macro_rules! repository_git {
 
             /// `error`, from checking what the UI hands over, as the UI shows it: logged, and
             /// reported as the bug it is (see `GitRepo::input`).
-            fn invalid(&self, error: gitto_git::Error) -> QueryError {
+            fn invalid(&self, error: gitto_git::Error) -> DataError {
                 ApiError::from(error).into()
             }
         }
@@ -63,7 +63,7 @@ macro_rules! repository_git {
                 }
             )*
 
-            fn invalid(&self, error: gitto_git::Error) -> QueryError {
+            fn invalid(&self, error: gitto_git::Error) -> DataError {
                 self.api.fail("input", error).into()
             }
         }
@@ -72,7 +72,7 @@ macro_rules! repository_git {
 
 /// What a test's [`RepositoryGit`] does with what it doesn't implement.
 fn not_in_this_test<T>(name: &str) -> GitTask<T> {
-    let error = QueryError::msg(format!("Not in this test: {name}."));
+    let error = DataError::msg(format!("Not in this test: {name}."));
     async move { Err(error) }.boxed()
 }
 

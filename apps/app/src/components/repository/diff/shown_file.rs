@@ -17,7 +17,7 @@ use gpui_kit::{AppContext as _, Context, Entity, Subscription};
 
 use crate::data::file_diff::{DiffSourceFiles, FilePatch};
 use crate::data::keyed::Hold;
-use crate::data::{Loaded, Opaque, Part, QueryError, Repositories, Repository, observe_parts};
+use crate::data::{DataError, Loaded, Opaque, Part, Repositories, Repository, observe_parts};
 use crate::state::delayed::{DELAY, Delayed};
 use gitto_ui::git::diff_source::{DiffSource, diff_file_key, is_same_source, is_uncommitted};
 
@@ -83,7 +83,7 @@ pub struct ShownFile {
     /// loads.
     patch: Option<FilePatch>,
     /// Why this file's patch couldn't be loaded, as last synced.
-    patch_error: Option<QueryError>,
+    patch_error: Option<DataError>,
     /// The patch on show: going to another file, the last one stays on show until the new one's
     /// is loaded and highlighted; they're swapped at once, without flicker.
     shown_patch: Option<ShownPatch>,
@@ -338,7 +338,7 @@ impl ShownFile {
 
     /// Why the patch couldn't be loaded; nothing while the file's edited, as the patch on show is
     /// the one editing started from.
-    pub fn patch_error(&self) -> Option<QueryError> {
+    pub fn patch_error(&self) -> Option<DataError> {
         if self.editing.is_some() {
             return None;
         }

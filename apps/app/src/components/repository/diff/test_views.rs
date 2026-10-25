@@ -28,7 +28,7 @@ use crate::components::repository::test_support::{fake_git, repository_entity};
 use crate::data::conflicts::FileToResolve;
 use crate::data::file_diff::FilePatch;
 use crate::data::git::{GitTask, RepositoryGit};
-use crate::data::{Mutation, QueryError, Repository};
+use crate::data::{DataError, Mutation, Repository};
 use gitto_ui::git::diff_source::{DiffSource, diff_file_key};
 
 pub fn id() -> RepositoryId {
@@ -44,7 +44,7 @@ pub fn init(cx: &mut TestAppContext) -> tempfile::TempDir {
 
 /// A patch the made-up git gives: always the same, or once, when the test sends it.
 enum PatchAnswer {
-    Now(Result<String, QueryError>),
+    Now(Result<String, DataError>),
     Later(oneshot::Receiver<FilePatch>),
 }
 
@@ -75,7 +75,7 @@ impl DiffGit {
     }
 
     /// Reads the patch of the file `key` as `patch`, from now on.
-    pub fn set_patch(&self, key: String, patch: Result<String, QueryError>) {
+    pub fn set_patch(&self, key: String, patch: Result<String, DataError>) {
         self.patches
             .borrow_mut()
             .insert(key, PatchAnswer::Now(patch));
@@ -107,11 +107,11 @@ impl DiffGit {
                 async move { patch }.boxed()
             }
             Some(PatchAnswer::Later(receive)) => async move {
-                let patch = receive.await.map_err(|_| QueryError::msg("Dropped."))?;
+                let patch = receive.await.map_err(|_| DataError::msg("Dropped."))?;
                 Ok(patch.patch.to_string())
             }
             .boxed(),
-            None => async move { Err(QueryError::msg(format!("No patch of {key}."))) }.boxed(),
+            None => async move { Err(DataError::msg(format!("No patch of {key}."))) }.boxed(),
         }
     }
 }
@@ -120,7 +120,7 @@ impl RepositoryGit for DiffGit {
     fn status(&self, _: Option<String>) -> GitTask<StatusReply> {
         let status = self.status.borrow().clone();
         async move {
-            let status = status.ok_or_else(|| QueryError::msg("No status in this test."))?;
+            let status = status.ok_or_else(|| DataError::msg("No status in this test."))?;
             Ok(StatusReply::Status(Box::new(status)))
         }
         .boxed()
@@ -146,7 +146,7 @@ impl RepositoryGit for DiffGit {
 
     fn conflict(&self, path: NonEmpty) -> GitTask<Conflict> {
         let conflict = self.conflicts.borrow().get(path.as_str()).cloned();
-        async move { conflict.ok_or_else(|| QueryError::msg("Not conflicted.")) }.boxed()
+        async move { conflict.ok_or_else(|| DataError::msg("Not conflicted.")) }.boxed()
     }
 }
 
@@ -294,7 +294,7 @@ pub fn save(path: &str, contents: &str, version: &str, overwrite: bool) -> Save 
     }
 }
 
-type SaveReply = Box<dyn FnMut(&Save) -> Result<String, QueryError>>;
+type SaveReply = Box<dyn FnMut(&Save) -> Result<String, DataError>>;
 
 /// The working tree a test makes up: the files it reads, and what saving them says.
 #[derive(Clone)]
@@ -327,7 +327,7 @@ impl FakeTree {
     }
 
     /// Answers saves with `reply` from now on.
-    pub fn reply(&self, reply: impl FnMut(&Save) -> Result<String, QueryError> + 'static) {
+    pub fn reply(&self, reply: impl FnMut(&Save) -> Result<String, DataError> + 'static) {
         *self.reply.borrow_mut() = Box::new(reply);
     }
 
@@ -354,7 +354,7 @@ impl FakeTree {
                         .borrow()
                         .get(path)
                         .cloned()
-                        .ok_or_else(|| QueryError::msg("No such file.")),
+                        .ok_or_else(|| DataError::msg("No such file.")),
                 )
             }),
             save: Rc::new(move |_, path, contents, version, overwrite, _| {
@@ -389,7 +389,7 @@ impl FakeResolve {
                 move |input: FileToResolve, _: &mut App| {
                     calls.borrow_mut().push(input);
                     Task::ready(match failure.borrow_mut().take() {
-                        Some(message) => Err(QueryError::msg(message)),
+                        Some(message) => Err(DataError::msg(message)),
                         None => Ok(()),
                     })
                 },

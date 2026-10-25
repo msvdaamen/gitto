@@ -10,7 +10,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::{App, ClickEvent, ElementId, FontWeight, SharedString, Window, div, rems};
 
 use crate::components::ui::{FailurePopover, Icon, IconName};
-use crate::data::QueryError;
+use crate::data::DataError;
 use crate::theme::PaletteExt as _;
 use crate::views::repository::{LARGE, MEDIUM};
 
@@ -42,7 +42,7 @@ type OnDismiss = Rc<dyn Fn(&mut Window, &mut App) + 'static>;
 /// Why the button's action failed, shown under it until dismissed (see `FailurePopover`).
 struct Failure {
     title: SharedString,
-    error: Option<QueryError>,
+    error: Option<DataError>,
     on_dismiss: OnDismiss,
 }
 
@@ -136,7 +136,7 @@ impl ToolbarButton {
     pub fn failure(
         mut self,
         title: impl Into<SharedString>,
-        error: Option<QueryError>,
+        error: Option<DataError>,
         on_dismiss: impl Fn(&mut Window, &mut App) + 'static,
     ) -> Self {
         self.failure = Some(Failure {
@@ -177,7 +177,7 @@ impl ToolbarButton {
     }
 
     /// Why its action failed, if that's shown.
-    pub fn shown_failure(&self) -> Option<&QueryError> {
+    pub fn shown_failure(&self) -> Option<&DataError> {
         self.failure
             .as_ref()
             .and_then(|failure| failure.error.as_ref())

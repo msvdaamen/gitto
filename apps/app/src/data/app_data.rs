@@ -17,7 +17,7 @@ use gitto_git::features::version::check;
 use gitto_repository::Repository;
 use gpui_kit::{App, AppContext as _, Context, Entity, EventEmitter, Global};
 
-use super::error::QueryError;
+use super::error::DataError;
 use super::git::GitTask;
 use super::loaded::Loaded;
 use crate::services::Services;
@@ -134,7 +134,7 @@ impl AppData {
     ) -> Option<oneshot::Receiver<()>> {
         let fetch = cx.background_spawn(fetch);
         at(self).start(cx.spawn(async move |this, cx| {
-            let result: Result<T, QueryError> = fetch.await;
+            let result: Result<T, DataError> = fetch.await;
             let _ = this.update(cx, |data, cx| {
                 at(data).settle(result);
                 cx.emit(AppChanged(part));

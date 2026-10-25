@@ -9,7 +9,7 @@ use gitto_git::input::RepositoryId;
 use gitto_git::schema::FileStatus;
 use gpui_kit::{App, Entity, Task};
 
-use super::error::QueryError;
+use super::error::DataError;
 use super::keyed::Hold;
 use super::loaded::Loaded;
 use super::opaque::{Opaque, memoized};
@@ -92,7 +92,7 @@ impl FilesOnShow {
     }
 
     /// Why the files `sha` changed couldn't be loaded, if they couldn't.
-    pub fn error(&self, repository: &Repository) -> Option<QueryError> {
+    pub fn error(&self, repository: &Repository) -> Option<DataError> {
         repository
             .files(self.of, &self.sha)
             .and_then(Loaded::error)
@@ -102,7 +102,7 @@ impl FilesOnShow {
 
 /// A file's contents by their object name, e.g. to show more of it around a patch's changes
 /// (`fetchBlob`).
-pub fn fetch_blob(id: &RepositoryId, oid: &str, cx: &mut App) -> Task<Result<String, QueryError>> {
+pub fn fetch_blob(id: &RepositoryId, oid: &str, cx: &mut App) -> Task<Result<String, DataError>> {
     Repositories::open(id, cx).update(cx, |repository, cx| repository.fetch_blob(oid, cx))
 }
 

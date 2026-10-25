@@ -13,7 +13,7 @@ use gpui_kit::{
 use super::demo_action::demo_action;
 use super::summaries::RepositorySummary;
 use crate::components::ui::{FailurePopover, Icon, IconName};
-use crate::data::QueryError;
+use crate::data::DataError;
 use crate::state::clock::relative_time;
 use crate::theme::{AppTheme, PaletteExt as _};
 
@@ -30,7 +30,7 @@ pub struct WelcomeHero {
     pub(crate) user_name: Option<Option<String>>,
     pub(crate) summaries: Rc<[RepositorySummary]>,
     /// Why the last repository couldn't be opened, under the button, until it's dismissed.
-    pub(crate) open_error: Option<QueryError>,
+    pub(crate) open_error: Option<DataError>,
     pub(crate) on_open_repository: Handler,
     pub(crate) on_dismiss_open_error: Handler,
 }
@@ -39,7 +39,7 @@ impl WelcomeHero {
     pub fn new(
         user_name: Option<Option<String>>,
         summaries: Rc<[RepositorySummary]>,
-        open_error: Option<QueryError>,
+        open_error: Option<DataError>,
         on_open_repository: impl Fn(&mut Window, &mut App) + 'static,
         on_dismiss_open_error: impl Fn(&mut Window, &mut App) + 'static,
     ) -> Self {

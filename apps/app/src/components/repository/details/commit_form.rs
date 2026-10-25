@@ -13,7 +13,7 @@ use gpui_kit::{App, Context, Entity, FontWeight, SharedString, Subscription, Win
 use crate::components::ui::{FormField, Icon, IconName};
 use crate::data::commit::{NewCommit, create_commit_mutation};
 use crate::data::keyed::Hold;
-use crate::data::{Loaded, Mutation, Part, QueryError, Repositories, Repository, observe_parts};
+use crate::data::{DataError, Loaded, Mutation, Part, Repositories, Repository, observe_parts};
 use crate::theme::PaletteExt as _;
 
 /// The shortcut that commits, as the button shows it.
@@ -319,7 +319,7 @@ impl CommitForm {
 
     /// Why the commit, or the amend's last message, failed, if either did. Not whether it's been
     /// pushed: that only decides the warning, and doesn't stop amending.
-    pub fn error(&self, cx: &App) -> Option<QueryError> {
+    pub fn error(&self, cx: &App) -> Option<DataError> {
         self.commit.read(cx).error().cloned().or_else(|| {
             self.last_message(cx)
                 .and_then(Loaded::error)
@@ -848,7 +848,7 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let form = render_form(cx, 0, Some("a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"));
-        form.fakes.messages.once(Err(QueryError::msg("log failed")));
+        form.fakes.messages.once(Err(DataError::msg("log failed")));
         form.click("amend", cx);
         let error = form.form.read_with(cx, |form, cx| form.error(cx));
         assert_eq!(error.unwrap().message(), "log failed");
@@ -922,7 +922,7 @@ mod tests {
         let form = render_form(cx, 1, Some("a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"));
         form.fakes
             .pushed_to
-            .once(Err(QueryError::msg("for-each-ref failed")));
+            .once(Err(DataError::msg("for-each-ref failed")));
         form.click("amend", cx);
         assert_eq!(
             form.fields(cx).0,

@@ -123,7 +123,7 @@ mod tests {
     use crate::components::repository::test_support::{
         changed, fake_git, repository_id, set_stashes, set_status, setup, stash, status,
     };
-    use crate::data::QueryError;
+    use crate::data::DataError;
     use crate::data::git::{GitTask, RepositoryGit};
 
     /// What the buttons were asked to do, and what settles the stash under way.
@@ -131,8 +131,8 @@ mod tests {
     struct Calls {
         stashes: RefCell<usize>,
         pops: RefCell<Vec<String>>,
-        finish_stash: RefCell<Option<oneshot::Sender<Result<(), QueryError>>>>,
-        pop_answer: RefCell<Option<QueryError>>,
+        finish_stash: RefCell<Option<oneshot::Sender<Result<(), DataError>>>>,
+        pop_answer: RefCell<Option<DataError>>,
     }
 
     impl RepositoryGit for Calls {
@@ -216,7 +216,7 @@ mod tests {
         let _dir = setup(cx);
         let calls = Rc::new(Calls::default());
         *calls.pop_answer.borrow_mut() =
-            Some(QueryError::msg("Popping the stash caused conflicts."));
+            Some(DataError::msg("Popping the stash caused conflicts."));
         let (window, buttons) = {
             let id = repository_id();
             set_status(&id, changed(status(), 2), cx);
@@ -230,7 +230,7 @@ mod tests {
             buttons
                 .pop_button(cx)
                 .shown_failure()
-                .map(QueryError::message)
+                .map(DataError::message)
         });
         assert_eq!(
             failure.as_deref(),

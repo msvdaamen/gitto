@@ -17,7 +17,7 @@ use super::line_picker::{LineStaging, StageLines};
 use crate::data::staging::{
     FileToStage, LinesToStage, StageAction, stage_file_mutation, stage_lines_mutation,
 };
-use crate::data::{Mutation, QueryError};
+use crate::data::{DataError, Mutation};
 use gitto_ui::git::diff_source::{DiffSource, is_uncommitted};
 
 /// Stages, or unstages, a file's lines; resolves to the patch they leave.
@@ -58,7 +58,7 @@ impl FileStaging {
         let view = cx.entity().downgrade();
         let stage: StageLines = Rc::new(move |from, lines, cx: &mut App| {
             view.update(cx, |view, cx| view.stage_lines(from, lines, cx))
-                .unwrap_or_else(|_| Task::ready(Err(QueryError::msg("The file was closed."))))
+                .unwrap_or_else(|_| Task::ready(Err(DataError::msg("The file was closed."))))
         });
         let subscriptions = [
             cx.observe(&stage_lines, |_, _, cx| cx.notify()),
@@ -130,7 +130,7 @@ impl FileDiffView {
         from: String,
         lines: LineSelection,
         cx: &mut Context<Self>,
-    ) -> Task<Result<(), QueryError>> {
+    ) -> Task<Result<(), DataError>> {
         let key = self.view.file_key();
         self.staging.error = None;
         let input = LinesToStage {
@@ -156,7 +156,7 @@ impl FileDiffView {
                     });
                     return Err(error);
                 }
-                Err(_) => return Err(QueryError::msg("The lines weren't staged.")),
+                Err(_) => return Err(DataError::msg("The lines weren't staged.")),
             };
             let _ = this.update(cx, |this, cx| {
                 // The patch staged from stays on show until the one they leave is highlighted;

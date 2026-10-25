@@ -1,22 +1,22 @@
-//! Why loading something, or changing a repository, failed: [`QueryError`].
+//! Why loading something, or changing a repository, failed: [`DataError`].
 
 use std::sync::Arc;
 
 use gitto_git::{ApiCode, ApiError};
 
 /// Why a load, or a change, failed: shared, so every view showing it has the same one.
-/// Usually git's [`ApiError`] (see [`QueryError::api`]).
+/// Usually git's [`ApiError`] (see [`DataError::api`]).
 #[derive(Clone)]
-pub struct QueryError(Arc<dyn std::error::Error + Send + Sync>);
+pub struct DataError(Arc<dyn std::error::Error + Send + Sync>);
 
-impl QueryError {
+impl DataError {
     pub fn new(error: impl std::error::Error + Send + Sync + 'static) -> Self {
-        QueryError(Arc::new(error))
+        DataError(Arc::new(error))
     }
 
     /// An error that's only its message, e.g. a test's.
     pub fn msg(message: impl Into<String>) -> Self {
-        QueryError::new(Message(message.into()))
+        DataError::new(Message(message.into()))
     }
 
     /// What the user is told.
@@ -36,54 +36,54 @@ impl QueryError {
 }
 
 /// The same error, not merely one that says the same.
-impl PartialEq for QueryError {
+impl PartialEq for DataError {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
 }
 
-impl std::fmt::Debug for QueryError {
+impl std::fmt::Debug for DataError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Debug::fmt(&*self.0, f)
     }
 }
 
-impl std::fmt::Display for QueryError {
+impl std::fmt::Display for DataError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&*self.0, f)
     }
 }
 
-impl From<ApiError> for QueryError {
+impl From<ApiError> for DataError {
     fn from(error: ApiError) -> Self {
-        QueryError::new(error)
+        DataError::new(error)
     }
 }
 
 /// As the API shows it (see `ApiError`), for git's errors that didn't come through a `GitRepo`
 /// method.
-impl From<gitto_git::Error> for QueryError {
+impl From<gitto_git::Error> for DataError {
     fn from(error: gitto_git::Error) -> Self {
-        QueryError::new(ApiError::from(error))
+        DataError::new(ApiError::from(error))
     }
 }
 
-impl From<gitto_repository::Error> for QueryError {
+impl From<gitto_repository::Error> for DataError {
     fn from(error: gitto_repository::Error) -> Self {
-        QueryError::new(error)
+        DataError::new(error)
     }
 }
 
-impl From<std::io::Error> for QueryError {
+impl From<std::io::Error> for DataError {
     fn from(error: std::io::Error) -> Self {
-        QueryError::new(error)
+        DataError::new(error)
     }
 }
 
 /// With its causes (`{:#}`), which its `Display` alone leaves out.
-impl From<anyhow::Error> for QueryError {
+impl From<anyhow::Error> for DataError {
     fn from(error: anyhow::Error) -> Self {
-        QueryError::msg(format!("{error:#}"))
+        DataError::msg(format!("{error:#}"))
     }
 }
 

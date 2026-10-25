@@ -812,7 +812,7 @@ mod tests {
         set_stashes, set_status, set_worktrees, setup_with, uncommitted,
     };
     use crate::components::repository::toolbar::RepositoryToolbar;
-    use crate::data::QueryError;
+    use crate::data::DataError;
     use crate::data::branch::{Merge, NewBranchFrom, Rebase};
     use crate::data::changes::{POP, POP_PICKED};
     use crate::data::git::{GitTask, RepositoryGit};
@@ -831,7 +831,7 @@ mod tests {
         calls: RefCell<Vec<T>>,
         hold: Cell<bool>,
         fail: RefCell<Option<String>>,
-        pending: RefCell<Vec<oneshot::Sender<Result<R, QueryError>>>>,
+        pending: RefCell<Vec<oneshot::Sender<Result<R, DataError>>>>,
     }
 
     impl<T: Clone + 'static, R: Clone + Send + 'static> Fake<T, R> {
@@ -847,7 +847,7 @@ mod tests {
         fn run(&self, input: T, done: R) -> GitTask<R> {
             self.calls.borrow_mut().push(input);
             if let Some(message) = self.fail.borrow().clone() {
-                return async move { Err(QueryError::msg(message)) }.boxed();
+                return async move { Err(DataError::msg(message)) }.boxed();
             }
             if self.hold.get() {
                 let (sender, receiver) = oneshot::channel();
@@ -984,12 +984,12 @@ mod tests {
     }
 
     impl RepositorySource for Source {
-        fn list(&self) -> BoxFuture<'static, Result<Vec<Repository>, QueryError>> {
+        fn list(&self) -> BoxFuture<'static, Result<Vec<Repository>, DataError>> {
             let list = self.list.borrow().clone();
             async move { Ok(list) }.boxed()
         }
 
-        fn add(&self, path: PathBuf) -> BoxFuture<'static, Result<Repository, QueryError>> {
+        fn add(&self, path: PathBuf) -> BoxFuture<'static, Result<Repository, DataError>> {
             let path = path.to_string_lossy().into_owned();
             let opened = repository(&repository_id(), &path);
             self.open
@@ -998,12 +998,12 @@ mod tests {
                 .boxed()
         }
 
-        fn remove(&self, _: String) -> BoxFuture<'static, Result<(), QueryError>> {
-            async { Err(QueryError::msg("Not in this test.")) }.boxed()
+        fn remove(&self, _: String) -> BoxFuture<'static, Result<(), DataError>> {
+            async { Err(DataError::msg("Not in this test.")) }.boxed()
         }
 
-        fn reorder(&self, _: Vec<String>) -> BoxFuture<'static, Result<(), QueryError>> {
-            async { Err(QueryError::msg("Not in this test.")) }.boxed()
+        fn reorder(&self, _: Vec<String>) -> BoxFuture<'static, Result<(), DataError>> {
+            async { Err(DataError::msg("Not in this test.")) }.boxed()
         }
     }
 

@@ -894,7 +894,7 @@ mod tests {
     use crate::components::repository::test_support::repository_entity;
     use crate::data::diff::{ChangedFiles, FilesOf};
     use crate::data::staging::{FileToStage, LinesToStage};
-    use crate::data::{Loaded, Mutation, Opaque, QueryError};
+    use crate::data::{DataError, Loaded, Mutation, Opaque};
 
     fn id() -> RepositoryId {
         RepositoryId::parse("01890a5d-ac96-774b-bcce-b302099a8057").unwrap()
@@ -1016,7 +1016,7 @@ mod tests {
         }
     }
 
-    type Respond<I, R> = Box<dyn FnMut(&I, &mut App) -> Task<Result<R, QueryError>>>;
+    type Respond<I, R> = Box<dyn FnMut(&I, &mut App) -> Task<Result<R, DataError>>>;
 
     /// A mutation a test makes up: it records its inputs, and does what `respond` says.
     struct Fake<I: 'static, R: 'static> {
@@ -1029,7 +1029,7 @@ mod tests {
         fn new(cx: &mut TestAppContext) -> Self {
             let calls: Rc<RefCell<Vec<I>>> = Rc::default();
             let respond: Rc<RefCell<Respond<I, R>>> = Rc::new(RefCell::new(Box::new(|_, _| {
-                Task::ready(Err(QueryError::msg("No reply set.")))
+                Task::ready(Err(DataError::msg("No reply set.")))
             })));
             let mutation = cx.update(|cx| {
                 let calls = Rc::clone(&calls);
@@ -1051,7 +1051,7 @@ mod tests {
 
         fn respond(
             &self,
-            respond: impl FnMut(&I, &mut App) -> Task<Result<R, QueryError>> + 'static,
+            respond: impl FnMut(&I, &mut App) -> Task<Result<R, DataError>> + 'static,
         ) {
             *self.respond.borrow_mut() = Box::new(respond);
         }
@@ -1148,7 +1148,7 @@ mod tests {
             patch: &str,
             lines: LineSelection,
             cx: &mut TestAppContext,
-        ) -> Rc<RefCell<Option<Result<(), QueryError>>>> {
+        ) -> Rc<RefCell<Option<Result<(), DataError>>>> {
             let staging = self.staging(cx).expect("lines can be staged");
             let result = Rc::new(RefCell::new(None));
             let done = Rc::clone(&result);
@@ -1612,7 +1612,7 @@ mod tests {
         source: DiffSource,
         file: ChangedFile,
         left: String,
-    ) -> impl FnMut(&LinesToStage, &mut App) -> Task<Result<String, QueryError>> + 'static {
+    ) -> impl FnMut(&LinesToStage, &mut App) -> Task<Result<String, DataError>> + 'static {
         move |_, cx| {
             if gitto_ui::git::patch::has_hunks(&left) {
                 set_patch_in(&source, &file, &left, cx);
@@ -1761,7 +1761,7 @@ mod tests {
             let (send, receive) = oneshot::channel();
             senders.borrow_mut().push_back(send);
             cx.background_spawn(
-                async move { receive.await.map_err(|_| QueryError::msg("Dropped.")) },
+                async move { receive.await.map_err(|_| DataError::msg("Dropped.")) },
             )
         });
 
@@ -1845,7 +1845,7 @@ mod tests {
                 &changed_line("a.txt", "saved"),
                 cx,
             );
-            Task::ready(Err(QueryError::msg(message)))
+            Task::ready(Err(DataError::msg(message)))
         });
 
         let result = opened.stage(&changed_line("a.txt", "new a.txt"), lines(), cx);
@@ -1883,7 +1883,7 @@ mod tests {
 
     // Staging the whole file.
 
-    fn staged_whole() -> impl FnMut(&FileToStage, &mut App) -> Task<Result<(), QueryError>> {
+    fn staged_whole() -> impl FnMut(&FileToStage, &mut App) -> Task<Result<(), DataError>> {
         |_, _| Task::ready(Ok(()))
     }
 
@@ -1957,7 +1957,7 @@ mod tests {
         let opened = open(DiffSource::Unstaged, counted("a.txt"), cx);
         opened
             .whole
-            .respond(|_, _| Task::ready(Err(QueryError::msg("The index is locked."))));
+            .respond(|_, _| Task::ready(Err(DataError::msg("The index is locked."))));
 
         opened.click("stage-file", cx);
         assert_eq!(

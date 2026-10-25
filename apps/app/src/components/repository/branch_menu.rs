@@ -632,7 +632,7 @@ mod tests {
         click_label, conflicted, fake_git, has_dialog, repository_id, set_operation, set_refs,
         set_remotes, set_status, set_worktrees, setup, status, uncommitted, with_conflicts,
     };
-    use crate::data::QueryError;
+    use crate::data::DataError;
     use crate::data::git::{GitTask, RepositoryGit};
 
     /// A sidebar's row for each branch, with its menu.
@@ -749,7 +749,7 @@ mod tests {
             let now = self.now.borrow().clone();
             async move {
                 now.map(|status| StatusReply::Status(Box::new(status)))
-                    .ok_or(QueryError::msg("Unchanged."))
+                    .ok_or(DataError::msg("Unchanged."))
             }
             .boxed()
         }

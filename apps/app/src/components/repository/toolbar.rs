@@ -19,7 +19,7 @@ use crate::components::ui::{Divider, FailurePopover, Icon, IconButton, IconName,
 use crate::data::changes::{DELETE_BRANCH, MERGE, PULL_BRANCH, REBASE, SWITCH};
 use crate::data::remote::fetch_mutation;
 use crate::data::repositories::find;
-use crate::data::{AppData, AppPart, Changed, Mutation, Part, QueryError, Repository, Shown};
+use crate::data::{AppData, AppPart, Changed, DataError, Mutation, Part, Repository, Shown};
 use crate::theme::PaletteExt as _;
 use crate::views::repository::MEDIUM;
 
@@ -84,7 +84,7 @@ impl BranchChangeKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FailureOrder {
     order: Vec<BranchChangeKind>,
-    errors: Vec<(BranchChangeKind, Option<QueryError>)>,
+    errors: Vec<(BranchChangeKind, Option<DataError>)>,
 }
 
 impl Default for FailureOrder {
@@ -101,7 +101,7 @@ impl Default for FailureOrder {
 
 impl FailureOrder {
     /// Takes in each change's error now (`error_of`), putting first one that failed since.
-    pub fn update(&mut self, error_of: impl Fn(BranchChangeKind) -> Option<QueryError>) {
+    pub fn update(&mut self, error_of: impl Fn(BranchChangeKind) -> Option<DataError>) {
         for (kind, last) in &mut self.errors {
             let error = error_of(*kind);
             if error != *last {
@@ -115,7 +115,7 @@ impl FailureOrder {
     }
 
     /// The failure to show: the last to fail of those that still have an error.
-    pub fn shown(&self) -> Option<(BranchChangeKind, QueryError)> {
+    pub fn shown(&self) -> Option<(BranchChangeKind, DataError)> {
         self.order.iter().find_map(|kind| {
             self.errors
                 .iter()
@@ -265,7 +265,7 @@ impl RepositoryToolbar {
     }
 
     /// The failure the current branch shows, if any.
-    pub fn branch_failure(&self) -> Option<(BranchChangeKind, QueryError)> {
+    pub fn branch_failure(&self) -> Option<(BranchChangeKind, DataError)> {
         self.failures.shown()
     }
 
@@ -521,7 +521,7 @@ mod tests {
     #[derive(Default)]
     struct Fetches {
         calls: RefCell<Vec<RepositoryId>>,
-        settle: RefCell<Option<oneshot::Sender<Result<(), QueryError>>>>,
+        settle: RefCell<Option<oneshot::Sender<Result<(), DataError>>>>,
     }
 
     fn render(
@@ -555,7 +555,7 @@ mod tests {
                         let (settle, settled) = oneshot::channel();
                         *fetches.settle.borrow_mut() = Some(settle);
                         cx.background_spawn(async move {
-                            settled.await.unwrap_or(Err(QueryError::msg("dropped")))
+                            settled.await.unwrap_or(Err(DataError::msg("dropped")))
                         })
                     },
                     cx,
@@ -608,7 +608,7 @@ mod tests {
 
         let settle = fetches.settle.borrow_mut().take().unwrap();
         settle
-            .send(Err(QueryError::msg("Could not resolve host: example.com")))
+            .send(Err(DataError::msg("Could not resolve host: example.com")))
             .unwrap();
         cx.run_until_parked();
         let shown = fetch_button(&toolbar, cx);
@@ -638,11 +638,11 @@ mod tests {
 
         impl RepositoryGit for Failing {
             fn merge_branch(&self, _: BranchRef, _: NonEmpty) -> GitTask<MergeOutcome> {
-                async { Err(QueryError::msg("Merge conflict.")) }.boxed()
+                async { Err(DataError::msg("Merge conflict.")) }.boxed()
             }
 
             fn delete_branch(&self, _: BranchRef) -> GitTask<()> {
-                async { Err(QueryError::msg("Not fully merged.")) }.boxed()
+                async { Err(DataError::msg("Not fully merged.")) }.boxed()
             }
         }
 
@@ -676,8 +676,8 @@ mod tests {
 
     #[test]
     fn puts_the_change_that_failed_last_first() {
-        let diverged = QueryError::msg("Diverged.");
-        let local_changes = QueryError::msg("Local changes.");
+        let diverged = DataError::msg("Diverged.");
+        let local_changes = DataError::msg("Local changes.");
         let mut order = FailureOrder::default();
         assert!(order.shown().is_none());
         order.update(|kind| (kind == BranchChangeKind::Pull).then(|| diverged.clone()));

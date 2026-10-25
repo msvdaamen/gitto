@@ -28,7 +28,7 @@ use super::app_data::{AppData, AppPart};
 use super::branch::{Merge, NewBranchFrom, Rebase};
 use super::commit::{NewCommit, Reword};
 use super::conflicts::ConflictResolution;
-use super::error::QueryError;
+use super::error::DataError;
 use super::git::GitTask;
 use super::repository::{Changed, Part, Repository};
 use super::staging::{DiscardTarget, StageAction, StagingTarget};
@@ -41,7 +41,7 @@ use gitto_ui::git::status::{branch_name, is_checked_out};
 
 /// What a change resolves to, once it's done: told to the view that started it, if it's still
 /// there.
-pub type Done<R = ()> = Option<oneshot::Receiver<Result<R, QueryError>>>;
+pub type Done<R = ()> = Option<oneshot::Receiver<Result<R, DataError>>>;
 
 pub const PULL: &str = "pull";
 pub const PULL_BRANCH: &str = "pull-branch";
@@ -106,7 +106,7 @@ impl Repository {
         &mut self,
         action: GitTask<R>,
         cx: &mut Context<Self>,
-    ) -> Task<Result<R, QueryError>> {
+    ) -> Task<Result<R, DataError>> {
         let action = cx.background_spawn(action);
         cx.spawn(async move |this, cx| {
             let result = action.await;
@@ -158,7 +158,7 @@ impl Repository {
 
     /// Fetches every remote (`useFetch`), then reloads the repository: the watcher would catch the
     /// new remote refs too, but reloading right away feels snappier. A view's own change.
-    pub fn fetch(&mut self, cx: &mut Context<Self>) -> Task<Result<(), QueryError>> {
+    pub fn fetch(&mut self, cx: &mut Context<Self>) -> Task<Result<(), DataError>> {
         let fetch = self.git().fetch();
         self.reloading(fetch, cx)
     }
@@ -178,7 +178,7 @@ impl Repository {
     fn change_branches<R: 'static>(
         &mut self,
         name: &'static str,
-        work: impl FnOnce(&mut Self, &mut Context<Self>) -> Task<Result<R, QueryError>>,
+        work: impl FnOnce(&mut Self, &mut Context<Self>) -> Task<Result<R, DataError>>,
         cx: &mut Context<Self>,
     ) -> Done<R> {
         if self.branches_changing() {
@@ -326,14 +326,14 @@ impl Repository {
         is_up_to_date: impl FnOnce(&T) -> bool + 'static,
         up_to_date: String,
         cx: &mut Context<Self>,
-    ) -> Task<Result<T, QueryError>> {
+    ) -> Task<Result<T, DataError>> {
         let action = cx.background_spawn(action);
         cx.spawn(async move |this, cx| {
             let outcome = action.await;
             if let Ok(outcome) = &outcome
                 && is_up_to_date(outcome)
             {
-                return Err(QueryError::msg(up_to_date));
+                return Err(DataError::msg(up_to_date));
             }
             if let Ok(reloading) = this.update(cx, |repository, cx| repository.reload_all(cx)) {
                 reloading.await;
@@ -472,7 +472,7 @@ impl Repository {
                         if let Some(reloaded) = reloaded {
                             let _ = reloaded.await;
                         }
-                        Ok::<_, QueryError>(())
+                        Ok::<_, DataError>(())
                     }
                     .await;
                     if let Ok(reloading) =
@@ -553,7 +553,7 @@ impl Repository {
         &mut self,
         commit: NewCommit,
         cx: &mut Context<Self>,
-    ) -> Task<Result<(), QueryError>> {
+    ) -> Task<Result<(), DataError>> {
         let git = self.git().clone();
         let parsed = Message::parse(commit.message)
             .and_then(|message| Ok((message, commit.amend.map(FullSha::parse).transpose()?)));
@@ -567,7 +567,7 @@ impl Repository {
         &mut self,
         reword: Reword,
         cx: &mut Context<Self>,
-    ) -> Task<Result<String, QueryError>> {
+    ) -> Task<Result<String, DataError>> {
         let git = self.git().clone();
         let parsed =
             FullSha::parse(reword.sha).and_then(|sha| Ok((sha, Message::parse(reword.message)?)));
@@ -581,7 +581,7 @@ impl Repository {
         &mut self,
         action: GitTask<R>,
         cx: &mut Context<Self>,
-    ) -> Task<Result<R, QueryError>> {
+    ) -> Task<Result<R, DataError>> {
         let action = cx.background_spawn(action);
         cx.spawn(async move |this, cx| {
             let result = action.await;
@@ -613,7 +613,7 @@ impl Repository {
         &mut self,
         action: GitTask<()>,
         cx: &mut Context<Self>,
-    ) -> Task<Result<(), QueryError>> {
+    ) -> Task<Result<(), DataError>> {
         let action = cx.background_spawn(action);
         cx.spawn(async move |this, cx| {
             action.await?;
@@ -631,7 +631,7 @@ impl Repository {
         &mut self,
         action: GitTask<()>,
         cx: &mut Context<Self>,
-    ) -> Task<Result<(), QueryError>> {
+    ) -> Task<Result<(), DataError>> {
         let action = cx.background_spawn(action);
         cx.spawn(async move |this, cx| {
             let result = action.await;
@@ -645,7 +645,7 @@ impl Repository {
         &mut self,
         target: StagingTarget,
         cx: &mut Context<Self>,
-    ) -> Task<Result<(), QueryError>> {
+    ) -> Task<Result<(), DataError>> {
         let git = self.git().clone();
         let action = match target {
             StagingTarget::All => git.stage_all(),
@@ -661,7 +661,7 @@ impl Repository {
         &mut self,
         target: StagingTarget,
         cx: &mut Context<Self>,
-    ) -> Task<Result<(), QueryError>> {
+    ) -> Task<Result<(), DataError>> {
         let git = self.git().clone();
         let action = match target {
             StagingTarget::All => git.unstage_all(),
@@ -679,7 +679,7 @@ impl Repository {
         &mut self,
         target: DiscardTarget,
         cx: &mut Context<Self>,
-    ) -> Task<Result<(), QueryError>> {
+    ) -> Task<Result<(), DataError>> {
         let action = match target {
             DiscardTarget::All => self.git().discard_all(),
             DiscardTarget::File { side, file } => self.git().discard(Discarded {
@@ -698,7 +698,7 @@ impl Repository {
         action: StageAction,
         paths: Vec<String>,
         cx: &mut Context<Self>,
-    ) -> Task<Result<(), QueryError>> {
+    ) -> Task<Result<(), DataError>> {
         let git = self.git().clone();
         let action = self.checked(Paths::parse(paths), |paths| match action {
             StageAction::Stage => git.stage(paths),
@@ -721,7 +721,7 @@ impl Repository {
         version: String,
         lines: gitto_git::features::staging::schema::LineSelection,
         cx: &mut Context<Self>,
-    ) -> Task<Result<String, QueryError>> {
+    ) -> Task<Result<String, DataError>> {
         let path = file.path.clone();
         let input = FileInput {
             path: file.path.clone(),
@@ -783,7 +783,7 @@ impl Repository {
         path: String,
         resolution: ConflictResolution,
         cx: &mut Context<Self>,
-    ) -> Task<Result<(), QueryError>> {
+    ) -> Task<Result<(), DataError>> {
         let git = self.git().clone();
         let action = self.checked(NonEmpty::parse(path), |path| match resolution {
             ConflictResolution::Keep {

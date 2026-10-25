@@ -12,17 +12,17 @@ use std::rc::Rc;
 use futures::channel::oneshot;
 use gpui_kit::{App, AppContext as _, Context, Entity, Task};
 
-use super::error::QueryError;
+use super::error::DataError;
 
 /// Runs a mutation with its input, on the main thread; its task runs the slow part on the
 /// background executor, and settles once what it reloads is reloaded, if it waits for that.
-pub type RunMutation<I, R> = Rc<dyn Fn(I, &mut App) -> Task<Result<R, QueryError>>>;
+pub type RunMutation<I, R> = Rc<dyn Fn(I, &mut App) -> Task<Result<R, DataError>>>;
 
 /// A change, and the state of its last run (see the module's doc).
 pub struct Mutation<I, R = ()> {
     run: RunMutation<I, R>,
     pending: bool,
-    error: Option<QueryError>,
+    error: Option<DataError>,
     input: Option<I>,
     /// Counts the runs and resets, so a run that settles after another started, or after a
     /// reset, leaves the state alone.
@@ -32,7 +32,7 @@ pub struct Mutation<I, R = ()> {
 impl<I: Clone + 'static, R: 'static> Mutation<I, R> {
     /// The mutation `run` does.
     pub fn new(
-        run: impl Fn(I, &mut App) -> Task<Result<R, QueryError>> + 'static,
+        run: impl Fn(I, &mut App) -> Task<Result<R, DataError>> + 'static,
         cx: &mut App,
     ) -> Entity<Self> {
         cx.new(|_| Mutation {
@@ -51,7 +51,7 @@ impl<I: Clone + 'static, R: 'static> Mutation<I, R> {
         &mut self,
         input: I,
         cx: &mut Context<Self>,
-    ) -> oneshot::Receiver<Result<R, QueryError>> {
+    ) -> oneshot::Receiver<Result<R, DataError>> {
         self.generation += 1;
         let generation = self.generation;
         self.pending = true;
@@ -82,7 +82,7 @@ impl<I: Clone + 'static, R: 'static> Mutation<I, R> {
     }
 
     /// Why its last run failed, if it did.
-    pub fn error(&self) -> Option<&QueryError> {
+    pub fn error(&self) -> Option<&DataError> {
         self.error.as_ref()
     }
 
@@ -115,7 +115,7 @@ mod tests {
     use super::*;
 
     /// What finishes each run, in turn.
-    type Finishes = Rc<RefCell<Vec<oneshot::Sender<Result<u32, QueryError>>>>>;
+    type Finishes = Rc<RefCell<Vec<oneshot::Sender<Result<u32, DataError>>>>>;
 
     /// A mutation whose runs finish when the test says.
     fn mutation(cx: &mut TestAppContext) -> (Entity<Mutation<&'static str, u32>>, Finishes) {
@@ -146,7 +146,7 @@ mod tests {
 
         let finish = finishes.borrow_mut().remove(0);
         finish
-            .send(Err(QueryError::msg("Nothing to commit.")))
+            .send(Err(DataError::msg("Nothing to commit.")))
             .unwrap();
         cx.run_until_parked();
         mutation.read_with(cx, |mutation, _| {
@@ -169,7 +169,7 @@ mod tests {
         let second = mutation.update(cx, |mutation, cx| mutation.mutate("b", cx));
 
         let first = finishes.borrow_mut().remove(0);
-        first.send(Err(QueryError::msg("Stale."))).unwrap();
+        first.send(Err(DataError::msg("Stale."))).unwrap();
         cx.run_until_parked();
         mutation.read_with(cx, |mutation, _| {
             assert!(mutation.is_pending());

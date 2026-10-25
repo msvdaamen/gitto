@@ -41,7 +41,7 @@ use crate::data::branch::{Merge, NewBranchFrom, Rebase};
 use crate::data::commit::Reword;
 use crate::data::diff::{ChangedFiles, FilesOf};
 use crate::data::git::{GitTask, RepositoryGit};
-use crate::data::{Opaque, Part, QueryError};
+use crate::data::{DataError, Opaque, Part};
 use gitto_git::features::history::commands::Page;
 use gitto_git::features::status::schema::StatusReply;
 use gitto_git::input::{BranchName, BranchRef, FullSha, Message, NonEmpty};
@@ -104,7 +104,7 @@ fn on_main(sha: &str, staged: u64) -> Uncommitted {
 }
 
 /// How a rewording goes: the commit it makes, and the log and HEAD after it; or why it fails.
-type RewordOutcome = Result<(String, Vec<Commit>, Uncommitted), QueryError>;
+type RewordOutcome = Result<(String, Vec<Commit>, Uncommitted), DataError>;
 
 /// The repository's git, made up: what it has (its log, which it reads pages of, its status, its
 /// stashes…), and what the table and the menus asked it to do.
@@ -153,7 +153,7 @@ impl RepositoryGit for Calls {
     fn status(&self, _: Option<String>) -> GitTask<StatusReply> {
         let status = self.status.borrow().clone();
         async move {
-            let status = status.ok_or_else(|| QueryError::msg("No status in this test."))?;
+            let status = status.ok_or_else(|| DataError::msg("No status in this test."))?;
             Ok(StatusReply::Status(Box::new(status)))
         }
         .boxed()
@@ -198,7 +198,7 @@ impl RepositoryGit for Calls {
             .reword
             .borrow_mut()
             .take()
-            .unwrap_or_else(|| Err(QueryError::msg("Not in this test.")));
+            .unwrap_or_else(|| Err(DataError::msg("Not in this test.")));
         // The repository reloads once it's reworded: to this log and HEAD.
         let outcome = outcome.map(|(sha, log, status)| {
             *self.log.borrow_mut() = log;
@@ -1024,7 +1024,7 @@ fn stays_open_with_the_edits_if_rewording_fails_saying_why(cx: &mut TestAppConte
         cx,
     );
     let message = "The last commit changed before it could be amended, so nothing was amended.";
-    *history.calls.reword.borrow_mut() = Some(Err(QueryError::msg(message)));
+    *history.calls.reword.borrow_mut() = Some(Err(DataError::msg(message)));
 
     history.edit_message_of("e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5", cx);
     history.type_text("!", cx);

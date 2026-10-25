@@ -38,7 +38,7 @@ use super::patch_viewer::{
 use super::viewer_rows::{ExpandDirection, SeparatorButtons, expand};
 use super::viewer_runtime::{HIGHLIGHT_WAIT, SharedHighlights, ViewHighlights, ViewerRuntime};
 use crate::components::ui::{Icon, IconName};
-use crate::data::QueryError;
+use crate::data::DataError;
 use crate::theme::{Palette, PaletteExt as _};
 
 /// How resolving the file on show is going.
@@ -66,7 +66,7 @@ pub struct DiskFile {
 }
 
 /// Writes `contents` over the file at `version`; resolves to its new version.
-pub type SaveFile = Rc<dyn Fn(String, String, &mut App) -> Task<Result<String, QueryError>>>;
+pub type SaveFile = Rc<dyn Fn(String, String, &mut App) -> Task<Result<String, DataError>>>;
 
 /// What the conflict viewer tells the file's view.
 #[derive(Debug, Clone, PartialEq)]

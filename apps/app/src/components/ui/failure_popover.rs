@@ -10,7 +10,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::{Anchor, App, ElementId, FontWeight, SharedString, Window, div};
 
 use super::icons::{Icon, IconName};
-use crate::data::QueryError;
+use crate::data::DataError;
 use crate::theme::{PaletteExt as _, mixed};
 
 type OnDismiss = Rc<dyn Fn(&mut Window, &mut App) + 'static>;
@@ -24,7 +24,7 @@ pub struct FailurePopover<T: Selectable + IntoElement + 'static> {
     id: ElementId,
     /// The action, e.g. "Pull".
     title: SharedString,
-    error: Option<QueryError>,
+    error: Option<DataError>,
     on_dismiss: Option<OnDismiss>,
     trigger: T,
 }
@@ -33,7 +33,7 @@ impl<T: Selectable + IntoElement + 'static> FailurePopover<T> {
     pub fn new(
         id: impl Into<ElementId>,
         title: impl Into<SharedString>,
-        error: Option<QueryError>,
+        error: Option<DataError>,
         trigger: T,
     ) -> Self {
         FailurePopover {

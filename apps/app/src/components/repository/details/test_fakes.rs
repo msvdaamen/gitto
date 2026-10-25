@@ -26,7 +26,7 @@ use gpui_kit::{
 };
 
 use crate::components::repository::test_support::fake_git;
-use crate::data::QueryError;
+use crate::data::DataError;
 use crate::data::commit::NewCommit;
 use crate::data::git::{GitTask, RepositoryGit};
 use crate::data::staging::{DiscardTarget, StagingTarget};
@@ -42,12 +42,12 @@ pub fn other_repository_id() -> RepositoryId {
 
 /// How a call is answered: at once, or when the test sends the answer.
 enum Answer<T> {
-    Now(Result<T, QueryError>),
-    Later(oneshot::Receiver<Result<T, QueryError>>),
+    Now(Result<T, DataError>),
+    Later(oneshot::Receiver<Result<T, DataError>>),
 }
 
 /// What a call is answered when the test lined nothing up, by what it was asked with.
-type DefaultAnswer<T> = Box<dyn Fn(&str) -> Result<T, QueryError>>;
+type DefaultAnswer<T> = Box<dyn Fn(&str) -> Result<T, DataError>>;
 
 /// The answers to one kind of call: the ones the test lined up, in turn, then the default's. Keeps
 /// what each was asked with.
@@ -58,7 +58,7 @@ pub struct Answers<T> {
 }
 
 impl<T: Send + 'static> Answers<T> {
-    pub fn new(default: impl Fn(&str) -> Result<T, QueryError> + 'static) -> Self {
+    pub fn new(default: impl Fn(&str) -> Result<T, DataError> + 'static) -> Self {
         Answers {
             queue: RefCell::new(VecDeque::new()),
             default: Box::new(default),
@@ -67,12 +67,12 @@ impl<T: Send + 'static> Answers<T> {
     }
 
     /// The next call is answered `result`.
-    pub fn once(&self, result: Result<T, QueryError>) {
+    pub fn once(&self, result: Result<T, DataError>) {
         self.queue.borrow_mut().push_back(Answer::Now(result));
     }
 
     /// The next call is answered with what's sent on the sender returned.
-    pub fn later(&self) -> oneshot::Sender<Result<T, QueryError>> {
+    pub fn later(&self) -> oneshot::Sender<Result<T, DataError>> {
         let (send, receive) = oneshot::channel();
         self.queue.borrow_mut().push_back(Answer::Later(receive));
         send
@@ -83,14 +83,14 @@ impl<T: Send + 'static> Answers<T> {
         self.calls.borrow().clone()
     }
 
-    fn answer(&self, asked: &str) -> BoxFuture<'static, Result<T, QueryError>> {
+    fn answer(&self, asked: &str) -> BoxFuture<'static, Result<T, DataError>> {
         self.calls.borrow_mut().push(asked.to_owned());
         match self.queue.borrow_mut().pop_front() {
             Some(Answer::Now(result)) => async move { result }.boxed(),
             Some(Answer::Later(answer)) => async move {
                 answer
                     .await
-                    .unwrap_or_else(|_| Err(QueryError::msg("Never answered.")))
+                    .unwrap_or_else(|_| Err(DataError::msg("Never answered.")))
             }
             .boxed(),
             None => {

@@ -24,7 +24,7 @@ use crate::components::ui::{
 };
 use crate::data::conflicts::{ConflictResolution, FileToResolve, resolve_file_mutation};
 use crate::data::keyed::Hold;
-use crate::data::{Loaded, Mutation, QueryError, Repositories, Repository};
+use crate::data::{DataError, Loaded, Mutation, Repositories, Repository};
 use crate::theme::PaletteExt as _;
 use gitto_ui::git::diff_source::DiffSource;
 
@@ -50,7 +50,7 @@ pub struct FileResolution {
     /// How many times the file on show has been read, and why it last couldn't be, as last
     /// synced.
     reads: u64,
-    load_error: Option<QueryError>,
+    load_error: Option<DataError>,
     /// After editing, the file is read again before it's shown: what was read before is of the
     /// edits saved so far, not the last. The reads there were when editing stopped.
     read_after: Option<u64>,
@@ -201,7 +201,7 @@ impl FileDiffView {
         let view = cx.entity().downgrade();
         let save: SaveFile = Rc::new(move |contents, version, cx| {
             view.update(cx, |view, cx| view.save_conflict(contents, version, cx))
-                .unwrap_or_else(|_| Task::ready(Err(QueryError::msg("The file was closed."))))
+                .unwrap_or_else(|_| Task::ready(Err(DataError::msg("The file was closed."))))
         });
         let viewer = cx.new(|cx| ConflictViewer::new(save, cx));
         cx.subscribe(&viewer, |this, _, event, cx| {
@@ -413,7 +413,7 @@ impl FileDiffView {
         contents: String,
         version: String,
         cx: &mut Context<Self>,
-    ) -> Task<Result<String, QueryError>> {
+    ) -> Task<Result<String, DataError>> {
         let id = self.view.repository_id().clone();
         let path = self.view.file().path;
         let io = self.editing.io();
@@ -971,7 +971,7 @@ mod tests {
         let _dir = init(cx);
         let opened = open_conflict(MARKERS, cx);
         opened.tree.reply(|_| {
-            Err(QueryError::msg(
+            Err(DataError::msg(
                 "a.txt was changed on disk since you started editing it.",
             ))
         });

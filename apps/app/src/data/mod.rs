@@ -81,7 +81,7 @@ pub mod worktree;
 
 pub use self::app_data::{AppChanged, AppData, AppPart};
 pub use self::changes::Done;
-pub use self::error::QueryError;
+pub use self::error::DataError;
 pub use self::loaded::Loaded;
 pub use self::mutation::Mutation;
 pub use self::opaque::Opaque;

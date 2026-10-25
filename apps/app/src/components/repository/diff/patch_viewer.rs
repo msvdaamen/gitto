@@ -1468,7 +1468,7 @@ mod tests {
     use gpui_kit::{AppContext as _, TestAppContext};
 
     use super::*;
-    use crate::data::QueryError;
+    use crate::data::DataError;
 
     const PATCH: &str = "diff --git a/f.txt b/f.txt\nindex 1111111..2222222 100644\n--- a/f.txt\n+++ b/f.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+TWO\n";
 
@@ -1476,7 +1476,7 @@ mod tests {
     fn stage_button_on_hover(staging: Option<LineStaging>, cx: &mut TestAppContext) -> bool {
         let _dir = crate::test_support::init(cx, |services| services);
         let load_file: LoadFile =
-            Rc::new(|_, _, _| Task::ready(Err(QueryError::msg("Not read in tests."))));
+            Rc::new(|_, _, _| Task::ready(Err(DataError::msg("Not read in tests."))));
         let (window, viewer) =
             crate::test_support::open(cx, |_, cx| PatchViewer::new(load_file, cx));
         cx.update(|cx| {

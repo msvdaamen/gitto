@@ -274,7 +274,7 @@ mod tests {
 
     use super::*;
     use crate::data::git::{GitTask, RepositoryGit};
-    use crate::data::{Part, QueryError};
+    use crate::data::{DataError, Part};
     use crate::test_support;
 
     /// A repository's git that counts how many times it's asked for the status, which it can't
@@ -285,7 +285,7 @@ mod tests {
     impl RepositoryGit for Statuses {
         fn status(&self, _: Option<String>) -> GitTask<StatusReply> {
             self.0.set(self.0.get() + 1);
-            async { Err(QueryError::msg("No git.")) }.boxed()
+            async { Err(DataError::msg("No git.")) }.boxed()
         }
     }
 
