@@ -349,14 +349,12 @@ pub(crate) fn nul_separated(output: &str) -> Vec<String> {
 /// `files` in a sentence: "a.txt", "a.txt and b.txt", or "a.txt and 3 other files".
 pub fn list(files: &[String]) -> String {
     match files {
+        // No caller asks for none: git names the files, or the caller checks it found some. TS
+        // words it "undefined and -1 other files".
+        [] => "the files".to_owned(),
         [first] => first.clone(),
         [first, second] => format!("{first} and {second}"),
-        // As TS words none, which no caller asks for.
-        _ => format!(
-            "{} and {} other files",
-            files.first().map_or("undefined", String::as_str),
-            files.len() as i64 - 1
-        ),
+        [first, ..] => format!("{first} and {} other files", files.len() - 1),
     }
 }
 
@@ -1479,5 +1477,13 @@ mod tests {
             ),
             "Rebasing onto side would overwrite the untracked file m.txt. Move or remove it, then rebase."
         );
+    }
+
+    #[test]
+    fn lists_files_in_a_sentence() {
+        assert_eq!(list(&names(&[])), "the files");
+        assert_eq!(list(&names(&["a"])), "a");
+        assert_eq!(list(&names(&["a", "b"])), "a and b");
+        assert_eq!(list(&names(&["a", "b", "c"])), "a and 2 other files");
     }
 }
