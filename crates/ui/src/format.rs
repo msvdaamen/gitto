@@ -1,11 +1,9 @@
 //! Ported from `lib/format.ts`.
 
-use crate::js;
-
 /// Up to two letters for an avatar: `AL` for "Ada Lovelace", `AD` for "ada".
 pub fn initials(name: &str) -> String {
     let mut words = name
-        .split(|c: char| js::is_whitespace(c) || matches!(c, '.' | '_' | '-'))
+        .split(|c: char| c.is_whitespace() || matches!(c, '.' | '_' | '-'))
         .filter(|word| !word.is_empty());
     let first = words.next();
     let last = words.next_back();
@@ -82,7 +80,7 @@ pub fn relative_time(timestamp: i64, now: i64) -> String {
     let diff = timestamp - now;
     for (unit, size) in TIME_UNITS {
         if diff.abs() >= size {
-            return format_relative(js::round(diff as f64 / size as f64) as i64, unit);
+            return format_relative((diff as f64 / size as f64).round() as i64, unit);
         }
     }
     "Just now".to_owned()
@@ -127,9 +125,15 @@ pub fn compact_count(count: u64) -> String {
     if count < 1000 {
         return count.to_string();
     }
-    let thousands = js::to_fixed(count as f64 / 1000.0, if count < 10_000 { 1 } else { 0 });
-    let thousands = thousands.strip_suffix(".0").unwrap_or(&thousands);
-    format!("{thousands}k")
+    if count >= 10_000 {
+        return format!("{}k", (count + 500) / 1000);
+    }
+    // Under 10k, to a tenth of a thousand, rounded halves up.
+    let tenths = (count + 50) / 100;
+    match tenths % 10 {
+        0 => format!("{}k", tenths / 10),
+        tenth => format!("{}.{tenth}k", tenths / 10),
+    }
 }
 
 #[cfg(test)]
