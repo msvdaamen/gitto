@@ -4,6 +4,7 @@
 use gitto_git::features::conflicts::schema::{Conflict, ConflictSide, ConflictSides, Side};
 use gitto_git::features::operation::schema::Operation;
 
+use super::short_sha;
 use crate::js;
 
 /// What one side of a conflict has at the file's path.
@@ -71,17 +72,10 @@ pub fn describe_side(side: Option<&ConflictSide>) -> String {
     };
     match side_kind(side) {
         SideKind::Link => "A symbolic link".to_owned(),
-        SideKind::Submodule => format!("A submodule at {}", prefix(&side.oid, 7)),
+        SideKind::Submodule => format!("A submodule at {}", short_sha(&side.oid)),
         SideKind::File if side.mode == "100755" => "An executable file".to_owned(),
         SideKind::File => "A file".to_owned(),
     }
-}
-
-/// The first `chars` characters of `text`, as `slice(0, chars)` takes them of a SHA.
-fn prefix(text: &str, chars: usize) -> &str {
-    text.char_indices()
-        .nth(chars)
-        .map_or(text, |(end, _)| &text[..end])
 }
 
 /// The button that keeps a side whole: "Keep ours", or "Delete, as theirs does".
