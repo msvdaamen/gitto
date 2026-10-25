@@ -20,22 +20,20 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use gitto_git::features::branch::schema::{MergeOutcome, RebaseOutcome};
 use gitto_git::features::diff::schema::ChangedFile;
-use gitto_git::features::operation::schema::Operation;
-use gitto_git::features::refs::schema::{Ref, RefKind};
+use gitto_git::features::refs::schema::RefKind;
 use gitto_git::features::remote::remote_name::remote_of;
-use gitto_git::features::status::schema::{Head, StatusSummary, Uncommitted};
+use gitto_git::features::status::schema::Head;
 use gitto_git::features::worktree::schema::Worktree;
 use gitto_git::input::RepositoryId;
 use gitto_ui::git::status::{branch_name, head_label, is_checked_out};
 use gitto_ui::git::worktree::{can_open_worktree, tracking_branches, worktree_on};
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, EventEmitter, Global, SharedString, Subscription, Task,
-    WeakEntity, Window,
+    App, AppContext as _, Context, Entity, EventEmitter, Global, SharedString, Task, WeakEntity,
+    Window,
 };
 
 use super::BeforeChange;
@@ -44,55 +42,16 @@ use super::create_branch_dialog::CreateBranchDialog;
 use super::delete_branch_dialog::{BranchDeletion, Unpushed, open_delete_branch_dialog};
 use super::row_menu::RowMenu;
 use crate::components::ui::{IconName, context_menu_item};
-use crate::data::branch::{
-    BranchChange, Merge, Rebase, branches_changing, delete_branch_operation,
-    merge_branch_operation, rebase_branch_operation,
-};
-use crate::data::progress::operation_in_progress_query;
-use crate::data::refs::refs_query;
-use crate::data::remote::{PullOperation, pull_branch_operation, pull_operation, remotes_query};
-use crate::data::status::{first_conflicted_file, status_query};
-use crate::data::worktree::{open_worktree_operation, worktrees_query};
-use crate::data::{Opaque, Operations, Query, RepositoryOperation};
+use crate::data::branch::{Merge, Rebase};
+use crate::data::changes::{OPEN_WORKTREE, PULL, PULL_BRANCH};
+use crate::data::status::{first_to_resolve, select_conflicted};
+use crate::data::{Done, Part, Repository, Shown};
 
 /// What the branch menus ask of the page.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BranchMenuEvent {
     /// Opens a conflicted file's conflicts: a merge or rebase stopped at them.
     Resolve(ChangedFile),
-}
-
-/// The operations the branch menus run: the data layer's, or a test's.
-#[derive(Clone)]
-pub struct BranchActions {
-    pub merge: BranchChange<Merge, MergeOutcome>,
-    pub rebase: BranchChange<Rebase, RebaseOutcome>,
-    pub delete: BranchChange<String>,
-    pub pull: PullOperation,
-    /// Pulls a branch that isn't checked out, by its short name.
-    pub pull_branch: RepositoryOperation<String>,
-    /// Opens a worktree, by its path.
-    pub open_worktree: RepositoryOperation<String>,
-}
-
-impl BranchActions {
-    /// The data layer's.
-    pub fn new() -> Self {
-        BranchActions {
-            merge: merge_branch_operation(),
-            rebase: rebase_branch_operation(),
-            delete: delete_branch_operation(),
-            pull: pull_operation(),
-            pull_branch: pull_branch_operation(),
-            open_worktree: open_worktree_operation(),
-        }
-    }
-}
-
-impl Default for BranchActions {
-    fn default() -> Self {
-        BranchActions::new()
-    }
 }
 
 /// The window's current provider, for the menus in the sidebar and the history to find.
@@ -111,20 +70,13 @@ impl Global for CurrentBranchMenu {}
 /// branches (a switch, a merge, a deletion…) is running; the toolbar's current branch shows those
 /// running, and why they failed.
 pub struct BranchMenuProvider {
-    repository_id: RepositoryId,
-    status: Query<Opaque<Uncommitted>, StatusSummary>,
-    operation: Query<Option<Operation>>,
-    worktrees: Query<Arc<[Worktree]>>,
-    refs: Query<Arc<[Ref]>>,
-    remotes: Query<Vec<String>>,
-    actions: BranchActions,
+    repository: Shown,
     create: Entity<CreateBranchDialog>,
     add_worktree: Entity<AddWorktreeDialog>,
     before_change: Option<BeforeChange>,
     menu: RowMenu,
     /// Whether the dialog asking before deleting a branch is open: it's of this repository.
     asking_delete: Rc<Cell<bool>>,
-    _subscriptions: Vec<Subscription>,
 }
 
 impl EventEmitter<BranchMenuEvent> for BranchMenuProvider {}
@@ -135,19 +87,12 @@ impl BranchMenuProvider {
     pub fn new(repository_id: RepositoryId, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let create = cx.new(|cx| CreateBranchDialog::new(repository_id.clone(), window, cx));
         let add_worktree = cx.new(|cx| AddWorktreeDialog::new(repository_id.clone(), window, cx));
-        BranchMenuProvider::with(
-            repository_id,
-            BranchActions::new(),
-            create,
-            add_worktree,
-            cx,
-        )
+        BranchMenuProvider::with(repository_id, create, add_worktree, cx)
     }
 
-    /// With `actions`, and the dialogs: a test's.
+    /// With the dialogs: a test's.
     pub(crate) fn with(
         repository_id: RepositoryId,
-        actions: BranchActions,
         create: Entity<CreateBranchDialog>,
         add_worktree: Entity<AddWorktreeDialog>,
         cx: &mut Context<Self>,
@@ -155,19 +100,12 @@ impl BranchMenuProvider {
         let current = cx.entity().downgrade();
         cx.set_global(CurrentBranchMenu(current));
         BranchMenuProvider {
-            status: status_query(&repository_id, cx),
-            operation: operation_in_progress_query(&repository_id, cx),
-            worktrees: worktrees_query(&repository_id, cx),
-            refs: refs_query(&repository_id, cx),
-            remotes: remotes_query(&repository_id, cx),
-            repository_id,
-            actions,
+            repository: Shown::new(&repository_id, PARTS, cx),
             create,
             add_worktree,
             before_change: None,
             menu: RowMenu::default(),
             asking_delete: Rc::default(),
-            _subscriptions: vec![cx.observe_global::<Operations>(|_, cx| cx.notify())],
         }
     }
 
@@ -177,8 +115,8 @@ impl BranchMenuProvider {
             .and_then(|current| current.0.upgrade())
     }
 
-    pub fn repository_id(&self) -> &RepositoryId {
-        &self.repository_id
+    pub fn repository_id<'a>(&self, cx: &'a App) -> &'a RepositoryId {
+        self.repository.id(cx)
     }
 
     /// Of another repository: a menu open for one of this one's branches closes, and so do the
@@ -189,15 +127,9 @@ impl BranchMenuProvider {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.repository_id == repository_id {
+        if !self.repository.set(&repository_id, cx) {
             return;
         }
-        self.status = status_query(&repository_id, cx);
-        self.operation = operation_in_progress_query(&repository_id, cx);
-        self.worktrees = worktrees_query(&repository_id, cx);
-        self.refs = refs_query(&repository_id, cx);
-        self.remotes = remotes_query(&repository_id, cx);
-        self.repository_id = repository_id.clone();
         self.menu.close(cx);
         if self.asking_delete.replace(false) {
             use gpui_kit::component::WindowExt as _;
@@ -209,7 +141,6 @@ impl BranchMenuProvider {
         self.add_worktree.update(cx, |dialog, cx| {
             dialog.set_repository(repository_id, window, cx)
         });
-        cx.notify();
     }
 
     /// What merging or rebasing waits for, as they rewrite files in the working tree: the edits
@@ -236,128 +167,30 @@ impl BranchMenuProvider {
     /// to open the worktree the branch is checked out in, rather than switching to it, which git
     /// refuses. The worktrees' section in the sidebar shows it running, and why it failed.
     pub fn open_worktree(&mut self, path: String, cx: &mut Context<Self>) {
-        let _ = self
-            .actions
-            .open_worktree
-            .run(&self.repository_id, path, cx);
+        self.repository.update(cx, |repository, cx| {
+            drop(repository.open_worktree(path, cx))
+        });
     }
 
     /// Whether a worktree is being opened.
     pub fn is_opening_worktree(&self, cx: &App) -> bool {
-        self.actions
-            .open_worktree
-            .state(&self.repository_id, cx)
+        self.repository
+            .read(cx)
+            .operation_state(OPEN_WORKTREE)
             .running
     }
 
-    fn head(&self) -> Option<Head> {
-        self.status.data().map(|status| status.head)
-    }
-
-    /// The branch to merge into, or to rebase: the one checked out; `None` with HEAD detached.
-    fn target_branch(&self) -> Option<String> {
-        match self.head()? {
-            Head::Detached { .. } => None,
-            Head::Branch { name, .. } | Head::Unborn { name } => Some(name),
-        }
-    }
-
-    /// Whether a branch can be merged into the checked-out one, or that one rebased onto it.
-    fn may_integrate(&self, cx: &App) -> bool {
-        let conflicted = self
-            .status
-            .data()
-            .is_some_and(|status| status.counts.conflicted > 0);
-        self.target_branch().is_some()
-            && !conflicted
-            && self.operation.data() == Some(None)
-            && !branches_changing(&self.repository_id, cx)
-    }
-
-    /// Whether the local branch `reference` is checked out here.
-    fn checked_out_here(&self, reference: &str) -> bool {
-        self.head()
-            .is_some_and(|head| is_checked_out(&head, reference))
-    }
-
-    /// Whether the local branch `reference` can be pulled from here: it tracks another, and is
-    /// checked out here or in no worktree.
-    fn is_pullable(&self, reference: &str) -> bool {
-        let tracks = self.refs.data().is_some_and(|refs| {
-            refs.iter()
-                .any(|r| r.full_name == reference && r.upstream.is_some())
-        });
-        let worktrees = self.worktrees.data();
-        tracks
-            && (self.checked_out_here(reference)
-                || worktree_on(worktrees.as_deref(), reference).is_none())
-    }
-
-    /// Whether the local branch `reference` is checked out, here or in another worktree.
-    fn is_checked_out(&self, reference: &str) -> bool {
-        let worktrees = self.worktrees.data();
-        self.checked_out_here(reference) || worktree_on(worktrees.as_deref(), reference).is_some()
-    }
-
-    /// The other worktree the branch is checked out in, if one that can be opened is.
-    fn worktree_of(&self, branch: &str) -> Option<Worktree> {
-        let worktrees = self.worktrees.data();
-        worktree_on(worktrees.as_deref(), branch)
-            .filter(|worktree| can_open_worktree(worktree))
-            .cloned()
+    /// The repository's data, for what the menus work out from it.
+    fn shown<'a>(&self, cx: &'a App) -> Branches<'a> {
+        Branches(self.repository.read(cx))
     }
 
     /// What deleting the branch `reference` deletes with it, or keeps; `None` if git won't delete
     /// it, as it, or a local branch tracking it, is checked out, or until that's known: the
     /// branches, the status and the worktrees have loaded. Until then, the dialog couldn't say
     /// which local branches go with a remote one.
-    pub fn deletion(&self, reference: &str) -> Option<BranchDeletion> {
-        let all = self.refs.data()?;
-        self.status.data()?;
-        self.worktrees.data()?;
-        if !reference.starts_with("refs/remotes/") {
-            if self.is_checked_out(reference) {
-                return None;
-            }
-            let branch = all.iter().find(|r| r.full_name == reference);
-            // Its remote branch, if it tracks one that's there, rather than another local one.
-            let upstream = branch.and_then(|branch| branch.upstream.clone());
-            let remote = all.iter().any(|candidate| {
-                candidate.kind == RefKind::Remote && Some(&candidate.name) == upstream.as_ref()
-            });
-            return Some(BranchDeletion::Local {
-                reference: reference.to_owned(),
-                upstream: if remote { upstream } else { None },
-                ahead: if remote {
-                    branch.map_or(0, |branch| branch.ahead)
-                } else {
-                    0
-                },
-            });
-        }
-        let tracking = tracking_branches(&all, reference);
-        if tracking
-            .iter()
-            .any(|local| self.is_checked_out(&local.full_name))
-        {
-            return None;
-        }
-        // Taken to be there until the remotes have loaded, so it isn't played down.
-        let on_remote = self
-            .remotes
-            .data()
-            .is_none_or(|remotes| remote_of(&remotes, branch_name(reference)).is_some());
-        Some(BranchDeletion::Remote {
-            reference: reference.to_owned(),
-            on_remote,
-            tracking: tracking
-                .iter()
-                .map(|local| Unpushed {
-                    name: local.name.clone(),
-                    ahead: local.ahead,
-                })
-                .collect(),
-        })
+    pub fn deletion(&self, reference: &str, cx: &App) -> Option<BranchDeletion> {
+        self.shown(cx).deletion(reference)
     }
 
     /// Begins creating a branch from `from`, by its full ref name, asking for the new one's name.
@@ -379,8 +212,7 @@ impl BranchMenuProvider {
 
     /// Begins deleting a branch, asking first. The toolbar shows it running, and why it failed.
     pub fn delete_branch(&mut self, deletion: BranchDeletion, window: &mut Window, cx: &mut App) {
-        let delete = self.actions.delete.clone();
-        let id = self.repository_id.clone();
+        let delete = self.repository.entity().clone();
         self.asking_delete.set(true);
         let (deleting, cancelled) = (
             Rc::clone(&self.asking_delete),
@@ -390,7 +222,10 @@ impl BranchMenuProvider {
             deletion,
             move |deletion, _, cx| {
                 deleting.set(false);
-                let _ = delete.run(&id, deletion.reference().to_owned(), cx);
+                let reference = deletion.reference().to_owned();
+                delete.update(cx, |repository, cx| {
+                    drop(repository.delete_branch(reference, cx))
+                });
             },
             move |_, _| cancelled.set(false),
             window,
@@ -402,39 +237,37 @@ impl BranchMenuProvider {
     /// any other by fast-forwarding it to its upstream. The toolbar shows it running, and why it
     /// failed.
     pub fn pull(&mut self, reference: &str, cx: &mut Context<Self>) {
-        if self.checked_out_here(reference) {
-            let _ = self.actions.pull.pull(&self.repository_id, cx);
-        } else {
-            let _ = self.actions.pull_branch.run(
-                &self.repository_id,
-                branch_name(reference).to_owned(),
-                cx,
-            );
-        }
+        let here = self.shown(cx).checked_out_here(reference);
+        let branch = branch_name(reference).to_owned();
+        self.repository.update(cx, |repository, cx| {
+            if here {
+                drop(repository.pull(cx));
+            } else {
+                drop(repository.pull_branch(branch, cx));
+            }
+        });
     }
 
     /// Whether the branch `reference` is being pulled: the checked-out one, or another.
     fn is_pulling(&self, reference: &str, cx: &App) -> bool {
-        if self.checked_out_here(reference) {
-            self.actions.pull.state(&self.repository_id, cx).running
+        let shown = self.shown(cx);
+        let name = if shown.checked_out_here(reference) {
+            PULL
         } else {
-            self.actions
-                .pull_branch
-                .state(&self.repository_id, cx)
-                .running
-        }
+            PULL_BRANCH
+        };
+        shown.0.operation_state(name).running
     }
 
     /// Merges the branch `reference`, by its full ref name, into the checked-out one, once the
     /// edits to a file on show are saved; if it stops at conflicts, opens the first conflicted
     /// file.
     pub fn merge(&mut self, reference: String, cx: &mut Context<Self>) {
-        let Some(into) = self.target_branch() else {
+        let Some(into) = self.shown(cx).target_branch() else {
             return;
         };
-        let merge = self.actions.merge.clone();
         self.integrate(
-            move |id, cx| merge.run(id, Merge { reference, into }, cx),
+            move |repository, cx| repository.merge(Merge { reference, into }, cx),
             |outcome: &MergeOutcome| *outcome == MergeOutcome::Conflicts,
             cx,
         );
@@ -443,12 +276,11 @@ impl BranchMenuProvider {
     /// Rebases the checked-out branch onto the branch `reference`, by its full ref name, as
     /// merging does.
     pub fn rebase(&mut self, reference: String, cx: &mut Context<Self>) {
-        let Some(branch) = self.target_branch() else {
+        let Some(branch) = self.shown(cx).target_branch() else {
             return;
         };
-        let rebase = self.actions.rebase.clone();
         self.integrate(
-            move |id, cx| rebase.run(id, Rebase { reference, branch }, cx),
+            move |repository, cx| repository.rebase(Rebase { reference, branch }, cx),
             |outcome: &RebaseOutcome| *outcome == RebaseOutcome::Conflicts,
             cx,
         );
@@ -458,16 +290,11 @@ impl BranchMenuProvider {
     /// at conflicts (`conflicts` says), opens the first conflicted file.
     fn integrate<O: 'static>(
         &mut self,
-        run: impl FnOnce(
-            &RepositoryId,
-            &mut App,
-        ) -> Option<
-            futures::channel::oneshot::Receiver<Result<O, crate::data::QueryError>>,
-        > + 'static,
+        run: impl FnOnce(&mut Repository, &mut Context<Repository>) -> Done<O> + 'static,
         conflicts: fn(&O) -> bool,
         cx: &mut Context<Self>,
     ) {
-        let id = self.repository_id.clone();
+        let id = self.repository.id(cx).clone();
         let saved = match &self.before_change {
             Some(before_change) => before_change(cx),
             None => Task::ready(true),
@@ -478,10 +305,10 @@ impl BranchMenuProvider {
                 return;
             }
             let Ok(Some(done)) = this.update(cx, |this, cx| {
-                if this.repository_id != id {
+                if this.repository.id(cx) != &id {
                     return None;
                 }
-                run(&id, cx)
+                this.repository.update(cx, run)
             }) else {
                 return;
             };
@@ -492,11 +319,11 @@ impl BranchMenuProvider {
                 return;
             }
             let _ = this.update(cx, |this, cx| {
-                if this.repository_id != id {
+                if this.repository.id(cx) != &id {
                     return;
                 }
-                // The status has reloaded by now (see `merge_branch_operation`).
-                if let Some(file) = first_conflicted_file(&id, cx) {
+                // The status has reloaded by now (see `Repository::merge`).
+                if let Some(file) = this.shown(cx).first_conflicted() {
                     cx.emit(BranchMenuEvent::Resolve(file));
                 }
             });
@@ -518,7 +345,8 @@ impl BranchMenuProvider {
             cx,
         );
         let provider = this.read(cx);
-        let busy = branches_changing(&provider.repository_id, cx);
+        let shown = provider.shown(cx);
+        let busy = shown.0.branches_changing();
         let short = branch_name(&branch).to_owned();
         let mut menu = menu.item(context_menu_item(
             IconName::GitBranchPlus,
@@ -533,10 +361,10 @@ impl BranchMenuProvider {
                 }
             },
         ));
-        if let Some(head) = provider.head()
+        if let Some(head) = shown.head()
             && !is_checked_out(&head, &branch)
         {
-            let may_integrate = provider.may_integrate(cx);
+            let may_integrate = shown.may_integrate();
             let head = head_label(&head).to_owned();
             menu = menu
                 .item(context_menu_item(
@@ -566,7 +394,7 @@ impl BranchMenuProvider {
                     },
                 ));
         }
-        if provider.is_pullable(&branch) {
+        if shown.is_pullable(&branch) {
             menu = menu.item(context_menu_item(
                 IconName::Download,
                 format!("Pull {short}"),
@@ -578,7 +406,7 @@ impl BranchMenuProvider {
                 },
             ));
         }
-        menu = match provider.worktree_of(&branch) {
+        menu = match shown.worktree_of(&branch) {
             Some(worktree) => menu.item(context_menu_item(
                 IconName::FolderOpen,
                 format!("Open worktree {}", worktree.name),
@@ -606,7 +434,7 @@ impl BranchMenuProvider {
                 },
             )),
         };
-        let deletion = provider.deletion(&branch);
+        let deletion = shown.deletion(&branch);
         menu.item(context_menu_item(
             IconName::Trash,
             format!("Delete {short}…"),
@@ -620,6 +448,137 @@ impl BranchMenuProvider {
                 }
             },
         ))
+    }
+}
+
+/// What the branch menus show of the repository.
+const PARTS: &[Part] = &[
+    Part::Status,
+    Part::Operation,
+    Part::Worktrees,
+    Part::Refs,
+    Part::Remotes,
+    Part::Operations,
+];
+
+/// The repository's data, for what the branch menus work out from it.
+struct Branches<'a>(&'a Repository);
+
+impl Branches<'_> {
+    fn head(&self) -> Option<Head> {
+        self.0.status().data().map(|status| status.head.clone())
+    }
+
+    fn worktrees(&self) -> Option<&[Worktree]> {
+        self.0.worktrees().data().map(|worktrees| &worktrees[..])
+    }
+
+    /// The branch to merge into, or to rebase: the one checked out; `None` with HEAD detached.
+    fn target_branch(&self) -> Option<String> {
+        match self.head()? {
+            Head::Detached { .. } => None,
+            Head::Branch { name, .. } | Head::Unborn { name } => Some(name),
+        }
+    }
+
+    /// Whether a branch can be merged into the checked-out one, or that one rebased onto it.
+    fn may_integrate(&self) -> bool {
+        let conflicted = self
+            .0
+            .status()
+            .data()
+            .is_some_and(|status| status.counts.conflicted > 0);
+        self.target_branch().is_some()
+            && !conflicted
+            && self.0.operation().data() == Some(&None)
+            && !self.0.branches_changing()
+    }
+
+    /// The conflicted file to open first: one with markers left, if any is.
+    fn first_conflicted(&self) -> Option<ChangedFile> {
+        let status = self.0.status().data()?;
+        first_to_resolve(&select_conflicted(status)).cloned()
+    }
+
+    /// Whether the local branch `reference` is checked out here.
+    fn checked_out_here(&self, reference: &str) -> bool {
+        self.head()
+            .is_some_and(|head| is_checked_out(&head, reference))
+    }
+
+    /// Whether the local branch `reference` can be pulled from here: it tracks another, and is
+    /// checked out here or in no worktree.
+    fn is_pullable(&self, reference: &str) -> bool {
+        let tracks = self.0.refs().data().is_some_and(|refs| {
+            refs.iter()
+                .any(|r| r.full_name == reference && r.upstream.is_some())
+        });
+        tracks
+            && (self.checked_out_here(reference)
+                || worktree_on(self.worktrees(), reference).is_none())
+    }
+
+    /// Whether the local branch `reference` is checked out, here or in another worktree.
+    fn is_checked_out(&self, reference: &str) -> bool {
+        self.checked_out_here(reference) || worktree_on(self.worktrees(), reference).is_some()
+    }
+
+    /// The other worktree the branch is checked out in, if one that can be opened is.
+    fn worktree_of(&self, branch: &str) -> Option<Worktree> {
+        worktree_on(self.worktrees(), branch)
+            .filter(|worktree| can_open_worktree(worktree))
+            .cloned()
+    }
+
+    /// See [`BranchMenuProvider::deletion`].
+    fn deletion(&self, reference: &str) -> Option<BranchDeletion> {
+        let all = self.0.refs().data()?;
+        self.0.status().data()?;
+        self.0.worktrees().data()?;
+        if !reference.starts_with("refs/remotes/") {
+            if self.is_checked_out(reference) {
+                return None;
+            }
+            let branch = all.iter().find(|r| r.full_name == reference);
+            // Its remote branch, if it tracks one that's there, rather than another local one.
+            let upstream = branch.and_then(|branch| branch.upstream.clone());
+            let remote = all.iter().any(|candidate| {
+                candidate.kind == RefKind::Remote && Some(&candidate.name) == upstream.as_ref()
+            });
+            return Some(BranchDeletion::Local {
+                reference: reference.to_owned(),
+                upstream: if remote { upstream } else { None },
+                ahead: if remote {
+                    branch.map_or(0, |branch| branch.ahead)
+                } else {
+                    0
+                },
+            });
+        }
+        let tracking = tracking_branches(all, reference);
+        if tracking
+            .iter()
+            .any(|local| self.is_checked_out(&local.full_name))
+        {
+            return None;
+        }
+        // Taken to be there until the remotes have loaded, so it isn't played down.
+        let on_remote = self
+            .0
+            .remotes()
+            .data()
+            .is_none_or(|remotes| remote_of(remotes, branch_name(reference)).is_some());
+        Some(BranchDeletion::Remote {
+            reference: reference.to_owned(),
+            on_remote,
+            tracking: tracking
+                .iter()
+                .map(|local| Unpushed {
+                    name: local.name.clone(),
+                    ahead: local.ahead,
+                })
+                .collect(),
+        })
     }
 }
 
@@ -658,19 +617,23 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use gitto_git::features::status::schema::Head;
+    use futures::FutureExt as _;
+    use gitto_git::features::operation::schema::Operation;
+    use gitto_git::features::refs::schema::Ref;
+    use gitto_git::features::status::schema::{Head, StatusReply, Uncommitted};
+    use gitto_git::input::{BranchRef, NonEmpty};
     use gpui_kit::component::menu::ContextMenuExt as _;
     use gpui_kit::prelude::*;
     use gpui_kit::test::{TestSupportExt as _, TestWindowExt as _};
-    use gpui_kit::{AnyWindowHandle, IntoElement, Render, TestAppContext, div};
+    use gpui_kit::{AnyWindowHandle, IntoElement, Render, Subscription, TestAppContext, div};
 
     use super::*;
     use crate::components::repository::test_support::{
-        click_label, conflicted, has_dialog, repository_id, set_operation, set_refs, set_remotes,
-        set_status, set_worktrees, setup, status, uncommitted, with_conflicts,
+        click_label, conflicted, fake_git, has_dialog, repository_id, set_operation, set_refs,
+        set_remotes, set_status, set_worktrees, setup, status, uncommitted, with_conflicts,
     };
     use crate::data::QueryError;
-    use crate::data::remote::PullOperation;
+    use crate::data::git::{GitTask, RepositoryGit};
 
     /// A sidebar's row for each branch, with its menu.
     struct Host {
@@ -749,55 +712,46 @@ mod tests {
         merge_outcome: RefCell<Option<MergeOutcome>>,
         /// The status as the merge leaves it, which the repository reloads.
         after_merge: RefCell<Option<Uncommitted>>,
+        /// The status as it is, once it's been merged.
+        now: RefCell<Option<Uncommitted>>,
     }
 
-    fn actions(calls: &Rc<Calls>) -> BranchActions {
-        let never = |name: &'static str| {
-            RepositoryOperation::new(name, |_, _: String, cx: &mut App| {
-                cx.background_spawn(async { Err(QueryError::msg("Not in this test.")) })
-            })
-        };
-        BranchActions {
-            merge: BranchChange::new(RepositoryOperation::new("merge", {
-                let calls = Rc::clone(calls);
-                move |id: RepositoryId, input: Merge, cx: &mut App| {
-                    calls.merges.borrow_mut().push(input);
-                    if let Some(status) = calls.after_merge.borrow_mut().take() {
-                        crate::data::QueryClient::set_data(
-                            &crate::data::keys::status(&id),
-                            Opaque::new(status),
-                            cx,
-                        );
-                    }
-                    let outcome = calls.merge_outcome.borrow_mut().take();
-                    cx.background_spawn(async move { Ok(outcome.unwrap_or(MergeOutcome::Merged)) })
-                }
-            })),
-            rebase: BranchChange::new(RepositoryOperation::new(
-                "rebase",
-                |_, _: Rebase, cx: &mut App| {
-                    cx.background_spawn(async { Ok(RebaseOutcome::Rebased) })
-                },
-            )),
-            delete: BranchChange::new(RepositoryOperation::new("delete-branch", {
-                let calls = Rc::clone(calls);
-                move |_, reference: String, cx: &mut App| {
-                    calls.deletes.borrow_mut().push(reference);
-                    cx.background_spawn(async { Ok(()) })
-                }
-            })),
-            pull: PullOperation::with_operation(RepositoryOperation::new(
-                "pull",
-                |_, (), cx: &mut App| cx.background_spawn(async { Ok(()) }),
-            )),
-            pull_branch: RepositoryOperation::new("pull-branch", {
-                let calls = Rc::clone(calls);
-                move |_, branch: String, cx: &mut App| {
-                    calls.pulled_branches.borrow_mut().push(branch);
-                    cx.background_spawn(async { Ok(()) })
-                }
-            }),
-            open_worktree: never("open-worktree"),
+    /// The menus' repository's git, which records what it was asked to run.
+    impl RepositoryGit for Calls {
+        fn merge_branch(&self, reference: BranchRef, into: NonEmpty) -> GitTask<MergeOutcome> {
+            self.merges.borrow_mut().push(Merge {
+                reference: reference.as_str().to_owned(),
+                into: into.as_str().to_owned(),
+            });
+            *self.now.borrow_mut() = self.after_merge.borrow_mut().take();
+            let outcome = self.merge_outcome.borrow_mut().take();
+            async move { Ok(outcome.unwrap_or(MergeOutcome::Merged)) }.boxed()
+        }
+
+        fn delete_branch(&self, reference: BranchRef) -> GitTask<()> {
+            self.deletes
+                .borrow_mut()
+                .push(reference.as_str().to_owned());
+            async { Ok(()) }.boxed()
+        }
+
+        fn pull(&self, branch: Option<NonEmpty>) -> GitTask<()> {
+            if let Some(branch) = branch {
+                self.pulled_branches
+                    .borrow_mut()
+                    .push(branch.as_str().to_owned());
+            }
+            async { Ok(()) }.boxed()
+        }
+
+        // As the repository reloads after a merge.
+        fn status(&self, _: Option<String>) -> GitTask<StatusReply> {
+            let now = self.now.borrow().clone();
+            async move {
+                now.map(|status| StatusReply::Status(Box::new(status)))
+                    .ok_or(QueryError::msg("Unchanged."))
+            }
+            .boxed()
         }
     }
 
@@ -836,13 +790,12 @@ mod tests {
             cx,
         );
         set_remotes(&id, &["origin"], cx);
-        let actions = actions(calls);
+        fake_git(&id, calls.clone(), cx);
         let shown = id.clone();
         let (window, host) = crate::test_support::open(cx, move |window, cx| {
             let create = cx.new(|cx| CreateBranchDialog::new(shown.clone(), window, cx));
             let add = cx.new(|cx| AddWorktreeDialog::new(shown.clone(), window, cx));
-            let provider =
-                cx.new(|cx| BranchMenuProvider::with(shown.clone(), actions, create, add, cx));
+            let provider = cx.new(|cx| BranchMenuProvider::with(shown.clone(), create, add, cx));
             let resolved = Rc::new(RefCell::new(Vec::new()));
             let subscription = cx.subscribe(&provider, {
                 let resolved = Rc::clone(&resolved);
@@ -955,8 +908,8 @@ mod tests {
         // Nor pulled from here, where it isn't checked out; nor deleted.
         assert!(!items.contains(&"Pull feature".to_owned()));
         let provider = host.read_with(cx, |host, _| host.provider.clone());
-        assert!(provider.read_with(cx, |provider, _| {
-            provider.deletion("refs/heads/feature").is_none()
+        assert!(provider.read_with(cx, |provider, cx| {
+            provider.deletion("refs/heads/feature", cx).is_none()
         }));
     }
 
@@ -1018,8 +971,8 @@ mod tests {
         let (_dir, _, window, host) = render(cx, &calls);
         let provider = host.read_with(cx, |host, _| host.provider.clone());
         assert_eq!(
-            provider.read_with(cx, |provider, _| provider
-                .deletion("refs/remotes/origin/topic")),
+            provider.read_with(cx, |provider, cx| provider
+                .deletion("refs/remotes/origin/topic", cx)),
             Some(BranchDeletion::Remote {
                 reference: "refs/remotes/origin/topic".into(),
                 on_remote: true,

@@ -24,6 +24,7 @@ use gpui_kit::test::{TestEventExt as _, TestQueryExt as _};
 use gpui_kit::{AnyWindowHandle, AppContext as _, MouseButton, Pixels, Point, TestAppContext};
 use tempfile::TempDir;
 
+use crate::data::git::{NoGit, RepositoryGit};
 use crate::data::repositories::RepositorySource;
 use crate::data::{Opaque, QueryClient, QueryError, keys};
 
@@ -62,7 +63,7 @@ pub fn setup(cx: &mut TestAppContext) -> TempDir {
 }
 
 /// [`setup`], with the repository list `repositories`.
-pub fn setup_with(cx: &mut TestAppContext, repositories: Rc<Repositories>) -> TempDir {
+pub fn setup_with(cx: &mut TestAppContext, repositories: Rc<dyn RepositorySource>) -> TempDir {
     crate::test_support::init(cx, |services| services.with_repository_source(repositories))
 }
 
@@ -148,35 +149,82 @@ pub fn with_conflicts(
     status
 }
 
+/// The repository `id`'s entity, asking `NoGit` if it wasn't opened: its git fails, so only what
+/// the test gives it is shown.
+pub fn repository_entity(
+    id: &RepositoryId,
+    cx: &mut gpui_kit::App,
+) -> gpui_kit::Entity<crate::data::Repository> {
+    use crate::data::Repositories as Open;
+    Open::get(id, cx).unwrap_or_else(|| Open::insert(id, Rc::new(NoGit), cx))
+}
+
+/// Has the repository `id` ask `git`, which makes up what the test's view asks of it.
+pub fn fake_git(id: &RepositoryId, git: Rc<dyn RepositoryGit>, cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        repository_entity(id, cx).update(cx, |repository, _| repository.set_git(git));
+    });
+}
+
+/// Changes the repository `id`'s entity with `update`.
+fn update(
+    id: &RepositoryId,
+    cx: &mut TestAppContext,
+    update: impl FnOnce(&mut crate::data::Repository, &mut gpui_kit::Context<crate::data::Repository>),
+) {
+    cx.update(|cx| repository_entity(id, cx).update(cx, update));
+}
+
 pub fn set_status(id: &RepositoryId, status: Uncommitted, cx: &mut TestAppContext) {
+    update(id, cx, |repository, cx| {
+        repository.set_status(status.clone(), cx)
+    });
     cx.update(|cx| QueryClient::set_data(&keys::status(id), Opaque::new(status), cx));
 }
 
 pub fn set_stashes(id: &RepositoryId, stashes: Vec<Stash>, cx: &mut TestAppContext) {
+    update(id, cx, |repository, cx| {
+        repository.set_stashes(stashes.clone(), cx)
+    });
     let stashes: Arc<[Stash]> = stashes.into();
     cx.update(|cx| QueryClient::set_data(&keys::stashes(id), stashes, cx));
 }
 
 pub fn set_push_target(id: &RepositoryId, target: PushTarget, cx: &mut TestAppContext) {
+    update(id, cx, |repository, cx| {
+        repository.set_push_target(target.clone(), cx)
+    });
     cx.update(|cx| QueryClient::set_data(&keys::push_target(id), target, cx));
 }
 
 pub fn set_operation(id: &RepositoryId, operation: Option<Operation>, cx: &mut TestAppContext) {
+    update(id, cx, |repository, cx| {
+        repository.set_operation(operation.clone(), cx)
+    });
     cx.update(|cx| QueryClient::set_data(&keys::operation(id), operation, cx));
 }
 
 pub fn set_refs(id: &RepositoryId, refs: Vec<Ref>, cx: &mut TestAppContext) {
+    update(id, cx, |repository, cx| {
+        repository.set_refs(refs.clone(), cx)
+    });
     let refs: Arc<[Ref]> = refs.into();
     cx.update(|cx| QueryClient::set_data(&keys::refs(id), refs, cx));
 }
 
 pub fn set_worktrees(id: &RepositoryId, worktrees: Vec<Worktree>, cx: &mut TestAppContext) {
+    update(id, cx, |repository, cx| {
+        repository.set_worktrees(worktrees.clone(), cx)
+    });
     let worktrees: Arc<[Worktree]> = worktrees.into();
     cx.update(|cx| QueryClient::set_data(&keys::worktrees(id), worktrees, cx));
 }
 
 pub fn set_remotes(id: &RepositoryId, remotes: &[&str], cx: &mut TestAppContext) {
     let remotes: Vec<String> = remotes.iter().map(|remote| (*remote).to_owned()).collect();
+    update(id, cx, |repository, cx| {
+        repository.set_remotes(remotes.clone(), cx)
+    });
     cx.update(|cx| QueryClient::set_data(&keys::remotes(id), remotes, cx));
 }
 

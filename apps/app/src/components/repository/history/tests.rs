@@ -31,18 +31,19 @@ use super::columns::{keyed, part};
 use super::history_table::{HistoryEvent, HistorySources, HistoryTable};
 use super::reword_dialog::{Note, RewordMutation};
 use crate::components::repository::add_worktree_dialog::AddWorktreeDialog;
-use crate::components::repository::branch_menu::{BranchActions, BranchMenuProvider};
+use crate::components::repository::branch_menu::BranchMenuProvider;
 use crate::components::repository::create_branch_dialog::CreateBranchDialog;
 use crate::components::repository::test_support::{
-    repository_id, set_operation, set_refs, set_remotes, set_stashes, set_status, set_worktrees,
-    setup, uncommitted,
+    Repositories, fake_git, repository_id, set_operation, set_refs, set_remotes, set_stashes,
+    set_status, set_worktrees, setup_with, uncommitted,
 };
 use crate::data::branch::{BranchChange, Merge, NewBranchFrom, Rebase};
 use crate::data::commit::Reword;
 use crate::data::diff::ChangedFiles;
+use crate::data::git::{GitTask, RepositoryGit};
 use crate::data::history::GetLog;
-use crate::data::remote::PullOperation;
 use crate::data::{Mutation, Opaque, QueryClient, QueryError, RepositoryOperation, keys};
+use gitto_git::input::{BranchName, BranchRef, NonEmpty};
 
 /// A commit of the log, `sha`, with `parents`, made `committed_at`.
 fn commit(sha: &str, subject: &str, parents: &[&str], refs: Vec<CommitRef>) -> Commit {
@@ -111,7 +112,35 @@ struct Calls {
     merges: RefCell<Vec<Merge>>,
     rebases: RefCell<Vec<Rebase>>,
     created: RefCell<Vec<NewBranchFrom>>,
-    opened_worktrees: RefCell<Vec<String>>,
+}
+
+/// The repository's git, as the branch menus ask it.
+impl RepositoryGit for Calls {
+    fn merge_branch(&self, reference: BranchRef, into: NonEmpty) -> GitTask<MergeOutcome> {
+        self.merges.borrow_mut().push(Merge {
+            reference: reference.as_str().to_owned(),
+            into: into.as_str().to_owned(),
+        });
+        async { Ok(MergeOutcome::Merged) }.boxed()
+    }
+
+    fn rebase_branch(&self, reference: BranchRef, branch: NonEmpty) -> GitTask<RebaseOutcome> {
+        self.rebases.borrow_mut().push(Rebase {
+            reference: reference.as_str().to_owned(),
+            branch: branch.as_str().to_owned(),
+        });
+        async { Ok(RebaseOutcome::Rebased) }.boxed()
+    }
+
+    fn create_branch(&self, name: BranchName, from: Option<BranchRef>) -> GitTask<()> {
+        self.created.borrow_mut().push(NewBranchFrom {
+            name: name.as_str().to_owned(),
+            from: from
+                .map(|from| from.as_str().to_owned())
+                .unwrap_or_default(),
+        });
+        async { Ok(()) }.boxed()
+    }
 }
 
 /// The repository's log, which the made-up git reads pages of; and a page held back until the
@@ -186,43 +215,6 @@ fn set_status_in(id: &RepositoryId, status: Uncommitted, cx: &mut App) {
     QueryClient::set_data(&keys::status(id), Opaque::new(status), cx);
 }
 
-fn branch_actions(calls: &Rc<Calls>) -> BranchActions {
-    BranchActions {
-        merge: BranchChange::new(RepositoryOperation::new("merge", {
-            let calls = Rc::clone(calls);
-            move |_, input: Merge, cx: &mut App| {
-                calls.merges.borrow_mut().push(input);
-                cx.background_spawn(async { Ok(MergeOutcome::Merged) })
-            }
-        })),
-        rebase: BranchChange::new(RepositoryOperation::new("rebase", {
-            let calls = Rc::clone(calls);
-            move |_, input: Rebase, cx: &mut App| {
-                calls.rebases.borrow_mut().push(input);
-                cx.background_spawn(async { Ok(RebaseOutcome::Rebased) })
-            }
-        })),
-        delete: BranchChange::new(RepositoryOperation::new(
-            "delete-branch",
-            |_, _: String, cx: &mut App| cx.background_spawn(async { Ok(()) }),
-        )),
-        pull: PullOperation::with_operation(RepositoryOperation::new(
-            "pull",
-            |_, (), cx: &mut App| cx.background_spawn(async { Ok(()) }),
-        )),
-        pull_branch: RepositoryOperation::new("pull-branch", |_, _: String, cx: &mut App| {
-            cx.background_spawn(async { Ok(()) })
-        }),
-        open_worktree: RepositoryOperation::new("open-worktree", {
-            let calls = Rc::clone(calls);
-            move |_, path: String, cx: &mut App| {
-                calls.opened_worktrees.borrow_mut().push(path);
-                cx.background_spawn(async { Ok(()) })
-            }
-        }),
-    }
-}
-
 /// The page's part: the branch menus' provider, and the table, whose selection it takes. The
 /// details follow the selection with `details_follow`, and show nothing otherwise.
 struct Host {
@@ -248,6 +240,20 @@ struct Rendered {
     calls: Rc<Calls>,
     repository: Rc<Repository>,
     reword: Rc<RefCell<Option<RewordOutcome>>>,
+    /// The repositories added to Gitto: a worktree opened is added.
+    source: Rc<Repositories>,
+}
+
+impl Rendered {
+    /// The folders of the worktrees opened.
+    fn opened_worktrees(&self) -> Vec<String> {
+        self.source
+            .added
+            .borrow()
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect()
+    }
 }
 
 /// What a test starts the history with.
@@ -276,7 +282,8 @@ impl Default for Start {
 }
 
 fn render(cx: &mut TestAppContext, start: Start) -> Rendered {
-    let dir = setup(cx);
+    let source = Rc::new(Repositories::default());
+    let dir = setup_with(cx, source.clone());
     let id = repository_id();
     set_status(&id, start.status, cx);
     set_stashes(&id, start.stashes, cx);
@@ -285,6 +292,7 @@ fn render(cx: &mut TestAppContext, start: Start) -> Rendered {
     set_operation(&id, None, cx);
     set_remotes(&id, &["origin"], cx);
     let calls = Rc::new(Calls::default());
+    fake_git(&id, calls.clone(), cx);
     let repository = Rc::new(Repository::default());
     *repository.log.borrow_mut() = start.log;
     let reword = Rc::new(RefCell::new(None));
@@ -306,21 +314,10 @@ fn render(cx: &mut TestAppContext, start: Start) -> Rendered {
         }
     };
     let shown = id.clone();
-    let actions = branch_actions(&calls);
-    let created = Rc::clone(&calls);
     let (window, host) = crate::test_support::open(cx, move |window, cx| {
-        let create_branch = BranchChange::new(RepositoryOperation::new(
-            "switch",
-            move |_, input: NewBranchFrom, cx: &mut App| {
-                created.created.borrow_mut().push(input);
-                cx.background_spawn(async { Ok(()) })
-            },
-        ));
-        let create =
-            cx.new(|cx| CreateBranchDialog::with_create(shown.clone(), create_branch, window, cx));
+        let create = cx.new(|cx| CreateBranchDialog::new(shown.clone(), window, cx));
         let add = cx.new(|cx| AddWorktreeDialog::new(shown.clone(), window, cx));
-        let provider =
-            cx.new(|cx| BranchMenuProvider::with(shown.clone(), actions, create, add, cx));
+        let provider = cx.new(|cx| BranchMenuProvider::with(shown.clone(), create, add, cx));
         let sources = sources(cx);
         let table = cx.new(|cx| HistoryTable::with(shown.clone(), sources, window, cx));
         let selections = Rc::new(RefCell::new(Vec::new()));
@@ -358,6 +355,7 @@ fn render(cx: &mut TestAppContext, start: Start) -> Rendered {
         calls,
         repository,
         reword,
+        source,
     }
 }
 
@@ -1123,7 +1121,7 @@ fn creates_a_branch_from_the_one_right_clicked_handing_the_focus_back_to_the_lis
     history.choose("Create branch…", cx);
     let provider = history.host.read_with(cx, |host, _| host.provider.clone());
     let summary = provider.read_with(cx, |provider, cx| {
-        provider.create_dialog().read(cx).summary()
+        provider.create_dialog().read(cx).summary(cx)
     });
     assert_eq!(summary, "From main.");
     history.type_text("topic", cx);
@@ -1353,10 +1351,7 @@ fn opens_the_worktree_a_branch_is_checked_out_in_when_its_label_is_double_clicke
     .unwrap();
     cx.run_until_parked();
     assert!(history.calls.switched.borrow().is_empty());
-    assert_eq!(
-        *history.calls.opened_worktrees.borrow(),
-        ["/w/repo-feature"]
-    );
+    assert_eq!(history.opened_worktrees(), ["/w/repo-feature"]);
 }
 
 #[gpui_kit::test]
@@ -1365,10 +1360,7 @@ fn opens_the_worktree_a_branch_is_checked_out_in_from_its_menu(cx: &mut TestAppC
     history.hover_more("e5", cx);
     history.menu_of(history.label("e5", "refs/heads/feature"), cx);
     history.choose("Open worktree repo-feature", cx);
-    assert_eq!(
-        *history.calls.opened_worktrees.borrow(),
-        ["/w/repo-feature"]
-    );
+    assert_eq!(history.opened_worktrees(), ["/w/repo-feature"]);
 }
 
 #[gpui_kit::test]

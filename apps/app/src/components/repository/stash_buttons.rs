@@ -1,119 +1,85 @@
 //! The toolbar's Stash and Pop. Ported from `components/repository/stash-buttons.tsx`.
 
-use std::sync::Arc;
-
-use gitto_git::features::stash::schema::Stash;
-use gitto_git::features::status::schema::{StatusSummary, Uncommitted};
 use gitto_git::input::RepositoryId;
 use gitto_ui::git::stash::{can_pop, pop_title, stash_blocker, stash_title};
 use gpui_kit::component::h_flex;
 use gpui_kit::prelude::*;
-use gpui_kit::{App, Context, Subscription, Window};
+use gpui_kit::{App, Context, Window};
 
 use super::toolbar_button::{HideBelow, ToolbarButton};
 use crate::components::ui::IconName;
-use crate::data::stash::{StashActions, stash_actions, stashes_query};
-use crate::data::status::status_query;
-use crate::data::{Opaque, Operations, Query};
+use crate::data::changes::{POP, STASH};
+use crate::data::{Part, Shown};
 
 /// Stashes every change, untracked files included, and pops the newest stash; each says why if it
 /// failed. One at a time, along with the stashes popped and deleted from the sidebar: a pop names
 /// the stash it pops, which a stash still being made would change. An entity: it shows the status
 /// and the stashes, and the actions' states, of the repository it's given.
 pub struct StashButtons {
-    repository_id: RepositoryId,
-    status: Query<Opaque<Uncommitted>, StatusSummary>,
-    stashes: Query<Arc<[Stash]>>,
-    actions: StashActions,
-    _subscriptions: Vec<Subscription>,
+    repository: Shown,
 }
 
 impl StashButtons {
     pub fn new(repository_id: RepositoryId, _: &mut Window, cx: &mut Context<Self>) -> Self {
-        StashButtons::with_actions(repository_id, stash_actions(), cx)
-    }
-
-    /// With `actions` doing the stashing and popping: a test's.
-    pub(crate) fn with_actions(
-        repository_id: RepositoryId,
-        actions: StashActions,
-        cx: &mut Context<Self>,
-    ) -> Self {
         StashButtons {
-            status: status_query(&repository_id, cx),
-            stashes: stashes_query(&repository_id, cx),
-            repository_id,
-            actions,
-            _subscriptions: vec![cx.observe_global::<Operations>(|_, cx| cx.notify())],
+            repository: Shown::new(
+                &repository_id,
+                &[Part::Status, Part::Stashes, Part::Operations],
+                cx,
+            ),
         }
-    }
-
-    pub fn repository_id(&self) -> &RepositoryId {
-        &self.repository_id
     }
 
     /// Shows another repository's.
     pub fn set_repository(&mut self, repository_id: RepositoryId, cx: &mut Context<Self>) {
-        if self.repository_id != repository_id {
-            self.status = status_query(&repository_id, cx);
-            self.stashes = stashes_query(&repository_id, cx);
-            self.repository_id = repository_id;
-            cx.notify();
-        }
+        self.repository.set(&repository_id, cx);
     }
 
     /// Stash, as it is now. Until the status has loaded, it's disabled.
     pub fn stash_button(&self, cx: &App) -> ToolbarButton {
-        let id = self.repository_id.clone();
-        let pending = StashActions::is_pending(&id, cx);
-        let state = self.actions.stash.state(&id, cx);
-        let status = self.status.data();
-        let title = status.as_ref().map_or_else(
+        let repository = self.repository.read(cx);
+        let pending = repository.stashes_changing();
+        let state = repository.operation_state(STASH);
+        let status = repository.status().data();
+        let title = status.map_or_else(
             || "Stash".to_owned(),
             |status| stash_title(&status.head, &status.counts),
         );
-        let blocked = status
-            .as_ref()
-            .is_none_or(|status| stash_blocker(&status.head, &status.counts).is_some());
-        let stash = self.actions.stash.clone();
-        let dismiss = self.actions.stash.clone();
-        let dismissed = id.clone();
+        let blocked =
+            status.is_none_or(|status| stash_blocker(&status.head, &status.counts).is_some());
+        let stash = self.repository.entity().clone();
+        let dismiss = stash.clone();
         ToolbarButton::new("stash", IconName::Archive, "Stash")
             .hide_below(HideBelow::Large)
             .title(title)
             .disabled(blocked || pending)
             .busy(state.running)
             .failure("Stash", state.error, move |_, cx| {
-                dismiss.dismiss(&dismissed, cx)
+                dismiss.update(cx, |repository, cx| repository.dismiss(STASH, cx))
             })
             .on_click(move |_, _, cx| {
-                let _ = stash.run(&id, (), cx);
+                stash.update(cx, |repository, cx| drop(repository.stash(cx)));
             })
     }
 
     /// Pop, as it is now. Until the status and the stashes have loaded, it's disabled.
     pub fn pop_button(&self, cx: &App) -> ToolbarButton {
-        let id = self.repository_id.clone();
-        let pending = StashActions::is_pending(&id, cx);
-        let state = self.actions.pop.state(&id, cx);
-        let status = self.status.data();
-        let stashes = self.stashes.data();
-        let title = match (&status, &stashes, self.stashes.error()) {
+        let repository = self.repository.read(cx);
+        let pending = repository.stashes_changing();
+        let state = repository.operation_state(POP);
+        let status = repository.status().data();
+        let stashes = repository.stashes().data();
+        let title = match (status, stashes, repository.stashes().error()) {
             (Some(status), Some(stashes), _) => pop_title(&status.counts, stashes),
             (_, None, Some(error)) => format!("Couldn't load the stashes: {}", error.message()),
             _ => "Pop".to_owned(),
         };
-        let poppable = can_pop(
-            status.as_ref().map(|status| &status.counts),
-            stashes.as_deref(),
-        );
+        let poppable = can_pop(status.map(|status| &status.counts), stashes.map(|s| &s[..]));
         let newest = stashes
-            .as_ref()
             .and_then(|stashes| stashes.first())
             .map(|stash| stash.sha.clone());
-        let pop = self.actions.pop.clone();
-        let dismiss = self.actions.pop.clone();
-        let dismissed = id.clone();
+        let pop = self.repository.entity().clone();
+        let dismiss = pop.clone();
         ToolbarButton::new("pop", IconName::ArchiveRestore, "Pop")
             .hide_below(HideBelow::Large)
             .title(title)
@@ -121,11 +87,13 @@ impl StashButtons {
             .busy(state.running)
             .count(stashes.map(|stashes| stashes.len() as u64))
             .failure("Pop", state.error, move |_, cx| {
-                dismiss.dismiss(&dismissed, cx)
+                dismiss.update(cx, |repository, cx| repository.dismiss(POP, cx))
             })
             .on_click(move |_, _, cx| {
                 if let Some(newest) = newest.clone() {
-                    let _ = pop.run(&id, newest, cx);
+                    pop.update(cx, |repository, cx| {
+                        drop(repository.pop_stash(POP, newest, cx))
+                    });
                 }
             })
     }
@@ -145,15 +113,18 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
+    use futures::FutureExt as _;
     use futures::channel::oneshot;
+    use gitto_git::input::FullSha;
     use gpui_kit::test::TestWindowExt as _;
-    use gpui_kit::{AnyWindowHandle, AppContext as _, TestAppContext};
+    use gpui_kit::{AnyWindowHandle, Entity, TestAppContext};
 
     use super::*;
     use crate::components::repository::test_support::{
-        changed, repository_id, set_stashes, set_status, setup, stash, status,
+        changed, fake_git, repository_id, set_stashes, set_status, setup, stash, status,
     };
-    use crate::data::{QueryError, RepositoryOperation};
+    use crate::data::QueryError;
+    use crate::data::git::{GitTask, RepositoryGit};
 
     /// What the buttons were asked to do, and what settles the stash under way.
     #[derive(Default)]
@@ -164,34 +135,29 @@ mod tests {
         pop_answer: RefCell<Option<QueryError>>,
     }
 
-    fn actions(calls: &Rc<Calls>) -> StashActions {
-        let busy = |id: &str, cx: &App| StashActions::is_pending(id, cx);
-        let unused = RepositoryOperation::new("unused", |_, _: String, cx: &mut App| {
-            cx.background_spawn(async { Ok(()) })
-        });
-        StashActions {
-            stash: RepositoryOperation::new("stash", {
-                let calls = Rc::clone(calls);
-                move |_, (), cx: &mut App| {
-                    *calls.stashes.borrow_mut() += 1;
-                    let (finish, finished) = oneshot::channel();
-                    *calls.finish_stash.borrow_mut() = Some(finish);
-                    cx.background_spawn(async move { finished.await.unwrap_or(Ok(())) })
-                }
-            })
-            .one_at_a_time(busy),
-            pop: RepositoryOperation::new("pop", {
-                let calls = Rc::clone(calls);
-                move |_, sha: String, cx: &mut App| {
-                    calls.pops.borrow_mut().push(sha);
-                    let answer = calls.pop_answer.borrow_mut().take();
-                    cx.background_spawn(async move { answer.map_or(Ok(()), Err) })
-                }
-            })
-            .one_at_a_time(busy),
-            pop_picked: unused.clone().one_at_a_time(busy),
-            drop: unused.one_at_a_time(busy),
+    impl RepositoryGit for Calls {
+        fn push_stash(&self) -> GitTask<()> {
+            *self.stashes.borrow_mut() += 1;
+            let (finish, finished) = oneshot::channel();
+            *self.finish_stash.borrow_mut() = Some(finish);
+            async move { finished.await.unwrap_or(Ok(())) }.boxed()
         }
+
+        fn pop_stash(&self, sha: FullSha) -> GitTask<()> {
+            self.pops.borrow_mut().push(sha.as_str().to_owned());
+            let answer = self.pop_answer.borrow_mut().take();
+            async move { answer.map_or(Ok(()), Err) }.boxed()
+        }
+    }
+
+    fn render(
+        id: &RepositoryId,
+        calls: &Rc<Calls>,
+        cx: &mut TestAppContext,
+    ) -> (AnyWindowHandle, Entity<StashButtons>) {
+        fake_git(id, calls.clone(), cx);
+        let shown = id.clone();
+        crate::test_support::open(cx, move |window, cx| StashButtons::new(shown, window, cx))
     }
 
     fn click(window: AnyWindowHandle, id: &'static str, cx: &mut TestAppContext) {
@@ -207,11 +173,7 @@ mod tests {
         let id = repository_id();
         set_status(&id, changed(status(), 2), cx);
         set_stashes(&id, vec![stash('a', "On main: older")], cx);
-        let actions = actions(&calls);
-        let shown = id.clone();
-        let (window, buttons) = crate::test_support::open(cx, move |_, cx| {
-            StashButtons::with_actions(shown, actions, cx)
-        });
+        let (window, buttons) = render(&id, &calls, cx);
 
         let pop = buttons.read_with(cx, |buttons, cx| buttons.pop_button(cx));
         assert_eq!(pop.tooltip(), "Pop \"On main: older\"");
@@ -259,12 +221,7 @@ mod tests {
             let id = repository_id();
             set_status(&id, changed(status(), 2), cx);
             set_stashes(&id, vec![stash('a', "On main: older")], cx);
-            let actions = actions(&calls);
-            let shown = id.clone();
-            let (window, buttons) = crate::test_support::open(cx, move |_, cx| {
-                StashButtons::with_actions(shown, actions, cx)
-            });
-            (window, buttons)
+            render(&id, &calls, cx)
         };
 
         click(window, "pop", cx);
@@ -294,11 +251,7 @@ mod tests {
         let id = repository_id();
         set_status(&id, status(), cx);
         set_stashes(&id, vec![], cx);
-        let actions = actions(&calls);
-        let shown = id.clone();
-        let (_, buttons) = crate::test_support::open(cx, move |_, cx| {
-            StashButtons::with_actions(shown, actions, cx)
-        });
+        let (_, buttons) = render(&id, &calls, cx);
 
         let stash_button = buttons.read_with(cx, |buttons, cx| buttons.stash_button(cx));
         assert_eq!(stash_button.tooltip(), "No changes to stash.");

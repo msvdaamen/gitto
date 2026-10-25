@@ -7,7 +7,6 @@ use std::sync::Arc;
 
 use gitto_git::features::refs::schema::{Ref, RefKind};
 use gitto_git::features::stash::schema::Stash;
-use gitto_git::features::status::schema::{StatusSummary, Uncommitted};
 use gitto_git::features::worktree::schema::Worktree;
 use gitto_git::input::RepositoryId;
 use gitto_ui::git::ref_tree::{RefTreeNode, build_ref_tree, flatten_ref_tree};
@@ -32,12 +31,7 @@ use super::worktree_menu::WorktreeMenu;
 use crate::components::repository::branch_menu::{BranchMenuProvider, branch_menu};
 use crate::components::repository::row_menu::RowMenu;
 use crate::components::ui::{EmptyState, IconName, LoadingState};
-use crate::data::branch::{BranchChange, switch_branch_operation};
-use crate::data::refs::refs_query;
-use crate::data::stash::stashes_query;
-use crate::data::status::status_query;
-use crate::data::worktree::worktrees_query;
-use crate::data::{Opaque, Operations, Query};
+use crate::data::{Part, Shown};
 use crate::services::Services;
 use crate::state::clock::Clock;
 use crate::state::collapsed::Collapsed;
@@ -50,32 +44,6 @@ const TAGS: &str = "tags";
 const STASHES: &str = "stashes";
 const WORKTREES: &str = "worktrees";
 const SECTIONS: [&str; 5] = [LOCAL, REMOTES, TAGS, STASHES, WORKTREES];
-
-/// What the list runs: the data layer's operations, or a test's.
-#[derive(Clone)]
-pub struct SidebarActions {
-    /// Switches to a branch, by its full ref name.
-    pub switch: BranchChange<String>,
-    pub stash: StashMenu,
-    pub worktree: WorktreeMenu,
-}
-
-impl SidebarActions {
-    /// The data layer's.
-    pub fn new() -> Self {
-        SidebarActions {
-            switch: switch_branch_operation(),
-            stash: StashMenu::new(),
-            worktree: WorktreeMenu::new(),
-        }
-    }
-}
-
-impl Default for SidebarActions {
-    fn default() -> Self {
-        SidebarActions::new()
-    }
-}
 
 /// A line of a ref tree, as the sidebar shows it: a folder, or a branch (labelled with its last
 /// path segment).
@@ -154,6 +122,15 @@ pub fn worktree_meta(worktree: &Worktree) -> String {
     }
 }
 
+/// What the list shows of the repository.
+const PARTS: &[Part] = &[
+    Part::Refs,
+    Part::Stashes,
+    Part::Worktrees,
+    Part::Status,
+    Part::Operations,
+];
+
 /// The dialog open, asking about a stash or a worktree of a repository.
 enum Asking {
     Drop(RepositoryId, Stash),
@@ -198,15 +175,10 @@ struct RowContext {
 /// `refs/heads/feature`, so they can't clash with the section ids. Tags and stashes start
 /// collapsed.
 pub struct RefList {
-    repository_id: RepositoryId,
-    refs: Query<Arc<[Ref]>>,
-    stashes: Query<Arc<[Stash]>>,
-    worktrees: Query<Arc<[Worktree]>>,
-    status: Query<Opaque<Uncommitted>, StatusSummary>,
+    repository: Shown,
     collapsed: Collapsed,
     /// Counts the changes to `collapsed`, so the trees are made again.
     collapsed_revision: u64,
-    actions: SidebarActions,
     /// The stash whose menu is open, by its SHA.
     stash_menu: RowMenu,
     /// The worktree whose menu is open, by its path.
@@ -218,35 +190,17 @@ pub struct RefList {
 }
 
 impl RefList {
-    pub fn new(repository_id: RepositoryId, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        RefList::with_actions(repository_id, SidebarActions::new(), window, cx)
-    }
-
-    /// With `actions` doing the work: a test's.
-    pub(crate) fn with_actions(
-        repository_id: RepositoryId,
-        actions: SidebarActions,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    pub fn new(repository_id: RepositoryId, _: &mut Window, cx: &mut Context<Self>) -> Self {
         let clock = Clock::global(cx);
-        let mut subscriptions = vec![
-            cx.observe_global::<Operations>(|_, cx| cx.notify()),
-            cx.observe(&clock, |_, _, cx| cx.notify()),
-        ];
+        let mut subscriptions = vec![cx.observe(&clock, |_, _, cx| cx.notify())];
         // Which branch's menu is open is the branch menus' (see `branch_menu`).
         if let Some(provider) = BranchMenuProvider::current(cx) {
             subscriptions.push(cx.observe(&provider, |_, _, cx| cx.notify()));
         }
         RefList {
-            refs: refs_query(&repository_id, cx),
-            stashes: stashes_query(&repository_id, cx),
-            worktrees: worktrees_query(&repository_id, cx),
-            status: status_query(&repository_id, cx),
+            repository: Shown::new(&repository_id, PARTS, cx),
             collapsed: Self::collapsed_of(&repository_id, cx),
             collapsed_revision: 0,
-            repository_id,
-            actions,
             stash_menu: RowMenu::default(),
             worktree_menu: RowMenu::default(),
             asking: None,
@@ -261,8 +215,8 @@ impl RefList {
         Collapsed::new(id.to_string(), [(TAGS, true), (STASHES, true)], storage)
     }
 
-    pub fn repository_id(&self) -> &RepositoryId {
-        &self.repository_id
+    pub fn repository_id<'a>(&self, cx: &'a App) -> &'a RepositoryId {
+        self.repository.id(cx)
     }
 
     /// Shows another repository's: its own collapsed sections, its lists at the top. A menu open
@@ -274,16 +228,11 @@ impl RefList {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.repository_id == repository_id {
+        if !self.repository.set(&repository_id, cx) {
             return;
         }
-        self.refs = refs_query(&repository_id, cx);
-        self.stashes = stashes_query(&repository_id, cx);
-        self.worktrees = worktrees_query(&repository_id, cx);
-        self.status = status_query(&repository_id, cx);
         self.collapsed = Self::collapsed_of(&repository_id, cx);
         self.collapsed_revision += 1;
-        self.repository_id = repository_id;
         self.stash_menu.close(cx);
         self.worktree_menu.close(cx);
         if self.asking.take().is_some() {
@@ -312,8 +261,8 @@ impl RefList {
     /// stash, or adding, opening or removing a worktree.
     pub fn is_section_busy(&self, id: &str, cx: &App) -> bool {
         match id {
-            STASHES => self.actions.stash.is_busy(&self.repository_id, cx),
-            WORKTREES => self.actions.worktree.is_busy(&self.repository_id, cx),
+            STASHES => StashMenu::is_busy(self.repository.read(cx)),
+            WORKTREES => WorktreeMenu::is_busy(self.repository.read(cx)),
             _ => false,
         }
     }
@@ -324,8 +273,10 @@ impl RefList {
     }
 
     /// The worktrees other than the one on show.
-    fn other_worktrees(&self) -> Vec<Worktree> {
-        self.worktrees
+    fn other_worktrees(&self, cx: &App) -> Vec<Worktree> {
+        self.repository
+            .read(cx)
+            .worktrees()
             .data()
             .map(|worktrees| {
                 worktrees
@@ -341,13 +292,13 @@ impl RefList {
     /// other worktree it's checked out in, as git won't switch to it here. The toolbar shows a
     /// switch running, and why it failed; the worktrees' section, opening the worktree.
     pub fn activate_branch(&mut self, reference: &str, cx: &mut Context<Self>) {
-        let others = self.other_worktrees();
+        let others = self.other_worktrees(cx);
         match worktree_on(Some(&others), reference) {
             None => {
-                let _ = self
-                    .actions
-                    .switch
-                    .run(&self.repository_id, reference.to_owned(), cx);
+                let reference = reference.to_owned();
+                self.repository.update(cx, |repository, cx| {
+                    drop(repository.switch_branch(reference, cx))
+                });
             }
             Some(worktree) if can_open_worktree(worktree) => {
                 match BranchMenuProvider::current(cx) {
@@ -355,10 +306,7 @@ impl RefList {
                         let path = worktree.path.clone();
                         provider.update(cx, |provider, cx| provider.open_worktree(path, cx));
                     }
-                    None => self
-                        .actions
-                        .worktree
-                        .open(&self.repository_id, worktree, cx),
+                    None => WorktreeMenu::open(self.repository.entity(), worktree, cx),
                 }
             }
             Some(_) => {}
@@ -369,19 +317,19 @@ impl RefList {
     /// running, and why it failed.
     pub fn activate_worktree(&mut self, path: &str, cx: &mut Context<Self>) {
         let worktree = self
-            .worktrees
+            .repository
+            .read(cx)
+            .worktrees()
             .data()
             .and_then(|worktrees| worktrees.iter().find(|w| w.path == path).cloned());
         if let Some(worktree) = worktree {
-            self.actions
-                .worktree
-                .open(&self.repository_id, &worktree, cx);
+            WorktreeMenu::open(self.repository.entity(), &worktree, cx);
         }
     }
 
     /// Asks before deleting `stash`.
     fn ask_to_drop(&mut self, stash: Stash, window: &mut Window, cx: &mut Context<Self>) {
-        self.asking = Some(Asking::Drop(self.repository_id.clone(), stash.clone()));
+        self.asking = Some(Asking::Drop(self.repository.id(cx).clone(), stash.clone()));
         let list = cx.entity().downgrade();
         let cancelled = list.clone();
         open_drop_stash_dialog(
@@ -399,7 +347,10 @@ impl RefList {
 
     /// Asks before removing `worktree`.
     fn ask_to_remove(&mut self, worktree: Worktree, window: &mut Window, cx: &mut Context<Self>) {
-        self.asking = Some(Asking::Remove(self.repository_id.clone(), worktree.clone()));
+        self.asking = Some(Asking::Remove(
+            self.repository.id(cx).clone(),
+            worktree.clone(),
+        ));
         let list = cx.entity().downgrade();
         let cancelled = list.clone();
         open_remove_worktree_dialog(
@@ -424,12 +375,12 @@ impl RefList {
         if !confirmed {
             return;
         }
+        let shown = self.repository.id(cx).clone();
+        let repository = self.repository.entity();
         match asking {
-            Asking::Drop(id, stash) if id == self.repository_id => {
-                self.actions.stash.drop(&id, &stash, cx);
-            }
-            Asking::Remove(id, worktree) if id == self.repository_id => {
-                self.actions.worktree.remove(&id, &worktree, cx);
+            Asking::Drop(id, stash) if id == shown => StashMenu::drop(repository, &stash, cx),
+            Asking::Remove(id, worktree) if id == shown => {
+                WorktreeMenu::remove(repository, &worktree, cx)
             }
             _ => {}
         }
@@ -445,20 +396,18 @@ impl RefList {
         let Some(entity) = list.upgrade() else {
             return menu;
         };
-        let this = entity.read(cx);
-        let stashes = this.stashes.data();
-        let Some(stash) = stashes
-            .as_ref()
-            .and_then(|stashes| stashes.iter().find(|stash| stash.sha == *sha).cloned())
+        let repository = entity.read(cx).repository.entity().clone();
+        let shown = repository.read(cx);
+        let stashes = shown.stashes().data();
+        let Some(stash) =
+            stashes.and_then(|stashes| stashes.iter().find(|stash| stash.sha == *sha).cloned())
         else {
             return menu;
         };
         let poppable = can_pop(
-            this.status.data().as_ref().map(|status| &status.counts),
-            stashes.as_deref(),
+            shown.status().data().map(|status| &status.counts),
+            stashes.map(|stashes| &stashes[..]),
         );
-        let id = this.repository_id.clone();
-        let actions = this.actions.stash.clone();
         RowMenu::track(
             list.clone(),
             sha,
@@ -466,9 +415,9 @@ impl RefList {
             cx,
         );
         let list = list.clone();
-        actions.items(
+        StashMenu::items(
             menu,
-            &id,
+            &repository,
             &stash.clone(),
             poppable,
             move |window, cx| {
@@ -489,17 +438,20 @@ impl RefList {
         let Some(entity) = list.upgrade() else {
             return menu;
         };
-        let this = entity.read(cx);
-        let Some(worktree) = this.worktrees.data().and_then(|worktrees| {
-            worktrees
-                .iter()
-                .find(|worktree| worktree.path == *path)
-                .cloned()
-        }) else {
+        let repository = entity.read(cx).repository.entity().clone();
+        let Some(worktree) = repository
+            .read(cx)
+            .worktrees()
+            .data()
+            .and_then(|worktrees| {
+                worktrees
+                    .iter()
+                    .find(|worktree| worktree.path == *path)
+                    .cloned()
+            })
+        else {
             return menu;
         };
-        let id = this.repository_id.clone();
-        let actions = this.actions.worktree.clone();
         RowMenu::track(
             list.clone(),
             path,
@@ -507,9 +459,9 @@ impl RefList {
             cx,
         );
         let list = list.clone();
-        actions.items(
+        WorktreeMenu::items(
             menu,
-            &id,
+            &repository,
             &worktree.clone(),
             move |window, cx| {
                 let worktree = worktree.clone();
@@ -520,8 +472,8 @@ impl RefList {
     }
 
     /// Makes the trees' lines again if the refs or what's collapsed changed.
-    fn refresh_trees(&mut self) {
-        let Some(refs) = self.refs.data() else {
+    fn refresh_trees(&mut self, cx: &App) {
+        let Some(refs) = self.repository.read(cx).refs().data().cloned() else {
             self.trees = Trees::default();
             return;
         };
@@ -550,7 +502,7 @@ impl RefList {
     fn row_context(&self, cx: &mut Context<Self>) -> Rc<RowContext> {
         Rc::new(RowContext {
             list: cx.entity().downgrade(),
-            other_worktrees: self.other_worktrees(),
+            other_worktrees: self.other_worktrees(cx),
             branch_menu_for: BranchMenuProvider::current(cx)
                 .and_then(|provider| provider.read(cx).open_for().cloned()),
             stash_menu_for: self.stash_menu.open_for().cloned(),
@@ -671,11 +623,12 @@ fn branch_row(branch: &Ref, label: &SharedString, depth: usize, rows: &RowContex
 impl Render for RefList {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let rail = f32::from(window.viewport_size().width) < MEDIUM;
-        self.refresh_trees();
+        self.refresh_trees(cx);
         let rows = self.row_context(cx);
-        let id = self.repository_id.clone();
+        let repository = self.repository.entity().clone();
+        let refs = repository.read(cx).refs();
 
-        let error = self.refs.error().map(|error| {
+        let error = refs.error().map(|error| {
             div().h(base_px(150.)).flex_none().child(
                 EmptyState::new(
                     "refs-error",
@@ -693,7 +646,7 @@ impl Render for RefList {
             .min_h_0()
             .when(rail, |list| list.items_center().gap_1().pt_2())
             .children(error);
-        if self.refs.is_pending() {
+        if refs.is_pending() {
             return list.child(
                 div()
                     .h(base_px(150.))
@@ -743,7 +696,12 @@ impl Render for RefList {
             )
             .rail(rail);
 
-        let stashes: Arc<[Stash]> = self.stashes.data().unwrap_or_else(|| Arc::new([]));
+        let stashes: Arc<[Stash]> = repository
+            .read(cx)
+            .stashes()
+            .data()
+            .cloned()
+            .unwrap_or_else(|| Arc::new([]));
         let stash_rows = {
             let stashes = Arc::clone(&stashes);
             let rows = Rc::clone(&rows);
@@ -757,9 +715,14 @@ impl Render for RefList {
         let stashes = self
             .section(STASHES, stashes.len(), stashes.len(), stash_rows, cx)
             .rail(rail)
-            .failure(self.actions.stash.failure(&id, cx));
+            .failure(StashMenu::failure(&repository, cx));
 
-        let worktrees: Arc<[Worktree]> = self.worktrees.data().unwrap_or_else(|| Arc::new([]));
+        let worktrees: Arc<[Worktree]> = repository
+            .read(cx)
+            .worktrees()
+            .data()
+            .cloned()
+            .unwrap_or_else(|| Arc::new([]));
         let worktree_rows = {
             let worktrees = Arc::clone(&worktrees);
             let rows = Rc::clone(&rows);
@@ -779,7 +742,7 @@ impl Render for RefList {
                 cx,
             )
             .rail(rail)
-            .failure(self.actions.worktree.failure(&id, cx));
+            .failure(WorktreeMenu::failure(&repository, cx));
 
         list.child(local)
             .child(remotes)
@@ -843,18 +806,24 @@ mod tests {
 
     use super::*;
     use crate::components::repository::add_worktree_dialog::AddWorktreeDialog;
-    use crate::components::repository::branch_menu::BranchActions;
     use crate::components::repository::create_branch_dialog::CreateBranchDialog;
     use crate::components::repository::test_support::{
-        Repositories, repository, repository_id, set_operation, set_push_target, set_refs,
-        set_remotes, set_stashes, set_status, set_worktrees, setup_with, uncommitted,
+        fake_git, repository, repository_id, set_operation, set_push_target, set_refs, set_remotes,
+        set_stashes, set_status, set_worktrees, setup_with, uncommitted,
     };
     use crate::components::repository::toolbar::RepositoryToolbar;
+    use crate::data::QueryError;
     use crate::data::branch::{Merge, NewBranchFrom, Rebase};
-    use crate::data::remote::PullOperation;
-    use crate::data::stash::StashActions;
-    use crate::data::worktree::{AddWorktreeInput, WorktreeActions};
-    use crate::data::{QueryError, RepositoryOperation};
+    use crate::data::changes::{POP, POP_PICKED};
+    use crate::data::git::{GitTask, RepositoryGit};
+    use crate::data::repositories::RepositorySource;
+    use crate::data::worktree::AddWorktreeInput;
+    use futures::FutureExt as _;
+    use futures::future::BoxFuture;
+    use gitto_git::features::status::schema::Uncommitted;
+    use gitto_git::input::{BranchName, BranchRef, Folder, FullSha, NonEmpty};
+    use gitto_repository::Repository;
+    use std::path::PathBuf;
 
     /// A made-up operation: it records what it's asked, then goes through, fails saying `fail`,
     /// or, while `hold` is set, waits to be finished.
@@ -875,22 +844,17 @@ mod tests {
             })
         }
 
-        fn operation(self: &Rc<Self>, name: &'static str, done: R) -> RepositoryOperation<T, R> {
-            let fake = Rc::clone(self);
-            RepositoryOperation::new(name, move |_, input: T, cx: &mut App| {
-                fake.calls.borrow_mut().push(input);
-                if let Some(message) = fake.fail.borrow().clone() {
-                    return cx.background_spawn(async move { Err(QueryError::msg(message)) });
-                }
-                let outcome = done.clone();
-                if fake.hold.get() {
-                    let (sender, receiver) = oneshot::channel();
-                    fake.pending.borrow_mut().push(sender);
-                    return cx
-                        .background_spawn(async move { receiver.await.unwrap_or(Ok(outcome)) });
-                }
-                cx.background_spawn(async move { Ok(outcome) })
-            })
+        fn run(&self, input: T, done: R) -> GitTask<R> {
+            self.calls.borrow_mut().push(input);
+            if let Some(message) = self.fail.borrow().clone() {
+                return async move { Err(QueryError::msg(message)) }.boxed();
+            }
+            if self.hold.get() {
+                let (sender, receiver) = oneshot::channel();
+                self.pending.borrow_mut().push(sender);
+                return async move { receiver.await.unwrap_or(Ok(done)) }.boxed();
+            }
+            async move { Ok(done) }.boxed()
         }
 
         fn calls(&self) -> Vec<T> {
@@ -941,55 +905,105 @@ mod tests {
                 open: Fake::new(),
             }
         }
+    }
 
-        fn stash_actions(&self) -> StashActions {
-            let busy = |id: &str, cx: &App| StashActions::is_pending(id, cx);
-            let unused = RepositoryOperation::new("unused", |_, _: String, cx: &mut App| {
-                cx.background_spawn(async { Ok::<_, QueryError>(()) })
-            });
-            StashActions {
-                stash: RepositoryOperation::new("stash", |_, (), cx: &mut App| {
-                    cx.background_spawn(async { Ok::<_, QueryError>(()) })
-                })
-                .one_at_a_time(busy),
-                pop: unused.one_at_a_time(busy),
-                pop_picked: self.pop.operation("pop-picked", ()).one_at_a_time(busy),
-                drop: self.drop.operation("drop-stash", ()).one_at_a_time(busy),
+    /// The repository's git, as the list, the branch menus and the toolbar ask it.
+    impl RepositoryGit for Fakes {
+        fn switch_branch(&self, reference: BranchRef) -> GitTask<()> {
+            self.switch.run(reference.as_str().to_owned(), ())
+        }
+
+        fn create_branch(&self, name: BranchName, from: Option<BranchRef>) -> GitTask<()> {
+            let input = NewBranchFrom {
+                name: name.as_str().to_owned(),
+                from: from
+                    .map(|from| from.as_str().to_owned())
+                    .unwrap_or_default(),
+            };
+            self.create.run(input, ())
+        }
+
+        fn merge_branch(&self, reference: BranchRef, into: NonEmpty) -> GitTask<MergeOutcome> {
+            let input = Merge {
+                reference: reference.as_str().to_owned(),
+                into: into.as_str().to_owned(),
+            };
+            self.merge.run(input, MergeOutcome::Merged)
+        }
+
+        fn rebase_branch(&self, reference: BranchRef, branch: NonEmpty) -> GitTask<RebaseOutcome> {
+            let input = Rebase {
+                reference: reference.as_str().to_owned(),
+                branch: branch.as_str().to_owned(),
+            };
+            self.rebase.run(input, RebaseOutcome::Rebased)
+        }
+
+        fn delete_branch(&self, reference: BranchRef) -> GitTask<()> {
+            self.delete.run(reference.as_str().to_owned(), ())
+        }
+
+        fn pull(&self, branch: Option<NonEmpty>) -> GitTask<()> {
+            match branch {
+                Some(branch) => self.pull_branch.run(branch.as_str().to_owned(), ()),
+                None => self.pull.run((), ()),
             }
         }
 
-        fn worktree_actions(&self) -> WorktreeActions {
-            let busy = |id: &str, cx: &App| WorktreeActions::is_pending(id, cx);
-            WorktreeActions {
-                add: self
-                    .add
-                    .operation("add-worktree", ())
-                    .one_at_a_time(WorktreeActions::add_is_blocked),
-                remove: self
-                    .remove
-                    .operation("remove-worktree", ())
-                    .one_at_a_time(busy),
-                open: self.open.operation("open-worktree", ()).one_at_a_time(busy),
-            }
+        fn pop_stash(&self, sha: FullSha) -> GitTask<()> {
+            self.pop.run(sha.as_str().to_owned(), ())
         }
 
-        fn sidebar_actions(&self) -> SidebarActions {
-            SidebarActions {
-                switch: BranchChange::new(self.switch.operation("switch", ())),
-                stash: StashMenu::with_actions(self.stash_actions()),
-                worktree: WorktreeMenu::with_actions(self.worktree_actions()),
-            }
+        fn drop_stash(&self, sha: FullSha) -> GitTask<()> {
+            self.drop.run(sha.as_str().to_owned(), ())
         }
 
-        fn branch_actions(&self) -> BranchActions {
-            BranchActions {
-                merge: BranchChange::new(self.merge.operation("merge", MergeOutcome::Merged)),
-                rebase: BranchChange::new(self.rebase.operation("rebase", RebaseOutcome::Rebased)),
-                delete: BranchChange::new(self.delete.operation("delete-branch", ())),
-                pull: PullOperation::with_operation(self.pull.operation("pull", ())),
-                pull_branch: self.pull_branch.operation("pull-branch", ()),
-                open_worktree: self.open.operation("open-worktree", ()),
-            }
+        fn add_worktree(
+            &self,
+            folder: Folder,
+            branch: BranchRef,
+            new_branch: Option<BranchName>,
+        ) -> GitTask<()> {
+            let input = AddWorktreeInput {
+                path: folder.as_str().to_owned(),
+                branch: branch.as_str().to_owned(),
+                new_branch: new_branch.map(|name| name.as_str().to_owned()),
+            };
+            self.add.run(input, ())
+        }
+
+        fn remove_worktree(&self, path: String) -> GitTask<()> {
+            self.remove.run(path, ())
+        }
+    }
+
+    /// The repositories added to Gitto; opening a worktree adds it, as `open` answers.
+    struct Source {
+        list: RefCell<Vec<Repository>>,
+        open: Rc<Fake<String>>,
+    }
+
+    impl RepositorySource for Source {
+        fn list(&self) -> BoxFuture<'static, Result<Vec<Repository>, QueryError>> {
+            let list = self.list.borrow().clone();
+            async move { Ok(list) }.boxed()
+        }
+
+        fn add(&self, path: PathBuf) -> BoxFuture<'static, Result<Repository, QueryError>> {
+            let path = path.to_string_lossy().into_owned();
+            let opened = repository(&repository_id(), &path);
+            self.open
+                .run(path, ())
+                .map(move |result| result.map(|()| opened))
+                .boxed()
+        }
+
+        fn remove(&self, _: String) -> BoxFuture<'static, Result<(), QueryError>> {
+            async { Err(QueryError::msg("Not in this test.")) }.boxed()
+        }
+
+        fn reorder(&self, _: Vec<String>) -> BoxFuture<'static, Result<(), QueryError>> {
+            async { Err(QueryError::msg("Not in this test.")) }.boxed()
         }
     }
 
@@ -1153,36 +1167,26 @@ mod tests {
     ) -> Fixture {
         let id = repository_id();
         let other = repository_id();
-        let repositories = Rc::new(Repositories::default());
-        repositories
-            .list
-            .borrow_mut()
-            .extend([repository(&id, "/w/repo"), repository(&other, "/w/other")]);
+        let fakes = Rc::new(Fakes::new());
+        let repositories = Rc::new(Source {
+            list: RefCell::new(vec![
+                repository(&id, "/w/repo"),
+                repository(&other, "/w/other"),
+            ]),
+            open: Rc::clone(&fakes.open),
+        });
         let dir = setup_with(cx, repositories);
+        fake_git(&id, fakes.clone(), cx);
         seed(&id, cx);
         seed(&other, cx);
         prepare(&id, cx);
-        let fakes = Rc::new(Fakes::new());
         let shown = id.clone();
-        let made = Rc::clone(&fakes);
         let (window, host) = crate::test_support::open(cx, move |window, cx| {
-            let create = cx.new(|cx| {
-                CreateBranchDialog::with_create(
-                    shown.clone(),
-                    BranchChange::new(made.create.operation("switch", ())),
-                    window,
-                    cx,
-                )
-            });
-            let add = cx.new(|cx| {
-                AddWorktreeDialog::with_actions(shown.clone(), made.worktree_actions(), window, cx)
-            });
-            let actions = made.branch_actions();
-            let provider =
-                cx.new(|cx| BranchMenuProvider::with(shown.clone(), actions, create, add, cx));
+            let create = cx.new(|cx| CreateBranchDialog::new(shown.clone(), window, cx));
+            let add = cx.new(|cx| AddWorktreeDialog::new(shown.clone(), window, cx));
+            let provider = cx.new(|cx| BranchMenuProvider::with(shown.clone(), create, add, cx));
             let toolbar = cx.new(|cx| RepositoryToolbar::new(shown.clone(), window, cx));
-            let list = cx
-                .new(|cx| RefList::with_actions(shown.clone(), made.sidebar_actions(), window, cx));
+            let list = cx.new(|cx| RefList::new(shown.clone(), window, cx));
             Host {
                 toolbar,
                 provider,
@@ -1207,6 +1211,12 @@ mod tests {
     impl Fixture {
         fn list(&self, cx: &mut TestAppContext) -> Entity<RefList> {
             self.host.read_with(cx, |host, _| host.list.clone())
+        }
+
+        /// The repository on show's entity.
+        fn repository(&self, cx: &mut TestAppContext) -> Entity<crate::data::Repository> {
+            let list = self.list(cx);
+            list.read_with(cx, |list, _| list.repository.entity().clone())
         }
 
         fn provider(&self, cx: &mut TestAppContext) -> Entity<BranchMenuProvider> {
@@ -1302,9 +1312,10 @@ mod tests {
         ) -> Option<(String, String)> {
             let list = self.list(cx);
             list.read_with(cx, |list, cx| {
+                let repository = list.repository.entity();
                 let failure = match section {
-                    STASHES => list.actions.stash.failure(&list.repository_id, cx),
-                    _ => list.actions.worktree.failure(&list.repository_id, cx),
+                    STASHES => StashMenu::failure(repository, cx),
+                    _ => WorktreeMenu::failure(repository, cx),
                 };
                 failure
                     .error
@@ -1576,12 +1587,9 @@ mod tests {
     #[gpui_kit::test]
     fn doesnt_switch_to_the_current_branch(cx: &mut TestAppContext) {
         let f = render(cx);
-        // The data layer's switch, which does nothing for the checked-out branch rather than run
-        // git.
-        f.run_on_list(cx, |list, _| {
-            list.actions.switch = switch_branch_operation()
-        });
+        // The switch does nothing for the checked-out branch rather than run git.
         f.double_click(MAIN, cx);
+        assert!(f.fakes.switch.calls().is_empty());
         assert!(!f.is_busy(cx));
         assert_eq!(f.branch_failure(cx), None);
     }
@@ -1626,7 +1634,7 @@ mod tests {
         assert!(f.has_dialog(cx));
         let dialog = create_dialog(&f, cx);
         assert_eq!(
-            dialog.read_with(cx, |dialog, _| dialog.summary()),
+            dialog.read_with(cx, |dialog, cx| dialog.summary(cx)),
             "From feature, with your uncommitted changes, unless they conflict with it: then \
              they're kept in the stash."
         );
@@ -1685,7 +1693,7 @@ mod tests {
         create_from(&f, MAIN, cx);
         let dialog = create_dialog(&f, cx);
         assert_eq!(
-            dialog.read_with(cx, |dialog, _| dialog.summary()),
+            dialog.read_with(cx, |dialog, cx| dialog.summary(cx)),
             "From main, with your uncommitted changes."
         );
     }
@@ -2010,9 +2018,9 @@ mod tests {
         assert_eq!(f.fakes.pop.calls(), [older().sha]);
         assert!(f.is_section_busy(STASHES, cx));
         // The toolbar's Pop isn't the one running, but waits for it.
-        let id = f.id.clone();
-        assert!(cx.read(|cx| !Operations::state("pop", &id, cx).running));
-        assert!(cx.read(|cx| StashActions::is_pending(&id, cx)));
+        let repository = f.repository(cx);
+        assert!(repository.read_with(cx, |repository, _| !repository.operation_state(POP).running));
+        assert!(repository.read_with(cx, |repository, _| repository.stashes_changing()));
 
         // Nor another one meanwhile.
         f.open_menu(&stash_row(&newer()), cx);
@@ -2041,8 +2049,10 @@ mod tests {
             Some(("Pop stash".to_owned(), message.to_owned()))
         );
         // Only there, not under the toolbar's Pop as well.
-        let id = f.id.clone();
-        assert!(cx.read(|cx| Operations::state("pop", &id, cx).error.is_none()));
+        let repository = f.repository(cx);
+        assert!(repository.read_with(cx, |repository, _| {
+            repository.operation_state(POP).error.is_none()
+        }));
 
         f.choose("Dismiss", cx);
         assert_eq!(f.section_failure(STASHES, cx), None);
@@ -2060,15 +2070,10 @@ mod tests {
         assert!(f.has_dialog(cx));
         // Begun straight on the actions: the dialog keeps the rest from being used, so this
         // stands for a pop begun some other way.
-        let id = f.id.clone();
-        f.run_on_list(cx, |list, cx| {
-            let _ = list
-                .actions
-                .stash
-                .actions()
-                .pop_picked
-                .run(&id, newer().sha, cx);
+        f.repository(cx).update(cx, |repository, cx| {
+            drop(repository.pop_stash(POP_PICKED, newer().sha, cx))
         });
+        cx.run_until_parked();
         f.choose("Delete", cx);
         assert!(f.fakes.drop.calls().is_empty());
 
@@ -2522,15 +2527,15 @@ mod tests {
             );
         });
         let provider = f.provider(cx);
-        provider.read_with(cx, |provider, _| {
-            assert!(provider.deletion("refs/heads/topic").is_some());
+        provider.read_with(cx, |provider, cx| {
+            assert!(provider.deletion("refs/heads/topic", cx).is_some());
             for reference in [
                 "refs/heads/main",
                 "refs/heads/feature",
                 "refs/remotes/origin/main",
                 "refs/remotes/origin/feature",
             ] {
-                assert!(provider.deletion(reference).is_none(), "{reference}");
+                assert!(provider.deletion(reference, cx).is_none(), "{reference}");
             }
         });
         f.open_menu(FEATURE, cx);

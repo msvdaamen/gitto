@@ -1,16 +1,14 @@
 //! The toolbar's Pull. Ported from `components/repository/pull-button.tsx`.
 
-use gitto_git::features::status::schema::{StatusSummary, Uncommitted};
 use gitto_git::input::RepositoryId;
 use gitto_ui::git::status::{head_pull_blocker, pull_title};
 use gpui_kit::prelude::*;
-use gpui_kit::{App, Context, Subscription, Window};
+use gpui_kit::{App, Context, Window};
 
 use super::toolbar_button::ToolbarButton;
 use crate::components::ui::IconName;
-use crate::data::remote::{PullOperation, pull_operation};
-use crate::data::status::status_query;
-use crate::data::{Opaque, Operations, Query};
+use crate::data::changes::PULL;
+use crate::data::{Part, Shown};
 
 /// Pulls the current branch's upstream, and says why if that failed or was left to finish. An
 /// entity: it shows the status (how many commits there are to pull, and why it can't) and the
@@ -18,59 +16,35 @@ use crate::data::{Opaque, Operations, Query};
 /// started (a branch's menu pulls the checked-out one too): switching away and back shows it
 /// still running, or why it failed.
 pub struct PullButton {
-    repository_id: RepositoryId,
-    status: Query<Opaque<Uncommitted>, StatusSummary>,
-    pull: PullOperation,
-    _subscriptions: Vec<Subscription>,
+    repository: Shown,
 }
 
 impl PullButton {
     pub fn new(repository_id: RepositoryId, _: &mut Window, cx: &mut Context<Self>) -> Self {
-        PullButton::with_pull(repository_id, pull_operation(), cx)
-    }
-
-    /// With `pull` doing the pulling: a test's.
-    pub(crate) fn with_pull(
-        repository_id: RepositoryId,
-        pull: PullOperation,
-        cx: &mut Context<Self>,
-    ) -> Self {
         PullButton {
-            status: status_query(&repository_id, cx),
-            repository_id,
-            pull,
-            _subscriptions: vec![cx.observe_global::<Operations>(|_, cx| cx.notify())],
+            repository: Shown::new(&repository_id, &[Part::Status, Part::Operations], cx),
         }
-    }
-
-    pub fn repository_id(&self) -> &RepositoryId {
-        &self.repository_id
     }
 
     /// Shows another repository's.
     pub fn set_repository(&mut self, repository_id: RepositoryId, cx: &mut Context<Self>) {
-        if self.repository_id != repository_id {
-            self.status = status_query(&repository_id, cx);
-            self.repository_id = repository_id;
-            cx.notify();
-        }
+        self.repository.set(&repository_id, cx);
     }
 
     /// The button as it is now. Until the status has loaded, it's disabled.
     pub fn button(&self, cx: &App) -> ToolbarButton {
-        let id = self.repository_id.clone();
-        let state = self.pull.state(&id, cx);
-        let status = self.status.data();
-        let title = status.as_ref().map_or_else(
+        let repository = self.repository.read(cx);
+        let state = repository.operation_state(PULL);
+        let status = repository.status().data();
+        let title = status.map_or_else(
             || "Pull".to_owned(),
             |status| pull_title(&status.head, status.upstream.as_deref(), status.behind),
         );
-        let blocked = status.as_ref().is_none_or(|status| {
+        let blocked = status.is_none_or(|status| {
             head_pull_blocker(&status.head, status.upstream.as_deref()).is_some()
         });
-        let pull = self.pull.clone();
-        let dismiss = self.pull.clone();
-        let dismissed = id.clone();
+        let pull = self.repository.entity().clone();
+        let dismiss = pull.clone();
         ToolbarButton::new("pull", IconName::Download, "Pull")
             .accent(true)
             .title(title)
@@ -78,10 +52,10 @@ impl PullButton {
             .busy(state.running)
             .count(status.map(|status| status.behind))
             .failure("Pull", state.error, move |_, cx| {
-                dismiss.dismiss(&dismissed, cx)
+                dismiss.update(cx, |repository, cx| repository.dismiss(PULL, cx))
             })
             .on_click(move |_, _, cx| {
-                let _ = pull.pull(&id, cx);
+                pull.update(cx, |repository, cx| drop(repository.pull(cx)));
             })
     }
 }
@@ -97,47 +71,43 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
+    use futures::FutureExt as _;
     use futures::channel::oneshot;
+    use gitto_git::input::NonEmpty;
     use gpui_kit::test::TestWindowExt as _;
-    use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, TestAppContext};
+    use gpui_kit::{AnyWindowHandle, Entity, TestAppContext};
 
     use super::*;
-    use crate::components::repository::test_support::{repository_id, set_status, setup, status};
-    use crate::data::{QueryError, RepositoryOperation};
+    use crate::components::repository::test_support::{
+        fake_git, repository_id, set_status, setup, status,
+    };
+    use crate::data::QueryError;
+    use crate::data::git::{GitTask, RepositoryGit};
 
-    /// A pull that the test settles, and the repositories it was asked to pull.
+    /// A repository's git whose pulls the test settles.
+    #[derive(Default)]
     struct Pulls {
-        calls: RefCell<Vec<String>>,
         settle: RefCell<Vec<oneshot::Sender<Result<(), QueryError>>>>,
     }
 
-    fn pulls() -> (Rc<Pulls>, PullOperation) {
-        let pulls = Rc::new(Pulls {
-            calls: RefCell::new(Vec::new()),
-            settle: RefCell::new(Vec::new()),
-        });
-        let operation = {
-            let pulls = Rc::clone(&pulls);
-            RepositoryOperation::new("pull", move |id: RepositoryId, (), cx: &mut App| {
-                pulls.calls.borrow_mut().push(id.to_string());
-                let (settle, settled) = oneshot::channel();
-                pulls.settle.borrow_mut().push(settle);
-                cx.background_spawn(async move {
-                    settled.await.unwrap_or(Err(QueryError::msg("dropped")))
-                })
-            })
-        };
-        (pulls, PullOperation::with_operation(operation))
+    impl RepositoryGit for Pulls {
+        fn pull(&self, _: Option<NonEmpty>) -> GitTask<()> {
+            let (settle, settled) = oneshot::channel();
+            self.settle.borrow_mut().push(settle);
+            async move { settled.await.unwrap_or(Err(QueryError::msg("dropped"))) }.boxed()
+        }
     }
 
-    fn render(
-        cx: &mut TestAppContext,
-        id: &RepositoryId,
-        pull: PullOperation,
-    ) -> (AnyWindowHandle, Entity<PullButton>) {
+    fn pulls(id: &RepositoryId, cx: &mut TestAppContext) -> Rc<Pulls> {
+        let pulls = Rc::new(Pulls::default());
+        fake_git(id, pulls.clone(), cx);
+        pulls
+    }
+
+    fn render(cx: &mut TestAppContext, id: &RepositoryId) -> (AnyWindowHandle, Entity<PullButton>) {
         let id = id.clone();
         let (window, button) =
-            crate::test_support::open(cx, move |_, cx| PullButton::with_pull(id, pull, cx));
+            crate::test_support::open(cx, move |window, cx| PullButton::new(id, window, cx));
         cx.run_until_parked();
         (window, button)
     }
@@ -151,8 +121,8 @@ mod tests {
         let _dir = setup(cx);
         let repo = repository_id();
         set_status(&repo, status(), cx);
-        let (pulls, pull) = pulls();
-        let (window, button) = render(cx, &repo, pull);
+        let pulls = pulls(&repo, cx);
+        let (window, button) = render(cx, &repo);
 
         let shown = shown(&button, cx);
         assert_eq!(shown.tooltip(), "Pull 2 commits from origin/main");
@@ -161,7 +131,8 @@ mod tests {
 
         cx.update_window(window, |_, window, cx| window.click("pull", cx))
             .unwrap();
-        assert_eq!(*pulls.calls.borrow(), [repo.to_string()]);
+        cx.run_until_parked();
+        assert_eq!(pulls.settle.borrow().len(), 1);
     }
 
     #[gpui_kit::test]
@@ -169,11 +140,12 @@ mod tests {
         let _dir = setup(cx);
         let repo = repository_id();
         set_status(&repo, status(), cx);
-        let (pulls, pull) = pulls();
-        let (window, button) = render(cx, &repo, pull);
+        let pulls = pulls(&repo, cx);
+        let (window, button) = render(cx, &repo);
 
         cx.update_window(window, |_, window, cx| window.click("pull", cx))
             .unwrap();
+        cx.run_until_parked();
         let settle = pulls.settle.borrow_mut().remove(0);
         settle
             .send(Err(QueryError::msg(
@@ -201,8 +173,7 @@ mod tests {
         summary.upstream = None;
         summary.behind = 0;
         set_status(&repo, summary, cx);
-        let (_, pull) = pulls();
-        let (_, button) = render(cx, &repo, pull);
+        let (_, button) = render(cx, &repo);
 
         let shown = shown(&button, cx);
         assert_eq!(shown.tooltip(), "main doesn't track a remote branch.");
@@ -216,11 +187,12 @@ mod tests {
         let other = repository_id();
         set_status(&repo, status(), cx);
         set_status(&other, status(), cx);
-        let (pulls, pull) = pulls();
-        let (window, button) = render(cx, &repo, pull);
+        let pulls = pulls(&repo, cx);
+        let (window, button) = render(cx, &repo);
 
         cx.update_window(window, |_, window, cx| window.click("pull", cx))
             .unwrap();
+        cx.run_until_parked();
         assert!(shown(&button, cx).is_busy());
 
         // Another repository's pull button isn't busy with it…
@@ -251,11 +223,12 @@ mod tests {
         let other = repository_id();
         set_status(&repo, status(), cx);
         set_status(&other, status(), cx);
-        let (pulls, pull) = pulls();
-        let (window, button) = render(cx, &repo, pull);
+        let pulls = pulls(&repo, cx);
+        let (window, button) = render(cx, &repo);
 
         cx.update_window(window, |_, window, cx| window.click("pull", cx))
             .unwrap();
+        cx.run_until_parked();
         button.update(cx, |button, cx| button.set_repository(other.clone(), cx));
         button.update(cx, |button, cx| button.set_repository(repo.clone(), cx));
         let shown = shown(&button, cx);
@@ -263,6 +236,7 @@ mod tests {
         // A second click is ignored while it runs.
         cx.update_window(window, |_, window, cx| window.click("pull", cx))
             .unwrap();
-        assert_eq!(pulls.calls.borrow().len(), 1);
+        cx.run_until_parked();
+        assert_eq!(pulls.settle.borrow().len(), 1);
     }
 }

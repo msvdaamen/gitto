@@ -2,7 +2,6 @@
 //! `components/repository/push-button.tsx`.
 
 use gitto_git::features::remote::schema::PushTarget;
-use gitto_git::features::status::schema::{StatusSummary, Uncommitted};
 use gitto_git::input::RepositoryId;
 use gitto_ui::git::push::push_title;
 use gitto_ui::git::status::head_pull_blocker;
@@ -15,12 +14,9 @@ use gpui_kit::{App, Context, Entity, SharedString, Subscription, Window, div};
 use super::toolbar_button::ToolbarButton;
 use crate::components::ui::dialog::CONFIRM_WIDTH;
 use crate::components::ui::{DialogHeading, IconName, Tone};
-use crate::data::remote::{
-    PullOperation, PushOperation, PushRejection, pull_operation, push_operation, push_rejection,
-    push_target_query,
-};
-use crate::data::status::status_query;
-use crate::data::{Opaque, Operations, Query};
+use crate::data::changes::PUSH;
+use crate::data::remote::{PushRejection, push_rejection};
+use crate::data::{Changed, Part, Repository, Shown};
 use crate::state::lingering::Lingering;
 
 /// Why the remote branch turned a push down, and how git put it.
@@ -81,58 +77,41 @@ impl RejectedCopy {
 /// given; the dialog is open while that repository's push was turned down, so it's there again
 /// when switching back to it.
 pub struct PushButton {
-    repository_id: RepositoryId,
-    target: Query<PushTarget>,
-    status: Query<Opaque<Uncommitted>, StatusSummary>,
-    push: PushOperation,
-    pull: PullOperation,
+    repository: Shown,
     /// What the dialog shows: the rejection, still, while the dialog closes.
     shown: Lingering<Rejection>,
     dialog_open: bool,
-    _subscriptions: Vec<Subscription>,
+    /// Opens and closes the dialog as the repository's push is turned down, and that's dismissed.
+    _push: Subscription,
 }
 
 impl PushButton {
     pub fn new(repository_id: RepositoryId, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        PushButton::with_operations(
-            repository_id,
-            push_operation(),
-            pull_operation(),
-            window,
+        let repository = Shown::new(
+            &repository_id,
+            &[Part::Status, Part::PushTarget, Part::Operations],
             cx,
-        )
-    }
-
-    /// With `push` and `pull` doing the work: a test's.
-    pub(crate) fn with_operations(
-        repository_id: RepositoryId,
-        push: PushOperation,
-        pull: PullOperation,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let subscriptions = vec![
-            cx.observe_global_in::<Operations>(window, |this, window, cx| {
-                this.sync_dialog(window, cx);
-                cx.notify();
-            }),
-        ];
+        );
         let mut button = PushButton {
-            target: push_target_query(&repository_id, cx),
-            status: status_query(&repository_id, cx),
-            repository_id,
-            push,
-            pull,
+            _push: Self::follow_push(repository.entity(), window, cx),
+            repository,
             shown: Lingering::default(),
             dialog_open: false,
-            _subscriptions: subscriptions,
         };
         button.sync_dialog(window, cx);
         button
     }
 
-    pub fn repository_id(&self) -> &RepositoryId {
-        &self.repository_id
+    fn follow_push(
+        repository: &Entity<Repository>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Subscription {
+        cx.subscribe_in(repository, window, |this, _, Changed(part), window, cx| {
+            if *part == Part::Operations {
+                this.sync_dialog(window, cx);
+            }
+        })
     }
 
     /// Shows another repository's.
@@ -142,19 +121,16 @@ impl PushButton {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.repository_id != repository_id {
-            self.target = push_target_query(&repository_id, cx);
-            self.status = status_query(&repository_id, cx);
-            self.repository_id = repository_id;
+        if self.repository.set(&repository_id, cx) {
+            self._push = Self::follow_push(self.repository.entity(), window, cx);
             self.sync_dialog(window, cx);
-            cx.notify();
         }
     }
 
     /// Why the remote branch turned the last push down, if it did: asked about in the dialog
     /// rather than shown as a failure.
     pub fn rejected(&self, cx: &App) -> Option<Rejection> {
-        let error = self.push.state(&self.repository_id, cx).error?;
+        let error = self.repository.read(cx).operation_state(PUSH).error?;
         let kind = push_rejection(Some(&error))?;
         Some(Rejection {
             kind,
@@ -164,12 +140,13 @@ impl PushButton {
 
     /// Whether pulling would bring in the remote branch's commits: it's the one pulled from, and
     /// the branch can be pulled.
-    pub fn can_pull(&self) -> bool {
-        let pullable = self.status.data().is_some_and(|status| {
+    pub fn can_pull(&self, cx: &App) -> bool {
+        let repository = self.repository.read(cx);
+        let pullable = repository.status().data().is_some_and(|status| {
             head_pull_blocker(&status.head, status.upstream.as_deref()).is_none()
         });
         let pulls_from = matches!(
-            self.target.data(),
+            repository.push_target().data(),
             Some(PushTarget::Remote {
                 pulls_from: true,
                 ..
@@ -216,7 +193,7 @@ impl PushButton {
             kind: PushRejection::Behind,
             message: String::new(),
         });
-        RejectedCopy::of(&rejection, self.can_pull())
+        RejectedCopy::of(&rejection, self.can_pull(cx))
     }
 
     fn rejected_footer(this: &Entity<Self>, copy: &RejectedCopy) -> DialogFooter {
@@ -260,28 +237,32 @@ impl PushButton {
     /// Leaves the remote alone.
     fn cancel_rejected(&mut self, cx: &mut Context<Self>) {
         self.dialog_open = false;
-        self.push.dismiss(&self.repository_id, cx);
+        self.repository
+            .update(cx, |repository, cx| repository.dismiss(PUSH, cx));
     }
 
     /// Pulls the remote branch's commits instead.
     fn pull_instead(&mut self, cx: &mut Context<Self>) {
         self.dialog_open = false;
-        self.push.dismiss(&self.repository_id, cx);
-        let _ = self.pull.pull(&self.repository_id, cx);
+        self.repository.update(cx, |repository, cx| {
+            repository.dismiss(PUSH, cx);
+            drop(repository.pull(cx));
+        });
     }
 
     /// Replaces the remote branch's commits.
     fn force_push(&mut self, cx: &mut Context<Self>) {
         self.dialog_open = false;
-        let _ = self.push.force_push(&self.repository_id, cx);
+        self.repository
+            .update(cx, |repository, cx| drop(repository.push(true, cx)));
     }
 
     /// The button as it is now. Until where it pushes has loaded, it's disabled.
     pub fn button(&self, cx: &App) -> ToolbarButton {
-        let id = self.repository_id.clone();
-        let state = self.push.state(&id, cx);
-        let target = self.target.data();
-        let title: SharedString = match (&target, self.target.error()) {
+        let repository = self.repository.read(cx);
+        let state = repository.operation_state(PUSH);
+        let target = repository.push_target().data();
+        let title: SharedString = match (&target, repository.push_target().error()) {
             (Some(target), _) => push_title(target).into(),
             (None, Some(error)) => {
                 format!("Couldn't tell where to push: {}", error.message()).into()
@@ -296,19 +277,18 @@ impl PushButton {
         let failure = state
             .error
             .filter(|error| push_rejection(Some(error)).is_none());
-        let push = self.push.clone();
-        let dismiss = self.push.clone();
-        let dismissed = id.clone();
+        let push = self.repository.entity().clone();
+        let dismiss = push.clone();
         ToolbarButton::new("push", IconName::Upload, "Push")
             .title(title)
             .disabled(!pushable || state.running)
             .busy(state.running)
             .count(ahead)
             .failure("Push", failure, move |_, cx| {
-                dismiss.dismiss(&dismissed, cx)
+                dismiss.update(cx, |repository, cx| repository.dismiss(PUSH, cx))
             })
             .on_click(move |_, _, cx| {
-                let _ = push.push(&id, cx);
+                push.update(cx, |repository, cx| drop(repository.push(false, cx)));
             })
     }
 }
@@ -324,15 +304,18 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
+    use futures::FutureExt as _;
     use gitto_git::features::remote::schema::PushTarget;
+    use gitto_git::input::NonEmpty;
     use gpui_kit::test::TestWindowExt as _;
-    use gpui_kit::{AnyWindowHandle, AppContext as _, TestAppContext};
+    use gpui_kit::{AnyWindowHandle, TestAppContext};
 
     use super::*;
     use crate::components::repository::test_support::{
-        has_dialog, repository_id, set_push_target, set_status, setup, status,
+        fake_git, has_dialog, repository_id, set_push_target, set_status, setup, status,
     };
-    use crate::data::{QueryError, RepositoryOperation};
+    use crate::data::QueryError;
+    use crate::data::git::{GitTask, RepositoryGit};
 
     const REWRITTEN: &str = "origin/main still has main's commits from before a rebase or amend.";
     const BEHIND: &str = "origin/main has commits you haven't pulled yet.";
@@ -354,46 +337,41 @@ mod tests {
         })
     }
 
-    /// The pushes asked for (whether forced), each answered by `answer`; and the pulls.
+    type Answer = Box<dyn Fn(bool, usize) -> Result<(), QueryError>>;
+
+    /// A repository's git that records the pushes asked for (whether forced), each answered by
+    /// `answer`, and the pulls.
     struct Calls {
         pushes: RefCell<Vec<bool>>,
         pulls: RefCell<usize>,
+        answer: Answer,
     }
 
-    fn operations(
-        answer: impl Fn(bool, usize) -> Result<(), QueryError> + 'static,
-    ) -> (Rc<Calls>, PushOperation, PullOperation) {
-        let calls = Rc::new(Calls {
+    impl RepositoryGit for Calls {
+        fn push(&self, force: bool) -> GitTask<()> {
+            self.pushes.borrow_mut().push(force);
+            let result = (self.answer)(force, self.pushes.borrow().len());
+            async move { result }.boxed()
+        }
+
+        fn pull(&self, _: Option<NonEmpty>) -> GitTask<()> {
+            *self.pulls.borrow_mut() += 1;
+            async { Ok(()) }.boxed()
+        }
+    }
+
+    fn operations(answer: impl Fn(bool, usize) -> Result<(), QueryError> + 'static) -> Rc<Calls> {
+        Rc::new(Calls {
             pushes: RefCell::new(Vec::new()),
             pulls: RefCell::new(0),
-        });
-        let push = {
-            let calls = Rc::clone(&calls);
-            RepositoryOperation::new("push", move |_, force: bool, cx: &mut App| {
-                calls.pushes.borrow_mut().push(force);
-                let result = answer(force, calls.pushes.borrow().len());
-                cx.background_spawn(async move { result })
-            })
-        };
-        let pull = {
-            let calls = Rc::clone(&calls);
-            RepositoryOperation::new("pull", move |_, (), cx: &mut App| {
-                *calls.pulls.borrow_mut() += 1;
-                cx.background_spawn(async { Ok(()) })
-            })
-        };
-        (
-            calls,
-            PushOperation::with_operation(push),
-            PullOperation::with_operation(pull),
-        )
+            answer: Box::new(answer),
+        })
     }
 
     fn render(
         cx: &mut TestAppContext,
         target: PushTarget,
-        push: PushOperation,
-        pull: PullOperation,
+        calls: &Rc<Calls>,
     ) -> (tempfile::TempDir, AnyWindowHandle, Entity<PushButton>) {
         let dir = setup(cx);
         let id = repository_id();
@@ -402,9 +380,9 @@ mod tests {
         summary.behind = 1;
         set_status(&id, summary, cx);
         set_push_target(&id, target, cx);
-        let (window, button) = crate::test_support::open(cx, move |window, cx| {
-            PushButton::with_operations(id, push, pull, window, cx)
-        });
+        fake_git(&id, calls.clone(), cx);
+        let (window, button) =
+            crate::test_support::open(cx, move |window, cx| PushButton::new(id, window, cx));
         (dir, window, button)
     }
 
@@ -420,8 +398,8 @@ mod tests {
 
     #[gpui_kit::test]
     fn pushes_and_shows_how_many_commits_there_are_to_push(cx: &mut TestAppContext) {
-        let (calls, push, pull) = operations(|_, _| Ok(()));
-        let (_dir, window, button) = render(cx, target(), push, pull);
+        let calls = operations(|_, _| Ok(()));
+        let (_dir, window, button) = render(cx, target(), &calls);
 
         let shown = button.read_with(cx, |button, cx| button.button(cx));
         assert_eq!(shown.tooltip(), "Push 2 commits to origin/main");
@@ -434,14 +412,14 @@ mod tests {
     fn offers_to_force_push_when_the_remote_has_the_commits_from_before_a_rebase(
         cx: &mut TestAppContext,
     ) {
-        let (calls, push, pull) = operations(|_, call| {
+        let calls = operations(|_, call| {
             if call == 1 {
                 Err(rejected(true))
             } else {
                 Ok(())
             }
         });
-        let (_dir, window, button) = render(cx, target(), push, pull);
+        let (_dir, window, button) = render(cx, target(), &calls);
 
         click(window, "push", cx);
         assert!(has_dialog(window, cx));
@@ -461,8 +439,8 @@ mod tests {
 
     #[gpui_kit::test]
     fn offers_to_pull_and_not_to_force_push_over_someone_elses_commits(cx: &mut TestAppContext) {
-        let (calls, push, pull) = operations(|_, _| Err(rejected(false)));
-        let (_dir, window, button) = render(cx, target(), push, pull);
+        let calls = operations(|_, _| Err(rejected(false)));
+        let (_dir, window, button) = render(cx, target(), &calls);
 
         click(window, "push", cx);
         assert!(has_dialog(window, cx));
@@ -478,14 +456,14 @@ mod tests {
 
     #[gpui_kit::test]
     fn doesnt_offer_to_pull_from_another_branch_than_it_pushes_to(cx: &mut TestAppContext) {
-        let (calls, push, pull) = operations(|_, _| Err(rejected(false)));
+        let calls = operations(|_, _| Err(rejected(false)));
         let fork = PushTarget::Remote {
             name: "fork/main".into(),
             is_new: false,
             ahead: 2,
             pulls_from: false,
         };
-        let (_dir, window, button) = render(cx, fork, push, pull);
+        let (_dir, window, button) = render(cx, fork, &calls);
         assert_eq!(
             button.read_with(cx, |button, cx| button.button(cx).tooltip().clone()),
             "Push 2 commits to fork/main"
@@ -503,8 +481,8 @@ mod tests {
 
     #[gpui_kit::test]
     fn leaves_the_remote_alone_when_cancelled(cx: &mut TestAppContext) {
-        let (calls, push, pull) = operations(|_, _| Err(rejected(true)));
-        let (_dir, window, button) = render(cx, target(), push, pull);
+        let calls = operations(|_, _| Err(rejected(true)));
+        let (_dir, window, button) = render(cx, target(), &calls);
 
         click(window, "push", cx);
         assert!(has_dialog(window, cx));
@@ -520,9 +498,8 @@ mod tests {
 
     #[gpui_kit::test]
     fn says_why_a_push_failed_otherwise(cx: &mut TestAppContext) {
-        let (_, push, pull) =
-            operations(|_, _| Err(QueryError::msg("Permission denied (publickey).")));
-        let (_dir, window, button) = render(cx, target(), push, pull);
+        let calls = operations(|_, _| Err(QueryError::msg("Permission denied (publickey).")));
+        let (_dir, window, button) = render(cx, target(), &calls);
 
         click(window, "push", cx);
         let shown = button.read_with(cx, |button, cx| button.button(cx));
@@ -535,14 +512,14 @@ mod tests {
 
     #[gpui_kit::test]
     fn says_when_it_pushes_to_a_new_remote_branch(cx: &mut TestAppContext) {
-        let (_, push, pull) = operations(|_, _| Ok(()));
+        let calls = operations(|_, _| Ok(()));
         let new = PushTarget::Remote {
             name: "origin/feature".into(),
             is_new: true,
             ahead: 2,
             pulls_from: true,
         };
-        let (_dir, _, button) = render(cx, new, push, pull);
+        let (_dir, _, button) = render(cx, new, &calls);
         let shown = button.read_with(cx, |button, cx| button.button(cx));
         assert_eq!(
             shown.tooltip(),
@@ -553,11 +530,11 @@ mod tests {
 
     #[gpui_kit::test]
     fn is_disabled_saying_why_when_theres_nothing_to_push_to(cx: &mut TestAppContext) {
-        let (_, push, pull) = operations(|_, _| Ok(()));
+        let calls = operations(|_, _| Ok(()));
         let blocked = PushTarget::Blocked {
             reason: "There's no remote to push to.".into(),
         };
-        let (_dir, _, button) = render(cx, blocked, push, pull);
+        let (_dir, _, button) = render(cx, blocked, &calls);
         let shown = button.read_with(cx, |button, cx| button.button(cx));
         assert_eq!(shown.tooltip(), "There's no remote to push to.");
         assert!(shown.is_disabled());

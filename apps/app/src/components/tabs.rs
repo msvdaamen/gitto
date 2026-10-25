@@ -14,9 +14,7 @@ use gpui_kit::{
 
 use super::remove_repository_dialog::open_remove_repository_dialog;
 use crate::components::ui::{FailurePopover, GittoIcon, Icon, IconName};
-use crate::data::repositories::{
-    OpenRepository, remove_repository, reorder_repositories,
-};
+use crate::data::repositories::{OpenRepository, remove_repository, reorder_repositories};
 use crate::data::{AppChanged, AppData, AppPart, QueryError};
 use crate::state::router::{Route, Router};
 use crate::theme::PaletteExt as _;

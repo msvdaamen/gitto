@@ -9,17 +9,14 @@
 use std::rc::Rc;
 
 use gitto_git::features::worktree::schema::Worktree;
-use gitto_git::input::RepositoryId;
 use gitto_ui::git::worktree::can_open_worktree;
 use gpui_kit::component::menu::PopupMenu;
-use gpui_kit::{App, Window};
+use gpui_kit::{App, Entity, Window};
 
 use super::sidebar_section::SectionFailure;
 use crate::components::ui::{IconName, context_menu_item};
-use crate::data::worktree::{WorktreeActions, worktree_actions};
-
-/// Forgets why an action last failed on a repository, by its id.
-type Dismiss = Rc<dyn Fn(&str, &mut App)>;
+use crate::data::Repository;
+use crate::data::changes::{ADD_WORKTREE, OPEN_WORKTREE, REMOVE_WORKTREE};
 
 /// The menu of what can be done with a worktree. Opening it adds it to Gitto's repositories, as a
 /// repository of its own, and shows it; not for the one on show, a bare one, which has no files,
@@ -28,94 +25,72 @@ type Dismiss = Rc<dyn Fn(&str, &mut App)>;
 /// each running ([`is_busy`](Self::is_busy)), and why it failed beside it
 /// ([`failure`](Self::failure)), as it does a worktree being added or opened from a branch's menu
 /// (see `AddWorktreeDialog` and `branch_menu`).
-#[derive(Clone)]
-pub struct WorktreeMenu {
-    actions: WorktreeActions,
-}
+pub struct WorktreeMenu;
 
 impl WorktreeMenu {
-    /// With the data layer's actions.
-    pub fn new() -> Self {
-        WorktreeMenu::with_actions(worktree_actions())
+    /// Whether a worktree is being added, opened or removed on `repository`.
+    pub fn is_busy(repository: &Repository) -> bool {
+        repository.worktrees_changing()
     }
 
-    /// With `actions`: a test's.
-    pub fn with_actions(actions: WorktreeActions) -> Self {
-        WorktreeMenu { actions }
-    }
-
-    /// Whether a worktree is being added, opened or removed on the repository `id`.
-    pub fn is_busy(&self, id: &str, cx: &App) -> bool {
-        WorktreeActions::is_pending(id, cx)
-    }
-
-    /// Why removing, adding or opening a worktree failed on the repository `id`, if it did. One
-    /// at a time, the removal's first, then the addition's: each can have failed, one after the
-    /// other.
-    pub fn failure(&self, id: &RepositoryId, cx: &App) -> SectionFailure {
-        let remove = self.actions.remove.state(id, cx);
-        let add = self.actions.add.state(id, cx);
-        let (title, error, dismiss): (_, _, Dismiss) = if remove.error.is_some() {
-            let remove_action = self.actions.remove.clone();
-            (
-                "Remove worktree",
-                remove.error,
-                Rc::new(move |id, cx| remove_action.dismiss(id, cx)),
-            )
+    /// Why removing, adding or opening a worktree failed on `repository`, if it did. One at a
+    /// time, the removal's first, then the addition's: each can have failed, one after the other.
+    pub fn failure(repository: &Entity<Repository>, cx: &App) -> SectionFailure {
+        let shown = repository.read(cx);
+        let remove = shown.operation_state(REMOVE_WORKTREE);
+        let add = shown.operation_state(ADD_WORKTREE);
+        let (title, error, name) = if remove.error.is_some() {
+            ("Remove worktree", remove.error, REMOVE_WORKTREE)
         } else if add.error.is_some() {
-            let add_action = self.actions.add.clone();
-            (
-                "Add worktree",
-                add.error,
-                Rc::new(move |id, cx| add_action.dismiss(id, cx)),
-            )
+            ("Add worktree", add.error, ADD_WORKTREE)
         } else {
-            let open = self.actions.open.clone();
-            (
-                "Open worktree",
-                open.state(id, cx).error,
-                Rc::new(move |id, cx| open.dismiss(id, cx)),
-            )
+            let open = shown.operation_state(OPEN_WORKTREE);
+            ("Open worktree", open.error, OPEN_WORKTREE)
         };
-        let id = id.clone();
+        let repository = repository.clone();
         SectionFailure {
             title: title.into(),
             error,
-            on_dismiss: Rc::new(move |_, cx| dismiss(&id, cx)),
+            on_dismiss: Rc::new(move |_, cx| {
+                repository.update(cx, |repository, cx| repository.dismiss(name, cx))
+            }),
         }
     }
 
     /// Opens `worktree` in Gitto, e.g. the one whose row was double-clicked, if it can be.
-    pub fn open(&self, id: &RepositoryId, worktree: &Worktree, cx: &mut App) {
+    pub fn open(repository: &Entity<Repository>, worktree: &Worktree, cx: &mut App) {
         if can_open_worktree(worktree) {
-            let _ = self.actions.open.run(id, worktree.path.clone(), cx);
+            let path = worktree.path.clone();
+            repository.update(cx, |repository, cx| {
+                drop(repository.open_worktree(path, cx))
+            });
         }
     }
 
-    /// Removes `worktree` on the repository `id`, once that's confirmed: not while another
-    /// worktree action runs.
-    pub fn remove(&self, id: &RepositoryId, worktree: &Worktree, cx: &mut App) {
-        let _ = self.actions.remove.run(id, worktree.path.clone(), cx);
+    /// Removes `worktree` from `repository`, once that's confirmed: not while another worktree
+    /// action runs.
+    pub fn remove(repository: &Entity<Repository>, worktree: &Worktree, cx: &mut App) {
+        let path = worktree.path.clone();
+        repository.update(cx, |repository, cx| {
+            drop(repository.remove_worktree(path, cx))
+        });
     }
 
-    /// The menu's items for `worktree` on the repository `id`; `on_remove` asks before removing
-    /// it.
+    /// The menu's items for `worktree` of `repository`; `on_remove` asks before removing it.
     pub fn items(
-        &self,
         menu: PopupMenu,
-        id: &RepositoryId,
+        repository: &Entity<Repository>,
         worktree: &Worktree,
         on_remove: impl Fn(&mut Window, &mut App) + 'static,
         cx: &App,
     ) -> PopupMenu {
-        let pending = self.is_busy(id, cx);
-        let this = self.clone();
-        let opened = (id.clone(), worktree.clone());
+        let pending = WorktreeMenu::is_busy(repository.read(cx));
+        let opened = (repository.clone(), worktree.clone());
         menu.item(context_menu_item(
             IconName::FolderOpen,
             "Open worktree",
             !can_open_worktree(worktree) || pending,
-            move |_, _, cx| this.open(&opened.0, &opened.1, cx),
+            move |_, _, cx| WorktreeMenu::open(&opened.0, &opened.1, cx),
         ))
         .item(context_menu_item(
             IconName::FolderX,
@@ -123,11 +98,5 @@ impl WorktreeMenu {
             worktree.main || worktree.current || pending,
             move |_, window, cx| on_remove(window, cx),
         ))
-    }
-}
-
-impl Default for WorktreeMenu {
-    fn default() -> Self {
-        WorktreeMenu::new()
     }
 }

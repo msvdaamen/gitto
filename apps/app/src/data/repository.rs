@@ -185,6 +185,12 @@ impl Repository {
         &self.git
     }
 
+    /// Asks `git` from now on: for tests, which make up what a repository's git answers.
+    #[cfg(test)]
+    pub fn set_git(&mut self, git: Rc<dyn RepositoryGit>) {
+        self.git = git;
+    }
+
     pub fn status(&self) -> &Loaded<Opaque<Uncommitted>> {
         &self.status
     }
@@ -395,13 +401,23 @@ impl Repository {
     /// Loads again what's shown of the uncommitted changes, after a file changed, or the index: the
     /// status, and the patches and conflicted files on show.
     pub fn reload_uncommitted(&mut self, cx: &mut Context<Self>) -> Reloading {
+        self.reload_uncommitted_but(None, cx)
+    }
+
+    /// [`reload_uncommitted`](Self::reload_uncommitted), but for the patch `kept`, which is up to
+    /// date: one a change just told.
+    pub(crate) fn reload_uncommitted_but(
+        &mut self,
+        kept: Option<PatchKey>,
+        cx: &mut Context<Self>,
+    ) -> Reloading {
         let mut waits = Vec::new();
         if self.status.is_used() {
             waits.extend(self.reload(Part::Status, cx).0);
         }
-        let patches = self
-            .patches
-            .held_and_drop_rest(|(source, _)| is_uncommitted(source));
+        let patches = self.patches.held_and_drop_rest(|key| {
+            is_uncommitted(&key.0) && kept.as_ref().is_none_or(|kept| kept != key)
+        });
         for key in patches {
             let file = self
                 .patches
@@ -851,6 +867,23 @@ impl Repository {
         self.changed(Part::PushedTo, cx);
     }
 
+    /// Puts `patch` in place of the patch of the file at `path` in `source`, and of a load of it
+    /// under way, keeping what it says of the file; whether there was one to replace.
+    pub(crate) fn replace_patch(&mut self, source: &DiffSource, path: &str, patch: &str) -> bool {
+        let Some(loaded) = self.patches.get_mut(&(source.clone(), path.to_owned())) else {
+            return false;
+        };
+        let Some(last) = loaded.data().cloned() else {
+            return false;
+        };
+        loaded.cancel();
+        loaded.set(FilePatch {
+            patch: Arc::from(patch),
+            ..last
+        });
+        true
+    }
+
     pub fn set_patch(&mut self, source: &DiffSource, patch: FilePatch, cx: &mut Context<Self>) {
         self.patches
             .set((source.clone(), patch.file.path.clone()), patch);
@@ -1015,6 +1048,73 @@ pub fn observe_parts<V: 'static>(
             cx.notify();
         }
     })
+}
+
+/// What a view shows of a repository: its entity, opened (see [`Repositories::open`]), with the
+/// parts the view shows loaded, and rendering the view again as they change. A view keeps one, and
+/// shows another repository's with [`set`](Self::set).
+pub struct Shown {
+    repository: Entity<Repository>,
+    parts: &'static [Part],
+    _changes: Subscription,
+}
+
+impl Shown {
+    /// The repository `id`'s `parts`, for the view `cx` is of.
+    pub fn new<V: 'static>(id: &RepositoryId, parts: &'static [Part], cx: &mut Context<V>) -> Self {
+        let repository = Repositories::open(id, cx);
+        Shown::of(repository, parts, cx)
+    }
+
+    fn of<V: 'static>(
+        repository: Entity<Repository>,
+        parts: &'static [Part],
+        cx: &mut Context<V>,
+    ) -> Self {
+        repository.update(cx, |repository, cx| {
+            for part in parts {
+                repository.show(*part, cx);
+            }
+        });
+        let changes = observe_parts(&repository, parts, cx);
+        Shown {
+            repository,
+            parts,
+            _changes: changes,
+        }
+    }
+
+    pub fn entity(&self) -> &Entity<Repository> {
+        &self.repository
+    }
+
+    /// The id of the repository on show.
+    pub fn id<'a>(&self, cx: &'a App) -> &'a RepositoryId {
+        self.repository.read(cx).id()
+    }
+
+    pub fn read<'a>(&self, cx: &'a App) -> &'a Repository {
+        self.repository.read(cx)
+    }
+
+    pub fn update<R>(
+        &self,
+        cx: &mut App,
+        update: impl FnOnce(&mut Repository, &mut Context<Repository>) -> R,
+    ) -> R {
+        self.repository.update(cx, update)
+    }
+
+    /// Shows the repository `id`'s, unless it's this one's; whether it was another.
+    pub fn set<V: 'static>(&mut self, id: &RepositoryId, cx: &mut Context<V>) -> bool {
+        if self.repository.read(cx).id() == id {
+            return false;
+        }
+        let repository = Repositories::open(id, cx);
+        *self = Shown::of(repository, self.parts, cx);
+        cx.notify();
+        true
+    }
 }
 
 /// `limit` commits of the log after skipping `skip`, as a [`Log`] of the repository `id`.

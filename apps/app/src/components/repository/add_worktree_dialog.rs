@@ -1,12 +1,8 @@
 //! Placing a new worktree for a branch. Ported from
 //! `components/repository/add-worktree-dialog.tsx`.
 
-use std::sync::Arc;
-
-use gitto_git::features::refs::schema::Ref;
 use gitto_git::features::worktree::schema::Worktree;
 use gitto_git::input::RepositoryId;
-use gitto_repository::Repository;
 use gitto_ui::git::status::branch_name;
 use gitto_ui::git::worktree::{checked_out_in, suggest_worktree_folder};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -19,10 +15,10 @@ use gpui_kit::{
 
 use super::branch_form::NAME_PLACEHOLDER;
 use crate::components::ui::{FormField, Icon, IconName};
-use crate::data::refs::refs_query;
-use crate::data::repositories::{find, repositories_query};
-use crate::data::worktree::{AddWorktreeInput, WorktreeActions, worktree_actions, worktrees_query};
-use crate::data::{Operations, Query};
+use crate::data::changes::ADD_WORKTREE;
+use crate::data::repositories::find;
+use crate::data::worktree::AddWorktreeInput;
+use crate::data::{AppData, AppPart, Part, Shown};
 use crate::services::SystemContext;
 use crate::state::lingering::Lingering;
 use crate::theme::PaletteExt as _;
@@ -39,11 +35,7 @@ const WIDTH: f32 = 26.67;
 /// kept to fix. An entity, kept by the branch menus' provider, of one repository: another starts
 /// with neither typed.
 pub struct AddWorktreeDialog {
-    repository_id: RepositoryId,
-    repositories: Query<Vec<Repository>>,
-    worktrees: Query<Arc<[Worktree]>>,
-    refs: Query<Arc<[Ref]>>,
-    actions: WorktreeActions,
+    repository: Shown,
     folder: Entity<InputState>,
     new_branch: Entity<InputState>,
     /// The branch it places a worktree for: still named while the dialog closes.
@@ -59,16 +51,6 @@ pub struct AddWorktreeDialog {
 
 impl AddWorktreeDialog {
     pub fn new(repository_id: RepositoryId, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        AddWorktreeDialog::with_actions(repository_id, worktree_actions(), window, cx)
-    }
-
-    /// With `actions` adding the worktree: a test's.
-    pub(crate) fn with_actions(
-        repository_id: RepositoryId,
-        actions: WorktreeActions,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
         let folder = cx.new(|cx| InputState::new(window, cx).placeholder("/path/to/folder"));
         let new_branch = cx.new(|cx| InputState::new(window, cx));
         let on_input = |this: &mut Self,
@@ -81,16 +63,16 @@ impl AddWorktreeDialog {
             _ => {}
         };
         let subscriptions = vec![
-            cx.observe_global::<Operations>(|_, cx| cx.notify()),
             cx.subscribe_in(&folder, window, on_input),
             cx.subscribe_in(&new_branch, window, on_input),
         ];
+        AppData::global(cx).update(cx, |data, cx| data.show(AppPart::Repositories, cx));
         AddWorktreeDialog {
-            repositories: repositories_query(cx),
-            worktrees: worktrees_query(&repository_id, cx),
-            refs: refs_query(&repository_id, cx),
-            repository_id,
-            actions,
+            repository: Shown::new(
+                &repository_id,
+                &[Part::Worktrees, Part::Refs, Part::Operations],
+                cx,
+            ),
             folder,
             new_branch,
             branch: Lingering::default(),
@@ -109,12 +91,9 @@ impl AddWorktreeDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.repository_id == repository_id {
+        if !self.repository.set(&repository_id, cx) {
             return;
         }
-        self.worktrees = worktrees_query(&repository_id, cx);
-        self.refs = refs_query(&repository_id, cx);
-        self.repository_id = repository_id;
         for input in [&self.folder, &self.new_branch] {
             input.update(cx, |input, cx| input.set_value("", window, cx));
         }
@@ -122,7 +101,6 @@ impl AddWorktreeDialog {
             self.open = false;
             window.close_dialog(cx);
         }
-        cx.notify();
     }
 
     pub fn is_open(&self) -> bool {
@@ -144,22 +122,26 @@ impl AddWorktreeDialog {
 
     /// Where the branch (for a remote one, the local branch tracking it) is checked out already,
     /// if anywhere: then a new branch has to be made.
-    fn clash(&self) -> Option<Worktree> {
-        let worktrees = self.worktrees.data();
-        let refs = self.refs.data();
+    fn clash(&self, cx: &App) -> Option<Worktree> {
+        let repository = self.repository.read(cx);
+        let worktrees = repository
+            .worktrees()
+            .data()
+            .map(|worktrees| &worktrees[..]);
+        let refs = repository.refs().data().map(|refs| &refs[..]);
         let branch = self.branch.get().map_or("", String::as_str);
-        checked_out_in(worktrees.as_deref(), refs.as_deref(), branch).cloned()
+        checked_out_in(worktrees, refs, branch).cloned()
     }
 
     /// Whether a new branch has to be named.
-    pub fn needs_new_branch(&self) -> bool {
-        self.clash().is_some()
+    pub fn needs_new_branch(&self, cx: &App) -> bool {
+        self.clash(cx).is_some()
     }
 
     /// What adding it does.
-    pub fn summary(&self) -> String {
+    pub fn summary(&self, cx: &App) -> String {
         let name = self.name();
-        if let Some(clash) = self.clash() {
+        if let Some(clash) = self.clash(cx) {
             let here = if clash.current {
                 "here".to_owned()
             } else {
@@ -198,19 +180,22 @@ impl AddWorktreeDialog {
     /// Whether what's typed can be added: a folder, and a new branch if one has to be named.
     pub fn is_valid(&self, cx: &App) -> bool {
         !Self::typed(&self.folder, cx).is_empty()
-            && (!self.needs_new_branch() || !Self::typed(&self.new_branch, cx).is_empty())
+            && (!self.needs_new_branch(cx) || !Self::typed(&self.new_branch, cx).is_empty())
     }
 
     /// Opens it for `branch`, by its full ref name, suggesting a folder afresh, unless one was
     /// typed and kept after a failure.
     pub fn open(&mut self, branch: String, window: &mut Window, cx: &mut Context<Self>) {
         // Out of the way of the folder and name, which are kept after a failure to fix them.
-        self.actions.add.dismiss(&self.repository_id, cx);
+        self.repository
+            .update(cx, |repository, cx| repository.dismiss(ADD_WORKTREE, cx));
         let folder = Self::typed(&self.folder, cx);
-        let repository = self
-            .repositories
+        let id = self.repository.id(cx);
+        let repository = AppData::global(cx)
+            .read(cx)
+            .repositories()
             .data()
-            .and_then(|list| find(&list, &self.repository_id).cloned());
+            .and_then(|list| find(list, id).cloned());
         if (folder.is_empty() || folder == self.suggested)
             && let Some(repository) = repository
         {
@@ -250,13 +235,13 @@ impl AddWorktreeDialog {
         let (summary, needs_new_branch, name, folder, new_branch, valid, blocked) = {
             let shown = this.read(cx);
             (
-                shown.summary(),
-                shown.needs_new_branch(),
+                shown.summary(cx),
+                shown.needs_new_branch(cx),
                 shown.name(),
                 shown.folder.clone(),
                 shown.new_branch.clone(),
                 shown.is_valid(cx),
-                WorktreeActions::add_is_blocked(&shown.repository_id, cx),
+                shown.repository.read(cx).add_worktree_blocked(),
             )
         };
         let placeholder: SharedString = if needs_new_branch {
@@ -347,10 +332,7 @@ impl AddWorktreeDialog {
     /// Adds the worktree, and closes the dialog. Once it's added, the folder and name are
     /// cleared, unless others are typed by then.
     fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.open
-            || !self.is_valid(cx)
-            || WorktreeActions::add_is_blocked(&self.repository_id, cx)
-        {
+        if !self.open || !self.is_valid(cx) || self.repository.read(cx).add_worktree_blocked() {
             return;
         }
         let Some(branch) = self.branch.get().cloned() else {
@@ -366,7 +348,10 @@ impl AddWorktreeDialog {
             branch,
             new_branch: (!made.is_empty()).then(|| made.clone()),
         };
-        let Some(done) = self.actions.add.run(&self.repository_id, input, cx) else {
+        let done = self
+            .repository
+            .update(cx, |repository, cx| repository.add_worktree(input, cx));
+        let Some(done) = done else {
             return;
         };
         cx.spawn_in(window, async move |this, cx| {
@@ -394,14 +379,36 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use gitto_git::features::refs::schema::RefKind;
+    use futures::FutureExt as _;
+    use gitto_git::features::refs::schema::{Ref, RefKind};
+    use gitto_git::input::{BranchName, BranchRef, Folder};
     use gpui_kit::{AnyWindowHandle, AppContext as _, IntoElement, Render, TestAppContext};
 
     use super::*;
     use crate::components::repository::test_support::{
-        Repositories, repository, repository_id, set_refs, set_worktrees, setup_with,
+        Repositories, fake_git, repository, repository_id, set_refs, set_worktrees, setup_with,
     };
-    use crate::data::{QueryError, RepositoryOperation};
+    use crate::data::git::{GitTask, RepositoryGit};
+
+    /// A repository's git that records the worktrees asked to be added.
+    #[derive(Default)]
+    struct Adds(RefCell<Vec<AddWorktreeInput>>);
+
+    impl RepositoryGit for Adds {
+        fn add_worktree(
+            &self,
+            folder: Folder,
+            branch: BranchRef,
+            new_branch: Option<BranchName>,
+        ) -> GitTask<()> {
+            self.0.borrow_mut().push(AddWorktreeInput {
+                path: folder.as_str().to_owned(),
+                branch: branch.as_str().to_owned(),
+                new_branch: new_branch.map(|name| name.as_str().to_owned()),
+            });
+            async { Ok(()) }.boxed()
+        }
+    }
 
     struct Host {
         dialog: Entity<AddWorktreeDialog>,
@@ -442,7 +449,7 @@ mod tests {
 
     fn render(
         cx: &mut TestAppContext,
-        adds: &Rc<RefCell<Vec<AddWorktreeInput>>>,
+        adds: &Rc<Adds>,
     ) -> (
         tempfile::TempDir,
         AnyWindowHandle,
@@ -465,24 +472,9 @@ mod tests {
             vec![local("main", Some("origin/main")), local("topic", None)],
             cx,
         );
-        let busy = |id: &str, cx: &App| WorktreeActions::is_pending(id, cx);
-        let unused = RepositoryOperation::new("unused", |_, _: String, cx: &mut App| {
-            cx.background_spawn(async { Ok::<_, QueryError>(()) })
-        });
-        let actions = WorktreeActions {
-            add: RepositoryOperation::new("add-worktree", {
-                let adds = Rc::clone(adds);
-                move |_, input: AddWorktreeInput, cx: &mut App| {
-                    adds.borrow_mut().push(input);
-                    cx.background_spawn(async { Ok(()) })
-                }
-            })
-            .one_at_a_time(WorktreeActions::add_is_blocked),
-            remove: unused.clone().one_at_a_time(busy),
-            open: unused.one_at_a_time(busy),
-        };
+        fake_git(&id, adds.clone(), cx);
         let (window, host) = crate::test_support::open(cx, move |window, cx| Host {
-            dialog: cx.new(|cx| AddWorktreeDialog::with_actions(id, actions, window, cx)),
+            dialog: cx.new(|cx| AddWorktreeDialog::new(id, window, cx)),
         });
         cx.run_until_parked();
         let dialog = host.read_with(cx, |host, _| host.dialog.clone());
@@ -510,14 +502,14 @@ mod tests {
     fn suggests_a_folder_beside_the_repository_and_checks_the_branch_out_there(
         cx: &mut TestAppContext,
     ) {
-        let adds = Rc::new(RefCell::new(Vec::new()));
+        let adds = Rc::new(Adds::default());
         let (_dir, window, dialog) = render(cx, &adds);
         open(window, &dialog, "refs/heads/topic", cx);
 
         let folder = dialog.read_with(cx, |dialog, _| dialog.folder.clone());
         assert_eq!(value(&folder, cx), "/work/gitto-topic");
         assert_eq!(
-            dialog.read_with(cx, |dialog, _| dialog.summary()),
+            dialog.read_with(cx, |dialog, cx| dialog.summary(cx)),
             "Checks out topic in a folder of its own. Name a new branch to make one from it \
              there instead."
         );
@@ -529,7 +521,7 @@ mod tests {
         .unwrap();
         cx.run_until_parked();
         assert_eq!(
-            *adds.borrow(),
+            *adds.0.borrow(),
             [AddWorktreeInput {
                 path: "/work/gitto-topic".into(),
                 branch: "refs/heads/topic".into(),
@@ -542,13 +534,13 @@ mod tests {
 
     #[gpui_kit::test]
     fn needs_a_new_branch_for_one_checked_out_already(cx: &mut TestAppContext) {
-        let adds = Rc::new(RefCell::new(Vec::new()));
+        let adds = Rc::new(Adds::default());
         let (_dir, window, dialog) = render(cx, &adds);
         open(window, &dialog, "refs/remotes/origin/main", cx);
 
-        assert!(dialog.read_with(cx, |dialog, _| dialog.needs_new_branch()));
+        assert!(dialog.read_with(cx, |dialog, cx| dialog.needs_new_branch(cx)));
         assert_eq!(
-            dialog.read_with(cx, |dialog, _| dialog.summary()),
+            dialog.read_with(cx, |dialog, cx| dialog.summary(cx)),
             "main, which tracks origin/main, is checked out here, so a new branch is made from \
              it and checked out in a folder of its own."
         );
@@ -564,7 +556,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn keeps_a_folder_that_was_typed_over_the_one_suggested(cx: &mut TestAppContext) {
-        let adds = Rc::new(RefCell::new(Vec::new()));
+        let adds = Rc::new(Adds::default());
         let (_dir, window, dialog) = render(cx, &adds);
         open(window, &dialog, "refs/heads/topic", cx);
         let folder = dialog.read_with(cx, |dialog, _| dialog.folder.clone());

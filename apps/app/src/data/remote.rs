@@ -7,6 +7,7 @@ use gitto_git::features::remote::schema::PushTarget;
 use gitto_git::input::{NonEmpty, RepositoryId};
 use gpui_kit::{App, AppContext as _, Context, Entity};
 
+use super::Repositories;
 use super::call::{call, loads};
 use super::client::{QueryClient, QueryError, QueryOptions, StaleTime};
 use super::keys;
@@ -30,15 +31,7 @@ pub fn remotes_query<V: 'static>(id: &RepositoryId, cx: &mut Context<V>) -> Quer
 pub fn fetch_mutation(cx: &mut App) -> Entity<Mutation<RepositoryId>> {
     Mutation::new(
         |id: RepositoryId, cx: &mut App| {
-            let fetching = call(cx, &id, |repo| repo.fetch());
-            cx.spawn(async move |cx| {
-                cx.background_spawn(fetching).await?;
-                // The watcher would catch the new remote refs too, but reloading right away feels
-                // snappier.
-                cx.update(|cx| QueryClient::invalidate(&keys::repository(&id), cx))
-                    .await;
-                Ok(())
-            })
+            Repositories::open(&id, cx).update(cx, |repository, cx| repository.fetch(cx))
         },
         cx,
     )
@@ -52,12 +45,6 @@ pub struct PullOperation {
 }
 
 impl PullOperation {
-    /// A pull that `operation` does, which a test makes up; it must be named "pull".
-    #[cfg(test)]
-    pub(crate) fn with_operation(operation: RepositoryOperation<()>) -> Self {
-        PullOperation { operation }
-    }
-
     /// Pulls into the repository `id`, unless it's pulling already.
     pub fn pull(
         &self,
@@ -126,13 +113,6 @@ pub struct PushOperation {
 }
 
 impl PushOperation {
-    /// A push that `operation` does, given whether to force, which a test makes up; it must be
-    /// named "push".
-    #[cfg(test)]
-    pub(crate) fn with_operation(operation: RepositoryOperation<bool>) -> Self {
-        PushOperation { operation }
-    }
-
     pub fn push(
         &self,
         id: &RepositoryId,

@@ -64,7 +64,7 @@ impl RefsSidebar {
     }
 
     pub fn repository_id<'a>(&self, cx: &'a gpui_kit::App) -> &'a RepositoryId {
-        self.list.read(cx).repository_id()
+        self.list.read(cx).repository_id(cx)
     }
 
     /// Shows another repository's (see `RefList::set_repository`).

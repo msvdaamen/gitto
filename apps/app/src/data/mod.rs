@@ -141,6 +141,7 @@ pub mod query;
 pub mod repository;
 
 pub mod branch;
+pub mod changes;
 pub mod commit;
 pub mod conflicts;
 pub mod diff;
@@ -159,19 +160,20 @@ pub mod version;
 pub mod watch;
 pub mod worktree;
 
+pub use self::app_data::{AppChanged, AppData, AppPart};
+pub use self::changes::Done;
 pub use self::client::{
     QueryClient, QueryDefaults, QueryEntry, QueryError, QueryOptions, QueryStatus, RefetchOnFocus,
     Reloading, StaleTime,
 };
 pub use self::key::QueryKey;
-pub use self::app_data::{AppChanged, AppData, AppPart};
 pub use self::loaded::Loaded;
 pub use self::mutation::Mutation;
 pub use self::opaque::Opaque;
 pub use self::operation::{OneAtATime, OperationState, Operations, RepositoryOperation, reloading};
 pub use self::query::Query;
 pub use self::repository::{
-    Changed, Part, Repositories, Repository, observe_parts, observe_selected,
+    Changed, Part, Repositories, Repository, Shown, observe_parts, observe_selected,
 };
 pub use self::watch::RepositoryWatcher;
 

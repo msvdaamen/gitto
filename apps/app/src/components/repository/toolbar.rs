@@ -1,8 +1,6 @@
 //! The repository's toolbar. Ported from `components/repository/toolbar.tsx`.
 
-use gitto_git::features::status::schema::{StatusSummary, Uncommitted};
 use gitto_git::input::RepositoryId;
-use gitto_repository::Repository;
 use gitto_ui::git::status::head_label;
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::spinner::Spinner;
@@ -18,13 +16,10 @@ use super::push_button::PushButton;
 use super::stash_buttons::StashButtons;
 use super::toolbar_button::{HideBelow, SMALL, ToolbarButton};
 use crate::components::ui::{Divider, FailurePopover, Icon, IconButton, IconName, TextInput};
-use crate::data::branch::{
-    self, delete_branch_state, merge_branch_state, rebase_branch_state, switch_branch_state,
-};
-use crate::data::remote::{self, fetch_mutation, pull_branch_state};
-use crate::data::repositories::{find, repositories_query};
-use crate::data::status::status_query;
-use crate::data::{Mutation, Opaque, OperationState, Operations, Query, QueryError};
+use crate::data::changes::{DELETE_BRANCH, MERGE, PULL_BRANCH, REBASE, SWITCH};
+use crate::data::remote::fetch_mutation;
+use crate::data::repositories::find;
+use crate::data::{AppData, AppPart, Changed, Mutation, Part, QueryError, Repository, Shown};
 use crate::theme::PaletteExt as _;
 use crate::views::repository::MEDIUM;
 
@@ -71,24 +66,14 @@ impl BranchChangeKind {
         }
     }
 
-    fn state(self, id: &str, cx: &App) -> OperationState {
-        match self {
-            BranchChangeKind::Merge => merge_branch_state(id, cx),
-            BranchChangeKind::Rebase => rebase_branch_state(id, cx),
-            BranchChangeKind::Switch => switch_branch_state(id, cx),
-            BranchChangeKind::Delete => delete_branch_state(id, cx),
-            BranchChangeKind::Pull => pull_branch_state(id, cx),
-        }
-    }
-
-    /// The name of its operation (see `data::branch` and `data::remote`).
+    /// The name of its change (see `data::changes`).
     fn operation(self) -> &'static str {
         match self {
-            BranchChangeKind::Merge => branch::MERGE,
-            BranchChangeKind::Rebase => branch::REBASE,
-            BranchChangeKind::Switch => branch::SWITCH,
-            BranchChangeKind::Delete => branch::DELETE,
-            BranchChangeKind::Pull => remote::PULL_BRANCH,
+            BranchChangeKind::Merge => MERGE,
+            BranchChangeKind::Rebase => REBASE,
+            BranchChangeKind::Switch => SWITCH,
+            BranchChangeKind::Delete => DELETE_BRANCH,
+            BranchChangeKind::Pull => PULL_BRANCH,
         }
     }
 }
@@ -151,12 +136,12 @@ impl FailureOrder {
 /// deleting or pulling another (from a branch's menu), and a popover under it says why that
 /// failed.
 pub struct RepositoryToolbar {
-    repository_id: RepositoryId,
+    repository: Shown,
     search: Entity<InputState>,
     sidebar_open: bool,
     details_open: bool,
-    status: Query<Opaque<Uncommitted>, StatusSummary>,
-    repositories: Query<Vec<Repository>>,
+    /// Takes in the changes of the branches' failures as they change.
+    _failures: Subscription,
     /// Fetching every remote of a repository, whose id is its input.
     fetch: Entity<Mutation<RepositoryId>>,
     failures: FailureOrder,
@@ -191,20 +176,22 @@ impl RepositoryToolbar {
                 }
             }),
             cx.observe(&fetch, |_, _, cx| cx.notify()),
-            cx.observe_global::<Operations>(|this, cx| {
-                this.update_failures(cx);
-                cx.notify();
+            cx.subscribe(&AppData::global(cx), |_, _, event, cx| {
+                if event.0 == AppPart::Repositories {
+                    cx.notify();
+                }
             }),
         ];
+        AppData::global(cx).update(cx, |data, cx| data.show(AppPart::Repositories, cx));
+        let repository = Shown::new(&repository_id, &[Part::Status, Part::Operations], cx);
         let id = repository_id.clone();
         let mut toolbar = RepositoryToolbar {
+            _failures: Self::follow_failures(repository.entity(), cx),
+            repository,
             pull: cx.new(|cx| PullButton::new(id.clone(), window, cx)),
             push: cx.new(|cx| PushButton::new(id.clone(), window, cx)),
             branch: cx.new(|cx| BranchButton::new(id.clone(), window, cx)),
             stash: cx.new(|cx| StashButtons::new(id, window, cx)),
-            status: status_query(&repository_id, cx),
-            repositories: repositories_query(cx),
-            repository_id,
             search,
             sidebar_open: true,
             details_open: true,
@@ -216,8 +203,17 @@ impl RepositoryToolbar {
         toolbar
     }
 
-    pub fn repository_id(&self) -> &RepositoryId {
-        &self.repository_id
+    fn follow_failures(repository: &Entity<Repository>, cx: &mut Context<Self>) -> Subscription {
+        cx.subscribe(repository, |this, _, Changed(part), cx| {
+            if *part == Part::Operations {
+                this.update_failures(cx);
+            }
+        })
+    }
+
+    /// The id of the repository on show.
+    pub fn repository_id<'a>(&self, cx: &'a App) -> &'a RepositoryId {
+        self.repository.read(cx).id()
     }
 
     /// Shows another repository's.
@@ -227,11 +223,10 @@ impl RepositoryToolbar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.repository_id == repository_id {
+        if !self.repository.set(&repository_id, cx) {
             return;
         }
-        self.status = status_query(&repository_id, cx);
-        self.repository_id = repository_id.clone();
+        self._failures = Self::follow_failures(self.repository.entity(), cx);
         let id = &repository_id;
         self.pull
             .update(cx, |button, cx| button.set_repository(id.clone(), cx));
@@ -244,7 +239,6 @@ impl RepositoryToolbar {
         self.stash
             .update(cx, |button, cx| button.set_repository(id.clone(), cx));
         self.update_failures(cx);
-        cx.notify();
     }
 
     /// Which panels are open, for the toggles to show.
@@ -257,15 +251,17 @@ impl RepositoryToolbar {
     }
 
     fn update_failures(&mut self, cx: &App) {
-        let id = self.repository_id.clone();
-        self.failures.update(|kind| kind.state(&id, cx).error);
+        let repository = self.repository.read(cx);
+        self.failures
+            .update(|kind| repository.operation_state(kind.operation()).error);
     }
 
     /// Whether the current branch is changing (see the type's doc).
     pub fn is_branch_busy(&self, cx: &App) -> bool {
+        let repository = self.repository.read(cx);
         BranchChangeKind::ALL
             .iter()
-            .any(|kind| kind.state(&self.repository_id, cx).running)
+            .any(|kind| repository.operation_state(kind.operation()).running)
     }
 
     /// The failure the current branch shows, if any.
@@ -276,8 +272,9 @@ impl RepositoryToolbar {
     /// Fetch, as it is now: spinning while it runs, red with the reason once it failed. The last
     /// fetch is shown if it was of this repository; one of another stays with that repository.
     pub fn fetch_button(&self, cx: &App) -> ToolbarButton {
+        let id = self.repository_id(cx).clone();
         let fetch = self.fetch.read(cx);
-        let current = fetch.input() == Some(&self.repository_id);
+        let current = fetch.input() == Some(&id);
         let pending = current && fetch.is_pending();
         let error = fetch.error().filter(|_| current).cloned();
         let title = match &error {
@@ -285,7 +282,6 @@ impl RepositoryToolbar {
             None => "Fetch all remotes".to_owned(),
         };
         let mutation = self.fetch.clone();
-        let id = self.repository_id.clone();
         ToolbarButton::new("fetch", IconName::RefreshCw, "Fetch")
             .hide_below(HideBelow::Small)
             .title(title)
@@ -301,13 +297,15 @@ impl RepositoryToolbar {
     fn render_current_branch(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = *cx.palette();
         let busy = self.is_branch_busy(cx);
-        let name = self
-            .repositories
+        let repository = self.repository.read(cx);
+        let name = AppData::global(cx)
+            .read(cx)
+            .repositories()
             .data()
-            .and_then(|list| find(&list, &self.repository_id).map(|r| r.name.clone()))
+            .and_then(|list| find(list, repository.id()).map(|r| r.name.clone()))
             .unwrap_or_default();
-        let head = self
-            .status
+        let head = repository
+            .status()
             .data()
             .map(|status| head_label(&status.head).to_owned())
             .unwrap_or_default();
@@ -317,7 +315,7 @@ impl RepositoryToolbar {
             None => ("Merge", None),
         };
         let dismiss = failure.map(|(kind, _)| kind);
-        let id = self.repository_id.clone();
+        let dismissed = self.repository.entity().clone();
         let with_name = f32::from(window.viewport_size().width) >= MEDIUM;
         let mark = div()
             .flex()
@@ -346,7 +344,9 @@ impl RepositoryToolbar {
         FailurePopover::new("current-branch-failure", title, error, trigger).on_dismiss(
             move |_, cx| {
                 if let Some(kind) = dismiss {
-                    Operations::dismiss(kind.operation(), &id, cx);
+                    dismissed.update(cx, |repository, cx| {
+                        repository.dismiss(kind.operation(), cx)
+                    });
                 }
             },
         )
@@ -484,16 +484,21 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
+    use futures::FutureExt as _;
     use futures::channel::oneshot;
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{AnyWindowHandle, AppContext as _, TestAppContext};
 
     use super::*;
+    use crate::components::repository::test_support::fake_git;
     use crate::components::repository::test_support::{
         Repositories, repository, repository_id, set_operation, set_push_target, set_refs,
         set_remotes, set_stashes, set_status, set_worktrees, setup_with, status,
     };
-    use crate::data::RepositoryOperation;
+    use crate::data::branch::Merge;
+    use crate::data::git::{GitTask, RepositoryGit};
+    use gitto_git::features::branch::schema::MergeOutcome;
+    use gitto_git::input::{BranchRef, NonEmpty};
 
     /// Gives `id` what the toolbar's buttons show, so none of them loads from git.
     fn seed(id: &RepositoryId, cx: &mut TestAppContext) {
@@ -628,25 +633,41 @@ mod tests {
 
     #[gpui_kit::test]
     fn shows_the_last_change_of_the_branches_to_fail(cx: &mut TestAppContext) {
-        let (_dir, a, _, _, _, toolbar) = render(cx);
-        let fail = |name: &'static str, message: &'static str, cx: &mut TestAppContext| {
-            let operation = RepositoryOperation::new(name, move |_, (), cx: &mut App| {
-                cx.background_spawn(async move { Err::<(), _>(QueryError::msg(message)) })
-            });
-            let a = a.clone();
-            cx.update(|cx| drop(operation.run(&a, (), cx)));
-            cx.run_until_parked();
-        };
+        /// A repository's git whose merges and deletes of branches fail.
+        struct Failing;
 
-        fail("merge", "Merge conflict.", cx);
-        fail("delete-branch", "Not fully merged.", cx);
+        impl RepositoryGit for Failing {
+            fn merge_branch(&self, _: BranchRef, _: NonEmpty) -> GitTask<MergeOutcome> {
+                async { Err(QueryError::msg("Merge conflict.")) }.boxed()
+            }
+
+            fn delete_branch(&self, _: BranchRef) -> GitTask<()> {
+                async { Err(QueryError::msg("Not fully merged.")) }.boxed()
+            }
+        }
+
+        let (_dir, a, _, _, _, toolbar) = render(cx);
+        fake_git(&a, Rc::new(Failing), cx);
+        let repository = cx.update(|cx| crate::data::Repositories::open(&a, cx));
+        repository.update(cx, |repository, cx| {
+            let merge = Merge {
+                reference: "refs/heads/feature".into(),
+                into: "main".into(),
+            };
+            drop(repository.merge(merge, cx));
+        });
+        cx.run_until_parked();
+        repository.update(cx, |repository, cx| {
+            drop(repository.delete_branch("refs/heads/feature".into(), cx));
+        });
+        cx.run_until_parked();
         let shown = toolbar.read_with(cx, |toolbar, _| toolbar.branch_failure());
         let (kind, error) = shown.unwrap();
         assert_eq!(kind.title(), "Delete branch");
         assert_eq!(error.message(), "Not fully merged.");
 
         // Dismissed, the one before it shows again.
-        cx.update(|cx| Operations::dismiss("delete-branch", &a, cx));
+        repository.update(cx, |repository, cx| repository.dismiss("delete-branch", cx));
         let (kind, _) = toolbar
             .read_with(cx, |toolbar, _| toolbar.branch_failure())
             .unwrap();

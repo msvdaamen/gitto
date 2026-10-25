@@ -10,11 +10,11 @@ use gitto_git::input::RepositoryId;
 use gitto_repository::{Repository, RepositoryService};
 use gpui_kit::{App, AppContext as _, Context, Entity, Task};
 
-use super::client::{QueryClient, QueryError, QueryOptions};
 use super::app_data::{AppData, AppPart};
+use super::client::{QueryClient, QueryError, QueryOptions};
 use super::keys;
-use super::repository::Repositories;
 use super::query::Query;
+use super::repository::Repositories;
 use crate::services::{Services, SystemContext};
 use crate::state::router::{Route, Router};
 
