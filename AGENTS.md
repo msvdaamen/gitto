@@ -29,9 +29,9 @@ Gitto is moving to Rust, with a GPUI ([gpui-kit](https://crates.io/crates/gpui-k
 `apps/app`, which calls the crates in `crates/` directly (no oRPC):
 
 - `gitto-git` (`crates/git`): `packages/git`.
-- `gitto-db` (`crates/db`): `packages/db`. Both apps share one `gitto.db` while both ship, so it
-  embeds the migrations drizzle-kit makes in `apps/electron/migrations` and applies them exactly as
-  Drizzle's migrator does: make migrations with `pnpm db:generate` only, never by hand in Rust.
+- `gitto-db` (`crates/db`): Gitto's SQLite database. Its schema is its own, not the Electron app's
+  Drizzle one: change it by adding a migration to `crates/db/migrations` and `MIGRATIONS`, never by
+  editing one that's shipped.
 - `gitto-repository` (`crates/repository`): `packages/repository`'s `server/`. Its
   `RepositoryService` is gitto-git's `RepositoryLookup`, so `GitApi::new(service)` opens the
   repositories added to Gitto.
