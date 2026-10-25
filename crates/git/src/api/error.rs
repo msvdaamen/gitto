@@ -39,7 +39,7 @@ impl ApiError {
 
     /// The HTTP status it had in the Electron app, e.g. 409 for `PUSH_REWRITTEN`.
     pub fn status(&self) -> u16 {
-        self.code.http_status()
+        self.code.status()
     }
 
     /// Whether it's a bug, to report (see `ApiCode::is_bug`): git failing in a way Gitto doesn't

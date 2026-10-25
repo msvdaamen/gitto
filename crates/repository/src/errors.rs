@@ -8,6 +8,10 @@ use std::sync::Arc;
 
 use gitto_db::rusqlite;
 
+/// What was done with the list of repositories when it failed: gitto-git's, whose
+/// `RepositoryListError` says the same as [`Error::List`] (see `lookup.rs`).
+pub use gitto_git::ListAction;
+
 /// What the repository crate's functions return.
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -60,29 +64,6 @@ impl Error {
     /// isn't (`BAD_REQUEST`).
     pub fn is_bug(&self) -> bool {
         matches!(self, Error::List { .. })
-    }
-}
-
-/// What was done with the list of repositories when it failed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ListAction {
-    Read,
-    Update,
-}
-
-impl ListAction {
-    /// As the message says it: `read` or `update`.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ListAction::Read => "read",
-            ListAction::Update => "update",
-        }
-    }
-}
-
-impl fmt::Display for ListAction {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
     }
 }
 

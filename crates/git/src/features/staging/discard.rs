@@ -217,23 +217,6 @@ async fn remove_empty_folders(root: &Path, paths: &[&str]) {
     .await;
 }
 
-/// `line` split at its first tab, as TS's `indexOf` and `slice` split it.
-fn split_at_tab(line: &str) -> (&str, &str) {
-    match line.find('\t') {
-        Some(tab) => (&line[..tab], &line[tab + 1..]),
-        // `slice(0, -1)` and `slice(0)`: never, as git writes the tab.
-        None => (all_but_last(line), line),
-    }
-}
-
-/// `line` without its last character.
-fn all_but_last(line: &str) -> &str {
-    match line.char_indices().next_back() {
-        Some((last, _)) => &line[..last],
-        None => line,
-    }
-}
-
 /// The index's files at `paths`, or below them.
 async fn index_entries(run: &GitCommand, paths: &[&str]) -> Result<Vec<Entry>> {
     let mut args = vec!["ls-files", "--stage", "-z", "--"];
@@ -241,18 +224,17 @@ async fn index_entries(run: &GitCommand, paths: &[&str]) -> Result<Vec<Entry>> {
     let output = run.run(args).await?;
     Ok(output
         .split('\0')
-        .filter(|line| !line.is_empty())
-        .map(|line| {
+        .filter_map(|line| {
             // `<mode> <object> <stage>\t<path>`
-            let (info, path) = split_at_tab(line);
+            let (info, path) = line.split_once('\t')?;
             let mut fields = info.split(' ');
             let mode = fields.next().unwrap_or("").to_owned();
             let stage = fields.nth(1).unwrap_or("").to_owned();
-            Entry {
+            Some(Entry {
                 path: path.to_owned(),
                 mode,
                 stage,
-            }
+            })
         })
         .collect())
 }
@@ -264,19 +246,15 @@ async fn head_entries(run: &GitCommand, paths: &[&str]) -> Result<Vec<Entry>> {
     let output = run.run(args).await?;
     Ok(output
         .split('\0')
-        .filter(|line| !line.is_empty())
-        .map(|line| {
+        .filter_map(|line| {
             // `<mode> <type> <object>\t<path>`
-            let (_, path) = split_at_tab(line);
-            let mode = match line.find(' ') {
-                Some(space) => &line[..space],
-                None => all_but_last(line),
-            };
-            Entry {
+            let (info, path) = line.split_once('\t')?;
+            let mode = info.split(' ').next().unwrap_or("");
+            Some(Entry {
                 path: path.to_owned(),
                 mode: mode.to_owned(),
                 stage: "0".to_owned(),
-            }
+            })
         })
         .collect())
 }
@@ -437,10 +415,11 @@ mod tests {
     use std::fs;
     use std::time::{Duration, SystemTime};
 
-    use super::super::test_status::{StatusFile, status_files};
     use super::*;
+    use crate::features::status::schema::StatusFile;
     use crate::schema::FileStatus::*;
     use crate::test_support::conflicts::{Sides, files, try_git};
+    use crate::test_support::status::status_entries;
     use crate::test_support::{Fixture, git};
 
     /// A file's changes to discard, as its list has the file.
@@ -508,7 +487,7 @@ mod tests {
             discard(&repo, &unstaged("f.txt", Modified)).await.unwrap();
             assert_eq!(read(&path.join("f.txt")), "two\n");
             assert_eq!(
-                status_files(&repo).await,
+                status_entries(&repo).await,
                 [entry("f.txt", Some(Modified), None)]
             );
         });
@@ -529,7 +508,7 @@ mod tests {
             assert_eq!(read(&path.join("c.txt")), "b\n");
             assert!(!path.join("*.txt").exists());
             assert_eq!(
-                status_files(&repo).await,
+                status_entries(&repo).await,
                 [
                     entry("a file.txt", None, Some(Modified)),
                     entry("new file.txt", None, Some(Untracked)),
@@ -566,7 +545,7 @@ mod tests {
             assert!(!path.join("new file.txt").exists());
             assert!(!path.join("d.txt").exists());
             assert_eq!(read(&path.join("c.txt")), "b\n");
-            assert_eq!(status_files(&repo).await, []);
+            assert_eq!(status_entries(&repo).await, []);
         });
     }
 
@@ -583,7 +562,7 @@ mod tests {
             discard(&repo, &staged("x.txt", Added)).await.unwrap();
             assert!(!path.join("x.txt").exists());
             assert_eq!(
-                status_files(&repo).await,
+                status_entries(&repo).await,
                 [entry("y.txt", Some(Added), None)]
             );
         });
@@ -620,7 +599,7 @@ mod tests {
 
             discard(&repo, &staged("foo", Added)).await.unwrap();
             assert_eq!(read(&path.join("foo").join("bar.txt")), "bar\n");
-            assert_eq!(status_files(&repo).await, []);
+            assert_eq!(status_entries(&repo).await, []);
         });
     }
 
@@ -724,7 +703,7 @@ mod tests {
             assert!(!path.join("copy.txt").exists());
             assert_eq!(read(&path.join("lib.txt")), "lib, changed\n");
             assert_eq!(
-                status_files(&repo).await,
+                status_entries(&repo).await,
                 [entry("lib.txt", Some(Modified), None)]
             );
         });
@@ -899,7 +878,7 @@ mod tests {
             git(&path, ["status"]);
 
             discard_all(&repo).await.unwrap();
-            assert_eq!(status_files(&repo).await, []);
+            assert_eq!(status_entries(&repo).await, []);
             assert_eq!(read(&path.join("a file.txt")), "a\nmore\n");
             assert_eq!(read(&path.join("c.txt")), "b\n");
             assert_eq!(read(&path.join("s.txt")), "s\n");
@@ -1028,7 +1007,7 @@ mod tests {
             let repo = fx.repos.open("discard-all-unborn").await.unwrap();
 
             discard_all(&repo).await.unwrap();
-            assert_eq!(status_files(&repo).await, []);
+            assert_eq!(status_entries(&repo).await, []);
             assert!(!path.join("staged.txt").exists());
             assert!(!path.join("untracked.txt").exists());
 

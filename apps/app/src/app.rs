@@ -28,30 +28,35 @@ pub const MIN_WIDTH: f32 = 560.;
 pub const MIN_HEIGHT: f32 = 400.;
 
 /// Runs Gitto: starts its services, then opens its window. Quits once the window's closed, as
-/// the Electron app did everywhere but macOS (`window-all-closed`).
+/// the Electron app did everywhere but macOS (`window-all-closed`); there, it stays running, and
+/// opens the window again when it's launched again, from the Dock say (`activate`).
 pub fn run() {
     logger::init();
-    gpui_kit::application()
-        .with_assets(AppAssets)
-        .run(|cx: &mut App| {
-            gpui_kit::init(cx);
-            let services = match start_services() {
-                Ok(services) => services,
-                Err(error) => {
-                    log::error!("Gitto couldn't start: {error:#}");
-                    cx.quit();
-                    return;
-                }
-            };
-            init(services, Route::Home, cx);
+    let application = gpui_kit::application().with_assets(AppAssets);
+    application.on_reopen(|cx| {
+        if cx.windows().is_empty() && cx.has_global::<Services>() {
             open_main_window(cx);
-            cx.on_window_closed(|cx, _| {
-                if cx.windows().is_empty() && !cfg!(target_os = "macos") {
-                    cx.quit();
-                }
-            })
-            .detach();
-        });
+        }
+    });
+    application.run(|cx: &mut App| {
+        gpui_kit::init(cx);
+        let services = match start_services() {
+            Ok(services) => services,
+            Err(error) => {
+                log::error!("Gitto couldn't start: {error:#}");
+                cx.quit();
+                return;
+            }
+        };
+        init(services, Route::Home, cx);
+        open_main_window(cx);
+        cx.on_window_closed(|cx, _| {
+            if cx.windows().is_empty() && !cfg!(target_os = "macos") {
+                cx.quit();
+            }
+        })
+        .detach();
+    });
 }
 
 /// The services, on the database in Gitto's `userData` folder (see `AppPaths::resolve`).

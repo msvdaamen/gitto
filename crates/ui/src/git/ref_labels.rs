@@ -149,9 +149,7 @@ pub fn to_ref_labels(refs: &[CommitRef], sha: &str, others: &Checkouts) -> Vec<R
     // The checked-out branch first; otherwise in git's order.
     locals.sort_by_key(|branch| !branch.current);
 
-    let mut labels = Vec::with_capacity(
-        usize::from(head) + locals.len() + detached.len() + remote_only.len() + refs.len(),
-    );
+    let mut labels = Vec::new();
     if head {
         labels.push(RefLabel::Head);
     }

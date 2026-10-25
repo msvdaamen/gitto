@@ -28,10 +28,6 @@ impl TelemetrySetting {
         }
     }
 
-    pub fn state(&self) -> TelemetryState {
-        self.state
-    }
-
     /// Lets Gitto send error reports, or not; says if that couldn't be saved, and keeps the switch
     /// as it was then.
     pub fn set_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {

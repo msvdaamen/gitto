@@ -72,10 +72,11 @@ async fn read_status(repo: &Repo) -> Result<(Uncommitted, String)> {
         behind,
         files,
     } = parse_status(&output);
-    let ((changes, outputs), resolved) =
-        futures::try_join!(get_working_tree_files(repo, &files), async {
-            Ok(resolved_conflicts(repo, &files).await)
-        },)?;
+    let (working_tree, resolved) = futures::join!(
+        get_working_tree_files(repo, &files),
+        resolved_conflicts(repo, &files)
+    );
+    let (changes, outputs) = working_tree?;
     // Everything shown comes from git's output, so the same output means the same status, but for
     // which conflicts have markers left, which comes from the files.
     let mut hash = Sha1::new();
