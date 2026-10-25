@@ -349,14 +349,12 @@ pub(crate) fn nul_separated(output: &str) -> Vec<String> {
 /// `files` in a sentence: "a.txt", "a.txt and b.txt", or "a.txt and 3 other files".
 pub fn list(files: &[String]) -> String {
     match files {
+        // No caller asks for none: git names the files, or the caller checks it found some. TS
+        // words it "undefined and -1 other files".
+        [] => "the files".to_owned(),
         [first] => first.clone(),
         [first, second] => format!("{first} and {second}"),
-        // As TS words none, which no caller asks for.
-        _ => format!(
-            "{} and {} other files",
-            files.first().map_or("undefined", String::as_str),
-            files.len() as i64 - 1
-        ),
+        [first, ..] => format!("{first} and {} other files", files.len() - 1),
     }
 }
 
@@ -366,20 +364,17 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::*;
-    use crate::features::conflicts::commands::{
-        ShownConflict, get_conflict, keep_side, mark_resolved,
-    };
+    use crate::features::conflicts::commands::{ShownConflict, get_conflict, keep_side};
     use crate::features::conflicts::schema::Side;
-    use crate::features::diff::working_tree::{SaveExpectation, save_working_tree_file};
     use crate::features::operation::commands::{
         abort_operation, continue_operation, get_operation,
     };
     use crate::features::operation::schema::{Operation, OperationKind};
     use crate::features::stash::commands::pop_stash;
     use crate::test_support::conflicts::{
-        Files, Sides, commit_files, files, text_conflict, try_git,
+        Files, Sides, commit_files, files, resolve_text, text_conflict, try_git,
     };
-    use crate::test_support::{Fixture, git};
+    use crate::test_support::{Fixture, git, write_script};
 
     /// `side` changed `s.txt`, `main` changed `m.txt`: they merge without conflicts.
     fn clean() -> Sides {
@@ -408,33 +403,8 @@ mod tests {
         }
     }
 
-    /// Resolves `f.txt`'s text conflict as `contents`, and marks it resolved, as the resolver does.
-    async fn resolve_text(repo: &Repo, contents: &str) {
-        let text = get_conflict(repo, "f.txt").await.unwrap().text.unwrap();
-        let expected = SaveExpectation {
-            version: text.version,
-            overwrite: false,
-        };
-        let version = save_working_tree_file(repo, "f.txt", contents, &expected)
-            .await
-            .unwrap();
-        mark_resolved(repo, "f.txt", Some(&version), false)
-            .await
-            .unwrap();
-    }
-
     fn read(path: &Path, file: &str) -> String {
         fs::read_to_string(path.join(file)).unwrap()
-    }
-
-    /// Writes the executable script `file`.
-    fn write_script(file: &Path, script: &str) {
-        fs::write(file, script).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(file, fs::Permissions::from_mode(0o755)).unwrap();
-        }
     }
 
     fn merging(merging: &str, into: &str) -> Option<Operation> {
@@ -1479,5 +1449,13 @@ mod tests {
             ),
             "Rebasing onto side would overwrite the untracked file m.txt. Move or remove it, then rebase."
         );
+    }
+
+    #[test]
+    fn lists_files_in_a_sentence() {
+        assert_eq!(list(&names(&[])), "the files");
+        assert_eq!(list(&names(&["a"])), "a");
+        assert_eq!(list(&names(&["a", "b"])), "a and b");
+        assert_eq!(list(&names(&["a", "b", "c"])), "a and 2 other files");
     }
 }
