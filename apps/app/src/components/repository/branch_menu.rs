@@ -666,8 +666,8 @@ mod tests {
 
     use super::*;
     use crate::components::repository::test_support::{
-        conflicted, repository_id, set_operation, set_refs, set_remotes, set_status, set_worktrees,
-        setup, status, uncommitted, with_conflicts,
+        click_label, conflicted, has_dialog, repository_id, set_operation, set_refs, set_remotes,
+        set_status, set_worktrees, setup, status, uncommitted, with_conflicts,
     };
     use crate::data::QueryError;
     use crate::data::remote::PullOperation;
@@ -945,12 +945,6 @@ mod tests {
         assert!(!has_dialog(window, cx));
     }
 
-    fn has_dialog(window: AnyWindowHandle, cx: &mut TestAppContext) -> bool {
-        use gpui_kit::component::WindowExt as _;
-        cx.update_window(window, |_, window, cx| window.has_active_dialog(cx))
-            .unwrap()
-    }
-
     #[gpui_kit::test]
     fn opens_the_worktree_a_branch_is_checked_out_in(cx: &mut TestAppContext) {
         let calls = Rc::new(Calls::default());
@@ -997,11 +991,10 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let calls = Rc::new(Calls::default());
-        let (_dir, id, window, host) = render(cx, &calls);
+        let (_dir, _, window, host) = render(cx, &calls);
         *calls.merge_outcome.borrow_mut() = Some(MergeOutcome::Conflicts);
         *calls.after_merge.borrow_mut() =
             Some(with_conflicts(status(), &["a.txt", "b.txt"], &["a.txt"]));
-        let _ = id;
 
         open_menu(window, "row-refs/heads/topic", cx);
         choose(window, "Merge topic into main", cx);
@@ -1039,13 +1032,7 @@ mod tests {
 
         open_menu(window, "row-refs/remotes/origin/topic", cx);
         choose(window, "Delete origin/topic…", cx);
-        assert!(
-            cx.update_window(window, |_, window, cx| {
-                use gpui_kit::component::WindowExt as _;
-                window.has_active_dialog(cx)
-            })
-            .unwrap()
-        );
+        assert!(has_dialog(window, cx));
         assert!(calls.deletes.borrow().is_empty());
         click_label(window, "Delete", cx);
         assert_eq!(*calls.deletes.borrow(), ["refs/remotes/origin/topic"]);
@@ -1078,17 +1065,5 @@ mod tests {
         cx.run_until_parked();
         assert!(!has_dialog(window, cx));
         assert!(calls.deletes.borrow().is_empty());
-    }
-
-    /// Clicks what's labelled `label`, e.g. a dialog's button.
-    fn click_label(window: AnyWindowHandle, label: &str, cx: &mut TestAppContext) {
-        cx.update_window(window, |_, window, cx| {
-            use gpui_kit::test::{TestEventExt as _, TestQueryExt as _};
-            let center = window.find_by_label(label).bounds().center();
-            window.pointer_down(center, gpui_kit::MouseButton::Left, cx);
-            window.pointer_up(center, gpui_kit::MouseButton::Left, cx);
-        })
-        .unwrap();
-        cx.run_until_parked();
     }
 }

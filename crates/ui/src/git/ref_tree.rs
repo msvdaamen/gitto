@@ -69,20 +69,16 @@ pub fn build_ref_tree(refs: &[Ref]) -> Vec<RefTreeNode> {
     let mut by_path: HashMap<String, usize> = HashMap::new();
 
     for (index, r) in refs.iter().enumerate() {
-        let (segments, _) = r.name.rsplit_once('/').unwrap_or(("", &r.name));
+        // The full name up to the short one, e.g. `refs/remotes` for `origin/main`.
         let prefix = r
             .full_name
-            .strip_suffix(r.name.as_str())
-            .or_else(|| {
-                r.full_name
-                    .get(..r.full_name.len().saturating_sub(r.name.len()))
-            })
+            .get(..r.full_name.len().saturating_sub(r.name.len()))
             .unwrap_or("");
         let mut path = prefix.strip_suffix('/').unwrap_or(prefix).to_owned();
         let mut folder = 0;
         folders[folder].count += 1;
 
-        if r.name.contains('/') {
+        if let Some((segments, _)) = r.name.rsplit_once('/') {
             for segment in segments.split('/') {
                 path.push('/');
                 path.push_str(segment);

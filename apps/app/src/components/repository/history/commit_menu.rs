@@ -134,13 +134,13 @@ impl CommitMenu {
             |commit: &mut CommitMenu| &mut commit.menu,
             cx,
         );
-        // Also until it's known whether one is.
-        let operation = this.read(cx).operation.data() != Some(None);
+        // Not while an operation is under way; also until it's known whether one is.
+        let disabled = this.read(cx).operation.data() != Some(None);
         let this = this.clone();
         menu.item(context_menu_item(
             IconName::PenLine,
             "Edit message…",
-            operation,
+            disabled,
             move |_, window, cx| {
                 let sha = sha.to_string();
                 this.update(cx, |this, cx| this.reword(sha, window, cx));

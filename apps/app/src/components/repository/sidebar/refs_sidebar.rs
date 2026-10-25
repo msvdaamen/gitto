@@ -8,7 +8,7 @@ use gpui_kit::{Context, Entity, SharedString, Window, div};
 
 use super::agent_placeholder::AgentPlaceholder;
 use super::base_px;
-use super::ref_list::{RefList, SidebarActions};
+use super::ref_list::RefList;
 use crate::components::ui::{Icon, IconName, SegmentedControl};
 use crate::theme::PaletteExt as _;
 use crate::views::repository::MEDIUM;
@@ -56,18 +56,8 @@ pub struct RefsSidebar {
 
 impl RefsSidebar {
     pub fn new(repository_id: RepositoryId, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        RefsSidebar::with_actions(repository_id, SidebarActions::new(), window, cx)
-    }
-
-    /// With the list's `actions`: a test's.
-    pub(crate) fn with_actions(
-        repository_id: RepositoryId,
-        actions: SidebarActions,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
         RefsSidebar {
-            list: cx.new(|cx| RefList::with_actions(repository_id, actions, window, cx)),
+            list: cx.new(|cx| RefList::new(repository_id, window, cx)),
             mode: SidebarMode::List,
             open: true,
         }
@@ -75,10 +65,6 @@ impl RefsSidebar {
 
     pub fn repository_id<'a>(&self, cx: &'a gpui_kit::App) -> &'a RepositoryId {
         self.list.read(cx).repository_id()
-    }
-
-    pub fn list(&self) -> &Entity<RefList> {
-        &self.list
     }
 
     /// Shows another repository's (see `RefList::set_repository`).

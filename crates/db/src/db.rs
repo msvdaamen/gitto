@@ -63,9 +63,14 @@ impl Db {
     {
         let conn = Arc::clone(&self.conn);
         blocking::unblock(move || {
-            // A panic in another use leaves SQLite as it was: a transaction it had open was rolled
-            // back as it was dropped.
+            // A panic in another use leaves the connection usable. A rusqlite `Transaction` it had
+            // open was rolled back as it was dropped; one it began with a plain `BEGIN` is still
+            // open, so it's rolled back here, and each use starts outside a transaction.
             let mut conn = conn.lock().unwrap_or_else(PoisonError::into_inner);
+            if !conn.is_autocommit() {
+                // If even this fails, `f`'s first statement says why.
+                let _ = conn.execute_batch("ROLLBACK");
+            }
             f(&mut conn)
         })
         .await
@@ -177,5 +182,30 @@ mod tests {
             smol::block_on(db.run(|conn| conn.query_row("SELECT 1", [], |row| row.get(0))))
                 .unwrap();
         assert_eq!(one, 1);
+    }
+
+    #[test]
+    fn rolls_back_a_transaction_a_use_that_panicked_left_open() {
+        let db = Db::open_in_memory().unwrap();
+        let panicked = std::thread::spawn({
+            let db = db.clone();
+            move || {
+                smol::block_on(db.run(|conn| {
+                    conn.execute_batch(
+                        "BEGIN; INSERT INTO repositories (id, name, path) VALUES ('1', 'one', '/one')",
+                    )
+                    .unwrap();
+                    panic!("on purpose")
+                }))
+            }
+        })
+        .join();
+        assert!(panicked.is_err());
+        let (autocommit, count): (bool, i64) = smol::block_on(db.run(|conn| {
+            let count = conn.query_row("SELECT count(*) FROM repositories", [], |row| row.get(0));
+            (conn.is_autocommit(), count.unwrap())
+        }));
+        assert!(autocommit);
+        assert_eq!(count, 0);
     }
 }

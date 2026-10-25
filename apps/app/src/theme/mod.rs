@@ -13,8 +13,7 @@
 //!
 //! Like `hooks/theme.ts`, the theme is the one the user last picked, dark until they pick one:
 //! `index.css` declares `color-scheme: dark` at the root, and the renderer never read the
-//! system's. (The task asked to follow the system setting as `theme.ts` does; it doesn't, so this
-//! keeps its behavior.)
+//! system's.
 
 pub mod palette;
 

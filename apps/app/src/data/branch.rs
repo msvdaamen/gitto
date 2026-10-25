@@ -21,10 +21,12 @@ use super::operation::{OneAtATime, OperationState, Operations, RepositoryOperati
 use gitto_ui::git::status::{branch_name, is_checked_out};
 
 const CREATE: &str = "branch";
-const SWITCH: &str = "switch";
-const MERGE: &str = "merge";
-const REBASE: &str = "rebase";
-const DELETE: &str = "delete-branch";
+// The names of the changes of the branches the toolbar's current branch shows (see
+// `toolbar::BranchChangeKind`), and dismisses by them.
+pub(crate) const SWITCH: &str = "switch";
+pub(crate) const MERGE: &str = "merge";
+pub(crate) const REBASE: &str = "rebase";
+pub(crate) const DELETE: &str = "delete-branch";
 /// Adding a worktree (see `worktree::worktree_actions`), which checks out a branch there, or
 /// creates one.
 pub const ADD_WORKTREE: &str = "add-worktree";
@@ -87,10 +89,6 @@ impl<T: 'static, R: 'static> BranchChange<T, R> {
     /// Whether it can't run on the repository `id` now, as a change of the branches is running.
     pub fn is_blocked(&self, id: &str, cx: &App) -> bool {
         branches_changing(id, cx)
-    }
-
-    pub fn operation(&self) -> &OneAtATime<T, R> {
-        &self.operation
     }
 }
 
@@ -210,11 +208,7 @@ pub fn merge_branch_operation() -> BranchChange<Merge, MergeOutcome> {
     BranchChange::new(RepositoryOperation::new(
         MERGE,
         |id, input: Merge, cx: &mut App| {
-            let up_to_date = format!(
-                "Already up to date: {} has every commit of {}.",
-                input.into,
-                branch_name(&input.reference)
-            );
+            let up_to_date = up_to_date_message(&input.into, &input.reference);
             let action = call(cx, "branch.merge", &id, move |repo| async move {
                 let reference = parse::<BranchRef>(input.reference)?;
                 let into = parse::<NonEmpty>(input.into)?;
@@ -232,6 +226,15 @@ pub fn merge_branch_operation() -> BranchChange<Merge, MergeOutcome> {
             })
         },
     ))
+}
+
+/// Why a merge or a rebase that changed nothing fails: `branch`, as the user saw it, had every
+/// commit of the branch `reference`, by its full ref name, already.
+fn up_to_date_message(branch: &str, reference: &str) -> String {
+    format!(
+        "Already up to date: {branch} has every commit of {}.",
+        branch_name(reference)
+    )
 }
 
 /// Runs `action`, a merge or a rebase on the repository `id`, then reloads the repository, also
@@ -285,11 +288,7 @@ pub fn rebase_branch_operation() -> BranchChange<Rebase, RebaseOutcome> {
     BranchChange::new(RepositoryOperation::new(
         REBASE,
         |id, input: Rebase, cx: &mut App| {
-            let up_to_date = format!(
-                "Already up to date: {} has every commit of {}.",
-                input.branch,
-                branch_name(&input.reference)
-            );
+            let up_to_date = up_to_date_message(&input.branch, &input.reference);
             let action = call(cx, "branch.rebase", &id, move |repo| async move {
                 let reference = parse::<BranchRef>(input.reference)?;
                 let branch = parse::<NonEmpty>(input.branch)?;

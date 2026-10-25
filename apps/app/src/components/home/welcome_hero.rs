@@ -70,7 +70,8 @@ impl RenderOnce for WelcomeHero {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let palette = *cx.palette();
         let narrow = window.viewport_size().width < px(MEDIUM);
-        let user_name = self.user_name.clone().flatten();
+        let greeting: SharedString =
+            greeting(self.user_name.as_ref().and_then(|name| name.as_deref())).into();
         let lead = if self.summaries.is_empty() {
             "Open a git repository to get started, or shape something new."
         } else {
@@ -135,11 +136,11 @@ impl RenderOnce for WelcomeHero {
                         div()
                             .id("greeting")
                             .test_support()
-                            .aria_label(SharedString::from(greeting(user_name.as_deref())))
+                            .aria_label(greeting.clone())
                             .text_3xl()
                             .line_height(relative(1.1))
                             .text_color(palette.text)
-                            .child(greeting(user_name.as_deref())),
+                            .child(greeting),
                     )
                     .child(
                         div()

@@ -185,7 +185,7 @@ impl Fakes {
                 .stale_time(StaleTime::Infinite)
                 .keep_previous_data()
             })
-            .with_changed_files(move |id, sha, of, enabled, _| {
+            .with_changed_files(move |id, sha, of, _| {
                 let fakes = Rc::clone(&files_of);
                 let sha = sha.to_owned();
                 let key = match of {
@@ -207,7 +207,6 @@ impl Fakes {
                 })
                 .stale_time(StaleTime::Infinite)
                 .keep_previous_data()
-                .enabled(enabled)
             })
             .with_stashes(move |id, _| {
                 let fakes = Rc::clone(&stashes);

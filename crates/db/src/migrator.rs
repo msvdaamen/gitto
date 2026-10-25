@@ -180,59 +180,11 @@ fn upgrade_journal(conn: &mut Connection, local: &mut [&Migration]) -> Result<()
     };
     local.sort_by(|a, b| a.created_at().cmp(&b.created_at()).then(a.name.cmp(b.name)));
 
-    enum Matched {
-        Id(Value),
-        Millis(String),
-        Hash(Value),
-    }
     let mut backfill: Vec<(&str, Matched)> = Vec::new();
     let mut unmatched: Vec<(&Value, &Value)> = Vec::new();
     for (id, hash, created_at) in &rows {
-        let stringified = js_string(created_at);
-        // Its time to the second: the last three digits (milliseconds) as zeros.
-        let cut = stringified
-            .char_indices()
-            .nth_back(2)
-            .map_or(0, |(index, _)| index);
-        let millis = js_number(&format!("{}000", &stringified[..cut]));
-        let candidates: Vec<&&Migration> = local
-            .iter()
-            .filter(|m| m.created_at() as f64 == millis)
-            .collect();
-        let hash_text = match hash {
-            Value::Text(hash) => Some(hash.as_str()),
-            _ => None,
-        };
-        let (matched, by_millis) = match candidates.as_slice() {
-            [only] => (Some(**only), true),
-            [] => (
-                // The last with that hash, as Drizzle's map by hash keeps it.
-                local
-                    .iter()
-                    .rev()
-                    .find(|m| Some(m.hash().as_str()) == hash_text)
-                    .copied(),
-                false,
-            ),
-            several => (
-                several
-                    .iter()
-                    .find(|m| hash_text.is_some_and(|hash| !hash.is_empty() && m.hash() == hash))
-                    .map(|m| **m),
-                false,
-            ),
-        };
-        match matched {
-            Some(migration) => {
-                let by = if js_truthy(id) {
-                    Matched::Id(id.clone())
-                } else if by_millis {
-                    Matched::Millis(stringified)
-                } else {
-                    Matched::Hash(hash.clone())
-                };
-                backfill.push((migration.name, by));
-            }
+        match match_journal_row(local, id, hash, created_at) {
+            Some((migration, by)) => backfill.push((migration.name, by)),
             None => unmatched.push((id, created_at)),
         }
     }
@@ -280,6 +232,66 @@ fn upgrade_journal(conn: &mut Connection, local: &mut [&Migration]) -> Result<()
     }
     tx.commit()?;
     Ok(())
+}
+
+/// How [`upgrade_journal`] finds a journal row again to name it: Drizzle's `matchedBy`, with the
+/// value it's found by.
+enum Matched {
+    Id(Value),
+    Millis(String),
+    Hash(Value),
+}
+
+/// The local migration a journal row of version 0 (`id`, `hash`, `created_at`) is, as Drizzle's
+/// upgrade matches them: the one made in the same second, or, if several or none were, the one with
+/// its hash. `local` is sorted by time, then name. `None` if none matches.
+fn match_journal_row<'m>(
+    local: &[&'m Migration],
+    id: &Value,
+    hash: &Value,
+    created_at: &Value,
+) -> Option<(&'m Migration, Matched)> {
+    let stringified = js_string(created_at);
+    // Its time to the second: the last three digits (milliseconds) as zeros.
+    let cut = stringified
+        .char_indices()
+        .nth_back(2)
+        .map_or(0, |(index, _)| index);
+    let millis = js_number(&format!("{}000", &stringified[..cut]));
+    let candidates: Vec<&'m Migration> = local
+        .iter()
+        .copied()
+        .filter(|m| m.created_at() as f64 == millis)
+        .collect();
+    let hash_text = match hash {
+        Value::Text(hash) => Some(hash.as_str()),
+        _ => None,
+    };
+    let (matched, by_millis) = match candidates.as_slice() {
+        [only] => (*only, true),
+        // The last with that hash, as Drizzle's map by hash keeps it.
+        [] => (
+            *local
+                .iter()
+                .rev()
+                .find(|m| Some(m.hash().as_str()) == hash_text)?,
+            false,
+        ),
+        several => (
+            *several
+                .iter()
+                .find(|m| hash_text.is_some_and(|hash| !hash.is_empty() && m.hash() == hash))?,
+            false,
+        ),
+    };
+    let by = if js_truthy(id) {
+        Matched::Id(id.clone())
+    } else if by_millis {
+        Matched::Millis(stringified)
+    } else {
+        Matched::Hash(hash.clone())
+    };
+    Some((matched, by))
 }
 
 /// JS's `String(value)` of a value node:sqlite read: how Drizzle prints and compares one.

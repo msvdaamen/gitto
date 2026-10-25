@@ -11,7 +11,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::{App, Context, Entity, EventEmitter, FontWeight, Subscription, Window, div, rems};
 
 use super::changed_file_list::{ChangedFileList, HoverIntent};
-use super::commit_details::{CommitDetailsEvent, ShownFile, shown_path_in};
+use super::commit_details::{CommitDetailsEvent, ShownFile, openable_files};
 use super::details_data::DetailsData;
 use super::details_sections::{DetailsError, DetailsList, FileTotals, RenderTop};
 use crate::components::ui::{Icon, IconName, LoadingState, Tone};
@@ -145,27 +145,7 @@ impl Render for StashDetails {
         );
         // Only once the files on show are this stash's, so another's aren't opened as its.
         if shown_sha.as_deref() == Some(self.sha.as_str()) {
-            let open_source = source.clone();
-            let prefetch_source = source.clone();
-            let opener = cx.entity().downgrade();
-            let prefetcher = opener.clone();
-            list = list
-                .open_path(shown_path_in(&self.shown_file, &source))
-                .on_open(move |file, _, cx| {
-                    let event = CommitDetailsEvent::OpenFile {
-                        source: open_source.clone(),
-                        file: file.clone(),
-                    };
-                    let _ = opener.update(cx, |_, cx| cx.emit(event));
-                })
-                .on_prefetch(&self.hover, move |file, _, cx| {
-                    let event = CommitDetailsEvent::PrefetchFile {
-                        source: prefetch_source.clone(),
-                        file: file.clone(),
-                        uncounted: false,
-                    };
-                    let _ = prefetcher.update(cx, |_, cx| cx.emit(event));
-                });
+            list = openable_files(list, source, &self.shown_file, &self.hover, cx);
         }
         self.list
             .render("stash-files", top, hasher.finish(), list, cx)

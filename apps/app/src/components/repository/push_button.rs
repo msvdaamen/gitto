@@ -330,7 +330,7 @@ mod tests {
 
     use super::*;
     use crate::components::repository::test_support::{
-        repository_id, set_push_target, set_status, setup, status,
+        has_dialog, repository_id, set_push_target, set_status, setup, status,
     };
     use crate::data::{QueryError, RepositoryOperation};
 
@@ -412,11 +412,6 @@ mod tests {
         cx.update_window(window, |_, window, cx| window.click(id, cx))
             .unwrap();
         cx.run_until_parked();
-    }
-
-    fn has_dialog(window: AnyWindowHandle, cx: &mut TestAppContext) -> bool {
-        cx.update_window(window, |_, window, cx| window.has_active_dialog(cx))
-            .unwrap()
     }
 
     fn copy(button: &Entity<PushButton>, cx: &mut TestAppContext) -> RejectedCopy {

@@ -122,7 +122,9 @@ struct MoreLabelsState {
     /// The row whose count is hovered, or whose labels are listed.
     row: Option<String>,
     open: bool,
-    hovered: bool,
+    /// How many of the count and the list the pointer is on. Not a flag: moving from one onto
+    /// the other, the list may hear it entered before the count hears it left.
+    hovered: usize,
     timer: Option<Task<()>>,
 }
 
@@ -618,15 +620,19 @@ impl HistoryTable {
             };
         }
         let state = &mut self.more_labels;
-        state.hovered = hovered;
-        if hovered {
+        state.hovered = if hovered {
+            state.hovered + 1
+        } else {
+            state.hovered.saturating_sub(1)
+        };
+        if state.hovered > 0 {
             if state.open {
                 state.timer = None;
             } else {
                 state.timer = Some(cx.spawn(async move |this, cx| {
                     cx.background_executor().timer(MORE_OPEN_DELAY).await;
                     let _ = this.update(cx, |this, cx| {
-                        if this.more_labels.hovered {
+                        if this.more_labels.hovered > 0 {
                             this.more_labels.open = true;
                             cx.notify();
                         }
@@ -646,7 +652,7 @@ impl HistoryTable {
         self.more_labels.timer = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(MORE_CLOSE_DELAY).await;
             let _ = this.update(cx, |this, cx| {
-                if !this.more_labels.hovered && !this.is_branch_menu_open(cx) {
+                if this.more_labels.hovered == 0 && !this.is_branch_menu_open(cx) {
                     this.more_labels.open = false;
                     cx.notify();
                 }
@@ -661,10 +667,10 @@ impl HistoryTable {
     }
 
     /// A branch's menu closed: the list of other labels it was opened from closes too, once the
-    /// pointer's off it.
+    /// pointer's off it. Whatever close was timed before ran while the menu was open, and kept it.
     fn recheck_more_labels(&mut self, cx: &mut Context<Self>) {
         let state = &self.more_labels;
-        if state.open && !state.hovered && state.timer.is_none() && !self.is_branch_menu_open(cx) {
+        if state.open && state.hovered == 0 && !self.is_branch_menu_open(cx) {
             self.close_more_labels_soon(cx);
         }
     }
