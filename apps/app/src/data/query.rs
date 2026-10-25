@@ -209,11 +209,6 @@ impl<T: Clone + PartialEq + Send + 'static, S: Clone + 'static> Query<T, S> {
         self.is_fetching() && self.snapshot.borrow().shown().is_some()
     }
 
-    /// Whether it's enabled (see [`set_enabled`](Self::set_enabled)).
-    pub fn is_enabled(&self) -> bool {
-        self.enabled.get()
-    }
-
     /// When it last loaded.
     pub fn data_updated_at(&self) -> Option<Instant> {
         self.snapshot.borrow().data_updated_at

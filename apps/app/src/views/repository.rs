@@ -219,12 +219,6 @@ impl RepositoryView {
         &self.repository_id
     }
 
-    /// What the branch menus share: for the sidebar and the history to build a branch's menu
-    /// from (see `branch_menu::branch_menu`).
-    pub fn branch_menu(&self) -> &Entity<BranchMenuProvider> {
-        &self.branch_menu
-    }
-
     /// Shows the repository `id` instead: its own selection (none), the panels as they are.
     pub fn set_repository(
         &mut self,

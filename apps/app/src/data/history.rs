@@ -160,7 +160,6 @@ fn followed_by(log: &Log, commits: Vec<Commit>, complete: bool) -> Log {
 /// keeps one, made in its constructor, and makes another for another repository.
 pub struct LogQuery {
     id: RepositoryId,
-    get: GetLog,
     query: Query<Log>,
     more: Entity<Mutation<RepositoryId>>,
     _subscriptions: [Subscription; 2],
@@ -174,10 +173,7 @@ impl LogQuery {
     /// The log, read by `get`: e.g. a test's.
     pub fn with_get<V: 'static>(id: &RepositoryId, get: GetLog, cx: &mut Context<V>) -> Self {
         let query = Query::new(log_options(id, Rc::clone(&get)), cx);
-        let more = {
-            let get = Rc::clone(&get);
-            Mutation::new(move |id, cx: &mut App| load_more(id, &get, cx), cx)
-        };
+        let more = Mutation::new(move |id, cx: &mut App| load_more(id, &get, cx), cx);
         // Whether loading more failed, or is still under way, is of the log as it was: not of the
         // one reloaded since (`useResetOn`).
         let reset = {
@@ -193,7 +189,6 @@ impl LogQuery {
         let render = cx.observe(&more, |_, _, cx| cx.notify());
         LogQuery {
             id: id.clone(),
-            get,
             query,
             more,
             _subscriptions: [reset, render],
@@ -222,10 +217,6 @@ impl LogQuery {
                 drop(more.mutate(id, cx));
             });
         }
-    }
-
-    pub fn get(&self) -> &GetLog {
-        &self.get
     }
 }
 
@@ -320,8 +311,7 @@ fn loaded<T: PartialEq + Send + Sync + 'static>(query: &Query<Arc<[T]>>) -> Arc<
 /// for it again. Loaded on its own otherwise. Shown with `Query::set_options` in place of the one
 /// before, which stays on show while it loads, instead of nothing.
 pub fn commit_details_options(id: &RepositoryId, sha: &str, cx: &App) -> QueryOptions<Commit> {
-    let log = keys::log(id);
-    let initial_sha = sha.to_owned();
+    let initial = commit_in_log(id, sha);
     let sha = sha.to_owned();
     QueryOptions::new(
         keys::commit(id, &sha),
@@ -330,15 +320,23 @@ pub fn commit_details_options(id: &RepositoryId, sha: &str, cx: &App) -> QueryOp
             async move { get_commit(&repo, &parse::<Sha>(sha)?).await }
         }),
     )
-    .initial_data(move |cx| {
+    .initial_data(initial)
+    .stale_time(StaleTime::Infinite)
+    .keep_previous_data()
+}
+
+/// The commit `sha` as the repository `id`'s cached log has it, if it's in it: a commit's details'
+/// initial data (see [`commit_details_options`]).
+fn commit_in_log(id: &RepositoryId, sha: &str) -> impl Fn(&App) -> Option<Commit> + 'static {
+    let log = keys::log(id);
+    let sha = sha.to_owned();
+    move |cx| {
         QueryClient::get_data::<Log>(&log, cx)?
             .commits
             .iter()
-            .find(|commit| commit.sha == initial_sha)
+            .find(|commit| commit.sha == sha)
             .cloned()
-    })
-    .stale_time(StaleTime::Infinite)
-    .keep_previous_data()
+    }
 }
 
 /// A commit's details' query (see [`commit_details_options`]).
@@ -526,16 +524,8 @@ mod tests {
         let options = QueryOptions::<Commit>::new(keys::commit(&id, &sha), |_, _| {
             async { Err(QueryError::msg("Asked git.")) }.boxed()
         });
-        let initial_sha = sha.clone();
-        let log_key = keys::log(&id);
         let options = options
-            .initial_data(move |cx| {
-                QueryClient::get_data::<Log>(&log_key, cx)?
-                    .commits
-                    .iter()
-                    .find(|commit| commit.sha == initial_sha)
-                    .cloned()
-            })
+            .initial_data(commit_in_log(&id, &sha))
             .stale_time(StaleTime::Infinite);
         struct Details {
             query: Query<Commit>,

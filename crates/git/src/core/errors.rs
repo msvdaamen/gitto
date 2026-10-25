@@ -14,8 +14,7 @@ use std::sync::Arc;
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// How an error reaches the UI: what kind of failure it is. In the Electron app it reached the
-/// renderer as an oRPC error with `code()`, and `status()` for a code of Gitto's own, which oRPC
-/// has no status for.
+/// renderer as an oRPC error with `code()` and `status()`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ApiCode {
     /// No such repository, folder or file.
@@ -56,17 +55,9 @@ impl ApiCode {
         }
     }
 
-    /// The HTTP status of a code of Gitto's own; `None` for oRPC's, which have one.
-    pub fn status(self) -> Option<u16> {
-        match self {
-            ApiCode::PushRewritten | ApiCode::PushBehind => Some(409),
-            _ => None,
-        }
-    }
-
-    /// The HTTP status the error had in the Electron app: [`status`](Self::status) for a code of
-    /// Gitto's own, oRPC's for the others.
-    pub fn http_status(self) -> u16 {
+    /// The HTTP status the error had in the Electron app: oRPC's for its codes, and 409 for
+    /// Gitto's own, which `errors.ts` gave one as oRPC has none for them.
+    pub fn status(self) -> u16 {
         match self {
             ApiCode::BadRequest => 400,
             ApiCode::Forbidden => 403,
@@ -84,7 +75,7 @@ impl ApiCode {
     /// `packages/rpc/src/server.ts`): git failing in a way Gitto doesn't expect, or input that the
     /// UI shouldn't have sent, which is the UI's bug.
     pub fn is_bug(self) -> bool {
-        self.http_status() >= 500 || self == ApiCode::BadRequest
+        self.status() >= 500 || self == ApiCode::BadRequest
     }
 }
 
@@ -539,7 +530,28 @@ fn sentence(message: &str) -> String {
 }
 
 /// The most specific error for a command that exited with `exit_code`, going by what git printed.
+/// It keeps `stdout` as git printed it (see `GitError::stdout`).
 pub fn command_error(
+    cwd: &str,
+    args: &[String],
+    exit_code: Option<i32>,
+    stdout: &[u8],
+    stderr: &str,
+) -> GitError {
+    GitError {
+        stdout: stdout.to_vec(),
+        ..specific_error(
+            cwd,
+            args,
+            exit_code,
+            &String::from_utf8_lossy(stdout),
+            stderr,
+        )
+    }
+}
+
+/// `command_error`, but for `stdout`, which it reads lossily as UTF-8 for the message.
+fn specific_error(
     cwd: &str,
     args: &[String],
     exit_code: Option<i32>,
@@ -579,10 +591,7 @@ pub fn command_error(
         ("", stdout) => stdout.to_owned(),
         (stderr, _) => stderr.to_owned(),
     };
-    GitError {
-        stdout: stdout.as_bytes().to_vec(),
-        ..GitError::new(message, args.to_vec(), exit_code, stderr)
-    }
+    GitError::new(message, args.to_vec(), exit_code, stderr)
 }
 
 fn unsupported_git_message(version: Option<&str>, required: &str) -> String {
@@ -635,7 +644,7 @@ mod tests {
             "/repo",
             &args(&["status"]),
             Some(128),
-            "",
+            b"",
             "fatal: not a git repository (or any of the parent directories): .git\n",
         );
         assert_eq!(error.kind, GitErrorKind::NotARepository);
@@ -646,7 +655,7 @@ mod tests {
             "/repo",
             &args(&["add", "a"]),
             Some(128),
-            "",
+            b"",
             "fatal: Unable to create '/repo/.git/index.lock': File exists.",
         );
         assert_eq!(error.kind, GitErrorKind::IndexLocked);
@@ -656,14 +665,14 @@ mod tests {
             "/repo",
             &args(&["commit"]),
             Some(1),
-            "nothing to commit\n",
+            b"nothing to commit\n",
             "",
         );
         assert_eq!(error.message, "nothing to commit");
         assert_eq!(error.stdout_text(), "nothing to commit\n");
         assert_eq!(error.api(), ApiCode::InternalServerError);
 
-        let error = command_error("/repo", &args(&["diff"]), None, "", "");
+        let error = command_error("/repo", &args(&["diff"]), None, b"", "");
         assert_eq!(error.message, "git diff exited with code null");
     }
 
@@ -683,10 +692,10 @@ mod tests {
             ApiCode::PushBehind,
         ] {
             assert!(!code.is_bug(), "{code:?}");
-            assert!(code.http_status() < 500, "{code:?}");
+            assert!(code.status() < 500, "{code:?}");
         }
-        assert_eq!(ApiCode::PushBehind.http_status(), 409);
-        assert_eq!(ApiCode::PreconditionFailed.http_status(), 412);
+        assert_eq!(ApiCode::PushBehind.status(), 409);
+        assert_eq!(ApiCode::PreconditionFailed.status(), 412);
     }
 
     #[test]
@@ -773,7 +782,7 @@ mod tests {
             }
             .api()
             .status(),
-            Some(409)
+            409
         );
     }
 }
