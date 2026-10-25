@@ -71,8 +71,13 @@ fn get_all(conn: &Connection) -> rusqlite::Result<Vec<Repository>> {
     .collect()
 }
 
-/// The repository whose `column` is `value`, if there's one.
-fn get_by(conn: &Connection, column: &str, value: &str) -> rusqlite::Result<Option<Repository>> {
+/// The repository whose `column` is `value`, if there's one. `column` goes into the SQL as it is,
+/// so it's only ever a literal.
+fn get_by(
+    conn: &Connection,
+    column: &'static str,
+    value: &str,
+) -> rusqlite::Result<Option<Repository>> {
     conn.query_row(
         &format!(
             r#"select {COLUMNS} from "repositories" where "repositories"."{column}" = ? limit ?"#
