@@ -44,10 +44,134 @@ pub(super) const ROW_REMS: f32 = 4. / 3.;
 
 /// Bytes of a line that are drawn: a longer one (a minified file's) is cut there, as shaping it
 /// whole would hold up every frame it's in view.
-pub(super) const MAX_DRAWN_LINE: usize = 4000;
+const MAX_DRAWN_LINE: usize = 4000;
 
 /// The spaces a tab is drawn as.
-pub(super) const TAB_WIDTH: usize = 4;
+const TAB_WIDTH: usize = 4;
+
+/// A line of code as it's drawn, here and in the conflicts' viewer: its line end left off, tabs
+/// as spaces, a long one cut (with an ellipsis).
+pub(super) struct DrawnLine {
+    pub text: String,
+    /// The bytes of the line that are drawn.
+    cut: usize,
+    /// Where its tabs are in the line.
+    tabs: Vec<usize>,
+}
+
+impl DrawnLine {
+    pub fn new(line: &str) -> Self {
+        let content = line.trim_end_matches(['\n', '\r']);
+        let (cut, ellipsis) = if content.len() > MAX_DRAWN_LINE {
+            let mut end = MAX_DRAWN_LINE;
+            while !content.is_char_boundary(end) {
+                end -= 1;
+            }
+            (&content[..end], true)
+        } else {
+            (content, false)
+        };
+        let tabs: Vec<usize> = cut
+            .bytes()
+            .enumerate()
+            .filter(|(_, byte)| *byte == b'\t')
+            .map(|(offset, _)| offset)
+            .collect();
+        let mut text = if tabs.is_empty() {
+            cut.to_owned()
+        } else {
+            cut.replace('\t', &" ".repeat(TAB_WIDTH))
+        };
+        if ellipsis {
+            text.push('…');
+        }
+        DrawnLine {
+            text,
+            cut: cut.len(),
+            tabs,
+        }
+    }
+
+    /// Where a byte offset in the line is in the text drawn.
+    pub fn offset(&self, offset: usize) -> usize {
+        let offset = offset.min(self.cut);
+        offset + self.tabs.partition_point(|tab| *tab < offset) * (TAB_WIDTH - 1)
+    }
+
+    /// The line's syntax, as `highlights` have it for line `ix` of `side`, where it's drawn.
+    pub fn syntax<'a>(
+        &'a self,
+        highlights: &'a DiffHighlights,
+        side: Side,
+        ix: usize,
+        cx: &'a App,
+    ) -> impl Iterator<Item = (Range<usize>, HighlightStyle)> + 'a {
+        let theme = &cx.theme().highlight_theme;
+        highlights
+            .syntax(side, ix)
+            .iter()
+            .filter_map(move |(range, name)| {
+                let style = theme.style(highlight_name(*name))?;
+                let range = self.offset(range.start as usize)..self.offset(range.end as usize);
+                (!range.is_empty()).then_some((range, style))
+            })
+    }
+}
+
+/// The widest of `lines`, in characters as drawn (see [`DrawnLine`]).
+pub(super) fn widest_line<'a>(lines: impl IntoIterator<Item = &'a str>) -> usize {
+    lines
+        .into_iter()
+        .map(|line| {
+            let line = line.trim_end_matches(['\n', '\r']);
+            let tabs = line.bytes().filter(|byte| *byte == b'\t').count();
+            line.len().min(MAX_DRAWN_LINE) + tabs * (TAB_WIDTH - 1)
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// The width of a character of the code's font, at `font_size`.
+pub(super) fn code_char_width(font_size: Pixels, window: &mut Window, cx: &App) -> Pixels {
+    let sample: SharedString = "0000000000".into();
+    let run = TextRun {
+        len: sample.len(),
+        font: font(cx.theme().mono_font_family.clone()),
+        color: cx.theme().foreground,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    window
+        .text_system()
+        .shape_line(sample, font_size, &[run], None)
+        .width
+        / 10.
+}
+
+/// Scrolls the list `scroll` tracks, of `rows` rows `row_height` high, by `down` pixels (up, if
+/// negative) and `across` right, within its contents.
+pub(super) fn scroll_list_by(
+    scroll: &UniformListScrollHandle,
+    rows: usize,
+    down: Pixels,
+    across: Pixels,
+    row_height: Pixels,
+) {
+    let state = scroll.0.borrow();
+    let handle = &state.base_handle;
+    let offset = handle.offset();
+    let height = state.last_item_size.map_or(px(0.), |size| size.item.height);
+    let width = state.last_item_size.map_or(px(0.), |size| size.item.width);
+    let content = state
+        .last_item_size
+        .map_or(px(0.), |size| size.contents.width);
+    let bottom = (row_height * rows as f32 - height).max(px(0.));
+    let right = (content - width).max(px(0.));
+    let y = (-offset.y + down).clamp(px(0.), bottom);
+    let x = (-offset.x + across).clamp(px(0.), right);
+    handle.set_offset(point(-x, -y));
+}
 
 /// What the viewer tells the file's view.
 #[derive(Debug, Clone, PartialEq)]
@@ -602,23 +726,6 @@ impl PatchViewer {
         }
     }
 
-    /// Scrolls by `delta` pixels down (or up, if negative) and `across` right.
-    fn scroll_by(&self, delta: Pixels, across: Pixels, row_height: Pixels) {
-        let state = self.scroll.0.borrow();
-        let handle = &state.base_handle;
-        let offset = handle.offset();
-        let height = state.last_item_size.map_or(px(0.), |size| size.item.height);
-        let width = state.last_item_size.map_or(px(0.), |size| size.item.width);
-        let content = state
-            .last_item_size
-            .map_or(px(0.), |size| size.contents.width);
-        let bottom = (row_height * self.layout.rows.len() as f32 - height).max(px(0.));
-        let right = (content - width).max(px(0.));
-        let y = (-offset.y + delta).clamp(px(0.), bottom);
-        let x = (-offset.x + across).clamp(px(0.), right);
-        handle.set_offset(point(-x, -y));
-    }
-
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let keystroke = &event.keystroke;
         let modifiers = &keystroke.modifiers;
@@ -685,7 +792,13 @@ impl PatchViewer {
             "end" => (px(1e9), px(0.)),
             _ => return,
         };
-        self.scroll_by(down, right, row_height);
+        scroll_list_by(
+            &self.scroll,
+            self.layout.rows.len(),
+            down,
+            right,
+            row_height,
+        );
         cx.stop_propagation();
         cx.notify();
     }
@@ -763,20 +876,7 @@ impl PatchViewer {
         {
             return width;
         }
-        let sample: SharedString = "0000000000".into();
-        let run = TextRun {
-            len: sample.len(),
-            font: font(cx.theme().mono_font_family.clone()),
-            color: cx.theme().foreground,
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        let width = window
-            .text_system()
-            .shape_line(sample, font_size, &[run], None)
-            .width
-            / 10.;
+        let width = code_char_width(font_size, window, cx);
         self.char_width = Some((font_size, width));
         width
     }
@@ -853,16 +953,7 @@ impl PatchViewer {
 
 /// The widest line of `diff`, in characters as drawn, and its highest line number.
 fn measure(diff: &FileDiff) -> (usize, usize) {
-    let widest = [&diff.deletion_lines, &diff.addition_lines]
-        .iter()
-        .flat_map(|lines| lines.iter())
-        .map(|line| {
-            let line = line.trim_end_matches(['\n', '\r']);
-            let tabs = line.bytes().filter(|byte| *byte == b'\t').count();
-            line.len().min(MAX_DRAWN_LINE) + tabs * (TAB_WIDTH - 1)
-        })
-        .max()
-        .unwrap_or(0);
+    let widest = widest_line(diff.deletion_lines.iter().chain(diff.addition_lines.iter()));
     let mut highest = diff.deletion_lines.len().max(diff.addition_lines.len());
     if let Some(last) = diff.hunks.last() {
         highest = highest
@@ -1347,54 +1438,18 @@ fn line_text(
     let Some(line) = frame.diff.lines(side).get(ix) else {
         return (SharedString::default(), Vec::new());
     };
-    let content = line.trim_end_matches(['\n', '\r']);
-    let (cut, ellipsis) = if content.len() > MAX_DRAWN_LINE {
-        let mut end = MAX_DRAWN_LINE;
-        while !content.is_char_boundary(end) {
-            end -= 1;
-        }
-        (&content[..end], true)
-    } else {
-        (content, false)
-    };
-    let tabs: Vec<usize> = cut
-        .bytes()
-        .enumerate()
-        .filter(|(_, byte)| *byte == b'\t')
-        .map(|(offset, _)| offset)
-        .collect();
-    let mut text = if tabs.is_empty() {
-        cut.to_owned()
-    } else {
-        cut.replace('\t', &" ".repeat(TAB_WIDTH))
-    };
-    if ellipsis {
-        text.push('…');
-    }
-    // A source offset, where it is in the text drawn.
-    let shown = |offset: usize| {
-        let offset = offset.min(cut.len());
-        offset + tabs.partition_point(|tab| *tab < offset) * (TAB_WIDTH - 1)
-    };
+    let drawn = DrawnLine::new(line);
     let Some(highlights) = &frame.highlights else {
-        return (text.into(), Vec::new());
+        return (drawn.text.into(), Vec::new());
     };
-    let theme = &cx.theme().highlight_theme;
-    let syntax = highlights
-        .syntax(side, ix)
-        .iter()
-        .filter_map(|(range, name)| {
-            let style = theme.style(highlight_name(*name))?;
-            let range = shown(range.start as usize)..shown(range.end as usize);
-            (!range.is_empty()).then_some((range, style))
-        });
+    let syntax = drawn.syntax(highlights, side, ix, cx);
     let words = if changed {
         highlights.changed(side, ix)
     } else {
         Default::default()
     };
     let words = words.iter().filter_map(|(range, ())| {
-        let range = shown(range.start as usize)..shown(range.end as usize);
+        let range = drawn.offset(range.start as usize)..drawn.offset(range.end as usize);
         (!range.is_empty()).then(|| {
             (
                 range,
@@ -1406,5 +1461,5 @@ fn line_text(
         })
     });
     let combined: Vec<_> = combine_highlights(syntax, words).collect();
-    (text.into(), combined)
+    (drawn.text.into(), combined)
 }

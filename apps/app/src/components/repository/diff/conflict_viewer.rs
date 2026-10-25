@@ -17,8 +17,8 @@ use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, HighlightStyle, Hsla,
     KeyDownEvent, ListHorizontalSizingBehavior, MouseButton, Pixels, ScrollStrategy, SharedString,
-    StyledText, Task, TextRun, UniformListScrollHandle, WeakEntity, Window, div, font, point, px,
-    rems, uniform_list,
+    StyledText, Task, UniformListScrollHandle, WeakEntity, Window, div, point, px, rems,
+    uniform_list,
 };
 
 pub use super::conflict_diff::Resolution;
@@ -30,9 +30,11 @@ use super::conflict_rows::{ConflictRow, LineRole, actions_row, conflict_rows};
 use super::conflict_whole_file::WholeFile;
 use super::diff_metadata::Side;
 use super::file_editing::EditSession;
-use super::highlight::{DiffHighlights, highlight_name};
+use super::highlight::DiffHighlights;
 use super::patch_files::Expanded;
-use super::patch_viewer::{FONT_REMS, MAX_DRAWN_LINE, ROW_REMS, TAB_WIDTH};
+use super::patch_viewer::{
+    DrawnLine, FONT_REMS, ROW_REMS, code_char_width, scroll_list_by, widest_line,
+};
 use super::viewer_rows::{ExpandDirection, SeparatorButtons, expand};
 use super::viewer_runtime::{HIGHLIGHT_WAIT, SharedHighlights, ViewHighlights, ViewerRuntime};
 use crate::components::ui::{Icon, IconName};
@@ -721,23 +723,6 @@ impl ConflictViewer {
         cx.notify();
     }
 
-    /// Scrolls by `down` pixels (up, if negative) and `across` right.
-    fn scroll_by(&self, down: Pixels, across: Pixels, row_height: Pixels) {
-        let state = self.scroll.0.borrow();
-        let handle = &state.base_handle;
-        let offset = handle.offset();
-        let height = state.last_item_size.map_or(px(0.), |size| size.item.height);
-        let width = state.last_item_size.map_or(px(0.), |size| size.item.width);
-        let content = state
-            .last_item_size
-            .map_or(px(0.), |size| size.contents.width);
-        let bottom = (row_height * self.rows.len() as f32 - height).max(px(0.));
-        let right = (content - width).max(px(0.));
-        let y = (-offset.y + down).clamp(px(0.), bottom);
-        let x = (-offset.x + across).clamp(px(0.), right);
-        handle.set_offset(point(-x, -y));
-    }
-
     /// Scrolls with the keyboard, as a browser's scroll container does.
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let keystroke = &event.keystroke;
@@ -768,7 +753,7 @@ impl ConflictViewer {
             "end" => (px(1e9), px(0.)),
             _ => return,
         };
-        self.scroll_by(down, right, row_height);
+        scroll_list_by(&self.scroll, self.rows.len(), down, right, row_height);
         cx.stop_propagation();
         cx.notify();
     }
@@ -780,20 +765,7 @@ impl ConflictViewer {
         {
             return width;
         }
-        let sample: SharedString = "0000000000".into();
-        let run = TextRun {
-            len: sample.len(),
-            font: font(cx.theme().mono_font_family.clone()),
-            color: cx.theme().foreground,
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        let width = window
-            .text_system()
-            .shape_line(sample, font_size, &[run], None)
-            .width
-            / 10.;
+        let width = code_char_width(font_size, window, cx);
         self.char_width = Some((font_size, width));
         width
     }
@@ -862,16 +834,7 @@ pub fn prepare_conflicts(
 
 /// The widest line of `state`'s sides, in characters as drawn.
 fn widest(state: &ConflictState) -> usize {
-    [state.ours(), state.theirs()]
-        .iter()
-        .flat_map(|lines| lines.iter())
-        .map(|line| {
-            let line = line.trim_end_matches(['\n', '\r']);
-            let tabs = line.bytes().filter(|byte| *byte == b'\t').count();
-            line.len().min(MAX_DRAWN_LINE) + tabs * (TAB_WIDTH - 1)
-        })
-        .max()
-        .unwrap_or(0)
+    widest_line(state.ours().iter().chain(state.theirs().iter()))
 }
 
 /// What drawing the rows in view needs (see [`ConflictViewer::frame`]).
@@ -1262,7 +1225,7 @@ fn separator(
         .into_any_element()
 }
 
-/// The text of line `ix` of `side` as it's drawn, and its syntax: tabs as spaces, a long line cut.
+/// The text of line `ix` of `side` as it's drawn (see `DrawnLine`), and its syntax.
 fn line_text(
     frame: &Frame,
     side: Side,
@@ -1276,48 +1239,12 @@ fn line_text(
     let Some(line) = lines.get(ix) else {
         return (SharedString::default(), Vec::new());
     };
-    let content = line.trim_end_matches(['\n', '\r']);
-    let (cut, ellipsis) = if content.len() > MAX_DRAWN_LINE {
-        let mut end = MAX_DRAWN_LINE;
-        while !content.is_char_boundary(end) {
-            end -= 1;
-        }
-        (&content[..end], true)
-    } else {
-        (content, false)
+    let drawn = DrawnLine::new(line);
+    let syntax = match &frame.highlights {
+        Some(highlights) => drawn.syntax(highlights, side, ix, cx).collect(),
+        None => Vec::new(),
     };
-    let tabs: Vec<usize> = cut
-        .bytes()
-        .enumerate()
-        .filter(|(_, byte)| *byte == b'\t')
-        .map(|(offset, _)| offset)
-        .collect();
-    let mut text = if tabs.is_empty() {
-        cut.to_owned()
-    } else {
-        cut.replace('\t', &" ".repeat(TAB_WIDTH))
-    };
-    if ellipsis {
-        text.push('…');
-    }
-    let shown = |offset: usize| {
-        let offset = offset.min(cut.len());
-        offset + tabs.partition_point(|tab| *tab < offset) * (TAB_WIDTH - 1)
-    };
-    let Some(highlights) = &frame.highlights else {
-        return (text.into(), Vec::new());
-    };
-    let theme = &cx.theme().highlight_theme;
-    let syntax = highlights
-        .syntax(side, ix)
-        .iter()
-        .filter_map(|(range, name)| {
-            let style = theme.style(highlight_name(*name))?;
-            let range = shown(range.start as usize)..shown(range.end as usize);
-            (!range.is_empty()).then_some((range, style))
-        })
-        .collect();
-    (text.into(), syntax)
+    (drawn.text.into(), syntax)
 }
 
 #[cfg(test)]
