@@ -198,6 +198,7 @@ fn ref_pill(
         Some(branch) => branch.full_name.clone(),
         None => format!("{label:?}"),
     };
+    let branch_key = key.clone();
     let icon = |name: IconName| Icon::new(name).size(LABEL_ICON).flex_none();
     let target = label_target(&label);
     let actions = actions.clone();
@@ -250,12 +251,18 @@ fn ref_pill(
                 })
         });
     match branch {
+        // The menu's around the pill, not in it: the menu would take its text's size, line height
+        // and weight (a checked-out branch's is bold), and look unlike the app's other menus.
         Some(branch) => {
             let reference: SharedString = branch.full_name.into();
-            pill.context_menu(move |menu, window, cx| {
-                branch_menu(menu_frame(menu), reference.clone(), window, cx)
-            })
-            .into_any_element()
+            h_flex()
+                .id(part(row, format!("{branch_key}/menu")))
+                .min_w_0()
+                .child(pill)
+                .context_menu(move |menu, window, cx| {
+                    branch_menu(menu_frame(menu), reference.clone(), window, cx)
+                })
+                .into_any_element()
         }
         None => pill.into_any_element(),
     }
