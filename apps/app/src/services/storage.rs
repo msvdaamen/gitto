@@ -4,7 +4,7 @@
 //!
 //! Like `localStorage`, it's read and written synchronously, and a value that can't be saved
 //! (the disk is full, say) still applies until the app closes: callers ignore the error, as the
-//! hooks did their `try`/`catch`.
+//! TS hooks did their `try`/`catch`.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -66,18 +66,6 @@ impl LocalStorage {
         let partial = file.with_extension("json.tmp");
         std::fs::write(&partial, text)?;
         std::fs::rename(&partial, file)
-    }
-}
-
-/// What gitto-ui-logic's hooks (`gitto_ui_logic::hooks`) save what they keep in: this, as the TS hooks did
-/// `localStorage`.
-impl gitto_ui_logic::hooks::Storage for &LocalStorage {
-    fn get(&self, key: &str) -> Option<String> {
-        self.get_item(key)
-    }
-
-    fn set(&mut self, key: &str, value: &str) -> io::Result<()> {
-        self.set_item(key, value)
     }
 }
 

@@ -507,7 +507,7 @@ impl RefList {
                 .and_then(|provider| provider.read(cx).open_for().cloned()),
             stash_menu_for: self.stash_menu.open_for().cloned(),
             worktree_menu_for: self.worktree_menu.open_for().cloned(),
-            now: gitto_ui_logic::hooks::relative_time::now_ms(),
+            now: crate::state::clock::now_ms(),
         })
     }
 

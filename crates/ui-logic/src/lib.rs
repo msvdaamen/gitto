@@ -7,12 +7,8 @@
 //!   ([`git::ref_tree`]), commit messages ([`git::message`]), patches ([`git::patch`]), conflicts
 //!   ([`git::conflicts`]), and what to call things.
 //! - [`format`]: `lib/format.ts`: initials, avatar colours, relative times and counts.
-//! - [`hooks`]: what of `hooks/*.ts` isn't Solid's signals: the clock relative times are told by,
-//!   which sidebar folders are collapsed, and panels' widths, saved in a [`hooks::Storage`] as the
-//!   Electron app saved them in `localStorage`.
 //!
 //! Where the TS used `@gitto/git/types`, this uses gitto-git's types.
 
 pub mod format;
 pub mod git;
-pub mod hooks;

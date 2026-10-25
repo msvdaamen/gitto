@@ -1,7 +1,11 @@
 //! The time relative times are told against. Ported from `hooks/relative-time.ts`.
 
-pub use gitto_ui_logic::hooks::relative_time::TICK;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
 use gpui_kit::{App, AppContext as _, Context, Entity, Global, Task};
+
+/// How often relative times are brought up to date: they're told to the minute at most.
+pub const TICK: Duration = Duration::from_secs(60);
 
 /// One clock for the whole app, started when a relative time is first shown and never stopped: a
 /// timer per row would be set up again for every row that scrolls into view. Views showing a
@@ -47,16 +51,22 @@ impl Clock {
     }
 }
 
-pub use gitto_ui_logic::hooks::relative_time::now_ms;
+/// Milliseconds since the epoch, now, as `Date.now()`.
+pub fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| since.as_millis() as i64)
+}
 
 /// A time (milliseconds since the epoch) relative to now, e.g. "3 days ago" (`useRelativeTime`'s
 /// function; observe [`Clock`] to have it told again as time passes).
 pub fn relative_time(timestamp: i64) -> String {
-    gitto_ui_logic::hooks::relative_time::relative_time_now(timestamp)
+    gitto_ui_logic::format::relative_time(timestamp, now_ms())
 }
 
 #[cfg(test)]
 mod tests {
+    use gitto_ui_logic::format;
     use gpui_kit::TestAppContext;
 
     use super::*;
@@ -73,5 +83,18 @@ mod tests {
         cx.executor().advance_clock(TICK * 60);
         cx.run_until_parked();
         assert!(clock.read_with(cx, |clock, _| clock.ticks()) > 1);
+    }
+
+    #[test]
+    fn tells_a_time_again_as_time_passes() {
+        let mut now = now_ms();
+        let made = now - 20_000;
+        assert_eq!(format::relative_time(made, now), "Just now");
+        assert_eq!(relative_time(made), "Just now");
+
+        now += TICK.as_millis() as i64;
+        assert_eq!(format::relative_time(made, now), "1 minute ago");
+        now += 60 * 60_000;
+        assert_eq!(format::relative_time(made, now), "1 hour ago");
     }
 }
