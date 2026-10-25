@@ -5,7 +5,6 @@ use gitto_git::features::conflicts::schema::{Conflict, ConflictSide, ConflictSid
 use gitto_git::features::operation::schema::{CommitName, Operation};
 
 use super::short_sha;
-use crate::js;
 
 /// What one side of a conflict has at the file's path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,9 +120,9 @@ pub fn operation_title(operation: &Operation) -> String {
 /// it"; `None` between the commits of a series, once one was committed by hand.
 fn picking(verb: &str, commit: Option<&CommitName>) -> String {
     match commit {
-        Some(commit) => {
-            js::trim_end(&format!("{verb} {} {}", commit.sha, commit.subject)).to_owned()
-        }
+        Some(commit) => format!("{verb} {} {}", commit.sha, commit.subject)
+            .trim_end()
+            .to_owned(),
         None => format!("{verb} commits"),
     }
 }
