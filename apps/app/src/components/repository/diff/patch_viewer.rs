@@ -1353,15 +1353,8 @@ fn line_text(
         return (SharedString::default(), Vec::new());
     };
     let content = line.trim_end_matches(['\n', '\r']);
-    let (cut, ellipsis) = if content.len() > MAX_DRAWN_LINE {
-        let mut end = MAX_DRAWN_LINE;
-        while !content.is_char_boundary(end) {
-            end -= 1;
-        }
-        (&content[..end], true)
-    } else {
-        (content, false)
-    };
+    let cut = &content[..content.floor_char_boundary(MAX_DRAWN_LINE)];
+    let ellipsis = cut.len() < content.len();
     let tabs: Vec<usize> = cut
         .bytes()
         .enumerate()
@@ -1457,6 +1450,21 @@ mod tests {
             })
         })
         .unwrap()
+    }
+
+    #[test]
+    fn measures_lines_in_characters_as_drawn() {
+        let patch = "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-\u{e9}\u{e9}\u{e9}\n+\ta\n";
+        let diff = super::super::diff_metadata::parse_patch_files(patch, None).remove(0);
+        // Three characters of two bytes each, and a tab drawn as four spaces before a letter.
+        assert_eq!(measure(&diff).0, TAB_WIDTH + 1);
+        let long = format!(
+            "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-a\n+{}\n",
+            "\u{e9}".repeat(MAX_DRAWN_LINE)
+        );
+        let diff = super::super::diff_metadata::parse_patch_files(&long, None).remove(0);
+        // Cut at as many bytes, with an ellipsis.
+        assert_eq!(measure(&diff).0, MAX_DRAWN_LINE / 2 + 1);
     }
 
     #[gpui_kit::test]
