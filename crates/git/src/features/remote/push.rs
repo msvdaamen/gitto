@@ -224,8 +224,7 @@ pub fn rejection(stdout: &str, reference: &str) -> Option<String> {
         let summary = fields.next().unwrap_or("");
         let reason = summary
             .strip_prefix("[rejected] (")
-            .and_then(|rest| rest.strip_suffix(')'))
-            .filter(|reason| !reason.contains('\n'));
+            .and_then(|rest| rest.strip_suffix(')'));
         if flag == "!"
             && refs.split(':').next() == Some(reference)
             && let Some(reason) = reason
