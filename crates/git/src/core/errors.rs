@@ -530,7 +530,28 @@ fn sentence(message: &str) -> String {
 }
 
 /// The most specific error for a command that exited with `exit_code`, going by what git printed.
+/// It keeps `stdout` as git printed it (see `GitError::stdout`).
 pub fn command_error(
+    cwd: &str,
+    args: &[String],
+    exit_code: Option<i32>,
+    stdout: &[u8],
+    stderr: &str,
+) -> GitError {
+    GitError {
+        stdout: stdout.to_vec(),
+        ..specific_error(
+            cwd,
+            args,
+            exit_code,
+            &String::from_utf8_lossy(stdout),
+            stderr,
+        )
+    }
+}
+
+/// `command_error`, but for `stdout`, which it reads lossily as UTF-8 for the message.
+fn specific_error(
     cwd: &str,
     args: &[String],
     exit_code: Option<i32>,
@@ -570,10 +591,7 @@ pub fn command_error(
         ("", stdout) => stdout.to_owned(),
         (stderr, _) => stderr.to_owned(),
     };
-    GitError {
-        stdout: stdout.as_bytes().to_vec(),
-        ..GitError::new(message, args.to_vec(), exit_code, stderr)
-    }
+    GitError::new(message, args.to_vec(), exit_code, stderr)
 }
 
 fn unsupported_git_message(version: Option<&str>, required: &str) -> String {
@@ -626,7 +644,7 @@ mod tests {
             "/repo",
             &args(&["status"]),
             Some(128),
-            "",
+            b"",
             "fatal: not a git repository (or any of the parent directories): .git\n",
         );
         assert_eq!(error.kind, GitErrorKind::NotARepository);
@@ -637,7 +655,7 @@ mod tests {
             "/repo",
             &args(&["add", "a"]),
             Some(128),
-            "",
+            b"",
             "fatal: Unable to create '/repo/.git/index.lock': File exists.",
         );
         assert_eq!(error.kind, GitErrorKind::IndexLocked);
@@ -647,14 +665,14 @@ mod tests {
             "/repo",
             &args(&["commit"]),
             Some(1),
-            "nothing to commit\n",
+            b"nothing to commit\n",
             "",
         );
         assert_eq!(error.message, "nothing to commit");
         assert_eq!(error.stdout_text(), "nothing to commit\n");
         assert_eq!(error.api(), ApiCode::InternalServerError);
 
-        let error = command_error("/repo", &args(&["diff"]), None, "", "");
+        let error = command_error("/repo", &args(&["diff"]), None, b"", "");
         assert_eq!(error.message, "git diff exited with code null");
     }
 
