@@ -107,7 +107,7 @@ pub fn pull_operation() -> PullOperation {
     }
 }
 
-const PULL_BRANCH: &str = "pull-branch";
+pub(crate) const PULL_BRANCH: &str = "pull-branch";
 
 /// Pulls a local branch that isn't checked out, by its short name, fast-forwarding it to its
 /// upstream without touching the working tree; whether that's running, and why it last failed
