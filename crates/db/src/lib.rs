@@ -1,19 +1,13 @@
-//! Gitto's SQLite database, which every domain keeps its tables in. Ported from `packages/db`.
-//!
-//! The Electron app and this crate share one database file (see [`database_path`]) and one set of
-//! migrations: drizzle-kit makes them in `apps/electron/migrations` from the TS schema, and both
-//! apply them the same way and record them in the same journal (see [`migrator`]). So a database
-//! either app migrated opens in the other, while both ship.
+//! Gitto's SQLite database, which every domain keeps its tables in.
 //!
 //! - [`Db`]: opens the database, migrated, and runs queries off the async executor.
-//! - [`migrator`]: Drizzle's migrator, ported.
-//! - [`database_path`]: where the Electron app keeps it.
+//! - [`migrations`]: the schema, and how it's brought up to date.
+//! - [`database_path`]: where Gitto keeps it.
 //!
-//! TS's `schema.ts`, which gathered the domains' Drizzle tables for drizzle-kit, has no
-//! counterpart: the tables are made by the migrations, and each domain's crate queries its own.
+//! Each domain's crate queries its own tables.
 
 mod db;
-pub mod migrator;
+pub mod migrations;
 mod paths;
 
 pub use rusqlite;
@@ -32,7 +26,9 @@ pub enum Error {
     /// SQLite failed, opening the file or running a statement; said as SQLite says it.
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
-    /// Drizzle's migrator refused the journal, with its message: see [`migrator::migrate`].
-    #[error("{0}")]
-    Migrations(String),
+    /// A newer Gitto migrated the database further than this one knows how to read.
+    #[error(
+        "the database is at version {version}, newer than this Gitto knows ({known}): update Gitto"
+    )]
+    TooNew { version: u32, known: u32 },
 }
