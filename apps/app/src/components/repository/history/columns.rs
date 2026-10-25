@@ -10,8 +10,6 @@ use std::sync::Arc;
 use gpui_kit::prelude::*;
 use gpui_kit::{Div, ElementId, Hsla, Rems, SharedString, rems};
 
-pub use crate::theme::mixed;
-
 /// Height of a history row, including its 1px bottom border (38px).
 pub const ROW_HEIGHT: Rems = Rems(38. / 15.);
 
@@ -96,17 +94,12 @@ pub fn tinted(color: Hsla, alpha: f32) -> Hsla {
 
 #[cfg(test)]
 mod tests {
-    use gpui_kit::{Rgba, hsla, rgb};
+    use gpui_kit::hsla;
 
     use super::*;
 
     #[test]
-    fn mixes_colors_channel_by_channel() {
-        let red: Hsla = rgb(0xff0000).into();
-        let blue: Hsla = rgb(0x0000ff).into();
-        let half = Rgba::from(mixed(red, 0.5, blue));
-        assert!((half.r - 0.5).abs() < 0.01 && (half.b - 0.5).abs() < 0.01);
-        assert_eq!(mixed(red, 1., blue), red);
+    fn tints_a_color() {
         assert_eq!(tinted(hsla(0.5, 0.5, 0.5, 1.), 0.16).a, 0.16);
     }
 }

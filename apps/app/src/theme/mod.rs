@@ -333,6 +333,15 @@ pub fn mixed(color: Hsla, share: f32, other: Hsla) -> Hsla {
 mod tests {
     use super::*;
 
+    #[test]
+    fn mixes_colors_channel_by_channel() {
+        let red: Hsla = gpui_kit::rgb(0xff0000).into();
+        let blue: Hsla = gpui_kit::rgb(0x0000ff).into();
+        let half = Rgba::from(mixed(red, 0.5, blue));
+        assert!((half.r - 0.5).abs() < 0.01 && (half.b - 0.5).abs() < 0.01);
+        assert_eq!(mixed(red, 1., blue), red);
+    }
+
     // `theme.test.ts`, on what keeps the theme rather than the DOM.
 
     #[test]

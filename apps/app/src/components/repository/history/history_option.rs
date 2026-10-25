@@ -11,9 +11,9 @@ use gpui_kit::{
     TestSupportExt as _, Window, div, px, rems,
 };
 
-use super::columns::{LABEL_ICON, LABEL_LINE, LABEL_TEXT, ROW_HEIGHT, mixed};
+use super::columns::{LABEL_ICON, LABEL_LINE, LABEL_TEXT, ROW_HEIGHT};
 use crate::components::ui::{Icon, IconName, LineStats, Tone, menu_frame};
-use crate::theme::PaletteExt as _;
+use crate::theme::{PaletteExt as _, mixed};
 use gitto_ui::git::changes::LineCounts;
 
 /// A row's place in the list. Only the rows in view are rendered, so assistive tech needs to be
