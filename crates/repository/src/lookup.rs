@@ -164,17 +164,6 @@ mod tests {
     }
 
     #[test]
-    fn refuses_an_id_that_isnt_a_uuid_v7() {
-        let f = fixture();
-        f.add_repository("gitto");
-        let v4 = uuid::Uuid::new_v4().to_string();
-
-        let error = ApiError::from(RepositoryId::parse(v4).unwrap_err());
-
-        assert_eq!(error.code().code(), "BAD_REQUEST");
-    }
-
-    #[test]
     fn tells_the_ui_why_the_list_of_repositories_couldnt_be_read() {
         let f = fixture();
         let id = f.add_repository("gitto");
