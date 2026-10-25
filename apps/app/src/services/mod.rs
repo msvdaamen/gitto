@@ -58,9 +58,9 @@ impl Services {
     /// The services on `db`, with `system` and `storage`: for tests, an in-memory database.
     pub fn with(paths: AppPaths, db: Db, system: SystemContext, storage: Rc<LocalStorage>) -> Self {
         let repositories = RepositoryService::new(RepositoryStore::new(db.clone()));
-        let git = GitApi::new(repositories.clone()).on_bug(|error, procedure| {
+        let git = GitApi::new(repositories.clone()).on_bug(|error, action| {
             log::error!(
-                "[bug] {procedure} failed ({}): {}",
+                "[bug] {action} failed ({}): {}",
                 error.code().code(),
                 error.error()
             );
@@ -131,7 +131,7 @@ impl Services {
         &self.repository_source
     }
 
-    /// Git, for the repositories added to Gitto (see `GitApi::call`).
+    /// Git, for the repositories added to Gitto (see `GitApi::repo`).
     pub fn git(&self) -> &GitApi {
         &self.git
     }

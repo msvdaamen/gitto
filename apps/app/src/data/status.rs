@@ -11,7 +11,6 @@ use futures::FutureExt as _;
 use futures::future::BoxFuture;
 use gitto_git::ApiError;
 use gitto_git::features::diff::schema::ChangedFile;
-use gitto_git::features::status::commands::get_status_since;
 use gitto_git::features::status::schema::{Head, StatusReply, StatusSummary, Uncommitted};
 use gitto_git::input::RepositoryId;
 use gitto_git::schema::FileStatus;
@@ -33,10 +32,8 @@ pub type GetStatus =
 pub fn git_status(cx: &App) -> GetStatus {
     let git = Services::global(cx).git().clone();
     Rc::new(move |id, since| {
-        git.call("status.get", &id, move |repo| async move {
-            get_status_since(&repo, since.as_deref()).await
-        })
-        .boxed()
+        let open = git.repo(&id);
+        async move { open.await?.status(since).await }.boxed()
     })
 }
 

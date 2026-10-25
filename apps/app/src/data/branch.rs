@@ -4,16 +4,12 @@
 use std::future::Future;
 
 use gitto_git::ApiError;
-use gitto_git::features::branch::commands::{create_branch, switch_branch};
-use gitto_git::features::branch::delete::delete_branch;
-use gitto_git::features::branch::merge::merge_branch;
-use gitto_git::features::branch::rebase::rebase_branch;
 use gitto_git::features::branch::schema::{MergeOutcome, RebaseOutcome};
 use gitto_git::features::status::schema::Uncommitted;
 use gitto_git::input::{BranchName, BranchRef, NonEmpty, RepositoryId};
 use gpui_kit::{App, AppContext as _, AsyncApp, Task};
 
-use super::call::{call, parse};
+use super::call::call;
 use super::client::{QueryClient, QueryError};
 use super::keys;
 use super::opaque::Opaque;
@@ -100,8 +96,9 @@ pub fn create_branch_operation() -> BranchChange<String> {
     BranchChange::new(RepositoryOperation::new(
         CREATE,
         |id, name: String, cx: &mut App| {
-            let action = call(cx, "branch.create", &id, move |repo| async move {
-                create_branch(&repo, &parse::<BranchName>(name)?, None).await
+            let action = call(cx, &id, move |repo| async move {
+                repo.create_branch(repo.input(BranchName::parse(name))?, None)
+                    .await
             });
             cx.spawn(async move |cx| {
                 cx.background_spawn(action).await?;
@@ -127,8 +124,9 @@ pub fn switch_branch_operation() -> BranchChange<String> {
             if status.is_some_and(|status| is_checked_out(&status.head, &reference)) {
                 return Task::ready(Ok(()));
             }
-            let action = call(cx, "branch.switch", &id, move |repo| async move {
-                switch_branch(&repo, &parse::<BranchRef>(reference)?).await
+            let action = call(cx, &id, move |repo| async move {
+                repo.switch_branch(repo.input(BranchRef::parse(reference))?)
+                    .await
             });
             cx.spawn(async move |cx| reloading(&id, action, cx).await)
         },
@@ -151,10 +149,10 @@ pub fn create_branch_from_operation() -> BranchChange<NewBranchFrom> {
     BranchChange::new(RepositoryOperation::new(
         SWITCH,
         |id, input: NewBranchFrom, cx: &mut App| {
-            let action = call(cx, "branch.create", &id, move |repo| async move {
-                let name = parse::<BranchName>(input.name)?;
-                let from = parse::<BranchRef>(input.from)?;
-                create_branch(&repo, &name, Some(&from)).await
+            let action = call(cx, &id, move |repo| async move {
+                let name = repo.input(BranchName::parse(input.name))?;
+                let from = repo.input(BranchRef::parse(input.from))?;
+                repo.create_branch(name, Some(from)).await
             });
             cx.spawn(async move |cx| reloading(&id, action, cx).await)
         },
@@ -176,8 +174,9 @@ pub fn delete_branch_operation() -> BranchChange<String> {
     BranchChange::new(RepositoryOperation::new(
         DELETE,
         |id, reference: String, cx: &mut App| {
-            let action = call(cx, "branch.delete", &id, move |repo| async move {
-                delete_branch(&repo, &parse::<BranchRef>(reference)?).await
+            let action = call(cx, &id, move |repo| async move {
+                repo.delete_branch(repo.input(BranchRef::parse(reference))?)
+                    .await
             });
             cx.spawn(async move |cx| reloading(&id, action, cx).await)
         },
@@ -209,10 +208,10 @@ pub fn merge_branch_operation() -> BranchChange<Merge, MergeOutcome> {
         MERGE,
         |id, input: Merge, cx: &mut App| {
             let up_to_date = up_to_date_message(&input.into, &input.reference);
-            let action = call(cx, "branch.merge", &id, move |repo| async move {
-                let reference = parse::<BranchRef>(input.reference)?;
-                let into = parse::<NonEmpty>(input.into)?;
-                merge_branch(&repo, &reference, &into).await
+            let action = call(cx, &id, move |repo| async move {
+                let reference = repo.input(BranchRef::parse(input.reference))?;
+                let into = repo.input(NonEmpty::parse(input.into))?;
+                repo.merge_branch(reference, into).await
             });
             cx.spawn(async move |cx| {
                 integrating(
@@ -289,10 +288,10 @@ pub fn rebase_branch_operation() -> BranchChange<Rebase, RebaseOutcome> {
         REBASE,
         |id, input: Rebase, cx: &mut App| {
             let up_to_date = up_to_date_message(&input.branch, &input.reference);
-            let action = call(cx, "branch.rebase", &id, move |repo| async move {
-                let reference = parse::<BranchRef>(input.reference)?;
-                let branch = parse::<NonEmpty>(input.branch)?;
-                rebase_branch(&repo, &reference, &branch).await
+            let action = call(cx, &id, move |repo| async move {
+                let reference = repo.input(BranchRef::parse(input.reference))?;
+                let branch = repo.input(NonEmpty::parse(input.branch))?;
+                repo.rebase_branch(reference, branch).await
             });
             cx.spawn(async move |cx| {
                 integrating(

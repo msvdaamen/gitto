@@ -16,7 +16,7 @@ pub mod schema;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-pub use crate::api::{ApiError, GitApi};
+pub use crate::api::{ApiError, GitApi, GitRepo};
 pub use crate::core::errors::{
     ApiCode, Error, GitError, GitErrorKind, ListAction, RepositoryListError, Result,
 };

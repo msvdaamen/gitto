@@ -83,8 +83,8 @@ impl From<ApiError> for QueryError {
     }
 }
 
-/// As the API shows it (see `ApiError`), for git's errors that didn't come through
-/// `GitApi::call`, like input the UI checks itself.
+/// As the API shows it (see `ApiError`), for git's errors that didn't come through a `GitRepo`
+/// method.
 impl From<gitto_git::Error> for QueryError {
     fn from(error: gitto_git::Error) -> Self {
         QueryError::new(ApiError::from(error))

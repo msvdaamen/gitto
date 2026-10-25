@@ -4,14 +4,13 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use gitto_git::features::worktree::commands::{add_worktree, list_worktrees, remove_worktree};
 use gitto_git::features::worktree::schema::Worktree;
 use gitto_git::input::{BranchName, BranchRef, Folder, RepositoryId};
 use gitto_repository::Repository;
 use gpui_kit::{App, AppContext as _, Context};
 
 use super::branch::{ADD_WORKTREE, branches_changing};
-use super::call::{call, loads, parse};
+use super::call::{call, loads};
 use super::client::{QueryClient, QueryError, QueryOptions};
 use super::keys;
 use super::operation::{OneAtATime, Operations, RepositoryOperation, reloading};
@@ -25,9 +24,11 @@ use crate::state::router::{Route, Router};
 pub fn worktrees_options(id: &RepositoryId, cx: &App) -> QueryOptions<Arc<[Worktree]>> {
     QueryOptions::new(
         keys::worktrees(id),
-        loads(cx, "worktree.list", id, |repo| async move {
-            Ok(list_worktrees(&repo).await?.into())
-        }),
+        loads(
+            cx,
+            id,
+            |repo| async move { Ok(repo.worktrees().await?.into()) },
+        ),
     )
 }
 
@@ -107,11 +108,11 @@ pub fn worktree_actions() -> WorktreeActions {
     let busy = |id: &str, cx: &App| WorktreeActions::is_pending(id, cx);
     WorktreeActions {
         add: RepositoryOperation::new(ADD_WORKTREE, |id, input: AddWorktreeInput, cx: &mut App| {
-            let action = call(cx, "worktree.add", &id, move |repo| async move {
-                let folder = parse::<Folder>(input.path)?;
-                let branch = parse::<BranchRef>(input.branch)?;
-                let new_branch = input.new_branch.map(parse::<BranchName>).transpose()?;
-                add_worktree(&repo, &folder, &branch, new_branch.as_ref()).await
+            let action = call(cx, &id, move |repo| async move {
+                let folder = repo.input(Folder::parse(input.path))?;
+                let branch = repo.input(BranchRef::parse(input.branch))?;
+                let new_branch = repo.input(input.new_branch.map(BranchName::parse).transpose())?;
+                repo.add_worktree(folder, branch, new_branch).await
             });
             cx.spawn(async move |cx| reloading(&id, action, cx).await)
         })
@@ -119,9 +120,7 @@ pub fn worktree_actions() -> WorktreeActions {
         remove: RepositoryOperation::new(REMOVE, |id, path: String, cx: &mut App| {
             let removing = {
                 let path = path.clone();
-                call(cx, "worktree.remove", &id, move |repo| async move {
-                    remove_worktree(&repo, &path).await
-                })
+                call(cx, &id, move |repo| repo.remove_worktree(path))
             };
             let source = Services::global(cx).repository_source().clone();
             cx.spawn(async move |cx| {

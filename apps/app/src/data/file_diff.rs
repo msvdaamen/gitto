@@ -3,20 +3,14 @@
 
 use std::sync::Arc;
 
-use gitto_git::features::diff::commands::{
-    get_commit_file_patch, get_staged_file_patch, get_unstaged_file_patch,
-};
 use gitto_git::features::diff::schema::ChangedFile;
-use gitto_git::features::diff::working_tree::{
-    SaveExpectation, WorkingTreeFile, read_working_tree_file, save_working_tree_file as save_file,
-};
-use gitto_git::features::stash::commands::get_stash_file_patch;
+use gitto_git::features::diff::working_tree::{SaveExpectation, WorkingTreeFile};
 use gitto_git::features::status::schema::Uncommitted;
 use gitto_git::input::{FileInput, FullSha, RepositoryId, Sha};
 use gitto_git::schema::FileStatus;
 use gpui_kit::{App, AppContext as _, Context, Task};
 
-use super::call::{call, loads, parse};
+use super::call::{call, loads};
 use super::client::{QueryClient, QueryError, QueryOptions, StaleTime};
 use super::diff::{ChangedFiles, FilesOf, ShownFiles, WorkingTreeLists, changed_files_options};
 use super::diff::{select_shown_files, working_tree_lists_query};
@@ -177,18 +171,12 @@ pub fn file_patch_options(
     file: &ChangedFile,
     cx: &App,
 ) -> QueryOptions<FilePatch> {
-    let procedure = match source {
-        DiffSource::Commit { .. } => "diff.commitFilePatch",
-        DiffSource::Stash { .. } => "stash.filePatch",
-        DiffSource::Unstaged => "diff.unstagedFilePatch",
-        DiffSource::Staged => "diff.stagedFilePatch",
-    };
     let key = file_patch_key(id, source, &file.path);
     let source = source.clone();
     let file = file.clone();
     QueryOptions::new(
         key,
-        loads(cx, procedure, id, move |repo| {
+        loads(cx, id, move |repo| {
             let source = source.clone();
             let file = file.clone();
             async move {
@@ -198,16 +186,18 @@ pub fn file_patch_options(
                 };
                 let patch = match &source {
                     DiffSource::Commit { sha } => {
-                        get_commit_file_patch(&repo, &parse::<Sha>(sha.clone())?, &input).await?
+                        let commit = repo.input(Sha::parse(sha.clone()))?;
+                        repo.commit_file_patch(commit, input).await?
                     }
                     DiffSource::Stash { sha } => {
-                        get_stash_file_patch(&repo, &parse::<FullSha>(sha.clone())?, &input).await?
+                        let stash = repo.input(FullSha::parse(sha.clone()))?;
+                        repo.stash_file_patch(stash, input).await?
                     }
                     DiffSource::Unstaged => {
                         let untracked = file.status == FileStatus::Untracked;
-                        get_unstaged_file_patch(&repo, &input, untracked).await?
+                        repo.unstaged_file_patch(input, untracked).await?
                     }
-                    DiffSource::Staged => get_staged_file_patch(&repo, &input).await?,
+                    DiffSource::Staged => repo.staged_file_patch(input).await?,
                 };
                 Ok(FilePatch {
                     key: diff_file_key(&source, &file.path),
@@ -270,9 +260,7 @@ pub fn fetch_working_tree_file(
     cx: &mut App,
 ) -> Task<Result<WorkingTreeFile, QueryError>> {
     let path = path.to_owned();
-    let reading = call(cx, "diff.workingTreeFile", id, move |repo| async move {
-        read_working_tree_file(&repo, &path).await
-    });
+    let reading = call(cx, id, move |repo| repo.working_tree_file(path));
     cx.background_spawn(async move { reading.await.map_err(Into::into) })
 }
 
@@ -288,9 +276,9 @@ pub fn save_working_tree_file(
     cx: &mut App,
 ) -> Task<Result<String, QueryError>> {
     let path = path.to_owned();
-    let saving = call(cx, "diff.saveWorkingTreeFile", id, move |repo| async move {
+    let saving = call(cx, id, move |repo| {
         let expected = SaveExpectation { version, overwrite };
-        save_file(&repo, &path, &contents, &expected).await
+        repo.save_working_tree_file(path, contents, expected)
     });
     cx.background_spawn(async move { saving.await.map_err(Into::into) })
 }

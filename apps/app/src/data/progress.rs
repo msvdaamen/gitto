@@ -1,9 +1,6 @@
 //! The merge, rebase, cherry-pick, revert or `git am` under way, and continuing or aborting it.
 //! Ported from `git/queries/progress.ts`.
 
-use gitto_git::features::operation::commands::{
-    abort_operation, continue_operation, get_operation,
-};
 use gitto_git::features::operation::schema::{Operation, OperationKind};
 use gitto_git::input::RepositoryId;
 use gpui_kit::{App, Context};
@@ -20,12 +17,7 @@ pub fn operation_in_progress_options(
     id: &RepositoryId,
     cx: &App,
 ) -> QueryOptions<Option<Operation>> {
-    QueryOptions::new(
-        keys::operation(id),
-        loads(cx, "operation.get", id, |repo| async move {
-            get_operation(&repo).await
-        }),
-    )
+    QueryOptions::new(keys::operation(id), loads(cx, id, |repo| repo.operation()))
 }
 
 /// The operation under way's query (`useOperationInProgress`).
@@ -51,15 +43,11 @@ pub struct OperationActions {
 pub fn operation_actions() -> OperationActions {
     OperationActions {
         proceed: RepositoryOperation::new("continue", |id, kind, cx: &mut App| {
-            let action = call(cx, "operation.continue", &id, move |repo| async move {
-                continue_operation(&repo, kind).await
-            });
+            let action = call(cx, &id, move |repo| repo.continue_operation(kind));
             cx.spawn(async move |cx| reloading(&id, action, cx).await)
         }),
         abort: RepositoryOperation::new("abort", |id, kind, cx: &mut App| {
-            let action = call(cx, "operation.abort", &id, move |repo| async move {
-                abort_operation(&repo, kind).await
-            });
+            let action = call(cx, &id, move |repo| repo.abort_operation(kind));
             cx.spawn(async move |cx| reloading(&id, action, cx).await)
         }),
     }

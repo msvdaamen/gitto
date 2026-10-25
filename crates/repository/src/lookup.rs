@@ -49,7 +49,6 @@ mod tests {
     use std::process::Command;
 
     use gitto_db::Db;
-    use gitto_git::features::status::commands::get_status_since;
     use gitto_git::features::status::schema::{Head, StatusReply};
     use gitto_git::input::RepositoryId;
     use gitto_git::{ApiCode, ApiError, Error as GitError, GitApi};
@@ -115,11 +114,9 @@ mod tests {
             RepositoryId::parse(repository.id).unwrap()
         }
 
-        /// `status.get` of the repository with `id`, as the UI asks for it.
+        /// The status of the repository with `id`, as the UI asks for it.
         fn status(&self, id: &RepositoryId) -> Result<StatusReply, ApiError> {
-            smol::block_on(self.api.call("status.get", id, |repo| async move {
-                get_status_since(&repo, None).await
-            }))
+            smol::block_on(async { self.api.repo(id).await?.status(None).await })
         }
     }
 

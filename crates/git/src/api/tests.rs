@@ -1,7 +1,8 @@
 //! The API as the UI uses it, errors and all. Ported from `packages/git/src/router.test.ts`: the
 //! Electron app called the features through an oRPC router, which checked the input and the
 //! installed git, and turned errors into codes the renderer showed. Here the UI parses its input
-//! into the types the features take, and calls them through `GitApi::call`, as these do.
+//! into the types the features take, opens the repository with `GitApi::repo`, and calls the
+//! `GitRepo` method for what it does, as these do.
 
 use std::fs;
 use std::path::PathBuf;
@@ -13,17 +14,11 @@ use async_io::Timer;
 use futures::StreamExt;
 use futures::future::BoxFuture;
 
-use super::{ApiError, GitApi, pull};
+use super::{ApiError, GitApi, GitRepo, pull};
 use crate::core::errors::{ApiCode, Error, ListAction, RepositoryListError, Result};
 use crate::core::repo::RepositoryLookup;
 use crate::core::version::GitVersion;
-use crate::features::branch::merge::merge_branch;
 use crate::features::branch::schema::MergeOutcome;
-use crate::features::diff::commands::get_commit_files;
-use crate::features::remote::push::push;
-use crate::features::staging::commands::stage;
-use crate::features::stash::commands::pop_stash;
-use crate::features::status::commands::get_status_since;
 use crate::features::status::schema::{Head, StatusReply};
 use crate::features::version::check;
 use crate::features::watch::schema::GitDirChange;
@@ -53,6 +48,11 @@ fn api(fx: &Fixture) -> GitApi {
     GitApi::with(fx.repos.clone(), GitVersion::new())
 }
 
+/// The repository with `value` as its id, opened as the UI opens it.
+async fn open(api: &GitApi, value: &str) -> Result<GitRepo, ApiError> {
+    api.repo(&id(value)).await
+}
+
 /// The repository with some history (see `create_history_repo`), as `HISTORY`.
 async fn history(fx: &Fixture) {
     let repo = fx.create_history_repo("history").await;
@@ -71,18 +71,14 @@ fn reports_git_errors_as_api_errors_the_renderer_can_show() {
         history(&fx).await;
         let sha = FullSha::parse(UNKNOWN_SHA).unwrap();
 
-        let status = api.call("status.get", &id(MISSING), |repo| async move {
-            get_status_since(&repo, None).await
-        });
+        let status = async { open(&api, MISSING).await?.status(None).await };
         assert_eq!(
             api_error(status.await.unwrap_err()),
             ("NOT_FOUND", "Repository not found.".to_owned())
         );
 
         let paths = Paths::parse(["file.txt"]).unwrap();
-        let staged = api.call("staging.stage", &id(LOCKED), |repo| async move {
-            stage(&repo, &paths).await
-        });
+        let staged = async { open(&api, LOCKED).await?.stage(paths).await };
         assert_eq!(
             api_error(staged.await.unwrap_err()),
             (
@@ -92,16 +88,12 @@ fn reports_git_errors_as_api_errors_the_renderer_can_show() {
         );
 
         let commit = Sha::from(sha.clone());
-        let files = api.call("diff.commitFiles", &id(HISTORY), |repo| async move {
-            get_commit_files(&repo, &commit).await
-        });
+        let files = async { open(&api, HISTORY).await?.commit_files(commit).await };
         let (code, message) = api_error(files.await.unwrap_err());
         assert_eq!(code, "INTERNAL_SERVER_ERROR");
         assert!(message.contains("bad object"), "{message}");
 
-        let pulled = api.call("remote.pull", &id(HISTORY), |repo| async move {
-            pull(&repo, None).await
-        });
+        let pulled = async { open(&api, HISTORY).await?.pull(None).await };
         assert_eq!(
             api_error(pulled.await.unwrap_err()),
             (
@@ -110,9 +102,7 @@ fn reports_git_errors_as_api_errors_the_renderer_can_show() {
             )
         );
 
-        let pushed = api.call("remote.push", &id(HISTORY), |repo| async move {
-            push(&repo, false).await
-        });
+        let pushed = async { open(&api, HISTORY).await?.push(false).await };
         assert_eq!(
             api_error(pushed.await.unwrap_err()),
             (
@@ -121,9 +111,7 @@ fn reports_git_errors_as_api_errors_the_renderer_can_show() {
             )
         );
 
-        let popped = api.call("stash.pop", &id(HISTORY), |repo| async move {
-            pop_stash(&repo, &sha).await
-        });
+        let popped = async { open(&api, HISTORY).await?.pop_stash(sha).await };
         assert_eq!(
             api_error(popped.await.unwrap_err()),
             (
@@ -148,13 +136,11 @@ fn runs_nothing_with_a_git_gitto_doesnt_support() {
     let outdated = GitApi::with(fx.repos.clone(), version);
     smol::block_on(async {
         history(&fx).await;
-        let ran = Arc::new(AtomicBool::new(false));
-        let status = || {
-            let ran = Arc::clone(&ran);
-            outdated.call("status.get", &id(HISTORY), |repo| async move {
-                ran.store(true, Ordering::SeqCst);
-                get_status_since(&repo, None).await
-            })
+        let ran = AtomicBool::new(false);
+        let status = || async {
+            let repo = open(&outdated, HISTORY).await?;
+            ran.store(true, Ordering::SeqCst);
+            repo.status(None).await
         };
 
         let install = check(outdated.version()).await;
@@ -198,7 +184,7 @@ fn merges_a_branch_saying_what_it_did_or_why_it_didnt() {
     let api = api(&fx);
     smol::block_on(async {
         history(&fx).await;
-        // The UI's input, checked as it's parsed, then the procedure.
+        // The UI's input, checked as it's parsed, then the merge.
         let merge = |reference: &str, into: &str| {
             let input = BranchRef::parse(reference).and_then(|reference| {
                 let into = NonEmpty::parse(into)?;
@@ -206,11 +192,11 @@ fn merges_a_branch_saying_what_it_did_or_why_it_didnt() {
             });
             let api = api.clone();
             async move {
-                let (reference, into) = input.map_err(|error| api.fail("branch.merge", error))?;
-                api.call("branch.merge", &id(HISTORY), |repo| async move {
-                    merge_branch(&repo, &reference, &into).await
-                })
-                .await
+                let (reference, into) = input.map_err(|error| api.fail("merge_branch", error))?;
+                open(&api, HISTORY)
+                    .await?
+                    .merge_branch(reference, into)
+                    .await
             }
         };
 
@@ -254,11 +240,8 @@ fn skips_a_status_the_caller_already_has() {
     let api = api(&fx);
     smol::block_on(async {
         history(&fx).await;
-        let status = |since: Option<String>| {
-            api.call("status.get", &id(HISTORY), |repo| async move {
-                get_status_since(&repo, since.as_deref()).await
-            })
-        };
+        let repo = open(&api, HISTORY).await.unwrap();
+        let status = |since: Option<String>| repo.status(since);
         let StatusReply::Status(full) = status(None).await.unwrap() else {
             panic!("expected a full status");
         };
@@ -287,12 +270,8 @@ fn tells_the_renderer_a_push_it_can_force_apart_from_other_failures() {
     fx.add_path(AMENDED, &path);
     let api = api(&fx);
     smol::block_on(async {
-        let error = api
-            .call("remote.push", &id(AMENDED), |repo| async move {
-                push(&repo, false).await
-            })
-            .await
-            .unwrap_err();
+        let repo = open(&api, AMENDED).await.unwrap();
+        let error = repo.push(false).await.unwrap_err();
         assert_eq!(error.code(), ApiCode::PushRewritten);
         assert_eq!(error.status(), 409);
         assert_eq!(
@@ -350,43 +329,38 @@ fn takes_only_the_values_the_contracts_enums_have() {
 }
 
 #[test]
-fn reports_bugs_with_the_procedure_they_failed_and_only_bugs() {
+fn reports_bugs_with_what_failed_and_only_bugs() {
     let fx = Fixture::new();
     let reported = Arc::new(Mutex::new(Vec::new()));
     let report = Arc::clone(&reported);
-    let api = api(&fx).on_bug(move |error, procedure| {
+    let api = api(&fx).on_bug(move |error, action| {
         report
             .lock()
             .unwrap()
-            .push((error.code().code(), procedure.to_owned()));
+            .push((error.code().code(), action.to_owned()));
     });
     smol::block_on(async {
         history(&fx).await;
         let commit = Sha::parse(UNKNOWN_SHA).unwrap();
-        let files = api.call("diff.commitFiles", &id(HISTORY), |repo| async move {
-            get_commit_files(&repo, &commit).await
-        });
-        assert!(files.await.unwrap_err().is_bug());
-        let missing = api.call("status.get", &id(MISSING), |repo| async move {
-            get_status_since(&repo, None).await
-        });
-        assert!(!missing.await.unwrap_err().is_bug());
-        let bug = api.call("history.log", &id(HISTORY), |_| async {
+        let repo = open(&api, HISTORY).await.unwrap();
+        assert!(repo.commit_files(commit).await.unwrap_err().is_bug());
+        assert!(!open(&api, MISSING).await.err().unwrap().is_bug());
+        let bug = repo.run("log", async {
             Err::<(), _>(Error::Bug("Unexpected output.".to_owned()))
         });
         assert_eq!(
             api_error(bug.await.unwrap_err()),
             ("INTERNAL_SERVER_ERROR", "Internal server error".to_owned())
         );
-        let input = api.fail("branch.merge", BranchRef::parse("v1").unwrap_err());
+        let input = api.fail("merge_branch", BranchRef::parse("v1").unwrap_err());
         assert_eq!(input.message(), "Input validation failed");
     });
     assert_eq!(
         *reported.lock().unwrap(),
         [
-            ("INTERNAL_SERVER_ERROR", "diff.commitFiles".to_owned()),
-            ("INTERNAL_SERVER_ERROR", "history.log".to_owned()),
-            ("BAD_REQUEST", "branch.merge".to_owned()),
+            ("INTERNAL_SERVER_ERROR", "commit_files".to_owned()),
+            ("INTERNAL_SERVER_ERROR", "log".to_owned()),
+            ("BAD_REQUEST", "merge_branch".to_owned()),
         ]
     );
 }
@@ -416,10 +390,7 @@ fn tells_the_ui_why_the_list_of_repositories_couldnt_be_read() {
     let api = GitApi::new(Locked::default()).on_bug(move |_, _| {
         report.fetch_add(1, Ordering::SeqCst);
     });
-    let error = smol::block_on(api.call("status.get", &id(HISTORY), |repo| async move {
-        get_status_since(&repo, None).await
-    }))
-    .unwrap_err();
+    let error = smol::block_on(open(&api, HISTORY)).err().unwrap();
     assert_eq!(
         api_error(error.clone()),
         (
@@ -506,10 +477,9 @@ fn calls_can_run_on_another_thread() {
     let api = api(&fx);
     let reference = valid::<BranchRef>("refs/heads/side");
     let into = valid::<NonEmpty>("main");
-    let merge = api.call("branch.merge", &id(HISTORY), |repo| async move {
-        merge_branch(&repo, &reference, &into).await
-    });
-    send(&merge);
+    send(&api.repo(&id(HISTORY)));
+    // Checked as it's compiled: there's no repository to open.
+    let _merge = |repo: GitRepo| send(&repo.merge_branch(reference, into));
     send(&api.open(&id(HISTORY)));
     send(&api.watch_git_dir(&id(HISTORY)));
 }
@@ -523,13 +493,13 @@ fn logs_a_failure_with_the_command_git_ran() {
         "fatal: bad object 0123\n",
     );
     assert_eq!(
-        super::log_line("diff.commitFiles", &ApiError::from(Error::Git(error))),
-        "[git] diff.commitFiles failed (INTERNAL_SERVER_ERROR): fatal: bad object 0123\n  \
+        super::log_line("commit_files", &ApiError::from(Error::Git(error))),
+        "[git] commit_files failed (INTERNAL_SERVER_ERROR): fatal: bad object 0123\n  \
          git diff-tree 0123 (exit code 128)"
     );
     assert_eq!(
-        super::log_line("commit.create", &ApiError::from(Error::HeadMoved)),
-        "[git] commit.create failed (CONFLICT): The last commit changed before it could be \
+        super::log_line("create_commit", &ApiError::from(Error::HeadMoved)),
+        "[git] create_commit failed (CONFLICT): The last commit changed before it could be \
          amended, so nothing was amended."
     );
 }

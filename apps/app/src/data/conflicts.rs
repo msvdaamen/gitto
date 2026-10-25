@@ -2,14 +2,12 @@
 
 use std::time::Duration;
 
-use gitto_git::features::conflicts::commands::{
-    ShownConflict, get_conflict, keep_side, mark_resolved,
-};
+use gitto_git::features::conflicts::commands::ShownConflict;
 use gitto_git::features::conflicts::schema::{Conflict, ConflictSides, Side};
 use gitto_git::input::{NonEmpty, RepositoryId};
 use gpui_kit::{App, AppContext as _, Context, Entity};
 
-use super::call::{call, loads, parse};
+use super::call::{call, loads};
 use super::client::{QueryClient, QueryOptions, StaleTime};
 use super::keys;
 use super::mutation::Mutation;
@@ -24,9 +22,9 @@ pub fn conflict_options(id: &RepositoryId, path: &str, cx: &App) -> QueryOptions
     let path = path.to_owned();
     QueryOptions::new(
         keys::conflict(id, &path),
-        loads(cx, "conflicts.get", id, move |repo| {
+        loads(cx, id, move |repo| {
             let path = path.clone();
-            async move { get_conflict(&repo, &parse::<NonEmpty>(path)?).await }
+            async move { repo.conflict(repo.input(NonEmpty::parse(path))?).await }
         }),
     )
     // Only reloaded once it's invalidated: like the status, whenever the working tree or the
@@ -97,22 +95,21 @@ pub fn resolve_file_mutation(cx: &mut App) -> Entity<Mutation<FileToResolve>> {
                 path,
                 resolution,
             } = file;
-            let procedure = match resolution {
-                ConflictResolution::Keep { .. } => "conflicts.keep",
-                ConflictResolution::Mark { .. } => "conflicts.markResolved",
-            };
-            let action = call(cx, procedure, &id, move |repo| async move {
-                let path = parse::<NonEmpty>(path)?;
+            let action = call(cx, &id, move |repo| async move {
+                let path = repo.input(NonEmpty::parse(path))?;
                 match resolution {
                     ConflictResolution::Keep {
                         side,
                         sides,
                         version,
-                    } => keep_side(&repo, &path, side, &ShownConflict { sides, version }).await,
+                    } => {
+                        let shown = ShownConflict { sides, version };
+                        repo.keep_side(path, side, shown).await
+                    }
                     ConflictResolution::Mark {
                         version,
                         with_markers,
-                    } => mark_resolved(&repo, &path, version.as_deref(), with_markers).await,
+                    } => repo.mark_resolved(path, version, with_markers).await,
                 }
             });
             cx.spawn(async move |cx| {

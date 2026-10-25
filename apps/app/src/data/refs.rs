@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-use gitto_git::features::refs::commands::list_refs;
 use gitto_git::features::refs::schema::Ref;
 use gitto_git::input::RepositoryId;
 use gpui_kit::{App, Context};
@@ -17,9 +16,7 @@ use super::query::Query;
 pub fn refs_options(id: &RepositoryId, cx: &App) -> QueryOptions<Arc<[Ref]>> {
     QueryOptions::new(
         keys::refs(id),
-        loads(cx, "refs.list", id, |repo| async move {
-            Ok(list_refs(&repo).await?.into())
-        }),
+        loads(cx, id, |repo| async move { Ok(repo.refs().await?.into()) }),
     )
 }
 

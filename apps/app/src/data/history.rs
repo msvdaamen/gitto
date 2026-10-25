@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use futures::FutureExt as _;
 use futures::future::BoxFuture;
-use gitto_git::features::history::commands::{Page, get_commit, get_log};
+use gitto_git::features::history::commands::Page;
 use gitto_git::features::history::schema::Commit;
 use gitto_git::features::stash::schema::Stash;
 use gitto_git::features::status::schema::{StatusSummary, Uncommitted};
@@ -21,7 +21,7 @@ use gitto_git::features::worktree::schema::Worktree;
 use gitto_git::input::{RepositoryId, Sha};
 use gpui_kit::{App, AppContext as _, Context, Entity, Subscription, Task};
 
-use super::call::{git, loads, parse};
+use super::call::{git, loads};
 use super::client::{QueryClient, QueryError, QueryOptions, StaleTime};
 use super::keys;
 use super::mutation::Mutation;
@@ -70,9 +70,11 @@ pub fn git_log(cx: &App) -> GetLog {
 /// `history.log`, run by `git`.
 pub fn git_log_from(git: gitto_git::GitApi) -> GetLog {
     Rc::new(move |id, skip, limit| {
-        git.call("history.log", &id, move |repo| async move {
-            get_log(&repo, Page::new(limit, skip)?).await
-        })
+        let open = git.repo(&id);
+        async move {
+            let repo = open.await?;
+            repo.log(repo.input(Page::new(limit, skip))?).await
+        }
         .map(|result| result.map_err(Into::into))
         .boxed()
     })
@@ -321,9 +323,9 @@ pub fn commit_details_options(id: &RepositoryId, sha: &str, cx: &App) -> QueryOp
     let sha = sha.to_owned();
     QueryOptions::new(
         keys::commit(id, &sha),
-        loads(cx, "history.commit", id, move |repo| {
+        loads(cx, id, move |repo| {
             let sha = sha.clone();
-            async move { get_commit(&repo, &parse::<Sha>(sha)?).await }
+            async move { repo.commit(repo.input(Sha::parse(sha))?).await }
         }),
     )
     .initial_data(initial)

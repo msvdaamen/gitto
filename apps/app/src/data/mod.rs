@@ -41,18 +41,9 @@
 //! function making its options, and one making the `Query` a view holds. With git:
 //!
 //! ```ignore
-//! use futures::FutureExt as _;
-//! use gitto_git::features::refs::{commands::get_refs, schema::Refs};
-//!
 //! /// The branches, tags and remotes (`useRefs`).
 //! pub fn refs_options(id: &RepositoryId, cx: &App) -> QueryOptions<Refs> {
-//!     let git = Services::global(cx).git().clone();
-//!     let id = id.clone();
-//!     QueryOptions::new(keys::refs(&id), move |_previous, _cx| {
-//!         git.call("refs.list", &id, |repo| async move { get_refs(&repo).await })
-//!             .map(|result| result.map_err(Into::into))
-//!             .boxed()
-//!     })
+//!     QueryOptions::new(keys::refs(id), loads(cx, id, |repo| repo.refs()))
 //! }
 //!
 //! pub fn refs_query<V: 'static>(id: &RepositoryId, cx: &mut Context<V>) -> Query<Refs> {
@@ -64,9 +55,9 @@
 //!   the watcher reloads it, and gets [`StaleTime::Infinite`] and no reload on focus by default
 //!   (see [`QueryClient::init`]); what never changes (a commit) goes outside it. A query of a
 //!   repository that isn't watched (the home page's) is wrapped in [`watch::unwatched`].
-//! - **Fetcher**: `GitApi::call(procedure, id, |repo| …)` opens the repository and turns errors
-//!   into the `ApiError` the UI shows; its procedure is the TS one's name (`branch.merge`). The
-//!   fetcher is given the data it had, e.g. to ask git only for what changed (see `status.rs`).
+//! - **Fetcher**: `call::loads(cx, id, |repo| …)` opens the repository (`GitApi::repo`) and runs
+//!   one of its `GitRepo` methods, which fail with the `ApiError` the UI shows. A fetcher of its
+//!   own is given the data it had, e.g. to ask git only for what changed (see `status.rs`).
 //! - **Data**: `Clone + PartialEq + Send`. Make it cheap to clone and compare: an [`Opaque`] for
 //!   big lists. TS's `select` is [`Query::with_select`]; each view keeps its own selection.
 //! - **Options**: TS's `staleTime`, `refetchOnWindowFocus` and `enabled` are
@@ -111,10 +102,8 @@
 //!
 //! ```ignore
 //! let pull = RepositoryOperation::new("pull", |id, branch: Option<NonEmpty>, cx: &mut App| {
-//!     let call = Services::global(cx).git().call("remote.pull", &id, move |repo| async move {
-//!         gitto_git::api::pull(&repo, branch.as_ref()).await
-//!     });
-//!     cx.spawn(async move |cx| reloading(&id, call, cx).await)
+//!     let pulling = call(cx, &id, move |repo| repo.pull(branch));
+//!     cx.spawn(async move |cx| reloading(&id, pulling, cx).await)
 //! });
 //! // In a click handler: runs unless it's running there; the receiver gets its result.
 //! if let Some(done) = pull.run(&id, None, cx) { … }

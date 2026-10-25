@@ -3,12 +3,11 @@
 
 use std::sync::Arc;
 
-use gitto_git::features::stash::commands::{drop_stash, list_stashes, pop_stash, push_stash};
 use gitto_git::features::stash::schema::Stash;
 use gitto_git::input::{FullSha, RepositoryId};
 use gpui_kit::{App, Context};
 
-use super::call::{call, loads, parse};
+use super::call::{call, loads};
 use super::client::QueryOptions;
 use super::diff::{ChangedFiles, FilesOf, ShownFiles, changed_files_query};
 use super::keys;
@@ -21,9 +20,11 @@ use super::query::Query;
 pub fn stashes_options(id: &RepositoryId, cx: &App) -> QueryOptions<Arc<[Stash]>> {
     QueryOptions::new(
         keys::stashes(id),
-        loads(cx, "stash.list", id, |repo| async move {
-            Ok(list_stashes(&repo).await?.into())
-        }),
+        loads(
+            cx,
+            id,
+            |repo| async move { Ok(repo.stashes().await?.into()) },
+        ),
     )
 }
 
@@ -77,25 +78,23 @@ impl StashActions {
 /// a pop can conflict.
 pub fn stash_actions() -> StashActions {
     let popping = |id: RepositoryId, sha: String, cx: &mut App| {
-        let action = call(cx, "stash.pop", &id, move |repo| async move {
-            pop_stash(&repo, &parse::<FullSha>(sha)?).await
+        let action = call(cx, &id, move |repo| async move {
+            repo.pop_stash(repo.input(FullSha::parse(sha))?).await
         });
         cx.spawn(async move |cx| reloading(&id, action, cx).await)
     };
     let busy = |id: &str, cx: &App| StashActions::is_pending(id, cx);
     StashActions {
         stash: RepositoryOperation::new(STASH, |id, (), cx: &mut App| {
-            let action = call(cx, "stash.push", &id, |repo| async move {
-                push_stash(&repo).await
-            });
+            let action = call(cx, &id, |repo| repo.push_stash());
             cx.spawn(async move |cx| reloading(&id, action, cx).await)
         })
         .one_at_a_time(busy),
         pop: RepositoryOperation::new(POP, popping).one_at_a_time(busy),
         pop_picked: RepositoryOperation::new(POP_PICKED, popping).one_at_a_time(busy),
         drop: RepositoryOperation::new(DROP, |id, sha: String, cx: &mut App| {
-            let action = call(cx, "stash.drop", &id, move |repo| async move {
-                drop_stash(&repo, &parse::<FullSha>(sha)?).await
+            let action = call(cx, &id, move |repo| async move {
+                repo.drop_stash(repo.input(FullSha::parse(sha))?).await
             });
             cx.spawn(async move |cx| reloading(&id, action, cx).await)
         })

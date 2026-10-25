@@ -3,13 +3,10 @@
 use std::future::Future;
 
 use gitto_git::ApiError;
-use gitto_git::features::commit::commands::{
-    create_commit, get_commit_message, get_pushed_to, reword_commit,
-};
 use gitto_git::input::{FullSha, Message, RepositoryId, Sha};
 use gpui_kit::{App, AppContext as _, Context, Entity, Task};
 
-use super::call::{call, loads, parse};
+use super::call::{call, loads};
 use super::client::{QueryClient, QueryError, QueryOptions, StaleTime};
 use super::keys;
 use super::mutation::Mutation;
@@ -34,10 +31,10 @@ pub struct Reword {
 pub fn create_commit_mutation(cx: &mut App) -> Entity<Mutation<(RepositoryId, NewCommit)>> {
     Mutation::new(
         |(id, commit): (RepositoryId, NewCommit), cx: &mut App| {
-            let action = call(cx, "commit.create", &id, move |repo| async move {
-                let message = parse::<Message>(commit.message)?;
-                let amend = commit.amend.map(parse::<FullSha>).transpose()?;
-                create_commit(&repo, &message, amend.as_ref()).await
+            let action = call(cx, &id, move |repo| async move {
+                let message = repo.input(Message::parse(commit.message))?;
+                let amend = repo.input(commit.amend.map(FullSha::parse).transpose())?;
+                repo.create_commit(message, amend).await
             });
             refresh_after_commit(id, action, cx)
         },
@@ -50,10 +47,10 @@ pub fn create_commit_mutation(cx: &mut App) -> Entity<Mutation<(RepositoryId, Ne
 pub fn reword_commit_mutation(cx: &mut App) -> Entity<Mutation<(RepositoryId, Reword), String>> {
     Mutation::new(
         |(id, reword): (RepositoryId, Reword), cx: &mut App| {
-            let action = call(cx, "commit.reword", &id, move |repo| async move {
-                let sha = parse::<FullSha>(reword.sha)?;
-                let message = parse::<Message>(reword.message)?;
-                reword_commit(&repo, &sha, &message).await
+            let action = call(cx, &id, move |repo| async move {
+                let sha = repo.input(FullSha::parse(reword.sha))?;
+                let message = repo.input(Message::parse(reword.message))?;
+                repo.reword_commit(sha, message).await
             });
             refresh_after_commit(id, action, cx)
         },
@@ -93,9 +90,9 @@ pub fn commit_message_options(id: &RepositoryId, sha: &str, cx: &App) -> QueryOp
     let sha = sha.to_owned();
     QueryOptions::new(
         keys::commit_message(id, &sha),
-        loads(cx, "commit.message", id, move |repo| {
+        loads(cx, id, move |repo| {
             let sha = sha.clone();
-            async move { get_commit_message(&repo, &parse::<Sha>(sha)?).await }
+            async move { repo.commit_message(repo.input(Sha::parse(sha))?).await }
         }),
     )
     .stale_time(StaleTime::Infinite)
@@ -115,9 +112,9 @@ pub fn pushed_to_options(id: &RepositoryId, sha: &str, cx: &App) -> QueryOptions
     let sha = sha.to_owned();
     QueryOptions::new(
         keys::pushed_to(id, &sha),
-        loads(cx, "commit.pushedTo", id, move |repo| {
+        loads(cx, id, move |repo| {
             let sha = sha.clone();
-            async move { get_pushed_to(&repo, &parse::<Sha>(sha)?).await }
+            async move { repo.pushed_to(repo.input(Sha::parse(sha))?).await }
         }),
     )
     // Reloaded when the refs change (it's under `keys::repository`), not on every window focus.

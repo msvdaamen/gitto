@@ -6,7 +6,7 @@ use std::future::Future;
 use futures::FutureExt as _;
 use futures::future::BoxFuture;
 use gitto_git::input::RepositoryId;
-use gitto_git::{ApiError, GitApi, Repo};
+use gitto_git::{ApiError, GitApi, GitRepo};
 use gpui_kit::App;
 
 use super::client::QueryError;
@@ -17,50 +17,43 @@ pub(crate) fn git(cx: &App) -> GitApi {
     Services::global(cx).git().clone()
 }
 
-/// `value` as the input type `T`, checked as the procedure's contract checked it: a failure is
-/// `Error::InvalidInput`, which reaches the UI as the API's "Input validation failed", as a request
-/// zod refused did. The UI hands over what git gave it (a SHA, a ref), so it only fails on a bug.
-pub(crate) fn parse<T>(value: impl Into<String>) -> gitto_git::Result<T>
-where
-    T: TryFrom<String, Error = gitto_git::Error>,
-{
-    T::try_from(value.into())
-}
-
-/// Runs `task` with the repository `id`, as the procedure `procedure` (see `GitApi::call`), off
-/// the main thread once it's spawned there.
+/// Opens the repository `id` (see `GitApi::repo`) and runs `task` with it, off the main thread
+/// once it's spawned there.
 pub(crate) fn call<T, F, Fut>(
     cx: &App,
-    procedure: &'static str,
     id: &RepositoryId,
     task: F,
 ) -> impl Future<Output = Result<T, ApiError>> + Send + 'static + use<T, F, Fut>
 where
-    F: FnOnce(Repo) -> Fut + Send + 'static,
-    Fut: Future<Output = gitto_git::Result<T>> + Send + 'static,
-    T: Send + 'static,
+    F: FnOnce(GitRepo) -> Fut + Send + 'static,
+    Fut: Future<Output = Result<T, ApiError>> + Send + 'static,
 {
-    git(cx).call(procedure, id, task)
+    let open = git(cx).repo(id);
+    async move { task(open.await?).await }
 }
 
-/// A query's fetcher that runs `task` with the repository `id` as `procedure` each time it loads
+/// A query's fetcher that opens the repository `id` and runs `task` with it each time it loads
 /// (see `QueryOptions::new`).
 pub(crate) fn loads<T, F, Fut>(
     cx: &App,
-    procedure: &'static str,
     id: &RepositoryId,
     task: F,
 ) -> impl Fn(Option<&T>, &App) -> BoxFuture<'static, Result<T, QueryError>> + 'static
 where
-    F: Fn(Repo) -> Fut + Clone + Send + 'static,
-    Fut: Future<Output = gitto_git::Result<T>> + Send + 'static,
+    F: Fn(GitRepo) -> Fut + Clone + Send + 'static,
+    Fut: Future<Output = Result<T, ApiError>> + Send + 'static,
     T: Send + 'static,
 {
     let git = git(cx);
     let id = id.clone();
     move |_, _| {
-        git.call(procedure, &id, task.clone())
-            .map(|result| result.map_err(Into::into))
-            .boxed()
+        let open = git.repo(&id);
+        let task = task.clone();
+        async move {
+            let repo = open.await?;
+            let load = task(repo);
+            Ok(load.await?)
+        }
+        .boxed()
     }
 }

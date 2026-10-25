@@ -3,14 +3,11 @@
 
 use futures::channel::oneshot;
 use gitto_git::ApiCode;
-use gitto_git::api::pull;
-use gitto_git::features::remote::commands::{fetch_all, list_remotes};
-use gitto_git::features::remote::push::{get_push_target, push};
 use gitto_git::features::remote::schema::PushTarget;
 use gitto_git::input::{NonEmpty, RepositoryId};
 use gpui_kit::{App, AppContext as _, Context, Entity};
 
-use super::call::{call, loads, parse};
+use super::call::{call, loads};
 use super::client::{QueryClient, QueryError, QueryOptions, StaleTime};
 use super::keys;
 use super::mutation::Mutation;
@@ -19,12 +16,7 @@ use super::query::Query;
 
 /// The remotes, by name.
 pub fn remotes_options(id: &RepositoryId, cx: &App) -> QueryOptions<Vec<String>> {
-    QueryOptions::new(
-        keys::remotes(id),
-        loads(cx, "remote.list", id, |repo| async move {
-            list_remotes(&repo.git()).await
-        }),
-    )
+    QueryOptions::new(keys::remotes(id), loads(cx, id, |repo| repo.remotes()))
 }
 
 /// The remotes' query (`useRemotes`).
@@ -38,9 +30,7 @@ pub fn remotes_query<V: 'static>(id: &RepositoryId, cx: &mut Context<V>) -> Quer
 pub fn fetch_mutation(cx: &mut App) -> Entity<Mutation<RepositoryId>> {
     Mutation::new(
         |id: RepositoryId, cx: &mut App| {
-            let fetching = call(cx, "remote.fetch", &id, |repo| async move {
-                fetch_all(&repo).await
-            });
+            let fetching = call(cx, &id, |repo| repo.fetch());
             cx.spawn(async move |cx| {
                 cx.background_spawn(fetching).await?;
                 // The watcher would catch the new remote refs too, but reloading right away feels
@@ -90,9 +80,7 @@ impl PullOperation {
 pub fn pull_operation() -> PullOperation {
     PullOperation {
         operation: RepositoryOperation::new("pull", |id, (), cx: &mut App| {
-            let pulling = call(cx, "remote.pull", &id, |repo| async move {
-                pull(&repo, None).await
-            });
+            let pulling = call(cx, &id, |repo| repo.pull(None));
             cx.spawn(async move |cx| {
                 let result = cx.background_spawn(pulling).await;
                 // Also after a failure: a pull that stopped at conflicts still brought in the
@@ -115,8 +103,8 @@ pub(crate) const PULL_BRANCH: &str = "pull-branch";
 /// failure: its remote was fetched all the same.
 pub fn pull_branch_operation() -> RepositoryOperation<String> {
     RepositoryOperation::new(PULL_BRANCH, |id, branch: String, cx: &mut App| {
-        let pulling = call(cx, "remote.pull", &id, move |repo| async move {
-            pull(&repo, Some(&parse::<NonEmpty>(branch)?)).await
+        let pulling = call(cx, &id, move |repo| async move {
+            repo.pull(Some(repo.input(NonEmpty::parse(branch))?)).await
         });
         cx.spawn(async move |cx| reloading(&id, pulling, cx).await)
     })
@@ -174,9 +162,7 @@ impl PushOperation {
 pub fn push_operation() -> PushOperation {
     PushOperation {
         operation: RepositoryOperation::new("push", |id, force: bool, cx: &mut App| {
-            let pushing = call(cx, "remote.push", &id, move |repo| async move {
-                push(&repo, force).await
-            });
+            let pushing = call(cx, &id, move |repo| repo.push(force));
             cx.spawn(async move |cx| {
                 let result = cx.background_spawn(pushing).await;
                 // The remote-tracking branch moved, and so did how far ahead the branch is. Not
@@ -218,9 +204,7 @@ pub fn push_rejection(error: Option<&QueryError>) -> Option<PushRejection> {
 pub fn push_target_options(id: &RepositoryId, cx: &App) -> QueryOptions<PushTarget> {
     QueryOptions::new(
         keys::push_target(id),
-        loads(cx, "remote.pushTarget", id, |repo| async move {
-            get_push_target(&repo).await
-        }),
+        loads(cx, id, |repo| repo.push_target()),
     )
     // Reloaded when the refs or config change (it's under `keys::repository`), not on window
     // focus.

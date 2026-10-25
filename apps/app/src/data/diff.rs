@@ -4,15 +4,13 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use gitto_git::features::diff::commands::{get_blob, get_commit_files};
 use gitto_git::features::diff::schema::ChangedFile;
-use gitto_git::features::stash::commands::get_stash_files;
 use gitto_git::features::status::schema::Uncommitted;
 use gitto_git::input::{FullSha, RepositoryId, Sha};
 use gitto_git::schema::FileStatus;
 use gpui_kit::{App, Context, Task};
 
-use super::call::{loads, parse};
+use super::call::loads;
 use super::client::{QueryClient, QueryError, QueryOptions, StaleTime};
 use super::keys;
 use super::opaque::{Opaque, memoized};
@@ -52,19 +50,19 @@ pub fn changed_files_options(
         FilesOf::Commit => keys::commit_files(id, &sha),
         FilesOf::Stash => keys::stash_files(id, &sha),
     };
-    let procedure = match of {
-        FilesOf::Commit => "diff.commitFiles",
-        FilesOf::Stash => "stash.files",
-    };
     QueryOptions::new(
         key,
-        loads(cx, procedure, id, move |repo| {
+        loads(cx, id, move |repo| {
             let sha = sha.clone();
             async move {
                 let files = match of {
-                    FilesOf::Commit => get_commit_files(&repo, &parse::<Sha>(sha.clone())?).await?,
+                    FilesOf::Commit => {
+                        let commit = repo.input(Sha::parse(sha.clone()))?;
+                        repo.commit_files(commit).await?
+                    }
                     FilesOf::Stash => {
-                        get_stash_files(&repo, &parse::<FullSha>(sha.clone())?).await?
+                        let stash = repo.input(FullSha::parse(sha.clone()))?;
+                        repo.stash_files(stash).await?
                     }
                 };
                 Ok(ChangedFiles {
@@ -134,9 +132,9 @@ pub fn fetch_blob(id: &RepositoryId, oid: &str, cx: &mut App) -> Task<Result<Str
     let oid = oid.to_owned();
     let options = QueryOptions::new(
         keys::blob(id, &oid),
-        loads(cx, "diff.blob", id, move |repo| {
+        loads(cx, id, move |repo| {
             let oid = oid.clone();
-            async move { get_blob(&repo, &parse::<FullSha>(oid)?).await }
+            async move { repo.blob(repo.input(FullSha::parse(oid))?).await }
         }),
     )
     .stale_time(StaleTime::Infinite)

@@ -5,18 +5,15 @@ use std::sync::Arc;
 
 use futures::FutureExt as _;
 use futures::future::BoxFuture;
+use gitto_git::ApiError;
 use gitto_git::features::diff::schema::ChangedFile;
-use gitto_git::features::staging::commands::{
-    stage, stage_all, stage_lines, unstage, unstage_all, unstage_lines,
-};
-use gitto_git::features::staging::discard::{DiscardSide, Discarded, discard, discard_all};
+use gitto_git::features::staging::discard::{DiscardSide, Discarded};
 use gitto_git::features::staging::schema::LineSelection;
 use gitto_git::input::{FileInput, Paths, RepositoryId};
 use gitto_git::schema::FileStatus;
-use gitto_git::{ApiError, GitApi};
 use gpui_kit::{App, AppContext as _, Entity};
 
-use super::call::{call, git};
+use super::call::call;
 use super::client::QueryClient;
 use super::file_diff::FilePatch;
 use super::keys::{self, UncommittedSide};
@@ -35,17 +32,12 @@ pub enum StagingTarget {
 /// Stages files in the repository it's given (`useStage`).
 pub fn stage_mutation(cx: &mut App) -> Entity<Mutation<(RepositoryId, StagingTarget)>> {
     staging_mutation(
-        |git, id, target| match target {
-            StagingTarget::All => git
-                .call("staging.stageAll", &id, |repo| async move {
-                    stage_all(&repo).await
-                })
-                .boxed(),
-            StagingTarget::Paths(paths) => git
-                .call("staging.stage", &id, |repo| async move {
-                    stage(&repo, &Paths::parse(paths)?).await
-                })
-                .boxed(),
+        |cx, id, target| match target {
+            StagingTarget::All => call(cx, &id, |repo| repo.stage_all()).boxed(),
+            StagingTarget::Paths(paths) => call(cx, &id, |repo| async move {
+                repo.stage(repo.input(Paths::parse(paths))?).await
+            })
+            .boxed(),
         },
         cx,
     )
@@ -54,17 +46,12 @@ pub fn stage_mutation(cx: &mut App) -> Entity<Mutation<(RepositoryId, StagingTar
 /// Unstages files in the repository it's given (`useUnstage`).
 pub fn unstage_mutation(cx: &mut App) -> Entity<Mutation<(RepositoryId, StagingTarget)>> {
     staging_mutation(
-        |git, id, target| match target {
-            StagingTarget::All => git
-                .call("staging.unstageAll", &id, |repo| async move {
-                    unstage_all(&repo).await
-                })
-                .boxed(),
-            StagingTarget::Paths(paths) => git
-                .call("staging.unstage", &id, |repo| async move {
-                    unstage(&repo, &Paths::parse(paths)?).await
-                })
-                .boxed(),
+        |cx, id, target| match target {
+            StagingTarget::All => call(cx, &id, |repo| repo.unstage_all()).boxed(),
+            StagingTarget::Paths(paths) => call(cx, &id, |repo| async move {
+                repo.unstage(repo.input(Paths::parse(paths))?).await
+            })
+            .boxed(),
         },
         cx,
     )
@@ -85,23 +72,17 @@ pub enum DiscardTarget {
 /// that changed since its list was read isn't discarded (see `discard`).
 pub fn discard_mutation(cx: &mut App) -> Entity<Mutation<(RepositoryId, DiscardTarget)>> {
     staging_mutation(
-        |git, id, target| match target {
-            DiscardTarget::All => git
-                .call("staging.discardAll", &id, |repo| async move {
-                    discard_all(&repo).await
+        |cx, id, target| match target {
+            DiscardTarget::All => call(cx, &id, |repo| repo.discard_all()).boxed(),
+            DiscardTarget::File { side, file } => call(cx, &id, move |repo| {
+                repo.discard(Discarded {
+                    path: file.path,
+                    orig_path: file.orig_path,
+                    status: file.status,
+                    side,
                 })
-                .boxed(),
-            DiscardTarget::File { side, file } => git
-                .call("staging.discard", &id, move |repo| async move {
-                    let discarded = Discarded {
-                        path: file.path,
-                        orig_path: file.orig_path,
-                        status: file.status,
-                        side,
-                    };
-                    discard(&repo, &discarded).await
-                })
-                .boxed(),
+            })
+            .boxed(),
         },
         cx,
     )
@@ -110,12 +91,12 @@ pub fn discard_mutation(cx: &mut App) -> Entity<Mutation<(RepositoryId, DiscardT
 /// A mutation of the staging in the repository it's given, which `run` does; the uncommitted
 /// changes reload once it's done, and it settles once they have (`useStagingMutation`).
 fn staging_mutation<T: Clone + 'static>(
-    run: impl Fn(GitApi, RepositoryId, T) -> BoxFuture<'static, Result<(), ApiError>> + 'static,
+    run: impl Fn(&App, RepositoryId, T) -> BoxFuture<'static, Result<(), ApiError>> + 'static,
     cx: &mut App,
 ) -> Entity<Mutation<(RepositoryId, T)>> {
     Mutation::new(
         move |(id, target): (RepositoryId, T), cx: &mut App| {
-            let action = run(git(cx), id.clone(), target);
+            let action = run(cx, id.clone(), target);
             cx.spawn(async move |cx| {
                 cx.background_spawn(action).await?;
                 // The watcher would catch this too, but reloading right away feels snappier.
@@ -155,15 +136,11 @@ pub fn stage_file_mutation(cx: &mut App) -> Entity<Mutation<FileToStage>> {
                 file,
             } = input;
             let paths = staging_paths(std::slice::from_ref(&file));
-            let procedure = match action {
-                StageAction::Stage => "staging.stage",
-                StageAction::Unstage => "staging.unstage",
-            };
-            let staging = call(cx, procedure, &id, move |repo| async move {
-                let paths = Paths::parse(paths)?;
+            let staging = call(cx, &id, move |repo| async move {
+                let paths = repo.input(Paths::parse(paths))?;
                 match action {
-                    StageAction::Stage => stage(&repo, &paths).await,
-                    StageAction::Unstage => unstage(&repo, &paths).await,
+                    StageAction::Stage => repo.stage(paths).await,
+                    StageAction::Unstage => repo.unstage(paths).await,
                 }
             });
             cx.spawn(async move |cx| {
@@ -207,11 +184,7 @@ pub fn stage_lines_mutation(cx: &mut App) -> Entity<Mutation<LinesToStage, Strin
             } = input;
             let path = file.path.clone();
             let staging = {
-                let procedure = match action {
-                    StageAction::Stage => "staging.stageLines",
-                    StageAction::Unstage => "staging.unstageLines",
-                };
-                call(cx, procedure, &id, move |repo| async move {
+                call(cx, &id, move |repo| async move {
                     let input = FileInput {
                         path: file.path,
                         orig_path: file.orig_path,
@@ -219,11 +192,9 @@ pub fn stage_lines_mutation(cx: &mut App) -> Entity<Mutation<LinesToStage, Strin
                     match action {
                         StageAction::Stage => {
                             let untracked = file.status == FileStatus::Untracked;
-                            stage_lines(&repo, &input, untracked, &version, &lines).await
+                            repo.stage_lines(input, untracked, version, lines).await
                         }
-                        StageAction::Unstage => {
-                            unstage_lines(&repo, &input, &version, &lines).await
-                        }
+                        StageAction::Unstage => repo.unstage_lines(input, version, lines).await,
                     }
                 })
             };
