@@ -45,7 +45,11 @@ log = { version = "0.4.34", features = ["std"] }
 # apps/app's diffs: syntax highlighting as gpui-kit's `syntect` feature does it (the same syntect
 # and syntax set), and the words that changed between a removed line and the line added for it.
 similar = "2.7.0"
-syntect = { version = "5.3.0", default-features = false, features = ["parsing", "default-syntaxes", "regex-fancy"] }
+syntect = { version = "5.3.0", default-features = false, features = [
+  "parsing",
+  "default-syntaxes",
+  "regex-fancy",
+] }
 two-face = { version = "0.4.5", default-features = false, features = ["syntect-fancy"] }
 
 # crates/ui: what the UI works out for itself, e.g. the order of the sidebar's folders.
