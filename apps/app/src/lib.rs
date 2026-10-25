@@ -10,7 +10,7 @@
 //! - [`services`]: what's started at launch (`apps/electron/src/main.ts`): the database, the
 //!   repositories, git, the system.
 //! - [`theme`]: `index.css`, as a GPUI Kit theme.
-//! - [`util`]: pure helpers (`lib/*.ts`); the rest of them, and `git/*.ts`, are in `gitto-ui`.
+//! - [`util`]: pure helpers (`lib/*.ts`); the rest of them, and `git/*.ts`, are in `gitto-ui-logic`.
 
 // GPUI's derive macros name `gpui`: it's the Kit, which re-exports it.
 extern crate gpui_kit as gpui;

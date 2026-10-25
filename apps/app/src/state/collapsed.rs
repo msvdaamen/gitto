@@ -1,9 +1,9 @@
-//! Which sidebar sections and folders are collapsed: gitto-ui's `hooks::collapsed` (ported from
+//! Which sidebar sections and folders are collapsed: gitto-ui-logic's `hooks::collapsed` (ported from
 //! `hooks/collapsed.ts`), saved in the app's [`LocalStorage`].
 
 use std::rc::Rc;
 
-use gitto_ui::hooks::collapsed;
+use gitto_ui_logic::hooks::collapsed;
 
 use crate::services::LocalStorage;
 

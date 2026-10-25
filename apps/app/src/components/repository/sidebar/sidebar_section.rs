@@ -3,7 +3,7 @@
 use std::ops::Range;
 use std::rc::Rc;
 
-use gitto_ui::format::compact_count;
+use gitto_ui_logic::format::compact_count;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::spinner::Spinner;

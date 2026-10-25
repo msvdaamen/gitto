@@ -9,17 +9,17 @@ use gitto_git::FileStatus;
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::features::staging::patch_version::patch_version;
 use gitto_git::input::RepositoryId;
-use gitto_ui::git::changes::{
+use gitto_ui_logic::git::changes::{
     LineCounts, counts_of, has_patch, is_known_binary, is_nested_repository, total_lines,
 };
-use gitto_ui::git::patch::{PatchSummary, is_link, summarize_patch};
+use gitto_ui_logic::git::patch::{PatchSummary, is_link, summarize_patch};
 use gpui_kit::{AppContext as _, Context, Entity, Subscription};
 
 use crate::data::file_diff::{DiffSourceFiles, FilePatch};
 use crate::data::keyed::Hold;
 use crate::data::{DataError, Loaded, Opaque, Part, Repositories, Repository, observe_parts};
 use crate::state::delayed::{DELAY, Delayed};
-use gitto_ui::git::diff_source::{DiffSource, diff_file_key, is_same_source, is_uncommitted};
+use gitto_ui_logic::git::diff_source::{DiffSource, diff_file_key, is_same_source, is_uncommitted};
 
 /// Changed lines above which a file's changes are only shown when asked: reading and parsing them
 /// takes a noticeable moment, and such a change is rarely read line by line (a lockfile, say).

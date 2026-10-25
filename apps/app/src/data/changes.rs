@@ -35,9 +35,9 @@ use super::staging::{DiscardTarget, StageAction, StagingTarget};
 use super::worktree::AddWorktreeInput;
 use crate::services::Services;
 use crate::state::router::{Route, Router};
-use gitto_ui::git::diff_source::DiffSource;
-use gitto_ui::git::patch::has_hunks;
-use gitto_ui::git::status::{branch_name, is_checked_out};
+use gitto_ui_logic::git::diff_source::DiffSource;
+use gitto_ui_logic::git::patch::has_hunks;
+use gitto_ui_logic::git::status::{branch_name, is_checked_out};
 
 /// What a change resolves to, once it's done: told to the view that started it, if it's still
 /// there.

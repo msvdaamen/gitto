@@ -1,9 +1,9 @@
-//! The width of a resizable panel: gitto-ui's `hooks::panel_width` (ported from
+//! The width of a resizable panel: gitto-ui-logic's `hooks::panel_width` (ported from
 //! `hooks/panel-width.ts`), saved in the app's [`LocalStorage`], in GPUI's `f32` pixels.
 
 use std::rc::Rc;
 
-use gitto_ui::hooks::panel_width;
+use gitto_ui_logic::hooks::panel_width;
 
 use crate::services::LocalStorage;
 
@@ -61,7 +61,7 @@ impl PanelWidth {
         let mut storage = &*self.storage;
         self.width.set_width(
             f64::from(width),
-            save.then_some(&mut storage as &mut dyn gitto_ui::hooks::Storage),
+            save.then_some(&mut storage as &mut dyn gitto_ui_logic::hooks::Storage),
         );
     }
 

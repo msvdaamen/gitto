@@ -1,12 +1,12 @@
 [package]
-name = "gitto-ui"
+name = "gitto-ui-logic"
 version = "0.1.0"
 edition.workspace = true
 description = "What Gitto's UI works out for itself, without GPUI: the history graph, its rows, labels and search, commit messages, and what to call things."
 publish = false
 
 [lib]
-name = "gitto_ui"
+name = "gitto_ui_logic"
 
 [dependencies]
 gitto-git.workspace = true

@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use gitto_git::features::overview::schema::{Activity, ActivityKind};
 use gitto_repository::Repository;
-use gitto_ui::git::activity::describe_activity;
+use gitto_ui_logic::git::activity::describe_activity;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, v_flex};
 use gpui_kit::prelude::*;

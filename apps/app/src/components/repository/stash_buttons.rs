@@ -1,7 +1,7 @@
 //! The toolbar's Stash and Pop. Ported from `components/repository/stash-buttons.tsx`.
 
 use gitto_git::input::RepositoryId;
-use gitto_ui::git::stash::{can_pop, pop_title, stash_blocker, stash_title};
+use gitto_ui_logic::git::stash::{can_pop, pop_title, stash_blocker, stash_title};
 use gpui_kit::component::h_flex;
 use gpui_kit::prelude::*;
 use gpui_kit::{App, Context, Window};

@@ -3,8 +3,8 @@
 
 use gitto_git::features::worktree::schema::Worktree;
 use gitto_git::input::RepositoryId;
-use gitto_ui::git::status::branch_name;
-use gitto_ui::git::worktree::{checked_out_in, suggest_worktree_folder};
+use gitto_ui_logic::git::status::branch_name;
+use gitto_ui_logic::git::worktree::{checked_out_in, suggest_worktree_folder};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::{Disableable as _, WindowExt as _, h_flex, v_flex};

@@ -567,7 +567,7 @@ mod tests {
         update_repository,
     };
     use super::*;
-    use gitto_ui::git::diff_source::{DiffSource, diff_file_key};
+    use gitto_ui_logic::git::diff_source::{DiffSource, diff_file_key};
 
     /// Saving fails as git's API says the file changed on disk.
     fn changed_on_disk() -> DataError {

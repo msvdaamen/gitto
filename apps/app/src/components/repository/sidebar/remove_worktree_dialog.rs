@@ -2,7 +2,7 @@
 //! `components/repository/sidebar/remove-worktree-dialog.tsx`.
 
 use gitto_git::features::worktree::schema::Worktree;
-use gitto_ui::git::status::branch_name;
+use gitto_ui_logic::git::status::branch_name;
 use gpui_kit::component::button::ButtonVariant;
 use gpui_kit::{App, Window};
 

@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::schema::FileStatus;
-use gitto_ui::git::changes::is_nested_repository;
+use gitto_ui_logic::git::changes::is_nested_repository;
 use gpui_kit::{App, Context, DismissEvent, Window};
 
 use crate::components::ui::{IconName, PopupMenu, context_menu_item};

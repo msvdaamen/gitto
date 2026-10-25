@@ -1,7 +1,7 @@
 //! The toolbar's Branch. Ported from `components/repository/branch-button.tsx`.
 
 use gitto_git::input::RepositoryId;
-use gitto_ui::git::status::{branch_source, has_uncommitted_changes};
+use gitto_ui_logic::git::status::{branch_source, has_uncommitted_changes};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::prelude::*;

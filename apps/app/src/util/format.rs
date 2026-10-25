@@ -1,15 +1,16 @@
-//! Formatting for display, from `lib/format.ts` (gitto-ui's `format`), and what else the app
+//! Formatting for display, from `lib/format.ts` (gitto-ui-logic's `format`), and what else the app
 //! formats.
 
-pub use gitto_ui::format::{compact_count, initials, relative_time};
+pub use gitto_ui_logic::format::{compact_count, initials, relative_time};
 use gpui_kit::Hsla;
 use gpui_kit::component::Colorize as _;
 
-/// An avatar colour picked by `key` (e.g. an email address), the same one every time: gitto-ui's
+/// An avatar colour picked by `key` (e.g. an email address), the same one every time: gitto-ui-logic's
 /// pick, as the history's rows have theirs (`commit_row::author_color`).
 pub fn avatar_color(key: &str) -> Hsla {
-    let picked = gitto_ui::format::avatar_color(key);
-    Hsla::parse_hex(picked).unwrap_or_else(|_| panic!("gitto-ui's avatar colour {picked} is hex"))
+    let picked = gitto_ui_logic::format::avatar_color(key);
+    Hsla::parse_hex(picked)
+        .unwrap_or_else(|_| panic!("gitto-ui-logic's avatar colour {picked} is hex"))
 }
 
 /// `text` with its first letter upper case (`capitalize` in `@gitto/release/changelog`).
@@ -55,7 +56,7 @@ mod tests {
     #[test]
     fn picks_gitto_uis_avatar_color() {
         for key in ["ada@example.com", "grace@example.com", "linus@example.com"] {
-            let picked = gitto_ui::format::avatar_color(key);
+            let picked = gitto_ui_logic::format::avatar_color(key);
             assert_eq!(Hsla::parse_hex(picked).ok(), Some(avatar_color(key)));
         }
     }

@@ -29,7 +29,7 @@ use crate::data::conflicts::FileToResolve;
 use crate::data::file_diff::FilePatch;
 use crate::data::git::{GitTask, RepositoryGit};
 use crate::data::{DataError, Mutation, Repository};
-use gitto_ui::git::diff_source::{DiffSource, diff_file_key};
+use gitto_ui_logic::git::diff_source::{DiffSource, diff_file_key};
 
 pub fn id() -> RepositoryId {
     RepositoryId::parse("01890a5d-ac96-774b-bcce-b302099a8057").unwrap()

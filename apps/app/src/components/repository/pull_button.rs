@@ -1,7 +1,7 @@
 //! The toolbar's Pull. Ported from `components/repository/pull-button.tsx`.
 
 use gitto_git::input::RepositoryId;
-use gitto_ui::git::status::{head_pull_blocker, pull_title};
+use gitto_ui_logic::git::status::{head_pull_blocker, pull_title};
 use gpui_kit::prelude::*;
 use gpui_kit::{App, Context, Window};
 

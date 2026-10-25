@@ -69,9 +69,9 @@ impl LocalStorage {
     }
 }
 
-/// What gitto-ui's hooks (`gitto_ui::hooks`) save what they keep in: this, as the TS hooks did
+/// What gitto-ui-logic's hooks (`gitto_ui_logic::hooks`) save what they keep in: this, as the TS hooks did
 /// `localStorage`.
-impl gitto_ui::hooks::Storage for &LocalStorage {
+impl gitto_ui_logic::hooks::Storage for &LocalStorage {
     fn get(&self, key: &str) -> Option<String> {
         self.get_item(key)
     }

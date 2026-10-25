@@ -8,8 +8,8 @@ use std::sync::Arc;
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::features::staging::patch_version::patch_version;
 use gitto_git::features::staging::schema::LineSelection;
-use gitto_ui::git::changes::is_nested_repository;
-use gitto_ui::git::patch::{has_hunks, staged_whole};
+use gitto_ui_logic::git::changes::is_nested_repository;
+use gitto_ui_logic::git::patch::{has_hunks, staged_whole};
 use gpui_kit::{App, Context, Entity, Subscription, Task};
 
 use super::file_diff_view::{FileDiffEvent, FileDiffView};
@@ -18,7 +18,7 @@ use crate::data::staging::{
     FileToStage, LinesToStage, StageAction, stage_file_mutation, stage_lines_mutation,
 };
 use crate::data::{DataError, Mutation};
-use gitto_ui::git::diff_source::{DiffSource, is_uncommitted};
+use gitto_ui_logic::git::diff_source::{DiffSource, is_uncommitted};
 
 /// Stages, or unstages, a file's lines; resolves to the patch they leave.
 pub type StageLinesMutation = Entity<Mutation<LinesToStage, String>>;

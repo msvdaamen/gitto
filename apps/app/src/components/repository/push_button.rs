@@ -3,8 +3,8 @@
 
 use gitto_git::features::remote::schema::PushTarget;
 use gitto_git::input::RepositoryId;
-use gitto_ui::git::push::push_title;
-use gitto_ui::git::status::head_pull_blocker;
+use gitto_ui_logic::git::push::push_title;
+use gitto_ui_logic::git::status::head_pull_blocker;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_kit::component::dialog::DialogFooter;

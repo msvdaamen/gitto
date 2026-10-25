@@ -6,7 +6,7 @@ use std::time::Duration;
 use gitto_git::FileStatus;
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::input::RepositoryId;
-use gitto_ui::git::changes::{counts_of, has_patch, total_lines, unchanged_reason};
+use gitto_ui_logic::git::changes::{counts_of, has_patch, total_lines, unchanged_reason};
 use gpui_kit::component::button::Button;
 use gpui_kit::component::{Disableable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
@@ -35,7 +35,7 @@ use crate::data::file_diff::{FilePatch, fetch_file_patch};
 use crate::data::staging::StageAction;
 use crate::state::diff_style::{DiffStyle, DiffStyleSetting};
 use crate::theme::PaletteExt as _;
-use gitto_ui::git::diff_source::{DiffSource, diff_file_key};
+use gitto_ui_logic::git::diff_source::{DiffSource, diff_file_key};
 
 /// What a file's changes ask of the page.
 #[derive(Debug, Clone, PartialEq)]
@@ -882,7 +882,7 @@ mod tests {
     use gitto_git::features::staging::patch_version::patch_version;
     use gitto_git::features::staging::schema::{LineRange, LineSelection};
     use gitto_git::features::status::schema::{Head, StatusCounts, Uncommitted, WorkingTreeFiles};
-    use gitto_ui::git::changes::staging_paths;
+    use gitto_ui_logic::git::changes::staging_paths;
     use gpui_kit::component::WindowExt as _;
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{AppContext as _, TestAppContext};
@@ -1614,7 +1614,7 @@ mod tests {
         left: String,
     ) -> impl FnMut(&LinesToStage, &mut App) -> Task<Result<String, DataError>> + 'static {
         move |_, cx| {
-            if gitto_ui::git::patch::has_hunks(&left) {
+            if gitto_ui_logic::git::patch::has_hunks(&left) {
                 set_patch_in(&source, &file, &left, cx);
             }
             Task::ready(Ok(left.clone()))

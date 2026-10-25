@@ -14,7 +14,7 @@ use super::keyed::Hold;
 use super::loaded::Loaded;
 use super::opaque::{Opaque, memoized};
 use super::repository::{Repositories, Repository};
-use gitto_ui::git::changes::{LineCounts, line_totals};
+use gitto_ui_logic::git::changes::{LineCounts, line_totals};
 
 /// Whose changed files to load: a commit's, compared to its first parent, or a stash's, compared
 /// to the commit it was made on (TS's `FilesFetcher`).

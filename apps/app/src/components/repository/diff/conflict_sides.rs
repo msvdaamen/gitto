@@ -3,7 +3,7 @@
 use std::rc::Rc;
 
 use gitto_git::features::conflicts::schema::{Conflict, Side};
-use gitto_ui::git::conflicts::{describe_conflict, describe_side, keep_label};
+use gitto_ui_logic::git::conflicts::{describe_conflict, describe_side, keep_label};
 use gpui_kit::component::button::Button;
 use gpui_kit::component::{Disableable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::*;

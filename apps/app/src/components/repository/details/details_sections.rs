@@ -15,7 +15,7 @@ use super::changed_file_list::{ChangedFileList, ROW_PITCH};
 use crate::components::ui::{Icon, IconName, LineStats, SectionHeader};
 use crate::data::{DataError, Opaque};
 use crate::theme::PaletteExt as _;
-use gitto_ui::git::changes::LineCounts;
+use gitto_ui_logic::git::changes::LineCounts;
 
 /// Why some of the details couldn't be loaded, e.g. "Couldn't load the commit", above the rest;
 /// nothing without an error.

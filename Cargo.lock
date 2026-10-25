@@ -197,7 +197,7 @@ dependencies = [
  "gitto-db",
  "gitto-git",
  "gitto-repository",
- "gitto-ui",
+ "gitto-ui-logic",
  "gpui-kit",
  "image",
  "log",
@@ -2177,7 +2177,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gitto-ui"
+name = "gitto-ui-logic"
 version = "0.1.0"
 dependencies = [
  "gitto-git",

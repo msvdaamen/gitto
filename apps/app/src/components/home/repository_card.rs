@@ -1,8 +1,8 @@
 //! A repository in the home page's list. Ported from `components/home/repository-card.tsx`.
 
 use gitto_git::features::status::schema::StatusSummary;
-use gitto_ui::git::remote::remote_provider;
-use gitto_ui::git::status::{head_label, sync_label};
+use gitto_ui_logic::git::remote::remote_provider;
+use gitto_ui_logic::git::status::{head_label, sync_label};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::prelude::*;

@@ -6,9 +6,9 @@ use std::rc::Rc;
 use gitto_git::features::staging::discard::DiscardSide;
 use gitto_git::features::status::schema::{StatusSummary, Uncommitted};
 use gitto_git::input::RepositoryId;
-use gitto_ui::git::changes::is_nested_repository;
-use gitto_ui::git::conflicts::operation_name;
-use gitto_ui::git::status::head_label;
+use gitto_ui_logic::git::changes::is_nested_repository;
+use gitto_ui_logic::git::conflicts::operation_name;
+use gitto_ui_logic::git::status::head_label;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::*;
@@ -34,8 +34,8 @@ use crate::data::status::head_sha;
 use crate::data::{Changed, DataError, Mutation, Opaque, Part, Shown};
 use crate::state::delayed::{DELAY, Delayed};
 use crate::theme::PaletteExt as _;
-use gitto_ui::git::changes::staging_paths;
-use gitto_ui::git::diff_source::DiffSource;
+use gitto_ui_logic::git::changes::staging_paths;
+use gitto_ui_logic::git::diff_source::DiffSource;
 
 /// Splits the status into the uncommitted changes' lists.
 type SelectLists = Box<dyn Fn(&Opaque<Uncommitted>) -> WorkingTreeLists>;

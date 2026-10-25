@@ -18,7 +18,7 @@ use gitto_git::features::stash::schema::Stash;
 use gitto_git::features::status::schema::{Head, Uncommitted};
 use gitto_git::features::worktree::schema::Worktree;
 use gitto_git::input::RepositoryId;
-use gitto_ui::git::rows::{WIP_ID, stash_row_id};
+use gitto_ui_logic::git::rows::{WIP_ID, stash_row_id};
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _};
 use gpui_kit::{
@@ -1475,7 +1475,7 @@ fn marks_a_branch_checked_out_in_another_worktree_and_names_one_detached_at_the_
     let labels = history
         .table
         .read_with(cx, |table, _| match &table.rows()[0] {
-            gitto_ui::git::rows::HistoryRow::Commit(commit) => commit.labels.clone(),
+            gitto_ui_logic::git::rows::HistoryRow::Commit(commit) => commit.labels.clone(),
             _ => vec![],
         });
     let titles: Vec<String> = labels.iter().map(super::ref_labels::label_title).collect();

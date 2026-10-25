@@ -2,7 +2,7 @@
 //! `components/repository/history/reword-dialog.tsx`.
 
 use gitto_git::input::RepositoryId;
-use gitto_ui::git::message::{CommitMessage, edit_message, split_message};
+use gitto_ui_logic::git::message::{CommitMessage, edit_message, split_message};
 use gpui_kit::component::Disableable as _;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};

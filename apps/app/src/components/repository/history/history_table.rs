@@ -12,10 +12,12 @@ use gitto_git::features::history::schema::Commit;
 use gitto_git::features::stash::schema::Stash;
 use gitto_git::features::worktree::schema::Worktree;
 use gitto_git::input::RepositoryId;
-use gitto_ui::git::ref_labels::checkouts;
-use gitto_ui::git::rows::{HistoryRow, history_graph, stash_sha, to_history_rows, with_stashes};
-use gitto_ui::git::search::{matches_search, search_needle};
-use gitto_ui::git::status::head_label;
+use gitto_ui_logic::git::ref_labels::checkouts;
+use gitto_ui_logic::git::rows::{
+    HistoryRow, history_graph, stash_sha, to_history_rows, with_stashes,
+};
+use gitto_ui_logic::git::search::{matches_search, search_needle};
+use gitto_ui_logic::git::status::head_label;
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::*;
@@ -47,7 +49,7 @@ use crate::data::{Changed, Part, Shown};
 use crate::state::clock::Clock;
 use crate::state::delayed::{DELAY, Delayed};
 use crate::theme::PaletteExt as _;
-use gitto_ui::git::changes::LineCounts;
+use gitto_ui_logic::git::changes::LineCounts;
 
 /// How many rows from the end of the history loaded so far the rows in view come before more is
 /// loaded: a few screenfuls, so it's usually there before it's scrolled to.
@@ -62,7 +64,7 @@ const MORE_CLOSE_DELAY: std::time::Duration = std::time::Duration::from_millis(2
 /// What the history asks of the page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HistoryEvent {
-    /// A row was selected, by its id: the uncommitted changes' (`gitto_ui::git::rows::WIP_ID`),
+    /// A row was selected, by its id: the uncommitted changes' (`gitto_ui_logic::git::rows::WIP_ID`),
     /// a stash's or a commit's.
     Select(String),
 }

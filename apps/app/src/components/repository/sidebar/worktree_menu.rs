@@ -9,7 +9,7 @@
 use std::rc::Rc;
 
 use gitto_git::features::worktree::schema::Worktree;
-use gitto_ui::git::worktree::can_open_worktree;
+use gitto_ui_logic::git::worktree::can_open_worktree;
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::{App, Entity, Window};
 

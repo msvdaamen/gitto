@@ -17,8 +17,8 @@ use crate::data::diff::{FilesOf, FilesOnShow};
 use crate::data::{Opaque, Part, Shown};
 use crate::state::clock::{Clock, relative_time};
 use crate::theme::PaletteExt as _;
-use gitto_ui::git::changes::LineCounts;
-use gitto_ui::git::diff_source::DiffSource;
+use gitto_ui_logic::git::changes::LineCounts;
+use gitto_ui_logic::git::diff_source::DiffSource;
 
 /// What the stash details show of the repository.
 const PARTS: &[Part] = &[Part::Stashes, Part::Commits];

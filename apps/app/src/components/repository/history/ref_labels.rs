@@ -3,7 +3,7 @@
 
 use std::rc::Rc;
 
-use gitto_ui::git::ref_labels::{RefLabel, describe_ref_label, ref_label_matches};
+use gitto_ui_logic::git::ref_labels::{RefLabel, describe_ref_label, ref_label_matches};
 use gpui_kit::component::menu::ContextMenuExt as _;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{h_flex, v_flex};
@@ -367,7 +367,7 @@ impl RenderOnce for MoreCount {
 #[cfg(test)]
 mod tests {
     use gitto_git::features::history::schema::{CommitRef, CommitRefKind};
-    use gitto_ui::git::ref_labels::{Checkouts, to_ref_labels};
+    use gitto_ui_logic::git::ref_labels::{Checkouts, to_ref_labels};
 
     use super::*;
 

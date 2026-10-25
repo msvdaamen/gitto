@@ -24,7 +24,7 @@ gitto-db.workspace = true
 gitto-git.workspace = true
 gitto-repository.workspace = true
 # The UI's pure logic (TS's `apps/ui/src/git/*.ts` and the like).
-gitto-ui.workspace = true
+gitto-ui-logic.workspace = true
 
 anyhow.workspace = true
 async-fs.workspace = true

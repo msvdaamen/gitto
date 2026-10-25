@@ -29,8 +29,8 @@ use crate::state::panel_width::{PanelBounds, PanelWidth};
 use crate::state::router::Router;
 use crate::state::settled::{SETTLE_AFTER, Settled};
 use crate::theme::PaletteExt as _;
-use gitto_ui::git::diff_source::{DiffSource, is_same_source};
-use gitto_ui::git::rows::WIP_ID;
+use gitto_ui_logic::git::diff_source::{DiffSource, is_same_source};
+use gitto_ui_logic::git::rows::WIP_ID;
 
 /// The sidebar's widths. The panels can't take more than a share of the window either (see
 /// [`SIDEBAR_SHARE`]), so the history keeps room on small screens.
@@ -776,7 +776,7 @@ mod tests {
             set_files(&id, FilesOf::Commit, files, cx);
             let source = DiffSource::Commit { sha: sha.into() };
             let patch = FilePatch {
-                key: gitto_ui::git::diff_source::diff_file_key(&source, path),
+                key: gitto_ui_logic::git::diff_source::diff_file_key(&source, path),
                 file: added(path),
                 patch: format!(
                     "diff --git a/{path} b/{path}\nnew file mode 100644\nindex 0000000..1111111\n--- /dev/null\n+++ b/{path}\n@@ -0,0 +1 @@\n+{sha}\n"

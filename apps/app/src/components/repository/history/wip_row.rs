@@ -4,7 +4,7 @@
 use std::rc::Rc;
 
 use gitto_git::features::status::schema::StatusCounts;
-use gitto_ui::git::rows::{WIP_MESSAGE, WipRow};
+use gitto_ui_logic::git::rows::{WIP_MESSAGE, WipRow};
 use gpui_kit::component::h_flex;
 use gpui_kit::prelude::*;
 use gpui_kit::{App, FontWeight, SharedString, Window, div, linear_color_stop, linear_gradient};

@@ -6,7 +6,7 @@ use gitto_git::FileStatus;
 use gitto_git::features::conflicts::schema::{Conflict, Side};
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::input::RepositoryId;
-use gitto_ui::git::conflicts::{ConflictKind, conflict_kind, describe_conflict};
+use gitto_ui_logic::git::conflicts::{ConflictKind, conflict_kind, describe_conflict};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{Disableable as _, Sizable as _};
 use gpui_kit::prelude::*;
@@ -26,7 +26,7 @@ use crate::data::conflicts::{ConflictResolution, FileToResolve, resolve_file_mut
 use crate::data::keyed::Hold;
 use crate::data::{DataError, Loaded, Mutation, Repositories, Repository};
 use crate::theme::PaletteExt as _;
-use gitto_ui::git::diff_source::DiffSource;
+use gitto_ui_logic::git::diff_source::DiffSource;
 
 /// Resolves a conflicted file whole: keeps a side, or marks it resolved.
 pub type ResolveFileMutation = Entity<Mutation<FileToResolve>>;
@@ -830,7 +830,7 @@ mod tests {
         opened.view.update(cx, |view, cx| {
             view.on_conflict_viewer(
                 &ConflictViewerEvent::Progress(ConflictProgress {
-                    file_key: Some(gitto_ui::git::diff_source::diff_file_key(
+                    file_key: Some(gitto_ui_logic::git::diff_source::diff_file_key(
                         &DiffSource::Unstaged,
                         "b.txt",
                     )),

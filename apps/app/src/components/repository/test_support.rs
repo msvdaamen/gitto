@@ -30,7 +30,7 @@ use crate::data::file_diff::FilePatch;
 use crate::data::git::{NoGit, RepositoryGit};
 use crate::data::history::Log;
 use crate::data::repositories::RepositorySource;
-use gitto_ui::git::diff_source::DiffSource;
+use gitto_ui_logic::git::diff_source::DiffSource;
 
 /// The repository list, answered at once: what the test puts in it.
 #[derive(Default)]

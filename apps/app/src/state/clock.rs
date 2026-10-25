@@ -1,6 +1,6 @@
 //! The time relative times are told against. Ported from `hooks/relative-time.ts`.
 
-pub use gitto_ui::hooks::relative_time::TICK;
+pub use gitto_ui_logic::hooks::relative_time::TICK;
 use gpui_kit::{App, AppContext as _, Context, Entity, Global, Task};
 
 /// One clock for the whole app, started when a relative time is first shown and never stopped: a
@@ -47,12 +47,12 @@ impl Clock {
     }
 }
 
-pub use gitto_ui::hooks::relative_time::now_ms;
+pub use gitto_ui_logic::hooks::relative_time::now_ms;
 
 /// A time (milliseconds since the epoch) relative to now, e.g. "3 days ago" (`useRelativeTime`'s
 /// function; observe [`Clock`] to have it told again as time passes).
 pub fn relative_time(timestamp: i64) -> String {
-    gitto_ui::hooks::relative_time::relative_time_now(timestamp)
+    gitto_ui_logic::hooks::relative_time::relative_time_now(timestamp)
 }
 
 #[cfg(test)]
@@ -62,7 +62,7 @@ mod tests {
     use super::*;
 
     // `relative-time.test.ts`: the time's told again as time passes (the telling itself is
-    // `gitto_ui::format::relative_time`'s, tested there).
+    // `gitto_ui_logic::format::relative_time`'s, tested there).
     #[gpui_kit::test]
     fn ticks_every_minute(cx: &mut TestAppContext) {
         let clock = cx.update(Clock::global);

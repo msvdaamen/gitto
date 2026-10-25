@@ -3,7 +3,7 @@
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::features::operation::schema::{Operation, OperationKind};
 use gitto_git::input::RepositoryId;
-use gitto_ui::git::conflicts::{operation_name, operation_progress, operation_title};
+use gitto_ui_logic::git::conflicts::{operation_name, operation_progress, operation_title};
 use gpui_kit::component::button::{ButtonVariant, ButtonVariants as _};
 use gpui_kit::component::{Disableable as _, h_flex};
 use gpui_kit::prelude::*;

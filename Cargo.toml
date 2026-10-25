@@ -66,14 +66,14 @@ two-face = { version = "0.4.5", default-features = false, features = [
   "syntect-onig",
 ] }
 
-# crates/ui: what the UI works out for itself, e.g. the order of the sidebar's folders.
+# crates/ui-logic: what the UI works out for itself, e.g. the order of the sidebar's folders.
 indexmap = "2.14.2"
 url = "2.5.8"
 
 gitto-db = { path = "crates/db" }
 gitto-git = { path = "crates/git" }
 gitto-repository = { path = "crates/repository" }
-gitto-ui = { path = "crates/ui" }
+gitto-ui-logic = { path = "crates/ui-logic" }
 
 # Dependencies are built optimized in dev builds too: GPUI (its layout, text and rendering) and
 # syntect are many times slower unoptimized, which makes `cargo run -p app` feel sluggish, while

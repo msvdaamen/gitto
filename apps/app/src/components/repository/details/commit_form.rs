@@ -2,7 +2,7 @@
 //! `components/repository/details/commit-form.tsx`.
 
 use gitto_git::input::RepositoryId;
-use gitto_ui::git::message::{CommitMessage, edit_message, join_message, split_message};
+use gitto_ui_logic::git::message::{CommitMessage, edit_message, join_message, split_message};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Enter, InputEvent, InputState, TextareaState};

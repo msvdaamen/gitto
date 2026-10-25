@@ -7,7 +7,7 @@ use std::time::Duration;
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::features::history::schema::Commit;
 use gitto_git::input::RepositoryId;
-use gitto_ui::git::rows::stash_sha;
+use gitto_ui_logic::git::rows::stash_sha;
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -28,8 +28,8 @@ use crate::data::{DataError, Opaque, Part, Shown};
 use crate::state::clock::{Clock, relative_time};
 use crate::theme::PaletteExt as _;
 use crate::util::format::{avatar_color, initials};
-use gitto_ui::git::diff_source::{DiffSource, is_same_source};
-use gitto_ui::git::rows::WIP_ID;
+use gitto_ui_logic::git::diff_source::{DiffSource, is_same_source};
+use gitto_ui_logic::git::rows::WIP_ID;
 
 /// What the details ask of the page (TS's `FileOpener`); each part of the details emits them too,
 /// and the details pass them on.
@@ -486,7 +486,7 @@ impl Render for SelectedCommit {
 struct CommitSummary {
     commit: Commit,
     count: usize,
-    totals: gitto_ui::git::changes::LineCounts,
+    totals: gitto_ui_logic::git::changes::LineCounts,
     copied: bool,
     owner: WeakEntity<SelectedCommit>,
 }
@@ -623,7 +623,7 @@ mod tests {
 
     use gitto_git::features::stash::schema::Stash;
     use gitto_git::schema::FileStatus;
-    use gitto_ui::git::rows::stash_row_id;
+    use gitto_ui_logic::git::rows::stash_row_id;
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{AnyWindowHandle, SharedString, TestAppContext};
 

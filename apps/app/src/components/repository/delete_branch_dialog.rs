@@ -1,7 +1,7 @@
 //! Asking before deleting a branch. Ported from
 //! `components/repository/delete-branch-dialog.tsx`.
 
-use gitto_ui::git::status::branch_name;
+use gitto_ui_logic::git::status::branch_name;
 use gpui_kit::component::button::ButtonVariant;
 use gpui_kit::{App, Window};
 

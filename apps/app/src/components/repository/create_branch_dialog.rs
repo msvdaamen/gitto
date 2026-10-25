@@ -2,7 +2,7 @@
 //! `components/repository/create-branch-dialog.tsx`.
 
 use gitto_git::input::RepositoryId;
-use gitto_ui::git::status::{branch_name, has_uncommitted_changes, is_checked_out};
+use gitto_ui_logic::git::status::{branch_name, has_uncommitted_changes, is_checked_out};
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::prelude::*;

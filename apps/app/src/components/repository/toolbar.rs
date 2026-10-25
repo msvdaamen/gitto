@@ -1,7 +1,7 @@
 //! The repository's toolbar. Ported from `components/repository/toolbar.tsx`.
 
 use gitto_git::input::RepositoryId;
-use gitto_ui::git::status::head_label;
+use gitto_ui_logic::git::status::head_label;
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{Sizable as _, h_flex, v_flex};

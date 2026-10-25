@@ -2,7 +2,7 @@
 
 use std::rc::Rc;
 
-use gitto_ui::git::rows::CommitRow;
+use gitto_ui_logic::git::rows::CommitRow;
 use gpui_kit::component::Colorize as _;
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -18,7 +18,7 @@ use super::history_option::{
 use super::ref_labels::{HistoryRefLabels, LabelActions, MoreLabels};
 use crate::state::clock::relative_time;
 use crate::theme::{Palette, PaletteExt as _};
-use gitto_ui::git::changes::LineCounts;
+use gitto_ui_logic::git::changes::LineCounts;
 
 /// What every row gets from the table.
 #[derive(Clone)]

@@ -2,7 +2,7 @@
 
 use std::rc::Rc;
 
-use gitto_ui::git::rows::StashRow;
+use gitto_ui_logic::git::rows::StashRow;
 use gpui_kit::prelude::*;
 use gpui_kit::{
     App, FontWeight, Rems, SharedString, Window, div, linear_color_stop, linear_gradient,

@@ -1264,7 +1264,7 @@ mod tests {
         Opened, conflicted, init, open, save, set_changes, set_conflict, text_conflict,
     };
     use super::*;
-    use gitto_ui::git::diff_source::DiffSource;
+    use gitto_ui_logic::git::diff_source::DiffSource;
 
     const MARKERS: &str = "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> side\n";
 

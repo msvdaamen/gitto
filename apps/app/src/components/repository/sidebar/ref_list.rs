@@ -9,10 +9,10 @@ use gitto_git::features::refs::schema::{Ref, RefKind};
 use gitto_git::features::stash::schema::Stash;
 use gitto_git::features::worktree::schema::Worktree;
 use gitto_git::input::RepositoryId;
-use gitto_ui::git::ref_tree::{RefTreeNode, build_ref_tree, flatten_ref_tree};
-use gitto_ui::git::stash::can_pop;
-use gitto_ui::git::status::branch_name;
-use gitto_ui::git::worktree::{can_open_worktree, describe_worktree, worktree_on};
+use gitto_ui_logic::git::ref_tree::{RefTreeNode, build_ref_tree, flatten_ref_tree};
+use gitto_ui_logic::git::stash::can_pop;
+use gitto_ui_logic::git::status::branch_name;
+use gitto_ui_logic::git::worktree::{can_open_worktree, describe_worktree, worktree_on};
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::v_flex;
 use gpui_kit::prelude::*;
@@ -109,7 +109,7 @@ pub fn stash_title(stash: &Stash, now: i64) -> String {
     format!(
         "{}\nStashed {}",
         stash.message,
-        gitto_ui::format::relative_time(stash.created_at, now).to_lowercase()
+        gitto_ui_logic::format::relative_time(stash.created_at, now).to_lowercase()
     )
 }
 
@@ -507,7 +507,7 @@ impl RefList {
                 .and_then(|provider| provider.read(cx).open_for().cloned()),
             stash_menu_for: self.stash_menu.open_for().cloned(),
             worktree_menu_for: self.worktree_menu.open_for().cloned(),
-            now: gitto_ui::hooks::relative_time::now_ms(),
+            now: gitto_ui_logic::hooks::relative_time::now_ms(),
         })
     }
 

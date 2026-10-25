@@ -16,7 +16,7 @@ use super::keyed::Hold;
 use super::loaded::Loaded;
 use super::opaque::Opaque;
 use super::repository::{Part, Repositories, Repository};
-use gitto_ui::git::diff_source::{DiffSource, is_uncommitted};
+use gitto_ui_logic::git::diff_source::{DiffSource, is_uncommitted};
 
 /// One file's patch in a source, with the file and its `DiffSource::file_key`, so what's shown can
 /// match.

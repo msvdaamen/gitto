@@ -28,8 +28,8 @@ use gitto_git::features::remote::remote_name::remote_of;
 use gitto_git::features::status::schema::Head;
 use gitto_git::features::worktree::schema::Worktree;
 use gitto_git::input::RepositoryId;
-use gitto_ui::git::status::{branch_name, head_label, is_checked_out};
-use gitto_ui::git::worktree::{can_open_worktree, tracking_branches, worktree_on};
+use gitto_ui_logic::git::status::{branch_name, head_label, is_checked_out};
+use gitto_ui_logic::git::worktree::{can_open_worktree, tracking_branches, worktree_on};
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::{
     App, AppContext as _, Context, Entity, EventEmitter, Global, SharedString, Task, WeakEntity,

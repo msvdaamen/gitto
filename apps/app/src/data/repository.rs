@@ -46,7 +46,7 @@ use super::keyed::{Hold, Keyed};
 use super::loaded::Loaded;
 use super::opaque::Opaque;
 use crate::services::Services;
-use gitto_ui::git::diff_source::{DiffSource, diff_file_key, is_uncommitted};
+use gitto_ui_logic::git::diff_source::{DiffSource, diff_file_key, is_uncommitted};
 
 /// How many commits, and of each thing in them, are kept that nothing shows: enough to step back
 /// and forth through the history without loading them again.

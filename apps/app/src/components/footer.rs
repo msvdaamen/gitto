@@ -11,7 +11,7 @@ use crate::data::{Part, Repositories, Repository, observe_selected};
 use crate::state::router::Router;
 use crate::state::update::UpdateStatus;
 use crate::theme::PaletteExt as _;
-use gitto_ui::git::status::{head_label, sync_label};
+use gitto_ui_logic::git::status::{head_label, sync_label};
 
 /// The footer's height (TS's grid row, 27px).
 pub const FOOTER_HEIGHT: f32 = 1.8;

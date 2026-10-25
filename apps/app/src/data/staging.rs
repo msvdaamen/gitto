@@ -9,9 +9,9 @@ use gpui_kit::{App, Entity};
 
 use super::mutation::Mutation;
 use super::repository::Repositories;
-use gitto_ui::git::changes::staging_paths;
+use gitto_ui_logic::git::changes::staging_paths;
 
-/// Files to stage or unstage: their paths (see `gitto_ui::git::changes::staging_paths`), or all
+/// Files to stage or unstage: their paths (see `gitto_ui_logic::git::changes::staging_paths`), or all
 /// of them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StagingTarget {
