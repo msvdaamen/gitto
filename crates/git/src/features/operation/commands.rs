@@ -171,41 +171,12 @@ pub async fn get_operation(repo: &Repo) -> Result<Option<Operation>> {
     }))
 }
 
-/// `text` as JavaScript's `Number(text)` reads it; NaN for a file that isn't there.
-fn js_number(text: Option<&str>) -> f64 {
-    let Some(text) = text else {
-        return f64::NAN;
-    };
-    let text = text.trim_matches(is_js_space);
-    if text.is_empty() {
-        return 0.0;
-    }
-    for (prefix, radix) in [("0x", 16), ("0o", 8), ("0b", 2)] {
-        let digits = text
-            .strip_prefix(prefix)
-            .or_else(|| text.strip_prefix(&prefix.to_uppercase()));
-        if let Some(digits) = digits {
-            return u64::from_str_radix(digits, radix).map_or(f64::NAN, |value| value as f64);
-        }
-    }
-    match text {
-        "Infinity" | "+Infinity" => f64::INFINITY,
-        "-Infinity" => f64::NEG_INFINITY,
-        // Rust also reads `inf` and `nan`, which JavaScript doesn't: NaN either way, as far as
-        // `steps` is concerned, being no integer.
-        _ => text.parse::<f64>().unwrap_or(f64::NAN),
-    }
-}
-
-/// How far an operation has got, from git's numbers for it; `None` if they don't make sense.
+/// How far an operation has got, from git's numbers for it; `None` if they don't make sense. Git
+/// writes them as plain decimal counters.
 fn steps(step: Option<&str>, total: Option<&str>) -> Option<Steps> {
-    let at = js_number(step);
-    let of = js_number(total);
-    let is_integer = |value: f64| value.is_finite() && value.fract() == 0.0;
-    (is_integer(at) && is_integer(of) && at > 0.0 && of >= at).then_some(Steps {
-        step: at as u64,
-        total: of as u64,
-    })
+    let step = step?.parse::<u64>().ok()?;
+    let total = total?.parse::<u64>().ok()?;
+    (step > 0 && total >= step).then_some(Steps { step, total })
 }
 
 /// The shortest name of the commit `sha`, as the user knows it: a branch pointing at it, or else a
@@ -914,13 +885,13 @@ mod tests {
     // Not in TS: the parsing the tests above go through only in part.
 
     #[test]
-    fn steps_are_read_as_javascript_reads_numbers() {
+    fn steps_are_read_from_gits_counters() {
         assert_eq!(
             steps(Some("1"), Some("2")),
             Some(Steps { step: 1, total: 2 })
         );
         assert_eq!(
-            steps(Some("2.0"), Some("0x2")),
+            steps(Some("2"), Some("2")),
             Some(Steps { step: 2, total: 2 })
         );
         assert_eq!(steps(Some("0"), Some("2")), None);
@@ -928,7 +899,7 @@ mod tests {
         assert_eq!(steps(Some("1.5"), Some("2")), None);
         assert_eq!(steps(None, Some("2")), None);
         assert_eq!(steps(Some(""), Some("2")), None);
-        assert_eq!(steps(Some("1"), Some("Infinity")), None);
+        assert_eq!(steps(Some("1"), None), None);
     }
 
     #[test]
