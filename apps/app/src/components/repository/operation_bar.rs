@@ -229,6 +229,7 @@ impl OperationBar {
         let name = operation_name(&operation);
         let kind = operation.kind();
         let this = cx.entity();
+        let id = self.repository_id.clone();
         ConfirmDialog::new(
             IconName::TriangleAlert,
             Tone::Coral,
@@ -239,7 +240,12 @@ impl OperationBar {
                  you've resolved so far are lost."
         ))
         .action("Abort", ButtonVariant::Primary, move |_, cx| {
-            this.update(cx, |this, cx| this.abort(kind, cx));
+            this.update(cx, |this, cx| {
+                // Not once another repository is on show: the operation asked about is this one's.
+                if this.repository_id == id {
+                    this.abort(kind, cx);
+                }
+            });
         })
         .open(window, cx);
     }
@@ -618,6 +624,25 @@ mod tests {
         assert!(has_dialog(&bar, cx));
         click_last_label(&bar, "Abort", cx);
         assert_eq!(*bar.calls.aborted.borrow(), [OperationKind::Merge]);
+    }
+
+    #[gpui_kit::test]
+    fn doesnt_abort_another_repositorys_operation_than_the_one_it_asked_about(
+        cx: &mut TestAppContext,
+    ) {
+        let bar = render(cx, Some(merge()), with_conflicts(status(), &["a.txt"], &[]));
+        click(&bar, "abort", cx);
+        assert!(has_dialog(&bar, cx));
+
+        // Another repository, merging too, comes on show under the dialog.
+        let other = repository_id();
+        set_operation(&other, Some(merge()), cx);
+        set_status(&other, with_conflicts(status(), &["b.txt"], &[]), cx);
+        bar.bar
+            .update(cx, |bar, cx| bar.set_repository(other.clone(), cx));
+        cx.run_until_parked();
+        click_last_label(&bar, "Abort", cx);
+        assert!(bar.calls.aborted.borrow().is_empty());
     }
 
     #[gpui_kit::test]
