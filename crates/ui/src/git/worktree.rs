@@ -5,7 +5,6 @@ use gitto_git::features::worktree::schema::Worktree;
 
 use super::short_sha;
 use super::status::branch_name;
-use crate::js;
 
 /// The worktree the local branch `ref` (a full ref name) is checked out in, if any.
 pub fn worktree_on<'a>(worktrees: Option<&'a [Worktree]>, r#ref: &str) -> Option<&'a Worktree> {
@@ -84,8 +83,7 @@ pub fn suggest_worktree_folder(repository: &str, branch: &str) -> String {
     let mut slug = String::with_capacity(branch.len());
     let mut in_run = false;
     for c in branch.chars() {
-        if matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || js::is_whitespace(c)
-        {
+        if matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_whitespace() {
             if !in_run {
                 slug.push('-');
             }

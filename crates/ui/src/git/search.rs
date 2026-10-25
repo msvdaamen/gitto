@@ -5,7 +5,7 @@ use super::rows::{HistoryRow, WIP_MESSAGE};
 
 /// Lowercases and trims what was typed in the history search; empty means no search.
 pub fn search_needle(search: &str) -> String {
-    search.trim_matches(crate::js::is_whitespace).to_lowercase()
+    search.trim().to_lowercase()
 }
 
 /// Whether a history row matches `needle` (see [`search_needle`]): a commit by its message, author,

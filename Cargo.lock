@@ -2122,7 +2122,6 @@ dependencies = [
  "blocking",
  "dirs 6.0.0",
  "rusqlite",
- "sha2 0.10.9",
  "smol",
  "tempfile",
  "thiserror 2.0.21",
