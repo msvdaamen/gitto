@@ -6,13 +6,11 @@ use gitto_git::features::overview::schema::{Activity, ActivityKind};
 use gitto_repository::Repository;
 use gitto_ui::git::activity::describe_activity;
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, v_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{
-    App, ElementId, FontWeight, KeyDownEvent, Role, SharedString, TestSupportExt as _, Window, div,
-};
+use gpui_kit::{App, ElementId, FontWeight, SharedString, TestSupportExt as _, Window, div};
 
-use super::repository_card::{is_activation, keyed_focus, open_repository};
+use super::repository_link::repository_link;
 use super::summaries::RepositorySummary;
 use crate::components::ui::{Card, Icon, IconName, Tone};
 use crate::state::clock::relative_time;
@@ -114,19 +112,15 @@ fn activity_row(
         activity.at,
         activity.kind.as_str()
     )));
-    let focus = keyed_focus(&id, window, cx);
     let message: SharedString = activity.message.clone().into();
     let place = match description.action {
         Some(action) => format!("{} · {action}", repository.name),
         None => repository.name.clone(),
     };
-    let open = repository.id.clone();
-    let open_on_key = repository.id.clone();
-    h_flex()
-        .id(id)
-        .test_support()
-        .track_focus(&focus)
-        .role(Role::Link)
+    repository_link(id, &repository.id, window, cx)
+        .flex()
+        .flex_row()
+        .items_center()
         .aria_label(SharedString::from(description.title.clone()))
         .gap_2()
         .px_1()
@@ -138,13 +132,6 @@ fn activity_row(
         .hover(|style| style.bg(palette.panel_hover))
         .focus_visible(|style| style.bg(palette.panel_hover))
         .tooltip(move |window, cx| Tooltip::new(message.clone()).build(window, cx))
-        .on_click(move |_, _, cx| open_repository(&open, cx))
-        .on_key_down(move |event: &KeyDownEvent, _, cx| {
-            if is_activation(event) {
-                cx.stop_propagation();
-                open_repository(&open_on_key, cx);
-            }
-        })
         .child(
             div()
                 .flex()
