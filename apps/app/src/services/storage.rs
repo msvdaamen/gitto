@@ -61,7 +61,11 @@ impl LocalStorage {
         if let Some(dir) = file.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        std::fs::write(file, text)
+        // Written beside it, then moved over it: a crash halfway through leaves the old file
+        // whole, rather than a cut-off one that `open` would read as nothing at all.
+        let partial = file.with_extension("json.tmp");
+        std::fs::write(&partial, text)?;
+        std::fs::rename(&partial, file)
     }
 }
 
