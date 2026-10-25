@@ -46,6 +46,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.97.0
         with:
           components: rustfmt, clippy
+      # What GPUI links on Linux: xkbcommon for the keyboard (X11's too), Wayland, and fontconfig
+      # (with FreeType) for fonts.
+      - name: Install GPUI's system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libfontconfig-dev libfreetype-dev
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --exclude app --all-targets --locked -- -D warnings
-      - run: cargo test --workspace --exclude app --locked
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
