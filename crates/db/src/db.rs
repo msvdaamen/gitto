@@ -1,14 +1,13 @@
-//! Opening the database. Ported from `packages/db/src/index.ts`.
+//! Opening the database.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
 
 use rusqlite::Connection;
 use rusqlite::config::DbConfig;
 
 use crate::Result;
-use crate::migrator::{MIGRATIONS, Migration, migrate};
+use crate::migrations::{MIGRATIONS, migrate};
 
 /// Gitto's database: one SQLite connection, migrated. Cheap to clone; clones share the connection.
 ///
@@ -27,8 +26,7 @@ impl std::fmt::Debug for Db {
 
 impl Db {
     /// Opens (or creates) the SQLite database at `path` and applies any pending migrations (see
-    /// [`crate::migrator`]). Its folder has to exist, as for the Electron app, whose `userData`
-    /// folder Electron makes (see [`crate::user_data_dir`]).
+    /// [`crate::migrations`]). Its folder has to exist.
     pub fn open(path: impl AsRef<Path>) -> Result<Db> {
         Db::init(Connection::open(path)?, MIGRATIONS)
     }
@@ -38,14 +36,9 @@ impl Db {
         Db::init(Connection::open_in_memory()?, MIGRATIONS)
     }
 
-    fn init(mut conn: Connection, migrations: &[Migration]) -> Result<Db> {
-        // node:sqlite doesn't wait for a lock (its `timeout` is 0 by default), where rusqlite
-        // waits 5 seconds: a locked database fails at once, as in the Electron app.
-        conn.busy_timeout(Duration::ZERO)?;
-        // node:sqlite turns off SQLite's double-quoted string literals (its
-        // `enableDoubleQuotedStringLiterals` is false by default), which rusqlite's SQLite keeps:
-        // `"text"` is an identifier, never a string, so SQL (a migration's above all) means the
-        // same, and fails the same, in both apps.
+    fn init(mut conn: Connection, migrations: &[&str]) -> Result<Db> {
+        // SQLite takes `"text"` for a string where no column has that name, which hides a
+        // misspelt column: it's always an identifier here, so that fails.
         conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DQS_DML, false)?;
         conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DQS_DDL, false)?;
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
@@ -101,7 +94,6 @@ mod tests {
         let db = Db::open(dir.path().join("gitto.db")).unwrap();
         assert_eq!(pragma(&db, "journal_mode"), "wal");
         assert_eq!(pragma(&db, "foreign_keys"), "1");
-        assert_eq!(pragma(&db, "busy_timeout"), "0");
     }
 
     #[test]
@@ -116,7 +108,8 @@ mod tests {
                 .collect::<rusqlite::Result<_>>()
         }))
         .unwrap();
-        assert_eq!(tables, ["__drizzle_migrations", "repositories"]);
+        assert_eq!(tables, ["repositories"]);
+        assert_eq!(pragma(&db, "user_version"), MIGRATIONS.len().to_string());
     }
 
     #[test]
@@ -130,7 +123,7 @@ mod tests {
     }
 
     #[test]
-    fn takes_double_quoted_text_as_an_identifier_as_node_sqlite_does() {
+    fn takes_double_quoted_text_as_an_identifier() {
         let db = Db::open_in_memory().unwrap();
         let error = smol::block_on(
             db.run(|conn| conn.query_row(r#"SELECT "text""#, [], |row| row.get::<_, String>(0))),
@@ -140,12 +133,8 @@ mod tests {
     }
 
     #[test]
-    fn refuses_a_migration_with_a_double_quoted_string_as_node_sqlite_does() {
-        let migrations = [Migration {
-            name: "20260101000000_quoted",
-            sql: "CREATE TABLE `t` (`a` text);--> statement-breakpoint\n\
-                  INSERT INTO `t` VALUES (\"text\");",
-        }];
+    fn refuses_a_migration_with_a_double_quoted_string() {
+        let migrations = ["CREATE TABLE `t` (`a` text); INSERT INTO `t` VALUES (\"text\");"];
         let error = Db::init(Connection::open_in_memory().unwrap(), &migrations).unwrap_err();
         assert!(error.to_string().contains("no such column"), "{error}");
     }
