@@ -411,11 +411,13 @@ impl<T: Clone + PartialEq + Send + 'static> QueryEntry<T> {
         cx.notify();
     }
 
-    /// Sets its data, as if it had loaded it (TanStack's `setQueryData`).
+    /// Sets its data, as if it had loaded it (TanStack's `setQueryData`): fresh, so no longer
+    /// invalidated.
     pub fn set_data(&mut self, data: T, cx: &mut Context<Self>) {
         self.data = Some(data);
         self.error = None;
         self.data_updated_at = Some(cx.background_executor().now());
+        self.is_invalidated = false;
         cx.notify();
     }
 }
@@ -780,6 +782,19 @@ mod tests {
         cx.update(QueryClient::window_focused);
         cx.run_until_parked();
         assert_eq!(loads.get(), 1);
+    }
+
+    #[gpui_kit::test]
+    fn setting_a_querys_data_makes_it_fresh(cx: &mut TestAppContext) {
+        cx.update(QueryClient::init);
+        let key = crate::data::keys::refs("repo");
+        cx.update(|cx| QueryClient::set_data(&key, 1, cx));
+        cx.update(|cx| {
+            let _ = QueryClient::invalidate(&key, cx);
+        });
+        cx.update(|cx| QueryClient::set_data(&key, 2, cx));
+        let entry = cx.update(|cx| QueryClient::get_entry::<i32>(&key, cx).unwrap());
+        assert!(!entry.read_with(cx, |entry, _| entry.is_invalidated()));
     }
 
     #[gpui_kit::test]
