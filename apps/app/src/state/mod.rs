@@ -6,13 +6,13 @@
 //! - [`settled`], [`delayed`]: values that follow another, in time; entities, observed.
 //! - [`clock`]: the minute tick relative times follow (`relative-time.ts`).
 //! - [`update`], [`whats_new`]: the app's own version and changes.
-//! - [`lingering`], [`reset_on`]: a value that lingers once it's gone, and telling when one
-//!   changes; plain values a view keeps (most dialogs are built with what they're about and keep
-//!   it while they close, and most views reset their state where they change repository).
+//! - [`lingering`]: a value that lingers once it's gone; a plain value a view keeps (most dialogs
+//!   are built with what they're about and keep it while they close).
 //! - `theme.ts` is `crate::theme`.
 //!
 //! Hooks with no counterpart, as GPUI does what they did: `connected.ts` (elements are laid out
-//! before they're measured), `window-focus.ts` (`cx.observe_window_activation` and
+//! before they're measured), `reset-on.ts` (a view resets its state where it changes repository,
+//! in `set_repository`), `window-focus.ts` (`cx.observe_window_activation` and
 //! `window.is_window_active()`), `repositories.ts` (`crate::data::repositories`).
 
 pub mod clock;
@@ -21,7 +21,6 @@ pub mod delayed;
 pub mod diff_style;
 pub mod lingering;
 pub mod panel_width;
-pub mod reset_on;
 pub mod router;
 pub mod settled;
 pub mod update;
