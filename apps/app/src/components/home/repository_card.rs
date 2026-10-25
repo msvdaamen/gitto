@@ -1,21 +1,20 @@
 //! A repository in the home page's list. Ported from `components/home/repository-card.tsx`.
 
 use gitto_git::features::status::schema::StatusSummary;
-use gitto_git::input::RepositoryId;
 use gitto_ui::git::remote::remote_provider;
 use gitto_ui::git::status::{head_label, sync_label};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, ElementId, FocusHandle, FontWeight, KeyDownEvent, Role, SharedString,
-    TestSupportExt as _, Window, div, linear_color_stop, linear_gradient, px,
+    AnyElement, App, ElementId, FontWeight, SharedString, Window, div, linear_color_stop,
+    linear_gradient, px,
 };
 
+use super::repository_link::repository_link;
 use super::summaries::RepositorySummary;
 use crate::components::ui::{Badge, Icon, IconName, Tone};
 use crate::state::clock::relative_time;
-use crate::state::router::{Route, Router};
 use crate::theme::PaletteExt as _;
 
 /// Below this window width the card leaves out when it was last committed to (TS's `max-sm`).
@@ -42,27 +41,6 @@ pub fn provider_of(summary: &RepositorySummary) -> String {
     }
 }
 
-/// Opens the repository with `id`, as a link to it did.
-pub(crate) fn open_repository(id: &str, cx: &mut App) {
-    if let Ok(id) = RepositoryId::parse(id) {
-        Router::navigate(Route::Repository(id), cx);
-    }
-}
-
-/// Whether `event` activates a link-like row: Enter, or Space.
-pub(crate) fn is_activation(event: &KeyDownEvent) -> bool {
-    let modifiers = event.keystroke.modifiers;
-    !modifiers.modified() && matches!(event.keystroke.key.as_str(), "enter" | "space")
-}
-
-/// A focus handle kept for the element `id` while it's rendered, which Tab stops at.
-pub(crate) fn keyed_focus(id: &ElementId, window: &mut Window, cx: &mut App) -> FocusHandle {
-    window
-        .use_keyed_state(id.clone(), cx, |_, cx| cx.focus_handle().tab_stop(true))
-        .read(cx)
-        .clone()
-}
-
 /// A repository in the home page's list: where it's hosted, its branch, and what's changed.
 /// Opens it when clicked, or on Enter.
 #[derive(IntoElement)]
@@ -85,13 +63,10 @@ impl RenderOnce for RepositoryCard {
             "repository-card-{}",
             repository.id
         )));
-        let focus = keyed_focus(&id, window, cx);
         let small = window.viewport_size().width < px(SMALL);
         let group = SharedString::from(format!("repository-card-group-{}", repository.id));
         let name: SharedString = repository.name.clone().into();
         let path: SharedString = repository.path.clone().into();
-        let open = repository.id.clone();
-        let open_on_key = repository.id.clone();
 
         // The folder icon's tile: the primary tint fading to the blue one, ringed with a little of
         // the primary color.
@@ -129,12 +104,8 @@ impl RenderOnce for RepositoryCard {
             .as_ref()
             .and_then(|overview| overview.committed_at);
 
-        div()
-            .id(id)
-            .test_support()
+        repository_link(id, &repository.id, window, cx)
             .group(group.clone())
-            .track_focus(&focus)
-            .role(Role::Link)
             .aria_label(name.clone())
             .flex()
             .flex_row()
@@ -150,13 +121,6 @@ impl RenderOnce for RepositoryCard {
             .border_color(gpui_kit::transparent_black())
             .hover(|style| style.border_color(palette.border).bg(palette.panel_hover))
             .focus_visible(|style| style.border_color(palette.primary))
-            .on_click(move |_, _, cx| open_repository(&open, cx))
-            .on_key_down(move |event: &KeyDownEvent, _, cx| {
-                if is_activation(event) {
-                    cx.stop_propagation();
-                    open_repository(&open_on_key, cx);
-                }
-            })
             .child(tile)
             .child(
                 v_flex()

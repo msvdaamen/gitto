@@ -93,13 +93,21 @@ fn render_dialog(
     };
     let palette = *cx.palette();
     let close = whats_new.clone();
+    let confirm = whats_new.clone();
     let cancel = whats_new.clone();
     dialog
         .w(LIST_WIDTH.to_pixels(window.rem_size()))
         .close_button(false)
+        // Every way out (Enter, Escape, a click outside, Got it) only closes `WhatsNew`: the
+        // dialog follows it (see `sync`). Closing it here too would close it twice, and the
+        // second time the dialog under it, the one saying git's too old, say.
+        .on_ok(move |_, _, cx| {
+            confirm.update(cx, |whats_new, cx| whats_new.close(cx));
+            false
+        })
         .on_cancel(move |_, _, cx| {
             cancel.update(cx, |whats_new, cx| whats_new.close(cx));
-            true
+            false
         })
         .child(
             DialogHeading::new(IconName::Sparkles, Tone::Purple, "What's new in Gitto")
@@ -138,12 +146,14 @@ fn render_dialog(
                 }),
         )
         .footer(
-            DialogFooter::new().child(Button::new("got-it").primary().label("Got it").on_click(
-                move |_, window, cx| {
-                    window.close_dialog(cx);
-                    close.update(cx, |whats_new, cx| whats_new.close(cx));
-                },
-            )),
+            DialogFooter::new().child(
+                Button::new("got-it")
+                    .primary()
+                    .label("Got it")
+                    .on_click(move |_, _, cx| {
+                        close.update(cx, |whats_new, cx| whats_new.close(cx))
+                    }),
+            ),
         )
 }
 
@@ -376,6 +386,55 @@ mod tests {
             .unwrap();
         assert!(!shown.unseen);
         assert_eq!(shown.versions.len(), 2);
+    }
+
+    #[gpui_kit::test]
+    fn closes_on_enter_and_escape_remembering_it_seen(cx: &mut TestAppContext) {
+        for key in ["enter", "escape"] {
+            let changelog = Arc::new(Changelog {
+                unseen: versions(),
+                all: Vec::new(),
+                seen: AtomicUsize::new(0),
+            });
+            let (_dir, window) = open(changelog.clone(), cx);
+            assert!(has_dialog(window, cx));
+
+            cx.update_window(window, |_, window, cx| window.press(key, cx))
+                .unwrap();
+            cx.run_until_parked();
+            assert!(!has_dialog(window, cx), "{key}");
+            assert!(!cx.update(|cx| WhatsNew::is_open(cx)), "{key}");
+            assert_eq!(changelog.seen.load(Ordering::SeqCst), 1, "{key}");
+        }
+    }
+
+    #[gpui_kit::test]
+    fn leaves_the_dialog_under_it_open(cx: &mut TestAppContext) {
+        let changelog = Arc::new(Changelog {
+            unseen: Vec::new(),
+            all: versions(),
+            seen: AtomicUsize::new(0),
+        });
+        let (_dir, window) = open(changelog, cx);
+        cx.update_window(window, |_, window, cx| {
+            window.open_dialog(cx, |dialog, _, _| dialog.keyboard(false));
+        })
+        .unwrap();
+        for close in ["escape", "got-it"] {
+            cx.update(|cx| WhatsNew::global(cx).update(cx, |whats_new, cx| whats_new.show_all(cx)));
+            cx.run_until_parked();
+            cx.update_window(window, |_, window, cx| {
+                window.render_frame(cx);
+                match close {
+                    "escape" => window.press("escape", cx),
+                    _ => window.click(close, cx),
+                }
+            })
+            .unwrap();
+            cx.run_until_parked();
+            assert!(!cx.update(|cx| WhatsNew::is_open(cx)), "{close}");
+            assert!(has_dialog(window, cx), "{close}");
+        }
     }
 
     #[test]

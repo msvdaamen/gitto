@@ -202,12 +202,12 @@ fn watch_working_tree_with(
             git_dir: dirs.git_dir.clone(),
             changes: Arc::new(Batches::new()),
             subscription: None,
+            excludes: None,
             ignored: HashSet::new(),
         };
-        let mut excludes = None;
-        let result = tree.changes(&dirs, &mut excludes, &yielder).await;
+        let result = tree.changes(&dirs, &yielder).await;
         tree.changes.close();
-        let unsubscribed = [tree.subscription.take(), excludes]
+        let unsubscribed = [tree.subscription.take(), tree.excludes.take()]
             .into_iter()
             .flatten()
             .map(Subscription::unsubscribe);
@@ -227,17 +227,14 @@ struct WorkingTree {
     git_dir: PathBuf,
     changes: Arc<Batches<TreeChange>>,
     subscription: Option<Subscription>,
+    /// The watch of `.git/info`, for changes to `.git/info/exclude`; `None` if it couldn't start.
+    excludes: Option<Subscription>,
     /// What the current subscription leaves out.
     ignored: HashSet<String>,
 }
 
 impl WorkingTree {
-    async fn changes(
-        &mut self,
-        dirs: &GitDirs,
-        excludes: &mut Option<Subscription>,
-        yielder: &Yielder<Result<()>>,
-    ) -> Result<()> {
+    async fn changes(&mut self, dirs: &GitDirs, yielder: &Yielder<Result<()>>) -> Result<()> {
         self.watch_tree(None).await?;
         // `.git/info/exclude` has ignore rules too. Fine to miss if `info` doesn't exist.
         if let Some(info) = dirs.exclude_file.parent() {
@@ -250,7 +247,7 @@ impl WorkingTree {
                     changes.add(TreeChange::Excludes);
                 }
             });
-            *excludes = watch(&self.subscribe, info.to_owned(), Vec::new(), on_events)
+            self.excludes = watch(&self.subscribe, info.to_owned(), Vec::new(), on_events)
                 .await
                 .ok();
         }

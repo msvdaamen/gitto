@@ -1195,6 +1195,55 @@ fn rebases_the_checked_out_branch_onto_a_branch_right_clicked_among_a_rows_label
     );
 }
 
+impl Rendered {
+    /// Whether the rest of `sha`'s row's labels are listed.
+    fn more_listed(&self, sha: &str, cx: &mut TestAppContext) -> bool {
+        self.render_frame(cx);
+        cx.update_window(self.window, |_, window, _| {
+            window
+                .try_find(part(&keyed("labels", sha.to_owned()), "more-labels"))
+                .is_some()
+        })
+        .unwrap()
+    }
+
+    /// Moves the pointer onto `target`, and waits out the list's delays.
+    fn hover_and_wait(&self, target: gpui_kit::ElementId, cx: &mut TestAppContext) {
+        cx.update_window(self.window, |_, window, cx| window.hover(target, cx))
+            .unwrap();
+        cx.executor().advance_clock(Duration::from_millis(300));
+        cx.run_until_parked();
+    }
+}
+
+#[gpui_kit::test]
+fn keeps_the_rest_of_a_rows_labels_listed_while_the_pointer_moves_from_the_count_onto_them(
+    cx: &mut TestAppContext,
+) {
+    let history = render(cx, branches(vec![]));
+    history.hover_more("e5", cx);
+    assert!(history.more_listed("e5", cx));
+    history.hover_and_wait(history.label("e5", "refs/heads/feature"), cx);
+    assert!(history.more_listed("e5", cx));
+    history.hover_and_wait(keyed("commit", "e5"), cx);
+    assert!(!history.more_listed("e5", cx));
+}
+
+#[gpui_kit::test]
+fn closes_the_rest_of_a_rows_labels_once_the_menu_opened_from_them_closes(cx: &mut TestAppContext) {
+    let history = render(cx, branches(vec![]));
+    history.hover_more("e5", cx);
+    history.menu_of(history.label("e5", "refs/heads/feature"), cx);
+    // Kept while the menu is open, though the pointer's left them.
+    history.hover_and_wait(keyed("commit", "e5"), cx);
+    assert!(history.more_listed("e5", cx));
+    history.press("escape", cx);
+    assert!(history.menu(cx).is_empty());
+    cx.executor().advance_clock(Duration::from_millis(300));
+    cx.run_until_parked();
+    assert!(!history.more_listed("e5", cx));
+}
+
 #[gpui_kit::test]
 fn doesnt_offer_merging_the_checked_out_branchs_label_into_itself_or_rebasing_it_onto_itself(
     cx: &mut TestAppContext,

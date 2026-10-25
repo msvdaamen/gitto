@@ -171,41 +171,12 @@ pub async fn get_operation(repo: &Repo) -> Result<Option<Operation>> {
     }))
 }
 
-/// `text` as JavaScript's `Number(text)` reads it; NaN for a file that isn't there.
-fn js_number(text: Option<&str>) -> f64 {
-    let Some(text) = text else {
-        return f64::NAN;
-    };
-    let text = text.trim_matches(is_js_space);
-    if text.is_empty() {
-        return 0.0;
-    }
-    for (prefix, radix) in [("0x", 16), ("0o", 8), ("0b", 2)] {
-        let digits = text
-            .strip_prefix(prefix)
-            .or_else(|| text.strip_prefix(&prefix.to_uppercase()));
-        if let Some(digits) = digits {
-            return u64::from_str_radix(digits, radix).map_or(f64::NAN, |value| value as f64);
-        }
-    }
-    match text {
-        "Infinity" | "+Infinity" => f64::INFINITY,
-        "-Infinity" => f64::NEG_INFINITY,
-        // Rust also reads `inf` and `nan`, which JavaScript doesn't: NaN either way, as far as
-        // `steps` is concerned, being no integer.
-        _ => text.parse::<f64>().unwrap_or(f64::NAN),
-    }
-}
-
-/// How far an operation has got, from git's numbers for it; `None` if they don't make sense.
+/// How far an operation has got, from git's numbers for it; `None` if they don't make sense. Git
+/// writes them as plain decimal counters.
 fn steps(step: Option<&str>, total: Option<&str>) -> Option<Steps> {
-    let at = js_number(step);
-    let of = js_number(total);
-    let is_integer = |value: f64| value.is_finite() && value.fract() == 0.0;
-    (is_integer(at) && is_integer(of) && at > 0.0 && of >= at).then_some(Steps {
-        step: at as u64,
-        total: of as u64,
-    })
+    let step = step?.parse::<u64>().ok()?;
+    let total = total?.parse::<u64>().ok()?;
+    (step > 0 && total >= step).then_some(Steps { step, total })
 }
 
 /// The shortest name of the commit `sha`, as the user knows it: a branch pointing at it, or else a
@@ -364,22 +335,14 @@ async fn go_on(
 
 /// Where a cherry-pick or revert stopped: HEAD, and the commit it stopped at; `None` if it isn't
 /// stopped at one.
-async fn stopped_at(run: &GitCommand, git_dir: &Path) -> Result<Option<String>> {
+async fn stopped_at(run: &GitCommand, git_dir: &Path) -> Result<Option<(Option<String>, String)>> {
     let (head, cherry_pick, revert) = futures::join!(
         resolve_ref(run, "HEAD"),
         read_state(git_dir.join("CHERRY_PICK_HEAD")),
         read_state(git_dir.join("REVERT_HEAD")),
     );
     let head = head?;
-    Ok(cherry_pick.or(revert).map(|at| {
-        if at.is_empty() {
-            at
-        } else {
-            // TS wrote a HEAD that isn't there, which a cherry-pick or revert stopped at a commit
-            // always has, as `undefined`.
-            format!("{} {at}", head.as_deref().unwrap_or("undefined"))
-        }
-    }))
+    Ok(cherry_pick.or(revert).map(|at| (head, at)))
 }
 
 /// Whether the rebase stopped in the worktree whose git directory is `git_dir` asks for a commit
@@ -914,7 +877,8 @@ mod tests {
         commit_files(&path, &files([("f.txt", "committed\n")]), "second");
         smol::block_on(async {
             let repo = fx.repos.open("op-stash").await.unwrap();
-            let _ = pop_stash(&repo, &valid(git(&path, ["rev-parse", "refs/stash"]))).await;
+            let popped = pop_stash(&repo, &valid(git(&path, ["rev-parse", "refs/stash"]))).await;
+            assert!(matches!(popped, Err(Error::StashConflict(_))), "{popped:?}");
 
             assert_eq!(get_operation(&repo).await.unwrap(), None);
             assert_eq!(
@@ -927,13 +891,13 @@ mod tests {
     // Not in TS: the parsing the tests above go through only in part.
 
     #[test]
-    fn steps_are_read_as_javascript_reads_numbers() {
+    fn steps_are_read_from_gits_counters() {
         assert_eq!(
             steps(Some("1"), Some("2")),
             Some(Steps { step: 1, total: 2 })
         );
         assert_eq!(
-            steps(Some("2.0"), Some("0x2")),
+            steps(Some("2"), Some("2")),
             Some(Steps { step: 2, total: 2 })
         );
         assert_eq!(steps(Some("0"), Some("2")), None);
@@ -941,7 +905,7 @@ mod tests {
         assert_eq!(steps(Some("1.5"), Some("2")), None);
         assert_eq!(steps(None, Some("2")), None);
         assert_eq!(steps(Some(""), Some("2")), None);
-        assert_eq!(steps(Some("1"), Some("Infinity")), None);
+        assert_eq!(steps(Some("1"), None), None);
     }
 
     #[test]

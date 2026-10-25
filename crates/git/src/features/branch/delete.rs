@@ -99,16 +99,13 @@ pub fn delete_branch(repo: &Repo, reference: &BranchRef) -> BoxFuture<'static, R
         }
         let mut args = vec!["branch", "--delete", "--force", "--"];
         args.extend(tracking.iter().map(|local| local.name.as_str()));
-        match run.run(args).await {
-            Ok(_) => Ok(()),
-            Err(Error::Git(error)) if fetched.is_some() => {
-                let remote = fetched.as_ref().map_or("", |fetched| &fetched.remote);
-                Err(Error::Git(error.with_message(format!(
-                    "{} was deleted on {remote}, but not every local branch tracking it was. {}",
-                    target.name, error.message
-                ))))
-            }
-            Err(error) => Err(error),
+        match (run.run(args).await, &fetched) {
+            (Ok(_), _) => Ok(()),
+            (Err(Error::Git(error)), Some(fetched)) => Err(Error::Git(error.with_message(format!(
+                "{} was deleted on {}, but not every local branch tracking it was. {}",
+                target.name, fetched.remote, error.message
+            )))),
+            (Err(error), _) => Err(error),
         }
     }))
 }

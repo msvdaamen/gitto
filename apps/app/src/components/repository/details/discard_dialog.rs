@@ -13,6 +13,7 @@ use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::prelude::*;
 use gpui_kit::{App, Window, div};
 
+use super::changed_file_list::name_and_folder;
 use crate::components::ui::dialog::CONFIRM_WIDTH;
 use crate::components::ui::{DialogHeading, IconName, Tone};
 use crate::data::staging::DiscardTarget;
@@ -47,7 +48,7 @@ impl DiscardPrompt {
         match self {
             DiscardPrompt::All => "Discard all changes?".to_owned(),
             DiscardPrompt::File { file, .. } => {
-                let name = file.path.rsplit('/').next().unwrap_or(&file.path);
+                let (name, _) = name_and_folder(&file.path);
                 format!("Discard changes to {name}?")
             }
         }

@@ -6,6 +6,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use super::schema::{Activity, ActivityKind, HostedRemote};
+use crate::features::history::parse::millis;
 
 /// With -z, entries are NUL-separated as well, so the output is a flat list of fields where every
 /// three make up one entry: the reflog selector (with `--date=unix`, `HEAD@{<seconds>}`), git's
@@ -56,7 +57,7 @@ pub fn parse_reflog(output: &str) -> Vec<Activity> {
         }
         if let Some((kind, target)) = to_activity(message) {
             activity.push(Activity {
-                at: seconds.parse::<i64>().unwrap_or(0).saturating_mul(1000),
+                at: millis(&seconds),
                 kind,
                 target,
                 subject: (*subject).to_owned(),
