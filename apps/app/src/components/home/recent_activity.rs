@@ -38,20 +38,23 @@ fn activity_style(kind: ActivityKind) -> (IconName, Tone) {
 
 /// The latest things done across all the repositories, the most recent first: [`SHOWN`] of them.
 pub fn recent_entries(summaries: &[RepositorySummary]) -> Vec<(Repository, Activity)> {
-    let mut entries: Vec<(Repository, Activity)> = summaries
+    let mut entries: Vec<(&Repository, &Activity)> = summaries
         .iter()
         .flat_map(|summary| {
             summary
                 .overview
                 .iter()
                 .flat_map(|overview| overview.activity.iter())
-                .map(|activity| (summary.repository.clone(), activity.clone()))
+                .map(|activity| (&summary.repository, activity))
         })
         .collect();
     // Stable, as `toSorted`: of two done at once, the one listed first stays first.
     entries.sort_by_key(|(_, activity)| std::cmp::Reverse(activity.at));
-    entries.truncate(SHOWN);
     entries
+        .into_iter()
+        .take(SHOWN)
+        .map(|(repository, activity)| (repository.clone(), activity.clone()))
+        .collect()
 }
 
 /// What was last done in any of the repositories, as their reflogs have it. Each opens its
