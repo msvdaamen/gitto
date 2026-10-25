@@ -133,6 +133,10 @@ pub struct Repository {
     pushed_to: Keyed<String, Option<String>>,
     patches: Keyed<PatchKey, FilePatch>,
     conflicts: Keyed<String, Conflict>,
+    /// Files' contents at a version, by their object id, which never change. Only a few are kept:
+    /// one can be megabytes, it's only read to fill in a patch, which keeps what it needs of it,
+    /// and git reads it again in milliseconds.
+    blobs: Keyed<String, String>,
     commits: Keyed<String, Commit>,
     files: Keyed<(FilesOf, String), ChangedFiles>,
     messages: Keyed<String, String>,
@@ -168,6 +172,7 @@ impl Repository {
             pushed_to: Keyed::new(KEPT_COMMITS),
             patches: Keyed::new(KEPT_FILES),
             conflicts: Keyed::new(KEPT_FILES),
+            blobs: Keyed::new(KEPT_FILES),
             commits: Keyed::new(KEPT_COMMITS),
             files: Keyed::new(KEPT_COMMITS),
             messages: Keyed::new(KEPT_COMMITS),
@@ -518,11 +523,12 @@ impl Repository {
         self.pushed_to.get(&sha.to_owned())
     }
 
-    /// Holds which remote branch has the commit `sha`, loading it unless it's loaded, and loading
-    /// it again as the refs change, while it's held.
+    /// Holds which remote branch has the commit `sha`, loading it unless it's loaded or loading,
+    /// and loading it again as the refs change, while it's held.
     pub fn hold_pushed_to(&mut self, sha: &str, cx: &mut Context<Self>) -> Hold {
         let hold = self.pushed_to.hold(sha.to_owned());
-        if self.pushed_to.entry(sha.to_owned()).is_stale() {
+        let loaded = self.pushed_to.entry(sha.to_owned());
+        if loaded.is_stale() && !loaded.is_fetching() {
             drop(self.load_pushed_to(sha.to_owned(), cx));
         }
         hold
@@ -551,8 +557,8 @@ impl Repository {
         self.patches.get(&(source.clone(), path.to_owned()))
     }
 
-    /// Holds the patch of `file` in `source`, loading it unless it's loaded, and loading it again
-    /// as the uncommitted changes change, if it's of those, while it's held.
+    /// Holds the patch of `file` in `source`, loading it unless it's loaded or loading, and
+    /// loading it again as the uncommitted changes change, if it's of those, while it's held.
     pub fn hold_patch(
         &mut self,
         source: &DiffSource,
@@ -561,7 +567,8 @@ impl Repository {
     ) -> Hold {
         let key = (source.clone(), file.path.clone());
         let hold = self.patches.hold(key.clone());
-        if self.patches.entry(key).is_stale() {
+        let loaded = self.patches.entry(key);
+        if loaded.is_stale() && !loaded.is_fetching() {
             drop(self.load_patch(source.clone(), file.clone(), cx));
         }
         hold
@@ -643,14 +650,24 @@ impl Repository {
         self.conflicts.get(&path.to_owned())
     }
 
-    /// Holds the conflicted file at `path`, loading it unless it's loaded, and loading it again
-    /// as the uncommitted changes change, while it's held.
+    /// Holds the conflicted file at `path`, loading it unless it's loaded or loading, and loading
+    /// it again as the uncommitted changes change, while it's held.
     pub fn hold_conflict(&mut self, path: &str, cx: &mut Context<Self>) -> Hold {
         let hold = self.conflicts.hold(path.to_owned());
-        if self.conflicts.entry(path.to_owned()).is_stale() {
+        let loaded = self.conflicts.entry(path.to_owned());
+        if loaded.is_stale() && !loaded.is_fetching() {
             drop(self.load_conflict(path.to_owned(), cx));
         }
         hold
+    }
+
+    /// Loads the conflicted file at `path` again: it changed on disk since it was read, say.
+    pub fn reload_conflict(
+        &mut self,
+        path: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<oneshot::Receiver<()>> {
+        self.load_conflict(path.to_owned(), cx)
     }
 
     /// The conflicted file at `path`: what's loaded, or what loads; e.g. for one about to be
@@ -695,6 +712,42 @@ impl Repository {
             fetch,
             cx,
         )
+    }
+
+    /// The contents of the object `oid`, a file's at some version: what's loaded, or what loads;
+    /// to show more of a file around its changes, say.
+    pub fn fetch_blob(
+        &mut self,
+        oid: &str,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<String, QueryError>> {
+        let oid = oid.to_owned();
+        let wait = {
+            let loaded = self.blobs.entry(oid.clone());
+            if loaded.is_fetching() {
+                loaded.wait()
+            } else if loaded.is_stale() {
+                let fetch = match FullSha::parse(oid.clone()) {
+                    Ok(blob) => self.git.blob(blob),
+                    Err(error) => failed(self.git.invalid(error)),
+                };
+                let key = oid.clone();
+                self.start(
+                    Part::Patches,
+                    move |repo| repo.blobs.get_mut(&key),
+                    fetch,
+                    cx,
+                )
+            } else {
+                None
+            }
+        };
+        cx.spawn(async move |this, cx| {
+            if let Some(wait) = wait {
+                let _ = wait.await;
+            }
+            this.read_with(cx, |repo, _| loaded_result(repo.blobs.get(&oid)))?
+        })
     }
 
     /// The commit `sha`, if it's loaded, or in the log: the log has all of a commit, so git isn't

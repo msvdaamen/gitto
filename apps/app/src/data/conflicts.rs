@@ -2,16 +2,16 @@
 
 use std::time::Duration;
 
-use gitto_git::features::conflicts::commands::ShownConflict;
 use gitto_git::features::conflicts::schema::{Conflict, ConflictSides, Side};
 use gitto_git::input::{NonEmpty, RepositoryId};
-use gpui_kit::{App, AppContext as _, Context, Entity};
+use gpui_kit::{App, Context, Entity};
 
-use super::call::{call, loads};
-use super::client::{QueryClient, QueryOptions, StaleTime};
+use super::call::loads;
+use super::client::{QueryOptions, StaleTime};
 use super::keys;
 use super::mutation::Mutation;
 use super::query::Query;
+use super::repository::Repositories;
 
 /// How long a conflicted file is kept once nothing shows it, rather than queries' five minutes.
 pub const CONFLICT_GC: Duration = Duration::from_secs(60);
@@ -95,29 +95,8 @@ pub fn resolve_file_mutation(cx: &mut App) -> Entity<Mutation<FileToResolve>> {
                 path,
                 resolution,
             } = file;
-            let action = call(cx, &id, move |repo| async move {
-                let path = repo.input(NonEmpty::parse(path))?;
-                match resolution {
-                    ConflictResolution::Keep {
-                        side,
-                        sides,
-                        version,
-                    } => {
-                        let shown = ShownConflict { sides, version };
-                        repo.keep_side(path, side, shown).await
-                    }
-                    ConflictResolution::Mark {
-                        version,
-                        with_markers,
-                    } => repo.mark_resolved(path, version, with_markers).await,
-                }
-            });
-            cx.spawn(async move |cx| {
-                let result = cx.background_spawn(action).await;
-                cx.update(|cx| {
-                    let _ = QueryClient::invalidate(&keys::uncommitted(&id), cx);
-                });
-                result.map_err(Into::into)
+            Repositories::open(&id, cx).update(cx, |repository, cx| {
+                repository.resolve_file(path, resolution, cx)
             })
         },
         cx,

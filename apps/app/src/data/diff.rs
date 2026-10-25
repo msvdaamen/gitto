@@ -2,7 +2,6 @@
 //! `git/queries/diff.ts`.
 
 use std::collections::HashSet;
-use std::time::Duration;
 
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::features::status::schema::Uncommitted;
@@ -11,13 +10,13 @@ use gitto_git::schema::FileStatus;
 use gpui_kit::{App, Context, Entity, Task};
 
 use super::call::loads;
-use super::client::{QueryClient, QueryError, QueryOptions, StaleTime};
+use super::client::{QueryError, QueryOptions, StaleTime};
 use super::keyed::Hold;
 use super::keys;
 use super::loaded::Loaded;
 use super::opaque::{Opaque, memoized};
 use super::query::Query;
-use super::repository::Repository;
+use super::repository::{Repositories, Repository};
 use super::status::uncommitted_options;
 use gitto_ui::git::changes::{LineCounts, line_totals};
 
@@ -172,25 +171,10 @@ pub fn commit_files_query<V: 'static>(
     changed_files_query(id, sha, FilesOf::Commit, cx)
 }
 
-/// How long a blob is kept once nothing's shown from it, rather than the five minutes queries are
-/// kept by default: it can be megabytes, it's only read to fill in a patch, which keeps what it
-/// needs of it, and git reads it again in milliseconds.
-pub const BLOB_GC: Duration = Duration::from_secs(60);
-
 /// A file's contents by their object name, e.g. to show more of it around a patch's changes
 /// (`fetchBlob`).
 pub fn fetch_blob(id: &RepositoryId, oid: &str, cx: &mut App) -> Task<Result<String, QueryError>> {
-    let oid = oid.to_owned();
-    let options = QueryOptions::new(
-        keys::blob(id, &oid),
-        loads(cx, id, move |repo| {
-            let oid = oid.clone();
-            async move { repo.blob(repo.input(FullSha::parse(oid))?).await }
-        }),
-    )
-    .stale_time(StaleTime::Infinite)
-    .gc_time(BLOB_GC);
-    QueryClient::fetch_query(options, cx)
+    Repositories::open(id, cx).update(cx, |repository, cx| repository.fetch_blob(oid, cx))
 }
 
 /// The lists in the uncommitted changes: what's staged for the next commit and what isn't, and

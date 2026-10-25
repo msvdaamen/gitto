@@ -29,8 +29,7 @@ use crate::components::ui::{
     EmptyState, FileStatusBadge, Icon, IconButton, IconName, LineStats, LoadingState, Notice,
     action_button,
 };
-use crate::data::QueryClient;
-use crate::data::conflicts::conflict_options;
+use crate::data::Repositories;
 use crate::data::diff::fetch_blob;
 use crate::data::file_diff::{FilePatch, fetch_file_patch};
 use crate::data::staging::StageAction;
@@ -70,8 +69,9 @@ pub fn prefetch_file_diff(
 ) {
     if file.status == FileStatus::Conflicted && *source == DiffSource::Unstaged {
         // Its conflicts, highlighted as the viewer names them, so they show at once.
-        let options = conflict_options(repository_id, &file.path, cx);
-        let fetching = QueryClient::fetch_query(options, cx);
+        let fetching = Repositories::open(repository_id, cx).update(cx, |repository, cx| {
+            repository.fetch_conflict(&file.path, cx)
+        });
         let file_key = diff_file_key(source, &file.path);
         let path = file.path.clone();
         cx.spawn(async move |cx| {
@@ -877,9 +877,7 @@ fn spinner() -> impl IntoElement {
 mod tests {
     use std::cell::RefCell;
     use std::collections::VecDeque;
-    use std::sync::{Arc, Mutex};
 
-    use futures::FutureExt as _;
     use futures::channel::oneshot;
     use gitto_git::features::staging::patch_version::patch_version;
     use gitto_git::features::staging::schema::{LineRange, LineSelection};
@@ -890,12 +888,13 @@ mod tests {
     use gpui_kit::{AppContext as _, TestAppContext};
 
     use super::super::line_picker::LineStaging;
+    use super::super::test_views::{DiffGit, init, set_patch_in, set_status, update_repository};
     use super::super::viewer_runtime::ViewerRuntime;
     use super::*;
-    use crate::data::diff::ChangedFiles;
-    use crate::data::file_diff::file_patch_key;
+    use crate::components::repository::test_support::repository_entity;
+    use crate::data::diff::{ChangedFiles, FilesOf};
     use crate::data::staging::{FileToStage, LinesToStage};
-    use crate::data::{Mutation, Opaque, QueryError, QueryOptions, keys};
+    use crate::data::{Loaded, Mutation, Opaque, QueryError};
 
     fn id() -> RepositoryId {
         RepositoryId::parse("01890a5d-ac96-774b-bcce-b302099a8057").unwrap()
@@ -941,18 +940,6 @@ mod tests {
         cx.update(|cx| set_patch_in(source, file, patch, cx));
     }
 
-    fn set_patch_in(source: &DiffSource, file: &ChangedFile, patch: &str, cx: &mut App) {
-        QueryClient::set_data(
-            &file_patch_key(&id(), source, &file.path),
-            FilePatch {
-                key: diff_file_key(source, &file.path),
-                file: file.clone(),
-                patch: patch.into(),
-            },
-            cx,
-        )
-    }
-
     /// Starts loading `file`'s patch in `source`, to be given by the sender returned: until then,
     /// it's loading.
     fn pending_patch(
@@ -960,41 +947,29 @@ mod tests {
         file: &ChangedFile,
         cx: &mut TestAppContext,
     ) -> oneshot::Sender<FilePatch> {
-        let (send, receive) = oneshot::channel::<FilePatch>();
-        let receive = Arc::new(Mutex::new(Some(receive)));
-        let options = QueryOptions::new(file_patch_key(&id(), source, &file.path), move |_, _| {
-            let receive = receive.lock().unwrap().take();
-            async move {
-                match receive {
-                    Some(receive) => receive.await.map_err(|_| QueryError::msg("Dropped.")),
-                    None => futures::future::pending().await,
-                }
-            }
-            .boxed()
-        });
-        cx.update(|cx| {
-            let entry = QueryClient::entry::<FilePatch>(options.key(), cx);
-            entry.update(cx, |entry, cx| {
-                entry.set_options(&options);
-                let _ = entry.fetch(cx);
-            });
+        let key = diff_file_key(source, &file.path);
+        let send = cx.update(|cx| DiffGit::get(cx).later(key));
+        update_repository(cx, |repository, cx| {
+            drop(repository.fetch_patch(source, file, cx))
         });
         send
     }
 
     /// The commit's files, and each one's patch.
     fn commit_files(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            QueryClient::set_data(
-                &keys::commit_files(&id(), SHA),
-                ChangedFiles {
-                    sha: SHA.into(),
-                    files: Opaque::new(files()),
-                },
-                cx,
-            )
-        });
+        set_commit_files(cx);
         patches(&commit(), &files(), "new", cx);
+    }
+
+    /// The commit's files, without their patches.
+    fn set_commit_files(cx: &mut TestAppContext) {
+        let files = ChangedFiles {
+            sha: SHA.into(),
+            files: Opaque::new(files()),
+        };
+        update_repository(cx, |repository, cx| {
+            repository.set_files(FilesOf::Commit, files, cx)
+        });
     }
 
     /// The uncommitted changes the status says there are.
@@ -1026,7 +1001,7 @@ mod tests {
             },
             version: uuid::Uuid::new_v4().to_string(),
         };
-        cx.update(|cx| QueryClient::set_data(&keys::status(&id()), Opaque::new(status), cx));
+        set_status(status, cx);
     }
 
     /// Gives each of `files` of `source` a patch changing its line to `<prefix> <path>`.
@@ -1213,10 +1188,6 @@ mod tests {
         }
     }
 
-    fn init(cx: &mut TestAppContext) -> tempfile::TempDir {
-        crate::test_support::init(cx, |services| services)
-    }
-
     fn lines() -> LineSelection {
         LineSelection {
             deletions: vec![LineRange::new(1, 1).unwrap()],
@@ -1251,16 +1222,7 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let _dir = init(cx);
-        cx.update(|cx| {
-            QueryClient::set_data(
-                &keys::commit_files(&id(), SHA),
-                ChangedFiles {
-                    sha: SHA.into(),
-                    files: Opaque::new(files()),
-                },
-                cx,
-            )
-        });
+        set_commit_files(cx);
         patches(&commit(), &[counted("a.txt"), counted("c.txt")], "new", cx);
         let next = pending_patch(&commit(), &counted("b.txt"), cx);
         let opened = open(commit(), counted("a.txt"), cx);
@@ -1315,10 +1277,11 @@ mod tests {
         let opened = open(commit(), image.clone(), cx);
 
         assert_eq!(opened.body(cx), Body::Binary);
-        let key = file_patch_key(&id(), &commit(), &image.path);
         let loading = cx.update(|cx| {
-            QueryClient::get_entry::<FilePatch>(&key, cx)
-                .is_some_and(|entry| entry.read(cx).is_fetching())
+            repository_entity(&id(), cx)
+                .read(cx)
+                .patch(&commit(), &image.path)
+                .is_some_and(Loaded::is_fetching)
         });
         assert!(!loading);
     }

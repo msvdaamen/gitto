@@ -607,6 +607,25 @@ impl Repository {
     // Staging: a view's own changes. Each reloads the uncommitted changes after, without waiting:
     // the watcher would catch it too, but reloading right away feels snappier.
 
+    /// Runs `action`, a change to the uncommitted changes, then reloads them; settles once they
+    /// have (`useStagingMutation`), so what's shown is what it left before it can be run again.
+    fn then_reloaded_uncommitted(
+        &mut self,
+        action: GitTask<()>,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<(), QueryError>> {
+        let action = cx.background_spawn(action);
+        cx.spawn(async move |this, cx| {
+            action.await?;
+            if let Ok(reloading) =
+                this.update(cx, |repository, cx| repository.reload_uncommitted(cx))
+            {
+                reloading.await;
+            }
+            Ok(())
+        })
+    }
+
     /// Runs `action`, a change to the uncommitted changes, then reloads them without waiting.
     fn then_reload_uncommitted(
         &mut self,
@@ -634,7 +653,7 @@ impl Repository {
                 self.checked(Paths::parse(paths), |paths| git.stage(paths))
             }
         };
-        self.then_reload_uncommitted(action, cx)
+        self.then_reloaded_uncommitted(action, cx)
     }
 
     /// Unstages files, or all of them (`useUnstage`).
@@ -650,7 +669,7 @@ impl Repository {
                 self.checked(Paths::parse(paths), |paths| git.unstage(paths))
             }
         };
-        self.then_reload_uncommitted(action, cx)
+        self.then_reloaded_uncommitted(action, cx)
     }
 
     /// Discards changes, which are lost: a file's unstaged ones, or staged ones and all, by both
@@ -670,7 +689,7 @@ impl Repository {
                 side,
             }),
         };
-        self.then_reload_uncommitted(action, cx)
+        self.then_reloaded_uncommitted(action, cx)
     }
 
     /// Stages or unstages a whole file at `paths` (a renamed one by both).

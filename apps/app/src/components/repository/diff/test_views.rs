@@ -4,33 +4,158 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
 
 use futures::FutureExt as _;
+use futures::channel::oneshot;
 use gitto_git::FileStatus;
 use gitto_git::features::conflicts::schema::{Conflict, ConflictSide, ConflictText};
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::features::diff::working_tree::WorkingTreeFile;
-use gitto_git::features::status::schema::{Head, StatusCounts, Uncommitted, WorkingTreeFiles};
-use gitto_git::input::RepositoryId;
+use gitto_git::features::status::schema::{
+    Head, StatusCounts, StatusReply, Uncommitted, WorkingTreeFiles,
+};
+use gitto_git::input::{FileInput, FullSha, NonEmpty, RepositoryId, Sha};
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{AnyWindowHandle, App, AppContext as _, Entity, Task, TestAppContext};
+use gpui_kit::{
+    AnyWindowHandle, App, AppContext as _, Context, Entity, Global, Task, TestAppContext,
+};
 
 use super::conflict_resolution::ResolveFileMutation;
 use super::file_diff_view::{FileDiffEvent, FileDiffView};
-use super::file_editing::FileIo;
+use super::file_editing::{FileIo, Reload};
+use crate::components::repository::test_support::{fake_git, repository_entity};
 use crate::data::conflicts::FileToResolve;
-use crate::data::file_diff::{FilePatch, file_patch_key};
-use crate::data::{Mutation, Opaque, QueryClient, QueryError, QueryKey, QueryOptions, keys};
+use crate::data::file_diff::FilePatch;
+use crate::data::git::{GitTask, RepositoryGit};
+use crate::data::{Mutation, QueryError, Repository};
 use gitto_ui::git::diff_source::{DiffSource, diff_file_key};
 
 pub fn id() -> RepositoryId {
     RepositoryId::parse("01890a5d-ac96-774b-bcce-b302099a8057").unwrap()
 }
 
+/// Sets the app up, with the test repository's git made up (see [`DiffGit`]).
 pub fn init(cx: &mut TestAppContext) -> tempfile::TempDir {
-    crate::test_support::init(cx, |services| services)
+    let dir = crate::test_support::init(cx, |services| services);
+    DiffGit::install(cx);
+    dir
+}
+
+/// A patch the made-up git gives: always the same, or once, when the test sends it.
+enum PatchAnswer {
+    Now(Result<String, QueryError>),
+    Later(oneshot::Receiver<FilePatch>),
+}
+
+/// The test repository's git, made up: the status, patches and conflicted files it reads, which
+/// the test sets as it sets what's loaded, so loading them again reads the same.
+#[derive(Default)]
+pub struct DiffGit {
+    status: RefCell<Option<Uncommitted>>,
+    /// By the file's key in its source (see `diff_file_key`).
+    patches: RefCell<HashMap<String, PatchAnswer>>,
+    conflicts: RefCell<HashMap<String, Conflict>>,
+}
+
+struct GlobalDiffGit(Rc<DiffGit>);
+
+impl Global for GlobalDiffGit {}
+
+impl DiffGit {
+    /// Has the test repository ask it, from now on.
+    pub fn install(cx: &mut TestAppContext) {
+        let git = Rc::new(DiffGit::default());
+        fake_git(&id(), Rc::clone(&git) as Rc<dyn RepositoryGit>, cx);
+        cx.update(|cx| cx.set_global(GlobalDiffGit(git)));
+    }
+
+    pub fn get(cx: &App) -> Rc<DiffGit> {
+        Rc::clone(&cx.global::<GlobalDiffGit>().0)
+    }
+
+    /// Reads the patch of the file `key` as `patch`, from now on.
+    pub fn set_patch(&self, key: String, patch: Result<String, QueryError>) {
+        self.patches
+            .borrow_mut()
+            .insert(key, PatchAnswer::Now(patch));
+    }
+
+    /// Reads the patch of the file `key` once it's sent on the sender returned.
+    pub fn later(&self, key: String) -> oneshot::Sender<FilePatch> {
+        let (send, receive) = oneshot::channel();
+        self.patches
+            .borrow_mut()
+            .insert(key, PatchAnswer::Later(receive));
+        send
+    }
+
+    pub fn set_status(&self, status: Uncommitted) {
+        *self.status.borrow_mut() = Some(status);
+    }
+
+    pub fn set_conflict(&self, path: &str, conflict: Conflict) {
+        self.conflicts.borrow_mut().insert(path.into(), conflict);
+    }
+
+    fn patch(&self, source: DiffSource, file: &FileInput) -> GitTask<String> {
+        let key = diff_file_key(&source, &file.path);
+        let mut patches = self.patches.borrow_mut();
+        match patches.remove(&key) {
+            Some(PatchAnswer::Now(patch)) => {
+                patches.insert(key, PatchAnswer::Now(patch.clone()));
+                async move { patch }.boxed()
+            }
+            Some(PatchAnswer::Later(receive)) => async move {
+                let patch = receive.await.map_err(|_| QueryError::msg("Dropped."))?;
+                Ok(patch.patch.to_string())
+            }
+            .boxed(),
+            None => async move { Err(QueryError::msg(format!("No patch of {key}."))) }.boxed(),
+        }
+    }
+}
+
+impl RepositoryGit for DiffGit {
+    fn status(&self, _: Option<String>) -> GitTask<StatusReply> {
+        let status = self.status.borrow().clone();
+        async move {
+            let status = status.ok_or_else(|| QueryError::msg("No status in this test."))?;
+            Ok(StatusReply::Status(Box::new(status)))
+        }
+        .boxed()
+    }
+
+    fn commit_file_patch(&self, sha: Sha, file: FileInput) -> GitTask<String> {
+        let sha = sha.as_str().to_owned();
+        self.patch(DiffSource::Commit { sha }, &file)
+    }
+
+    fn stash_file_patch(&self, sha: FullSha, file: FileInput) -> GitTask<String> {
+        let sha = sha.as_str().to_owned();
+        self.patch(DiffSource::Stash { sha }, &file)
+    }
+
+    fn unstaged_file_patch(&self, file: FileInput, _: bool) -> GitTask<String> {
+        self.patch(DiffSource::Unstaged, &file)
+    }
+
+    fn staged_file_patch(&self, file: FileInput) -> GitTask<String> {
+        self.patch(DiffSource::Staged, &file)
+    }
+
+    fn conflict(&self, path: NonEmpty) -> GitTask<Conflict> {
+        let conflict = self.conflicts.borrow().get(path.as_str()).cloned();
+        async move { conflict.ok_or_else(|| QueryError::msg("Not conflicted.")) }.boxed()
+    }
+}
+
+/// Changes what the test repository has loaded with `update`.
+pub fn update_repository(
+    cx: &mut TestAppContext,
+    update: impl FnOnce(&mut Repository, &mut Context<Repository>),
+) {
+    cx.update(|cx| repository_entity(&id(), cx).update(cx, update));
 }
 
 pub fn file(path: &str, status: FileStatus) -> ChangedFile {
@@ -104,40 +229,44 @@ pub fn set_changes(staged: Vec<ChangedFile>, unstaged: Vec<ChangedFile>, cx: &mu
         },
         version: uuid::Uuid::new_v4().to_string(),
     };
-    cx.update(|cx| QueryClient::set_data(&keys::status(&id()), Opaque::new(status), cx));
+    set_status(status, cx);
+}
+
+/// The status, as if it was read.
+pub fn set_status(status: Uncommitted, cx: &mut TestAppContext) {
+    cx.update(|cx| DiffGit::get(cx).set_status(status.clone()));
+    update_repository(cx, |repository, cx| repository.set_status(status, cx));
 }
 
 /// The conflicted file at `path`, as if it was read.
 pub fn set_conflict(path: &str, conflict: Conflict, cx: &mut TestAppContext) {
-    cx.update(|cx| QueryClient::set_data(&keys::conflict(&id(), path), conflict, cx));
+    cx.update(|cx| DiffGit::get(cx).set_conflict(path, conflict.clone()));
+    update_repository(cx, |repository, cx| {
+        repository.set_conflict(path, conflict, cx)
+    });
 }
 
 /// Reads the conflicted file at `path` as `conflict` from now on, when it's loaded again.
 pub fn reload_conflict_as(path: &str, conflict: Conflict, cx: &mut TestAppContext) {
-    let conflict = Arc::new(Mutex::new(conflict));
-    let options = QueryOptions::new(keys::conflict(&id(), path), move |_, _| {
-        let conflict = conflict.lock().unwrap().clone();
-        async move { Ok(conflict) }.boxed()
-    });
-    cx.update(|cx| {
-        let entry = QueryClient::entry::<Conflict>(options.key(), cx);
-        entry.update(cx, |entry, _| entry.set_options(&options));
-    });
+    cx.update(|cx| DiffGit::get(cx).set_conflict(path, conflict));
 }
 
 /// Gives `file` of `source` the patch `patch`, as if it was loaded.
 pub fn set_patch(source: &DiffSource, file: &ChangedFile, patch: &str, cx: &mut TestAppContext) {
-    cx.update(|cx| {
-        QueryClient::set_data(
-            &file_patch_key(&id(), source, &file.path),
-            FilePatch {
-                key: diff_file_key(source, &file.path),
-                file: file.clone(),
-                patch: patch.into(),
-            },
-            cx,
-        )
-    });
+    cx.update(|cx| set_patch_in(source, file, patch, cx));
+}
+
+/// [`set_patch`], in the app.
+pub fn set_patch_in(source: &DiffSource, file: &ChangedFile, patch: &str, cx: &mut App) {
+    let key = diff_file_key(source, &file.path);
+    DiffGit::get(cx).set_patch(key.clone(), Ok(patch.to_owned()));
+    let patch = FilePatch {
+        key,
+        file: file.clone(),
+        patch: patch.into(),
+    };
+    repository_entity(&id(), cx)
+        .update(cx, |repository, cx| repository.set_patch(source, patch, cx));
 }
 
 /// A patch of `path` with one line changed to `line`, as git would give it.
@@ -173,7 +302,7 @@ pub struct FakeTree {
     files: Rc<RefCell<HashMap<String, WorkingTreeFile>>>,
     saves: Rc<RefCell<Vec<Save>>>,
     reply: Rc<RefCell<SaveReply>>,
-    reloads: Rc<RefCell<Vec<QueryKey>>>,
+    reloads: Rc<RefCell<Vec<Reload>>>,
 }
 
 impl FakeTree {
@@ -207,7 +336,7 @@ impl FakeTree {
     }
 
     /// What was asked to be loaded again, which isn't: it'd be read with git.
-    pub fn reloads(&self) -> Vec<QueryKey> {
+    pub fn reloads(&self) -> Vec<Reload> {
         self.reloads.borrow().clone()
     }
 
@@ -238,7 +367,7 @@ impl FakeTree {
                 saves.borrow_mut().push(asked.clone());
                 Task::ready((reply.borrow_mut())(&asked))
             }),
-            reload: Rc::new(move |key, _| reloads.borrow_mut().push(key)),
+            reload: Rc::new(move |_, reload, _| reloads.borrow_mut().push(reload)),
         }
     }
 }

@@ -17,15 +17,14 @@ use super::conflict_viewer::{
     ConflictProgress, ConflictViewer, ConflictViewerEvent, DiskFile, Resolution, SaveFile,
 };
 use super::file_diff_view::{FileDiffEvent, FileDiffView};
+use super::file_editing::Reload;
 use super::markers_dialog::open_markers_dialog;
 use crate::components::ui::{
     EmptyState, IconButton, IconName, LoadingState, Notice, action_button,
 };
-use crate::data::conflicts::{
-    ConflictResolution, FileToResolve, conflict_query, conflict_query_options,
-    resolve_file_mutation,
-};
-use crate::data::{Mutation, Query, QueryError, keys};
+use crate::data::conflicts::{ConflictResolution, FileToResolve, resolve_file_mutation};
+use crate::data::keyed::Hold;
+use crate::data::{Loaded, Mutation, QueryError, Repositories, Repository};
 use crate::theme::PaletteExt as _;
 use gitto_ui::git::diff_source::DiffSource;
 
@@ -41,11 +40,19 @@ pub type ResolveFileMutation = Entity<Mutation<FileToResolve>>;
 /// In the view, `[` and `]` step through the conflicts, `O`, `T` and `B` keep ours, theirs or both
 /// of the current one, `N` opens the next conflicted file, and ⌘↵ marks the file resolved.
 pub struct FileResolution {
-    query: Query<Conflict>,
-    /// What the query is of: the file's path, and whether it's loaded at all.
-    query_of: (String, bool),
+    /// Holds the conflicted file while it's resolved, as it's loaded (see `held`).
+    hold: Option<Hold>,
+    /// What's held: the repository and the file's path, and whether it's held at all.
+    held: (RepositoryId, String, bool),
+    /// The conflicted file last read, by its path, as last synced: while another one's loads, the
+    /// last one's stays on show, until it's in.
+    conflict: Option<(String, Conflict)>,
+    /// How many times the file on show has been read, and why it last couldn't be, as last
+    /// synced.
+    reads: u64,
+    load_error: Option<QueryError>,
     /// After editing, the file is read again before it's shown: what was read before is of the
-    /// edits saved so far, not the last. The loads the query had when editing stopped.
+    /// edits saved so far, not the last. The reads there were when editing stopped.
     read_after: Option<u64>,
     was_editing: bool,
     /// The viewer's progress, of the file it says.
@@ -64,12 +71,19 @@ impl FileResolution {
         active: bool,
         cx: &mut Context<FileDiffView>,
     ) -> Self {
-        let query = conflict_query(repository_id, &file.path, active, cx);
+        let hold = active.then(|| {
+            Repositories::open(repository_id, cx).update(cx, |repository, cx| {
+                repository.hold_conflict(&file.path, cx)
+            })
+        });
         let resolve = resolve_file_mutation(cx);
         cx.observe(&resolve, |_, _, cx| cx.notify()).detach();
         FileResolution {
-            query,
-            query_of: (file.path.clone(), active),
+            hold,
+            held: (repository_id.clone(), file.path.clone(), active),
+            conflict: None,
+            reads: 0,
+            load_error: None,
             read_after: None,
             was_editing: false,
             progress: None,
@@ -87,11 +101,33 @@ impl FileResolution {
 
     /// The conflicted file, as it was last read.
     pub fn conflict(&self) -> Option<Conflict> {
-        self.query.data()
+        self.conflict.as_ref().map(|(_, conflict)| conflict.clone())
     }
 
     fn kind(&self) -> Option<ConflictKind> {
-        self.query.data().map(|conflict| conflict_kind(&conflict))
+        self.conflict
+            .as_ref()
+            .map(|(_, conflict)| conflict_kind(conflict))
+    }
+
+    /// Whether the conflict on show is the last file's, while this one's loads.
+    fn is_placeholder(&self) -> bool {
+        self.conflict
+            .as_ref()
+            .is_some_and(|(path, _)| *path != self.held.1)
+    }
+
+    /// Brings what it says up to date with what `repository` has read of the file at `path`.
+    fn sync(&mut self, repository: &Repository, path: &str) {
+        let loaded = repository.conflict(path);
+        if let Some(conflict) = loaded.and_then(Loaded::data) {
+            self.conflict = Some((path.to_owned(), conflict.clone()));
+        }
+        self.reads = loaded.map_or(0, Loaded::updates);
+        self.load_error = loaded
+            .and_then(Loaded::error)
+            .filter(|_| self.held.2)
+            .cloned();
     }
 
     fn is_text(&self) -> bool {
@@ -121,17 +157,22 @@ impl FileDiffView {
     ) {
         let active = self.is_resolving();
         let path = self.view.file().path;
-        if self.resolution.query_of != (path.clone(), active) {
-            let options = conflict_query_options(self.view.repository_id(), &path, active, cx);
-            self.resolution.query.set_options(options, cx);
-            self.resolution.query_of = (path.clone(), active);
+        let repository = self.view.repository().clone();
+        let held = (self.view.repository_id().clone(), path.clone(), active);
+        if self.resolution.held != held {
+            self.resolution.hold = active.then(|| {
+                repository.update(cx, |repository, cx| repository.hold_conflict(&path, cx))
+            });
+            self.resolution.held = held;
         }
+        self.resolution.sync(repository.read(cx), &path);
         // After editing, the file is read again before it's shown.
         let editing = self.editing.is_editing();
         if active && self.resolution.was_editing && !editing {
-            self.resolution.read_after = Some(self.resolution.query.updates());
-            let refetching = self.resolution.query.refetch(cx);
-            cx.spawn(async move |_, _| refetching.await).detach();
+            self.resolution.read_after = Some(self.resolution.reads);
+            repository.update(cx, |repository, cx| {
+                drop(repository.reload_conflict(&path, cx))
+            });
         }
         self.resolution.was_editing = editing;
 
@@ -194,11 +235,11 @@ impl FileDiffView {
     /// nor what was read before editing stopped.
     fn disk(&self) -> Option<DiskFile> {
         let resolution = &self.resolution;
-        if self.editing.is_editing() || resolution.query.is_placeholder_data() {
+        if self.editing.is_editing() || resolution.is_placeholder() {
             return None;
         }
         if let Some(after) = resolution.read_after
-            && resolution.query.updates() <= after
+            && resolution.reads <= after
         {
             return None;
         }
@@ -225,7 +266,7 @@ impl FileDiffView {
         let resolution = &self.resolution;
         resolution.resolving
             || self.editing.is_editing()
-            || resolution.query.is_placeholder_data()
+            || resolution.is_placeholder()
             || (resolution.is_text()
                 && self
                     .shown_progress()
@@ -381,7 +422,7 @@ impl FileDiffView {
             let saved = saving.await;
             if saved.is_err() {
                 // Changed on disk since, say: shown as it is now.
-                cx.update(|cx| (io.reload)(keys::conflict(&id, &path), cx));
+                cx.update(|cx| (io.reload)(&id, Reload::Conflict(path), cx));
             }
             saved
         })
@@ -455,7 +496,7 @@ impl FileDiffView {
             && self
                 .shown_progress()
                 .is_some_and(|shown| shown.version.is_some())
-            && !self.resolution.query.is_placeholder_data()
+            && !self.resolution.is_placeholder()
     }
 
     /// The conflicts left, stepping through them, marking the file resolved, and the next file.
@@ -600,7 +641,7 @@ impl FileDiffView {
 
     /// The conflicts, or the sides to keep one of.
     pub(super) fn render_conflict_body(&self, cx: &mut Context<Self>) -> AnyElement {
-        if let Some(error) = self.resolution.query.error() {
+        if let Some(error) = self.resolution.load_error.clone() {
             return EmptyState::new(
                 "conflict-error",
                 IconName::TriangleAlert,
@@ -943,7 +984,7 @@ mod tests {
             Some("a.txt was changed on disk since you started editing it.")
         );
         // Read again, to be shown as it is now.
-        assert_eq!(opened.tree.reloads(), [keys::conflict(&id(), "a.txt")]);
+        assert_eq!(opened.tree.reloads(), [Reload::Conflict("a.txt".into())]);
         // Still as it was.
         assert_eq!(left(&opened, cx).as_deref(), Some("1 conflict left"));
     }
