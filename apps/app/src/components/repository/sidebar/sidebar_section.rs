@@ -27,8 +27,11 @@ const LIST_PADDING: f32 = 4.;
 /// Height of an expanded section without its rows: its top border, its header, the border below
 /// that and the list's padding.
 const SECTION_CHROME: f32 = 1. + HEADER_HEIGHT + 1. + 2. * LIST_PADDING;
-/// The most a section's popover beside the rail lists before it scrolls.
+/// The most a section's popover beside the rail lists before it scrolls, in pixels of the 15px
+/// base, and as a share of the window's height (TS's `min(400px, 70vh)`): a short window would
+/// cut off the bottom of a taller list.
 const RAIL_LIST_MAX: f32 = 400.;
+const RAIL_LIST_MAX_VIEWPORT: f32 = 0.7;
 /// How wide a section's popover beside the rail is.
 const RAIL_POPOVER_WIDTH: f32 = 260.;
 /// The space between the rail's icon and its section's popover.
@@ -292,7 +295,7 @@ impl SidebarSection {
             .w(base_px(RAIL_POPOVER_WIDTH))
             .overflow_hidden()
             .trigger(trigger)
-            .content(move |_, _, cx| {
+            .content(move |_, window, cx| {
                 let palette = *cx.palette();
                 let header = h_flex()
                     .flex_none()
@@ -315,10 +318,13 @@ impl SidebarSection {
                         .child("Nothing here yet")
                         .into_any_element()
                 } else {
-                    let height = (items as f32 * ROW_PX + 2. * LIST_PADDING).min(RAIL_LIST_MAX);
+                    let height =
+                        base_px((items as f32 * ROW_PX + 2. * LIST_PADDING).min(RAIL_LIST_MAX))
+                            .to_pixels(window.rem_size())
+                            .min(window.viewport_size().height * RAIL_LIST_MAX_VIEWPORT);
                     let render_rows = Rc::clone(&render_rows);
                     div()
-                        .h(base_px(height))
+                        .h(height)
                         .px_1p5()
                         .py(base_px(LIST_PADDING))
                         .child(VirtualList::new(
