@@ -38,18 +38,34 @@ jobs:
       - uses: ./.github/actions/setup
       - run: pnpm test
 
-  rust:
-    name: Rust
+  # Formatting needs no build, so it gets no cache or system libraries and fails within seconds.
+  rust-format:
+    name: Rust format
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.97.0
         with:
-          components: rustfmt, clippy
-      # The dependencies' build, kept between runs: keyed by the toolchain and Cargo.lock, and
-      # restored from the closest match when those changed. A pull request restores its own cache,
-      # or else main's; base branches that aren't main never save one, as CI only runs on push to
-      # main. The workspace's crates are left out, as they're the ones that change.
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  # Clippy and the tests build different things (clippy only checks the dependencies, the tests
+  # compile them), so they run side by side, each with its own cache.
+  rust-lint:
+    name: Rust lint
+    runs-on: ubuntu-latest
+    env:
+      # CI never runs a debugger, and debug info only slows the build, the linking and the cache.
+      CARGO_PROFILE_DEV_DEBUG: 0
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.97.0
+        with:
+          components: clippy
+      # The dependencies' build, kept between runs: keyed by the job, the toolchain and Cargo.lock,
+      # and restored from the closest match when those changed. A pull request restores its own
+      # cache, or else main's; base branches that aren't main never save one, as CI only runs on
+      # push to main. The workspace's crates are left out, as they're the ones that change.
       - uses: Swatinem/rust-cache@v2
       # What GPUI links on Linux: xkbcommon for the keyboard (X11's too), Wayland, and fontconfig
       # (with FreeType) for fonts.
@@ -58,6 +74,24 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libfontconfig-dev libfreetype-dev
-      - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  rust-test:
+    name: Rust test
+    runs-on: ubuntu-latest
+    env:
+      # CI never runs a debugger, and debug info only slows the build, the linking and the cache.
+      CARGO_PROFILE_DEV_DEBUG: 0
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.97.0
+      # Cached as in rust-lint.
+      - uses: Swatinem/rust-cache@v2
+      # What GPUI links on Linux: xkbcommon for the keyboard (X11's too), Wayland, and fontconfig
+      # (with FreeType) for fonts.
+      - name: Install GPUI's system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libfontconfig-dev libfreetype-dev
       - run: cargo test --workspace --locked
