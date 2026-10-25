@@ -126,6 +126,7 @@
 //! [`staging`], [`stash`], [`status`], [`user`], [`version`], [`watch`] and [`worktree`]; and
 //! `hooks/repositories.ts` as [`repositories`].
 
+pub mod app_data;
 mod call;
 pub mod client;
 pub mod git;
@@ -163,16 +164,20 @@ pub use self::client::{
     Reloading, StaleTime,
 };
 pub use self::key::QueryKey;
+pub use self::app_data::{AppChanged, AppData, AppPart};
 pub use self::loaded::Loaded;
 pub use self::mutation::Mutation;
 pub use self::opaque::Opaque;
 pub use self::operation::{OneAtATime, OperationState, Operations, RepositoryOperation, reloading};
 pub use self::query::Query;
-pub use self::repository::{Changed, Part, Repositories, Repository};
+pub use self::repository::{
+    Changed, Part, Repositories, Repository, observe_parts, observe_selected,
+};
 pub use self::watch::RepositoryWatcher;
 
 /// Sets up the data layer's globals: the query cache and the operations' state.
 pub fn init(cx: &mut gpui_kit::App) {
     QueryClient::init(cx);
+    app_data::AppData::init(cx);
     cx.set_global(Operations::default());
 }

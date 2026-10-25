@@ -156,16 +156,10 @@ impl RepositoryWatcher {
 
     fn reload_all(&self, cx: &mut Context<Self>) {
         QueryClient::invalidate(&keys::repository(&self.id), cx);
-        if let Some(repository) = Repositories::get(&self.id, cx) {
-            repository.update(cx, |repository, cx| drop(repository.reload_all(cx)));
-        }
     }
 
     fn reload_uncommitted(&self, cx: &mut Context<Self>) {
         QueryClient::invalidate(&keys::uncommitted(&self.id), cx);
-        if let Some(repository) = Repositories::get(&self.id, cx) {
-            repository.update(cx, |repository, cx| drop(repository.reload_uncommitted(cx)));
-        }
     }
 
     fn watch_git_dir(&mut self, cx: &mut Context<Self>) {

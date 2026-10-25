@@ -11,7 +11,9 @@ use gitto_repository::{Repository, RepositoryService};
 use gpui_kit::{App, AppContext as _, Context, Entity, Task};
 
 use super::client::{QueryClient, QueryError, QueryOptions};
+use super::app_data::{AppData, AppPart};
 use super::keys;
+use super::repository::Repositories;
 use super::query::Query;
 use crate::services::{Services, SystemContext};
 use crate::state::router::{Route, Router};
@@ -83,6 +85,7 @@ pub fn add_repository(cx: &mut App) -> Task<Result<Option<Repository>, QueryErro
             Ok(_) => {
                 cx.update(|cx| QueryClient::invalidate(&keys::repositories(), cx))
                     .await;
+                cx.update(reload_list);
             }
             // The UI shows only the message; the rest is for whoever looks into it.
             Err(error) => log::error!("Couldn't add the repository: {error:?}"),
@@ -93,13 +96,17 @@ pub fn add_repository(cx: &mut App) -> Task<Result<Option<Repository>, QueryErro
 
 /// Removes a repository from Gitto; the folder on disk is left untouched (`useRemoveRepository`).
 pub fn remove_repository(id: String, cx: &mut App) -> Task<Result<(), QueryError>> {
-    let removing = Services::global(cx).repository_source().remove(id);
+    let removing = Services::global(cx).repository_source().remove(id.clone());
     cx.spawn(async move |cx| {
         let result = removing.await;
         match &result {
             Ok(()) => {
                 cx.update(|cx| QueryClient::invalidate(&keys::repositories(), cx))
                     .await;
+                cx.update(|cx| {
+                    Repositories::close(&id, cx);
+                    reload_list(cx);
+                });
             }
             Err(error) => log::error!("Couldn't remove the repository: {error:?}"),
         }
@@ -118,8 +125,14 @@ pub fn reorder_repositories(ids: Vec<String>, cx: &mut App) -> Task<Result<(), Q
         }
         cx.update(|cx| QueryClient::invalidate(&keys::repositories(), cx))
             .await;
+        cx.update(reload_list);
         result
     })
+}
+
+/// Loads the list of repositories again, after it changed.
+fn reload_list(cx: &mut App) {
+    AppData::global(cx).update(cx, |data, cx| drop(data.reload(AppPart::Repositories, cx)));
 }
 
 /// Asks for a folder, adds the repository in it (see [`add_repository`]), and opens it; with why

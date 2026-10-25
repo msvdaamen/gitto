@@ -14,6 +14,7 @@
 //! nor a timer. What never changes, a commit and what's in it, is kept, a few at a time, for
 //! whichever view shows it next.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -34,7 +35,7 @@ use gitto_git::features::status::schema::{StatusReply, Uncommitted};
 use gitto_git::features::worktree::schema::Worktree;
 use gitto_git::input::{FileInput, FullSha, NonEmpty, RepositoryId, Sha};
 use gitto_git::schema::FileStatus;
-use gpui_kit::{App, AppContext as _, Context, Entity, EventEmitter, Global, Task};
+use gpui_kit::{App, AppContext as _, Context, Entity, EventEmitter, Global, Subscription, Task};
 
 use super::client::QueryError;
 use super::diff::{ChangedFiles, FilesOf};
@@ -94,6 +95,13 @@ pub struct Changed(pub Part);
 /// way).
 #[must_use = "awaiting it waits for the reloads; drop it not to"]
 pub struct Reloading(Vec<oneshot::Receiver<()>>);
+
+impl Reloading {
+    /// What it waits for, to wait for with others.
+    pub fn into_waits(self) -> Vec<oneshot::Receiver<()>> {
+        self.0
+    }
+}
 
 impl std::future::IntoFuture for Reloading {
     type Output = ();
@@ -974,6 +982,41 @@ impl Repository {
     }
 }
 
+/// Renders the view `cx` is of again when what `select` picks of `repository` changes, as it
+/// says `part` changed, and only then: e.g. the status's summary, which stays the same as files
+/// are edited.
+pub fn observe_selected<V: 'static, S: PartialEq + 'static>(
+    repository: &Entity<Repository>,
+    part: Part,
+    select: impl Fn(&Repository) -> S + 'static,
+    cx: &mut Context<V>,
+) -> Subscription {
+    let last = RefCell::new(select(repository.read(cx)));
+    cx.subscribe(repository, move |_, repository, Changed(changed), cx| {
+        if *changed != part {
+            return;
+        }
+        let next = select(repository.read(cx));
+        if *last.borrow() != next {
+            *last.borrow_mut() = next;
+            cx.notify();
+        }
+    })
+}
+
+/// Renders the view `cx` is of again when `repository` says one of `parts` changed.
+pub fn observe_parts<V: 'static>(
+    repository: &Entity<Repository>,
+    parts: &'static [Part],
+    cx: &mut Context<V>,
+) -> Subscription {
+    cx.subscribe(repository, move |_, _, Changed(changed), cx| {
+        if parts.contains(changed) {
+            cx.notify();
+        }
+    })
+}
+
 /// `limit` commits of the log after skipping `skip`, as a [`Log`] of the repository `id`.
 fn log_page(git: &dyn RepositoryGit, id: &RepositoryId, skip: u32, limit: u32) -> GitTask<Log> {
     let commits = log_commits(git, skip, limit);
@@ -1053,6 +1096,23 @@ impl Repositories {
             .iter()
             .find(|(open, _)| open.as_str() == id)
             .map(|(_, repository)| repository.clone())
+    }
+
+    /// Loads again what's shown of every repository opened: once git works again, say, for what
+    /// failed for want of it.
+    pub fn reload_all(cx: &mut App) {
+        let open: Vec<_> = cx
+            .try_global::<Repositories>()
+            .map(|repositories| repositories.open.values().cloned().collect())
+            .unwrap_or_default();
+        for repository in open {
+            repository.update(cx, |repository, cx| {
+                drop(repository.reload_all(cx));
+                if repository.overview.is_used() {
+                    drop(repository.reload(Part::Overview, cx));
+                }
+            });
+        }
     }
 
     /// Forgets the repository `id`, as it was removed from Gitto.

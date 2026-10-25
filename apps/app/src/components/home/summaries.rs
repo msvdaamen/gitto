@@ -3,14 +3,12 @@
 use std::rc::Rc;
 
 use gitto_git::features::overview::schema::Overview;
-use gitto_git::features::status::schema::{StatusSummary, Uncommitted};
+use gitto_git::features::status::schema::StatusSummary;
 use gitto_git::input::RepositoryId;
 use gitto_repository::Repository;
-use gpui_kit::Context;
+use gpui_kit::{App, Context, Entity, Subscription};
 
-use crate::data::overview::overview_query;
-use crate::data::status::unwatched_status_query;
-use crate::data::{Opaque, Query, QueryError};
+use crate::data::{Changed, Part, QueryError, Repositories};
 
 /// A repository on the home page, with what's loaded of it so far.
 #[derive(Debug, Clone, PartialEq)]
@@ -25,17 +23,18 @@ pub struct RepositorySummary {
     pub settled: bool,
 }
 
-/// One repository's queries.
+/// One repository, as it's shown.
 struct Entry {
     repository: Repository,
-    status: Query<Opaque<Uncommitted>, StatusSummary>,
-    overview: Query<Overview>,
+    data: Entity<crate::data::Repository>,
+    _subscription: Subscription,
 }
 
-/// The status and overview of every repository, kept up to date while the home page shows them
-/// (see `watch::unwatched`): its view holds them, and [`sync`](Self::sync)s them with the list of
-/// repositories. Each repository shows what it has as it loads, and a reload doesn't take the
-/// page away meanwhile (`useRepositorySummaries`).
+/// The status and overview of every repository, kept up to date while the home page shows them:
+/// its view holds them, and [`sync`](Self::sync)s them with the list of repositories. Nothing
+/// watches them here, so they're loaded again whenever they're shown, and when the window gets
+/// focus. Each repository shows what it has as it loads, and a reload doesn't take the page away
+/// meanwhile (`useRepositorySummaries`).
 #[derive(Default)]
 pub struct RepositorySummaries {
     entries: Vec<Entry>,
@@ -44,6 +43,18 @@ pub struct RepositorySummaries {
 impl RepositorySummaries {
     pub fn new() -> Self {
         RepositorySummaries::default()
+    }
+
+    /// Loads again what's shown of `repository`, which nothing watches here.
+    fn reload(repository: &Entity<crate::data::Repository>, cx: &mut App) {
+        repository.update(cx, |repository, cx| {
+            if !repository.status().is_fetching() {
+                drop(repository.reload(Part::Status, cx));
+            }
+            if !repository.overview().is_fetching() {
+                drop(repository.reload(Part::Overview, cx));
+            }
+        });
     }
 
     /// Follows `repositories`: their queries are kept for the ones still there, made for new ones,
@@ -63,24 +74,44 @@ impl RepositorySummaries {
             let Ok(id) = RepositoryId::parse(repository.id.clone()) else {
                 continue;
             };
+            let data = Repositories::open(&id, cx);
+            Self::reload(&data, cx);
+            let subscription = cx.subscribe(&data, |_, _, Changed(part), cx| {
+                if matches!(part, Part::Status | Part::Overview) {
+                    cx.notify();
+                }
+            });
             self.entries.push(Entry {
                 repository: repository.clone(),
-                status: unwatched_status_query(&id, cx),
-                overview: overview_query(&id, cx),
+                data,
+                _subscription: subscription,
             });
         }
     }
 
+    /// Loads again what's shown of every repository: when the window gets focus (see
+    /// `AppPart::Focus`).
+    pub fn reload_all(&self, cx: &mut App) {
+        for entry in &self.entries {
+            Self::reload(&entry.data, cx);
+        }
+    }
+
     /// What's loaded of each repository, in the list's order.
-    pub fn summaries(&self) -> Rc<[RepositorySummary]> {
+    pub fn summaries(&self, cx: &App) -> Rc<[RepositorySummary]> {
         self.entries
             .iter()
-            .map(|entry| RepositorySummary {
-                repository: entry.repository.clone(),
-                status: entry.status.data(),
-                overview: entry.overview.data(),
-                error: entry.status.error().or_else(|| entry.overview.error()),
-                settled: entry.status.data().is_some() || entry.status.is_error(),
+            .map(|entry| {
+                let data = entry.data.read(cx);
+                let status = data.status();
+                let overview = data.overview();
+                RepositorySummary {
+                    repository: entry.repository.clone(),
+                    status: status.data().map(|status| status.summary()),
+                    overview: overview.data().cloned(),
+                    error: status.error().or_else(|| overview.error()).cloned(),
+                    settled: status.data().is_some() || status.is_error(),
+                }
             })
             .collect()
     }

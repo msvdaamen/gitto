@@ -63,6 +63,7 @@ impl AppShell {
             cx.observe_window_activation(window, |_, window, cx| {
                 if window.is_window_active() {
                     QueryClient::window_focused(cx);
+                    crate::data::AppData::window_focused(cx);
                 }
             }),
         ];

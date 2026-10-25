@@ -15,9 +15,9 @@ use gpui_kit::{
 use super::remove_repository_dialog::open_remove_repository_dialog;
 use crate::components::ui::{FailurePopover, GittoIcon, Icon, IconName};
 use crate::data::repositories::{
-    OpenRepository, remove_repository, reorder_repositories, repositories_query,
+    OpenRepository, remove_repository, reorder_repositories,
 };
-use crate::data::{Query, QueryError};
+use crate::data::{AppChanged, AppData, AppPart, QueryError};
 use crate::state::router::{Route, Router};
 use crate::theme::PaletteExt as _;
 
@@ -88,7 +88,7 @@ impl Render for TabDrag {
 /// Alt+Shift and the arrow keys, into another order; their close button removes them, asking
 /// first.
 pub struct Tabs {
-    repositories: Query<Vec<Repository>>,
+    data: Entity<AppData>,
     open_repository: Entity<OpenRepository>,
     /// The tabs' order once one's moved, until that's saved and read back.
     moved_order: Option<Vec<String>>,
@@ -104,17 +104,21 @@ pub struct Tabs {
 
 impl Tabs {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let repositories = repositories_query(cx);
+        let data = AppData::global(cx);
+        data.update(cx, |data, cx| data.show(AppPart::Repositories, cx));
         let open_repository = OpenRepository::new(cx);
         let subscriptions = vec![
             cx.observe(&Router::global(cx), |_, _, cx| cx.notify()),
             cx.observe(&open_repository, |_, _, cx| cx.notify()),
-            cx.observe(repositories.entry(), |tabs, _, cx| {
-                tabs.forget_saved_order(cx)
+            cx.subscribe(&data, |tabs, _, AppChanged(part), cx| {
+                if *part == AppPart::Repositories {
+                    tabs.forget_saved_order(cx);
+                    cx.notify();
+                }
             }),
         ];
         Tabs {
-            repositories,
+            data,
             open_repository,
             moved_order: None,
             moved: None,
@@ -126,30 +130,33 @@ impl Tabs {
         }
     }
 
-    fn saved_order(&self) -> Vec<String> {
-        self.repositories
+    fn repositories<'a>(&self, cx: &'a App) -> &'a [Repository] {
+        self.data
+            .read(cx)
+            .repositories()
             .data()
-            .map(|repositories| {
-                repositories
-                    .into_iter()
-                    .map(|repository| repository.id)
-                    .collect()
-            })
-            .unwrap_or_default()
+            .map_or(&[], Vec::as_slice)
+    }
+
+    fn saved_order(&self, cx: &App) -> Vec<String> {
+        self.repositories(cx)
+            .iter()
+            .map(|repository| repository.id.clone())
+            .collect()
     }
 
     /// The repositories' ids in the order their tabs are shown: ids rather than the repositories,
     /// so the tabs stay as they are when the list is read again.
-    pub fn ordered(&self) -> Vec<String> {
+    pub fn ordered(&self, cx: &App) -> Vec<String> {
         self.moved_order
             .clone()
-            .unwrap_or_else(|| self.saved_order())
+            .unwrap_or_else(|| self.saved_order(cx))
     }
 
     /// The tabs show the saved order again once the order they were moved into is read back.
     fn forget_saved_order(&mut self, cx: &mut Context<Self>) {
         if let Some(order) = &self.moved_order
-            && same_order(order, &self.saved_order())
+            && same_order(order, &self.saved_order(cx))
         {
             self.moved_order = None;
             cx.notify();
@@ -159,7 +166,7 @@ impl Tabs {
     /// Shows the tabs in `order` (with `id` moved) until it's saved, unless it's the order they
     /// had; puts them back, saying why, if it can't be saved.
     fn reorder(&mut self, id: &str, order: Vec<String>, cx: &mut Context<Self>) {
-        let unchanged = same_order(&order, &self.saved_order());
+        let unchanged = same_order(&order, &self.saved_order(cx));
         self.moved_order = Some(order.clone());
         cx.notify();
         if unchanged {
@@ -184,7 +191,7 @@ impl Tabs {
 
     /// Moves the tab `id` one place left (`-1`) or right (`1`); it keeps focus.
     pub fn move_tab(&mut self, id: &str, by: isize, cx: &mut Context<Self>) {
-        let mut order = self.ordered();
+        let mut order = self.ordered(cx);
         let Some(from) = order.iter().position(|other| other == id) else {
             return;
         };
@@ -201,7 +208,7 @@ impl Tabs {
         if dragged == target {
             return;
         }
-        let order = moved_to(&self.ordered(), dragged, target);
+        let order = moved_to(&self.ordered(cx), dragged, target);
         self.reorder(dragged, order, cx);
     }
 
@@ -448,9 +455,9 @@ impl Render for Tabs {
                 .repository_id()
                 .is_some_and(|shown| shown.as_str() == id)
         };
-        let repositories = self.repositories.data().unwrap_or_default();
+        let repositories = self.repositories(cx).to_vec();
         let mut tabs = Vec::new();
-        for id in self.ordered() {
+        for id in self.ordered(cx) {
             if let Some(repository) = repositories.iter().find(|repository| repository.id == id) {
                 tabs.push(
                     self.render_repository_tab(repository, selected(&id), width < SMALL, cx)
@@ -616,7 +623,7 @@ mod ui_tests {
     }
 
     fn order(host: &Entity<Host>, cx: &mut TestAppContext) -> Vec<String> {
-        host.read_with(cx, |host, cx| host.tabs.read(cx).ordered())
+        host.read_with(cx, |host, cx| host.tabs.read(cx).ordered(cx))
     }
 
     fn move_right(id: &str, window: AnyWindowHandle, cx: &mut TestAppContext) {

@@ -593,6 +593,43 @@ impl std::future::IntoFuture for Reloading {
     }
 }
 
+/// Reloads what a repository's entity holds under `prefix`, as the cache reloads its queries:
+/// while the views move from the cache to `Repository`, a change reloads both.
+fn reload_repository(prefix: &QueryKey, cx: &mut App) -> Reloading {
+    use super::repository::{Part, Repositories};
+
+    let segments = prefix.segments();
+    if segments.len() < 2 || segments[0].as_ref() != "git" {
+        return Reloading(Vec::new());
+    }
+    let Some(repository) = Repositories::get(segments[1].as_ref(), cx) else {
+        return Reloading(Vec::new());
+    };
+    let part = match segments.get(2).map(|segment| segment.as_ref()) {
+        None => None,
+        Some("uncommitted") if segments.len() == 3 => {
+            let reloading =
+                repository.update(cx, |repository, cx| repository.reload_uncommitted(cx));
+            return Reloading(reloading.into_waits());
+        }
+        Some("uncommitted") => Some(Part::Status),
+        Some("operation") => Some(Part::Operation),
+        Some("log") => Some(Part::Log),
+        Some("refs") => Some(Part::Refs),
+        Some("remotes") => Some(Part::Remotes),
+        Some("stashes") => Some(Part::Stashes),
+        Some("worktrees") => Some(Part::Worktrees),
+        Some("overview") => Some(Part::Overview),
+        Some("push-target") => Some(Part::PushTarget),
+        Some(_) => return Reloading(Vec::new()),
+    };
+    let reloading = repository.update(cx, |repository, cx| match part {
+        None => repository.reload_all(cx),
+        Some(part) => repository.reload(part, cx),
+    });
+    Reloading(reloading.into_waits())
+}
+
 /// The query cache (see the module's doc): a GPUI global, set up by [`QueryClient::init`].
 #[derive(Default)]
 pub struct QueryClient {
@@ -765,7 +802,9 @@ impl QueryClient {
     /// others load once they're shown again (TanStack's `invalidateQueries`). The future resolves
     /// once those loads are done.
     pub fn invalidate(prefix: &QueryKey, cx: &mut App) -> Reloading {
-        Self::invalidate_where(prefix, |_| true, cx)
+        let mut reloading = Self::invalidate_where(prefix, |_| true, cx);
+        reloading.0.extend(reload_repository(prefix, cx).0);
+        reloading
     }
 
     /// [`invalidate`](Self::invalidate), for the queries under `prefix` that `predicate` picks.

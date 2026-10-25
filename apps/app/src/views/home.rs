@@ -4,15 +4,14 @@ use gitto_repository::Repository;
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::v_flex;
 use gpui_kit::prelude::*;
-use gpui_kit::{Context, Entity, Subscription, Window, div, px, rems};
+use gpui_kit::{App, Context, Entity, Subscription, Window, div, px, rems};
 
 use crate::components::home::recent_activity::RecentActivity;
 use crate::components::home::repository_list::RepositoryList;
 use crate::components::home::summaries::RepositorySummaries;
 use crate::components::home::welcome_hero::WelcomeHero;
-use crate::data::Query;
-use crate::data::repositories::{OpenRepository, repositories_query};
-use crate::data::user::user_name_query;
+use crate::data::repositories::OpenRepository;
+use crate::data::{AppChanged, AppData, AppPart};
 use crate::state::clock::Clock;
 use crate::theme::PaletteExt as _;
 
@@ -31,9 +30,8 @@ const MEDIUM: f32 = 768.;
 /// The home page: a welcome, the repositories added to Gitto, and what was last done in them.
 /// Read without waiting: the page shows straight away, and fills in as they load.
 pub struct HomeView {
-    repositories: Query<Vec<Repository>>,
+    data: Entity<AppData>,
     summaries: RepositorySummaries,
-    user_name: Query<Option<String>>,
     open_repository: Entity<OpenRepository>,
     /// The repository list's search.
     search: Entity<InputState>,
@@ -42,12 +40,21 @@ pub struct HomeView {
 
 impl HomeView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let repositories = repositories_query(cx);
+        let data = AppData::global(cx);
+        data.update(cx, |data, cx| {
+            data.show(AppPart::Repositories, cx);
+            data.show(AppPart::UserName, cx);
+        });
         let open_repository = OpenRepository::new(cx);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Find a repository…"));
         let clock = Clock::global(cx);
         let subscriptions = vec![
-            cx.observe(repositories.entry(), |home, _, cx| home.sync(cx)),
+            cx.subscribe(&data, |home, _, AppChanged(part), cx| match part {
+                AppPart::Repositories => home.sync(cx),
+                AppPart::UserName => cx.notify(),
+                AppPart::Focus => home.summaries.reload_all(cx),
+                AppPart::GitVersion => {}
+            }),
             cx.observe(&open_repository, |_, _, cx| cx.notify()),
             // The list is filtered as the search is typed.
             cx.subscribe(&search, |_, _, event: &InputEvent, cx| {
@@ -59,9 +66,8 @@ impl HomeView {
             cx.observe(&clock, |_, _, cx| cx.notify()),
         ];
         let mut home = HomeView {
-            repositories,
+            data,
             summaries: RepositorySummaries::new(),
-            user_name: user_name_query(cx),
             open_repository,
             search,
             _subscriptions: subscriptions,
@@ -70,11 +76,18 @@ impl HomeView {
         home
     }
 
-    /// Follows the list of repositories with their summaries' queries.
+    /// Follows the list of repositories with their summaries.
     fn sync(&mut self, cx: &mut Context<Self>) {
-        let repositories = self.repositories.data().unwrap_or_default();
+        let repositories = self.repositories(cx);
         self.summaries.sync(&repositories, cx);
         cx.notify();
+    }
+}
+
+impl HomeView {
+    fn repositories(&self, cx: &App) -> Vec<Repository> {
+        let data = self.data.read(cx);
+        data.repositories().data().cloned().unwrap_or_default()
     }
 }
 
@@ -88,8 +101,10 @@ impl Render for HomeView {
         } else {
             ASIDE_WIDTH
         };
-        let summaries = self.summaries.summaries();
-        let loaded = self.repositories.data().is_some();
+        let summaries = self.summaries.summaries(cx);
+        let data = self.data.read(cx);
+        let loaded = data.repositories().data().is_some();
+        let user_name = data.user_name().data().cloned();
         let open = self.open_repository.clone();
         let open_from_list = self.open_repository.clone();
         let dismiss = self.open_repository.clone();
@@ -112,7 +127,7 @@ impl Render for HomeView {
                     .w_full()
                     .gap_6()
                     .child(WelcomeHero::new(
-                        self.user_name.data(),
+                        user_name,
                         summaries.clone(),
                         self.open_repository.read(cx).error().cloned(),
                         move |_, cx| open.update(cx, |open, cx| open.open(cx)),
