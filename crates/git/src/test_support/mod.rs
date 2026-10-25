@@ -6,6 +6,7 @@
 //! functions that run their async part with `smol::block_on`.
 
 pub mod conflicts;
+pub mod status;
 
 use std::collections::HashMap;
 use std::ffi::OsStr;

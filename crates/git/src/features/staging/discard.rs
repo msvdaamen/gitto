@@ -415,10 +415,11 @@ mod tests {
     use std::fs;
     use std::time::{Duration, SystemTime};
 
-    use super::super::test_status::{StatusFile, status_files};
     use super::*;
+    use crate::features::status::schema::StatusFile;
     use crate::schema::FileStatus::*;
     use crate::test_support::conflicts::{Sides, files, try_git};
+    use crate::test_support::status::status_entries;
     use crate::test_support::{Fixture, git};
 
     /// A file's changes to discard, as its list has the file.
@@ -486,7 +487,7 @@ mod tests {
             discard(&repo, &unstaged("f.txt", Modified)).await.unwrap();
             assert_eq!(read(&path.join("f.txt")), "two\n");
             assert_eq!(
-                status_files(&repo).await,
+                status_entries(&repo).await,
                 [entry("f.txt", Some(Modified), None)]
             );
         });
@@ -507,7 +508,7 @@ mod tests {
             assert_eq!(read(&path.join("c.txt")), "b\n");
             assert!(!path.join("*.txt").exists());
             assert_eq!(
-                status_files(&repo).await,
+                status_entries(&repo).await,
                 [
                     entry("a file.txt", None, Some(Modified)),
                     entry("new file.txt", None, Some(Untracked)),
@@ -544,7 +545,7 @@ mod tests {
             assert!(!path.join("new file.txt").exists());
             assert!(!path.join("d.txt").exists());
             assert_eq!(read(&path.join("c.txt")), "b\n");
-            assert_eq!(status_files(&repo).await, []);
+            assert_eq!(status_entries(&repo).await, []);
         });
     }
 
@@ -561,7 +562,7 @@ mod tests {
             discard(&repo, &staged("x.txt", Added)).await.unwrap();
             assert!(!path.join("x.txt").exists());
             assert_eq!(
-                status_files(&repo).await,
+                status_entries(&repo).await,
                 [entry("y.txt", Some(Added), None)]
             );
         });
@@ -598,7 +599,7 @@ mod tests {
 
             discard(&repo, &staged("foo", Added)).await.unwrap();
             assert_eq!(read(&path.join("foo").join("bar.txt")), "bar\n");
-            assert_eq!(status_files(&repo).await, []);
+            assert_eq!(status_entries(&repo).await, []);
         });
     }
 
@@ -702,7 +703,7 @@ mod tests {
             assert!(!path.join("copy.txt").exists());
             assert_eq!(read(&path.join("lib.txt")), "lib, changed\n");
             assert_eq!(
-                status_files(&repo).await,
+                status_entries(&repo).await,
                 [entry("lib.txt", Some(Modified), None)]
             );
         });
@@ -877,7 +878,7 @@ mod tests {
             git(&path, ["status"]);
 
             discard_all(&repo).await.unwrap();
-            assert_eq!(status_files(&repo).await, []);
+            assert_eq!(status_entries(&repo).await, []);
             assert_eq!(read(&path.join("a file.txt")), "a\nmore\n");
             assert_eq!(read(&path.join("c.txt")), "b\n");
             assert_eq!(read(&path.join("s.txt")), "s\n");
@@ -1006,7 +1007,7 @@ mod tests {
             let repo = fx.repos.open("discard-all-unborn").await.unwrap();
 
             discard_all(&repo).await.unwrap();
-            assert_eq!(status_files(&repo).await, []);
+            assert_eq!(status_entries(&repo).await, []);
             assert!(!path.join("staged.txt").exists());
             assert!(!path.join("untracked.txt").exists());
 
