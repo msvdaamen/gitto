@@ -68,10 +68,8 @@ impl TryFrom<RawPage> for Page {
     }
 }
 
-/// A page of the history over every branch, remote and tag, newest first.
-///
-/// History of all branches, remotes and tags, most recently committed first across all of them,
-/// like GitKraken; a commit still always comes after its children. Sorting by commit date keeps
+/// A page of the history over every branch, remote and tag, most recently committed first across
+/// all of them, like GitKraken; a commit still always comes after its children. Sorting by commit date keeps
 /// rebased and amended work at the top, where sorting by author date would bury it.
 pub async fn get_log(repo: &Repo, page: Page) -> Result<Vec<Commit>> {
     let has_head = repo.has_head().await;
