@@ -914,7 +914,8 @@ mod tests {
         commit_files(&path, &files([("f.txt", "committed\n")]), "second");
         smol::block_on(async {
             let repo = fx.repos.open("op-stash").await.unwrap();
-            let _ = pop_stash(&repo, &git(&path, ["rev-parse", "refs/stash"])).await;
+            let popped = pop_stash(&repo, &git(&path, ["rev-parse", "refs/stash"])).await;
+            assert!(matches!(popped, Err(Error::StashConflict(_))), "{popped:?}");
 
             assert_eq!(get_operation(&repo).await.unwrap(), None);
             assert_eq!(
