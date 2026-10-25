@@ -335,22 +335,14 @@ async fn go_on(
 
 /// Where a cherry-pick or revert stopped: HEAD, and the commit it stopped at; `None` if it isn't
 /// stopped at one.
-async fn stopped_at(run: &GitCommand, git_dir: &Path) -> Result<Option<String>> {
+async fn stopped_at(run: &GitCommand, git_dir: &Path) -> Result<Option<(Option<String>, String)>> {
     let (head, cherry_pick, revert) = futures::join!(
         resolve_ref(run, "HEAD"),
         read_state(git_dir.join("CHERRY_PICK_HEAD")),
         read_state(git_dir.join("REVERT_HEAD")),
     );
     let head = head?;
-    Ok(cherry_pick.or(revert).map(|at| {
-        if at.is_empty() {
-            at
-        } else {
-            // TS wrote a HEAD that isn't there, which a cherry-pick or revert stopped at a commit
-            // always has, as `undefined`.
-            format!("{} {at}", head.as_deref().unwrap_or("undefined"))
-        }
-    }))
+    Ok(cherry_pick.or(revert).map(|at| (head, at)))
 }
 
 /// Whether the rebase stopped in the worktree whose git directory is `git_dir` asks for a commit
