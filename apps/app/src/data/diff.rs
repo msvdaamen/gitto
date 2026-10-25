@@ -8,13 +8,16 @@ use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::features::status::schema::Uncommitted;
 use gitto_git::input::{FullSha, RepositoryId, Sha};
 use gitto_git::schema::FileStatus;
-use gpui_kit::{App, Context, Task};
+use gpui_kit::{App, Context, Entity, Task};
 
 use super::call::loads;
 use super::client::{QueryClient, QueryError, QueryOptions, StaleTime};
+use super::keyed::Hold;
 use super::keys;
+use super::loaded::Loaded;
 use super::opaque::{Opaque, memoized};
 use super::query::Query;
+use super::repository::Repository;
 use super::status::uncommitted_options;
 use gitto_ui::git::changes::{LineCounts, line_totals};
 
@@ -93,6 +96,54 @@ pub fn select_shown_files() -> impl Fn(&ChangedFiles) -> ShownFiles + 'static {
         shown_sha: changed.sha.clone(),
         files: changed.files.clone(),
         totals: totals(&changed.files),
+    }
+}
+
+/// The files of a commit or stash that a view shows, from its repository: held while they're on
+/// show, and, while another's load, the ones before kept on show, saying whose they are.
+pub struct FilesOnShow {
+    of: FilesOf,
+    sha: String,
+    _hold: Hold,
+    select: Box<dyn Fn(&ChangedFiles) -> ShownFiles>,
+    last: Option<ShownFiles>,
+}
+
+impl FilesOnShow {
+    /// The files `of` `sha` changed, in `repository`.
+    pub fn new(of: FilesOf, sha: &str, repository: &Entity<Repository>, cx: &mut App) -> Self {
+        FilesOnShow {
+            of,
+            sha: sha.to_owned(),
+            _hold: repository.update(cx, |repository, cx| repository.hold_files(of, sha, cx)),
+            select: Box::new(select_shown_files()),
+            last: None,
+        }
+    }
+
+    /// Shows the files `sha` changed instead; the ones on show stay until they're loaded.
+    pub fn set_sha(&mut self, sha: &str, repository: &Entity<Repository>, cx: &mut App) {
+        if self.sha != sha {
+            self.sha = sha.to_owned();
+            let of = self.of;
+            self._hold = repository.update(cx, |repository, cx| repository.hold_files(of, sha, cx));
+        }
+    }
+
+    /// The files on show, as `repository` has them now: call as the view renders.
+    pub fn data(&mut self, repository: &Repository) -> Option<ShownFiles> {
+        if let Some(files) = repository.files(self.of, &self.sha).and_then(Loaded::data) {
+            self.last = Some((self.select)(files));
+        }
+        self.last.clone()
+    }
+
+    /// Why the files `sha` changed couldn't be loaded, if they couldn't.
+    pub fn error(&self, repository: &Repository) -> Option<QueryError> {
+        repository
+            .files(self.of, &self.sha)
+            .and_then(Loaded::error)
+            .cloned()
     }
 }
 

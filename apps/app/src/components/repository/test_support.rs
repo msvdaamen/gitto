@@ -24,7 +24,9 @@ use gpui_kit::test::{TestEventExt as _, TestQueryExt as _};
 use gpui_kit::{AnyWindowHandle, AppContext as _, MouseButton, Pixels, Point, TestAppContext};
 use tempfile::TempDir;
 
+use crate::data::diff::{ChangedFiles, FilesOf};
 use crate::data::git::{NoGit, RepositoryGit};
+use crate::data::history::Log;
 use crate::data::repositories::RepositorySource;
 use crate::data::{Opaque, QueryClient, QueryError, keys};
 
@@ -226,6 +228,23 @@ pub fn set_remotes(id: &RepositoryId, remotes: &[&str], cx: &mut TestAppContext)
         repository.set_remotes(remotes.clone(), cx)
     });
     cx.update(|cx| QueryClient::set_data(&keys::remotes(id), remotes, cx));
+}
+
+pub fn set_log(id: &RepositoryId, log: Log, cx: &mut TestAppContext) {
+    update(id, cx, |repository, cx| repository.set_log(log.clone(), cx));
+    cx.update(|cx| QueryClient::set_data(&keys::log(id), log, cx));
+}
+
+/// The files the commit or stash `files.sha` changed, as `of`'s.
+pub fn set_files(id: &RepositoryId, of: FilesOf, files: ChangedFiles, cx: &mut TestAppContext) {
+    update(id, cx, |repository, cx| {
+        repository.set_files(of, files.clone(), cx)
+    });
+    let key = match of {
+        FilesOf::Commit => keys::commit_files(id, &files.sha),
+        FilesOf::Stash => keys::stash_files(id, &files.sha),
+    };
+    cx.update(|cx| QueryClient::set_data(&key, files, cx));
 }
 
 /// The repository `id` at `path`, named after its folder.

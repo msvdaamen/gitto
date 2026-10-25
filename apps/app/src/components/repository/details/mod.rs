@@ -3,7 +3,6 @@
 pub mod changed_file_list;
 pub mod commit_details;
 pub mod commit_form;
-pub mod details_data;
 pub mod details_sections;
 pub mod discard_dialog;
 pub mod file_menu;

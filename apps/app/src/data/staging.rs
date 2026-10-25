@@ -3,11 +3,8 @@
 
 use std::sync::Arc;
 
-use futures::FutureExt as _;
-use futures::future::BoxFuture;
-use gitto_git::ApiError;
 use gitto_git::features::diff::schema::ChangedFile;
-use gitto_git::features::staging::discard::{DiscardSide, Discarded};
+use gitto_git::features::staging::discard::DiscardSide;
 use gitto_git::features::staging::schema::LineSelection;
 use gitto_git::input::{FileInput, Paths, RepositoryId};
 use gitto_git::schema::FileStatus;
@@ -18,6 +15,7 @@ use super::client::QueryClient;
 use super::file_diff::FilePatch;
 use super::keys::{self, UncommittedSide};
 use super::mutation::Mutation;
+use super::repository::Repositories;
 use gitto_ui::git::changes::staging_paths;
 use gitto_ui::git::patch::has_hunks;
 
@@ -31,13 +29,9 @@ pub enum StagingTarget {
 
 /// Stages files in the repository it's given (`useStage`).
 pub fn stage_mutation(cx: &mut App) -> Entity<Mutation<(RepositoryId, StagingTarget)>> {
-    staging_mutation(
-        |cx, id, target| match target {
-            StagingTarget::All => call(cx, &id, |repo| repo.stage_all()).boxed(),
-            StagingTarget::Paths(paths) => call(cx, &id, |repo| async move {
-                repo.stage(repo.input(Paths::parse(paths))?).await
-            })
-            .boxed(),
+    Mutation::new(
+        |(id, target): (RepositoryId, StagingTarget), cx: &mut App| {
+            Repositories::open(&id, cx).update(cx, |repository, cx| repository.stage(target, cx))
         },
         cx,
     )
@@ -45,13 +39,9 @@ pub fn stage_mutation(cx: &mut App) -> Entity<Mutation<(RepositoryId, StagingTar
 
 /// Unstages files in the repository it's given (`useUnstage`).
 pub fn unstage_mutation(cx: &mut App) -> Entity<Mutation<(RepositoryId, StagingTarget)>> {
-    staging_mutation(
-        |cx, id, target| match target {
-            StagingTarget::All => call(cx, &id, |repo| repo.unstage_all()).boxed(),
-            StagingTarget::Paths(paths) => call(cx, &id, |repo| async move {
-                repo.unstage(repo.input(Paths::parse(paths))?).await
-            })
-            .boxed(),
+    Mutation::new(
+        |(id, target): (RepositoryId, StagingTarget), cx: &mut App| {
+            Repositories::open(&id, cx).update(cx, |repository, cx| repository.unstage(target, cx))
         },
         cx,
     )
@@ -71,39 +61,9 @@ pub enum DiscardTarget {
 /// paths if it's renamed; or every change, deleting untracked files too (`useDiscard`). A file
 /// that changed since its list was read isn't discarded (see `discard`).
 pub fn discard_mutation(cx: &mut App) -> Entity<Mutation<(RepositoryId, DiscardTarget)>> {
-    staging_mutation(
-        |cx, id, target| match target {
-            DiscardTarget::All => call(cx, &id, |repo| repo.discard_all()).boxed(),
-            DiscardTarget::File { side, file } => call(cx, &id, move |repo| {
-                repo.discard(Discarded {
-                    path: file.path,
-                    orig_path: file.orig_path,
-                    status: file.status,
-                    side,
-                })
-            })
-            .boxed(),
-        },
-        cx,
-    )
-}
-
-/// A mutation of the staging in the repository it's given, which `run` does; the uncommitted
-/// changes reload once it's done, and it settles once they have (`useStagingMutation`).
-fn staging_mutation<T: Clone + 'static>(
-    run: impl Fn(&App, RepositoryId, T) -> BoxFuture<'static, Result<(), ApiError>> + 'static,
-    cx: &mut App,
-) -> Entity<Mutation<(RepositoryId, T)>> {
     Mutation::new(
-        move |(id, target): (RepositoryId, T), cx: &mut App| {
-            let action = run(cx, id.clone(), target);
-            cx.spawn(async move |cx| {
-                cx.background_spawn(action).await?;
-                // The watcher would catch this too, but reloading right away feels snappier.
-                cx.update(|cx| QueryClient::invalidate(&keys::uncommitted(&id), cx))
-                    .await;
-                Ok(())
-            })
+        |(id, target): (RepositoryId, DiscardTarget), cx: &mut App| {
+            Repositories::open(&id, cx).update(cx, |repository, cx| repository.discard(target, cx))
         },
         cx,
     )

@@ -3,7 +3,6 @@
 
 use std::rc::Rc;
 
-use gitto_git::features::operation::schema::Operation;
 use gitto_git::features::staging::discard::DiscardSide;
 use gitto_git::features::status::schema::{StatusSummary, Uncommitted};
 use gitto_git::input::RepositoryId;
@@ -21,7 +20,6 @@ use gpui_kit::{
 use super::changed_file_list::{ChangedFileList, FileAction, HoverIntent};
 use super::commit_details::{CommitDetailsEvent, ShownFile, shown_path_in};
 use super::commit_form::CommitForm;
-use super::details_data::DetailsData;
 use super::details_sections::DetailsError;
 use super::discard_dialog::{DiscardPrompt, open_discard_dialog};
 use super::file_menu::file_menu;
@@ -29,15 +27,23 @@ use crate::components::ui::{
     Badge, IconButton, IconName, LinkButton, Mascot, SectionHeader, Tone, UpdatingIndicator,
 };
 use crate::data::diff::{WorkingTreeLists, select_working_tree_lists};
-use crate::data::staging::{DiscardTarget, StagingTarget};
-use crate::data::status::{head_sha, select_summary, uncommitted_options};
-use crate::data::{Mutation, Opaque, Query, QueryError};
+use crate::data::staging::{
+    DiscardTarget, StagingTarget, discard_mutation, stage_mutation, unstage_mutation,
+};
+use crate::data::status::head_sha;
+use crate::data::{Changed, Mutation, Opaque, Part, QueryError, Shown};
 use crate::state::delayed::{DELAY, Delayed};
 use crate::theme::PaletteExt as _;
 use gitto_ui::git::changes::staging_paths;
 use gitto_ui::git::diff_source::DiffSource;
 
+/// Splits the status into the uncommitted changes' lists.
+type SelectLists = Box<dyn Fn(&Opaque<Uncommitted>) -> WorkingTreeLists>;
+
 type Staging = Entity<Mutation<(RepositoryId, StagingTarget)>>;
+
+/// What the uncommitted changes' details show of the repository.
+const PARTS: &[Part] = &[Part::Status, Part::Operation];
 
 /// Which of the two lists: what isn't staged, and what is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,10 +84,9 @@ impl Side {
 /// There's no Suspense to take it off the page while the status reloads (whenever a file is
 /// saved): it stays, its lists scrolled where they were, and says it's updating.
 pub struct WorkingTreeDetails {
-    repository_id: RepositoryId,
-    changes: Query<Opaque<Uncommitted>, WorkingTreeLists>,
-    status: Query<Opaque<Uncommitted>, StatusSummary>,
-    operation: Query<Option<Operation>>,
+    repository: Shown,
+    /// The uncommitted changes' lists, of the status.
+    select_lists: SelectLists,
     stage: Staging,
     unstage: Staging,
     discard: Entity<Mutation<(RepositoryId, DiscardTarget)>>,
@@ -100,44 +105,31 @@ pub struct WorkingTreeDetails {
 impl EventEmitter<CommitDetailsEvent> for WorkingTreeDetails {}
 
 impl WorkingTreeDetails {
-    pub fn new(
-        repository_id: RepositoryId,
-        data: DetailsData,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let get_status = data.status(cx);
-        let changes = Query::with_select(
-            uncommitted_options(&repository_id, get_status.clone()),
-            select_working_tree_lists(),
-            cx,
-        );
-        let status = Query::with_select(
-            uncommitted_options(&repository_id, get_status),
-            select_summary,
-            cx,
-        );
-        let operation = Query::new(data.operation(&repository_id, cx), cx);
-        let stage = data.stage(cx);
-        let unstage = data.unstage(cx);
-        let discard = data.discard(cx);
-        let form = cx.new(|cx| CommitForm::new(repository_id.clone(), data.clone(), window, cx));
+    pub fn new(repository_id: &RepositoryId, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let repository = Shown::new(repository_id, PARTS, cx);
+        let stage = stage_mutation(cx);
+        let unstage = unstage_mutation(cx);
+        let discard = discard_mutation(cx);
+        let form = cx.new(|cx| CommitForm::new(repository_id.clone(), window, cx));
         let updating = cx.new(|cx| Delayed::new(false, DELAY, cx));
         let subscriptions = vec![
             cx.observe(&stage, |_, _, cx| cx.notify()),
             cx.observe(&unstage, |_, _, cx| cx.notify()),
             cx.observe(&discard, |_, _, cx| cx.notify()),
             cx.observe(&updating, |_, _, cx| cx.notify()),
-            // Observed after the queries, which read it first.
-            cx.observe_in(changes.entry(), window, |this, _, window, cx| {
-                this.status_changed(window, cx)
-            }),
+            cx.subscribe_in(
+                repository.entity(),
+                window,
+                |this, _, Changed(part), window, cx| {
+                    if *part == Part::Status {
+                        this.status_changed(window, cx)
+                    }
+                },
+            ),
         ];
         let mut details = WorkingTreeDetails {
-            repository_id,
-            changes,
-            status,
-            operation,
+            repository,
+            select_lists: Box::new(select_working_tree_lists()),
             stage,
             unstage,
             discard,
@@ -163,24 +155,35 @@ impl WorkingTreeDetails {
         }
     }
 
+    /// The uncommitted changes' lists, once loaded.
+    fn lists(&self, cx: &App) -> Option<WorkingTreeLists> {
+        let status = self.repository.read(cx).status().data()?;
+        Some((self.select_lists)(status))
+    }
+
+    fn summary(&self, cx: &App) -> Option<StatusSummary> {
+        let status = self.repository.read(cx).status().data()?;
+        Some(status.summary())
+    }
+
     /// Follows the status as it reloads: tells the form what's staged and where HEAD is, says
     /// it's updating once that's taken a while, and stops asking about a file whose changes are
     /// gone.
     fn status_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let summary = self.status.data();
-        let staged = self.changes.data().map_or(0, |lists| lists.staged().len());
+        let summary = self.summary(cx);
+        let staged = self.lists(cx).map_or(0, |lists| lists.staged().len());
         let last_commit = summary
             .as_ref()
             .and_then(|summary| head_sha(&summary.head).map(str::to_owned));
-        let repository_id = self.repository_id.clone();
+        let repository_id = self.repository.id(cx).clone();
         self.form.update(cx, |form, cx| {
             form.set_head(repository_id, staged, last_commit, cx)
         });
-        let refetching = self.status.is_refetching();
+        let refetching = self.repository.read(cx).status().is_refetching();
         self.updating
             .update(cx, |updating, cx| updating.set(refetching, cx));
         // Gone, it isn't asked about again, should it come back.
-        if self.discarding.is_some() && self.discard_prompt().is_none() {
+        if self.discarding.is_some() && self.discard_prompt(cx).is_none() {
             self.discarding = None;
             window.close_dialog(cx);
         }
@@ -197,7 +200,7 @@ impl WorkingTreeDetails {
     /// latest one did, if it did.
     fn stage_files(&mut self, side: Side, target: StagingTarget, cx: &mut Context<Self>) {
         self.reset_failures(cx);
-        let input = (self.repository_id.clone(), target);
+        let input = (self.repository.id(cx).clone(), target);
         let mutation = match side {
             Side::Unstaged => &self.stage,
             Side::Staged => &self.unstage,
@@ -207,7 +210,7 @@ impl WorkingTreeDetails {
 
     fn discard_changes(&mut self, target: DiscardTarget, cx: &mut Context<Self>) {
         self.reset_failures(cx);
-        let input = (self.repository_id.clone(), target);
+        let input = (self.repository.id(cx).clone(), target);
         drop(
             self.discard
                 .update(cx, |mutation, cx| mutation.mutate(input, cx)),
@@ -221,23 +224,29 @@ impl WorkingTreeDetails {
     }
 
     /// Why all the changes can't be discarded, if they can't.
-    fn discard_all_blocker(&self) -> Option<String> {
+    fn discard_all_blocker(&self, cx: &App) -> Option<String> {
         // Its commit would finish it without its changes.
-        if let Some(operation) = self.operation.data().flatten() {
+        if let Some(operation) = self
+            .repository
+            .read(cx)
+            .operation()
+            .data()
+            .cloned()
+            .flatten()
+        {
             return Some(format!(
                 "Finish or abort {} before discarding all changes",
                 operation_name(&operation)
             ));
         }
         if self
-            .status
-            .data()
+            .summary(cx)
             .is_some_and(|summary| summary.counts.conflicted > 0)
         {
             return Some("Resolve the conflicts before discarding all changes".to_owned());
         }
         // Repositories inside this one are kept.
-        let lists = self.changes.data();
+        let lists = self.lists(cx);
         let staged = lists.as_ref().map_or(0, |lists| lists.staged().len());
         let only_nested = lists
             .as_ref()
@@ -251,11 +260,11 @@ impl WorkingTreeDetails {
     /// The changes being asked about discarding as their list has them now, which the dialog
     /// asks about: what discarding them does can change with the file, as it's staged in a
     /// terminal, say. None once it's gone.
-    fn discard_prompt(&self) -> Option<DiscardPrompt> {
+    fn discard_prompt(&self, cx: &App) -> Option<DiscardPrompt> {
         match self.discarding.as_ref()? {
             DiscardTarget::All => Some(DiscardPrompt::All),
             DiscardTarget::File { side, file } => {
-                let lists = self.changes.data()?;
+                let lists = self.lists(cx)?;
                 let list = match side {
                     DiscardSide::Staged => lists.staged(),
                     DiscardSide::Unstaged => lists.unstaged(),
@@ -288,7 +297,7 @@ impl WorkingTreeDetails {
         let cancel = this.clone();
         let discard = this.clone();
         open_discard_dialog(
-            move |cx| this.upgrade()?.read(cx).discard_prompt(),
+            move |cx| this.upgrade()?.read(cx).discard_prompt(cx),
             move |_, cx| {
                 let _ = cancel.update(cx, |this, cx| {
                     this.discarding = None;
@@ -309,8 +318,11 @@ impl WorkingTreeDetails {
     /// The error to show, if any: why the changes couldn't be loaded, or why the latest change to
     /// them failed.
     fn error(&self, cx: &App) -> Option<QueryError> {
-        self.changes
+        self.repository
+            .read(cx)
+            .status()
             .error()
+            .cloned()
             .or_else(|| self.stage.read(cx).error().cloned())
             .or_else(|| self.unstage.read(cx).error().cloned())
             .or_else(|| self.discard.read(cx).error().cloned())
@@ -318,15 +330,14 @@ impl WorkingTreeDetails {
 
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = *cx.palette();
-        let lists = self.changes.data();
+        let lists = self.lists(cx);
         let (staged, unstaged) = lists.as_ref().map_or((0, 0), |lists| {
             (lists.staged().len(), lists.unstaged().len())
         });
         let branch = self
-            .status
-            .data()
+            .summary(cx)
             .map(|summary| head_label(&summary.head).to_owned());
-        let blocker = self.discard_all_blocker();
+        let blocker = self.discard_all_blocker(cx);
         let busy = self.is_busy(cx);
         h_flex()
             .flex_none()
@@ -395,7 +406,7 @@ impl WorkingTreeDetails {
 
     fn render_section(&self, side: Side, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = *cx.palette();
-        let lists = self.changes.data();
+        let lists = self.lists(cx);
         let busy = self.is_busy(cx);
         let ix = side as usize;
         let (title, icon, empty, bulk_label) = match side {
@@ -571,9 +582,11 @@ mod tests {
 
     use super::*;
     use crate::components::repository::details::test_fakes::{
-        Fakes, click_label, file, open, repository_id,
+        Fakes, click_label, file, open_with, repository_id,
     };
-    use crate::data::{QueryClient, keys};
+    use gitto_git::features::operation::schema::Operation;
+
+    use crate::data::Repositories;
 
     struct Details {
         _dir: tempfile::TempDir,
@@ -588,9 +601,8 @@ mod tests {
 
     /// The uncommitted changes' details, of the changes `fakes` has.
     fn render_details(cx: &mut TestAppContext, fakes: Rc<Fakes>) -> Details {
-        let data = fakes.data();
-        let (dir, window, details) = open(cx, move |window, cx| {
-            WorkingTreeDetails::new(repository_id(), data, window, cx)
+        let (dir, window, details) = open_with(cx, &fakes, move |window, cx| {
+            WorkingTreeDetails::new(&repository_id(), window, cx)
         });
         Details {
             _dir: dir,
@@ -643,7 +655,7 @@ mod tests {
                 .unwrap();
             let prompt = self
                 .details
-                .read_with(cx, |details, _| details.discard_prompt());
+                .read_with(cx, |details, cx| details.discard_prompt(cx));
             open.then(|| prompt.map(|prompt| prompt.describe()))
                 .flatten()
         }
@@ -673,10 +685,8 @@ mod tests {
 
         fn reload(&self, cx: &mut TestAppContext) {
             cx.update(|cx| {
-                drop(QueryClient::invalidate(
-                    &keys::uncommitted(&repository_id()),
-                    cx,
-                ))
+                let repository = Repositories::get(&repository_id(), cx).unwrap();
+                repository.update(cx, |repository, cx| drop(repository.reload_uncommitted(cx)));
             });
             cx.run_until_parked();
         }

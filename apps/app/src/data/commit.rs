@@ -11,6 +11,7 @@ use super::client::{QueryClient, QueryError, QueryOptions, StaleTime};
 use super::keys;
 use super::mutation::Mutation;
 use super::query::Query;
+use super::repository::Repositories;
 
 /// A commit to make: of what's staged, with `message`; with `amend`, HEAD's SHA, it replaces that
 /// commit instead.
@@ -31,12 +32,8 @@ pub struct Reword {
 pub fn create_commit_mutation(cx: &mut App) -> Entity<Mutation<(RepositoryId, NewCommit)>> {
     Mutation::new(
         |(id, commit): (RepositoryId, NewCommit), cx: &mut App| {
-            let action = call(cx, &id, move |repo| async move {
-                let message = repo.input(Message::parse(commit.message))?;
-                let amend = repo.input(commit.amend.map(FullSha::parse).transpose())?;
-                repo.create_commit(message, amend).await
-            });
-            refresh_after_commit(id, action, cx)
+            Repositories::open(&id, cx)
+                .update(cx, |repository, cx| repository.create_commit(commit, cx))
         },
         cx,
     )

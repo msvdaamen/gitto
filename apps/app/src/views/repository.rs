@@ -669,13 +669,14 @@ mod tests {
     use super::*;
     use crate::components::repository::history::columns::keyed;
     use crate::components::repository::test_support::{
-        Repositories, repository, repository_id, set_operation, set_push_target, set_refs,
-        set_remotes, set_stashes, set_status, set_worktrees, setup_with, uncommitted,
+        Repositories, repository, repository_id, set_files, set_log, set_operation,
+        set_push_target, set_refs, set_remotes, set_stashes, set_status, set_worktrees, setup_with,
+        uncommitted,
     };
-    use crate::data::diff::ChangedFiles;
+    use crate::data::diff::{ChangedFiles, FilesOf};
     use crate::data::file_diff::{FilePatch, file_patch_key};
     use crate::data::history::Log;
-    use crate::data::{Opaque, QueryClient, keys};
+    use crate::data::{Opaque, QueryClient};
 
     fn commit(sha: &str, subject: &str, parents: &[&str], committed_at: i64) -> Commit {
         Commit {
@@ -767,13 +768,13 @@ mod tests {
             ]),
             complete: true,
         };
-        cx.update(|cx| QueryClient::set_data(&keys::log(&id), log, cx));
+        set_log(&id, log, cx);
         for (sha, path) in [("b1", "second.txt"), ("a1", "first.txt")] {
             let files = ChangedFiles {
                 sha: sha.into(),
                 files: Opaque::new(vec![added(path)]),
             };
-            cx.update(|cx| QueryClient::set_data(&keys::commit_files(&id, sha), files, cx));
+            set_files(&id, FilesOf::Commit, files, cx);
             let source = DiffSource::Commit { sha: sha.into() };
             let patch = FilePatch {
                 key: gitto_ui::git::diff_source::diff_file_key(&source, path),
