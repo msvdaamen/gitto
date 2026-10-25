@@ -1,0 +1,22 @@
+name: Cache cleanup
+
+# A pull request's caches (see the Rust job in ci.yml) can only be restored by that pull request, so
+# once it's merged or closed they only take up the repository's cache space, where GitHub would
+# otherwise keep them for a week.
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  actions: write
+
+jobs:
+  delete:
+    name: Delete the pull request's caches
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REF: refs/pull/${{ github.event.pull_request.number }}/merge
+        run: gh cache delete --all --ref "$REF" --succeed-on-no-caches
