@@ -143,7 +143,7 @@ pub fn load_more(id: RepositoryId, get: &GetLog, cx: &mut App) -> Task<Result<()
 
 /// `log` with `commits` after it. Each commit only once: the history may have moved since the
 /// commits before were loaded, until the reload that follows the move.
-fn followed_by(log: &Log, commits: Vec<Commit>, complete: bool) -> Log {
+pub(crate) fn followed_by(log: &Log, commits: Vec<Commit>, complete: bool) -> Log {
     let listed: HashSet<&str> = log
         .commits
         .iter()

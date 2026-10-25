@@ -20,7 +20,7 @@ use gitto_ui::git::changes::{LineCounts, line_totals};
 
 /// Whose changed files to load: a commit's, compared to its first parent, or a stash's, compared
 /// to the commit it was made on (TS's pair of a query key and a `FilesFetcher`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FilesOf {
     Commit,
     Stash,

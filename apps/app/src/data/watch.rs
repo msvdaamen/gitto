@@ -17,6 +17,7 @@ use gpui_kit::{AppContext as _, Context, Task};
 
 use super::client::{QueryClient, QueryOptions, RefetchOnFocus, StaleTime};
 use super::keys;
+use super::repository::Repositories;
 
 /// How long the working tree stays watched after the window loses focus. Starting to watch walks
 /// the whole tree, so switching to an editor and back shouldn't start over every time.
@@ -97,6 +98,9 @@ impl RepositoryWatcher {
             |entry| entry.data_updated_at.is_none_or(|at| at < shown_at),
             cx,
         );
+        if let Some(repository) = Repositories::get(&watcher.id, cx) {
+            repository.update(cx, |repository, cx| repository.reload_when_shown(cx));
+        }
         watcher.watch_git_dir(cx);
         watcher.focus_changed(None, cx);
         watcher
@@ -152,10 +156,16 @@ impl RepositoryWatcher {
 
     fn reload_all(&self, cx: &mut Context<Self>) {
         QueryClient::invalidate(&keys::repository(&self.id), cx);
+        if let Some(repository) = Repositories::get(&self.id, cx) {
+            repository.update(cx, |repository, cx| drop(repository.reload_all(cx)));
+        }
     }
 
     fn reload_uncommitted(&self, cx: &mut Context<Self>) {
         QueryClient::invalidate(&keys::uncommitted(&self.id), cx);
+        if let Some(repository) = Repositories::get(&self.id, cx) {
+            repository.update(cx, |repository, cx| drop(repository.reload_uncommitted(cx)));
+        }
     }
 
     fn watch_git_dir(&mut self, cx: &mut Context<Self>) {

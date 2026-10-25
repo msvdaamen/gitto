@@ -128,12 +128,16 @@
 
 mod call;
 pub mod client;
+pub mod git;
 pub mod key;
+pub mod keyed;
 pub mod keys;
+pub mod loaded;
 pub mod mutation;
 pub mod opaque;
 pub mod operation;
 pub mod query;
+pub mod repository;
 
 pub mod branch;
 pub mod commit;
@@ -159,10 +163,12 @@ pub use self::client::{
     Reloading, StaleTime,
 };
 pub use self::key::QueryKey;
+pub use self::loaded::Loaded;
 pub use self::mutation::Mutation;
 pub use self::opaque::Opaque;
 pub use self::operation::{OneAtATime, OperationState, Operations, RepositoryOperation, reloading};
 pub use self::query::Query;
+pub use self::repository::{Changed, Part, Repositories, Repository};
 pub use self::watch::RepositoryWatcher;
 
 /// Sets up the data layer's globals: the query cache and the operations' state.

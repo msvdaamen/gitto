@@ -1,0 +1,1448 @@
+//! A repository as the app shows it: [`Repository`], an entity holding what's loaded of it, and
+//! [`Repositories`], the global that has one for each repository opened. It takes the place of
+//! TanStack Query's cache, which the Electron app kept it in by string keys: here each thing loaded
+//! is a field, a [`Loaded`], or a [`Keyed`] of them for what's loaded by key, like a file's patch.
+//!
+//! A view reads the fields in `render`, and subscribes to [`Changed`] for the [`Part`]s it shows,
+//! to render again when they change, and only then: a load that brings the same data keeps it, and
+//! changes nothing. It asks for what it shows with [`Repository::show`] (and `hold_*` for what's
+//! loaded by key), which loads it unless it's loaded. Git runs on the background executor, through
+//! [`RepositoryGit`]; loading something again drops the load under way, which cancels it.
+//!
+//! What's loaded is kept up to date by `super::watch::RepositoryWatcher`, which reloads it when the
+//! repository changes on disk (see [`Repository::reload_all`]), and nothing else does: not focus,
+//! nor a timer. What never changes, a commit and what's in it, is kept, a few at a time, for
+//! whichever view shows it next.
+
+use std::collections::HashMap;
+use std::rc::Rc;
+use std::sync::Arc;
+
+use futures::FutureExt as _;
+use futures::channel::oneshot;
+use futures::future::{BoxFuture, join_all};
+use gitto_git::features::conflicts::schema::Conflict;
+use gitto_git::features::diff::schema::ChangedFile;
+use gitto_git::features::history::commands::Page;
+use gitto_git::features::history::schema::Commit;
+use gitto_git::features::operation::schema::Operation;
+use gitto_git::features::overview::schema::Overview;
+use gitto_git::features::refs::schema::Ref;
+use gitto_git::features::remote::schema::PushTarget;
+use gitto_git::features::stash::schema::Stash;
+use gitto_git::features::status::schema::{StatusReply, Uncommitted};
+use gitto_git::features::worktree::schema::Worktree;
+use gitto_git::input::{FileInput, FullSha, NonEmpty, RepositoryId, Sha};
+use gitto_git::schema::FileStatus;
+use gpui_kit::{App, AppContext as _, Context, Entity, EventEmitter, Global, Task};
+
+use super::client::QueryError;
+use super::diff::{ChangedFiles, FilesOf};
+use super::file_diff::FilePatch;
+use super::git::{GitRepository, GitTask, RepositoryGit};
+use super::history::{Log, NEXT_PAGE, followed_by, reload_limit};
+use super::keyed::{Hold, Keyed};
+use super::loaded::Loaded;
+use super::opaque::Opaque;
+use super::operation::OperationState;
+use crate::services::Services;
+use gitto_ui::git::diff_source::{DiffSource, diff_file_key, is_uncommitted};
+
+/// How many commits, and of each thing in them, are kept that nothing shows: enough to step back
+/// and forth through the history without loading them again.
+const KEPT_COMMITS: usize = 64;
+
+/// How many patches and conflicted files are kept that nothing shows: they can be megabytes, and
+/// one is loaded ahead whenever the pointer rests on a file.
+const KEPT_FILES: usize = 16;
+
+/// What of a repository changed (see [`Changed`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Part {
+    /// The status, with the uncommitted changes.
+    Status,
+    /// The merge, rebase, cherry-pick or revert under way.
+    Operation,
+    Log,
+    Refs,
+    Remotes,
+    Stashes,
+    Worktrees,
+    /// Where the Push button pushes, and how many commits.
+    PushTarget,
+    /// What the home page shows of it, beyond its status.
+    Overview,
+    /// Which remote branch has a commit.
+    PushedTo,
+    /// A file's patch, in a commit, a stash or the uncommitted changes.
+    Patches,
+    Conflicts,
+    /// A commit's details, files or message.
+    Commits,
+    /// Loading more of the log.
+    More,
+    /// Whether a change to the repository (a pull, say) is running, and why it last failed.
+    Operations,
+}
+
+/// What a [`Repository`] says when what it holds of `Part` changed: its data, why it failed, or
+/// whether it's loading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Changed(pub Part);
+
+/// The loads a reload started: `.await` it to wait for them, or drop it not to (they run either
+/// way).
+#[must_use = "awaiting it waits for the reloads; drop it not to"]
+pub struct Reloading(Vec<oneshot::Receiver<()>>);
+
+impl std::future::IntoFuture for Reloading {
+    type Output = ();
+    type IntoFuture = BoxFuture<'static, ()>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(async move {
+            join_all(self.0).await;
+        })
+    }
+}
+
+/// Where a file's patch is kept: its source and path.
+type PatchKey = (DiffSource, String);
+
+/// A repository's data (see the module's doc).
+pub struct Repository {
+    id: RepositoryId,
+    git: Rc<dyn RepositoryGit>,
+    status: Loaded<Opaque<Uncommitted>>,
+    operation: Loaded<Option<Operation>>,
+    log: Loaded<Log>,
+    refs: Loaded<Arc<[Ref]>>,
+    remotes: Loaded<Vec<String>>,
+    stashes: Loaded<Arc<[Stash]>>,
+    worktrees: Loaded<Arc<[Worktree]>>,
+    push_target: Loaded<PushTarget>,
+    overview: Loaded<Overview>,
+    pushed_to: Keyed<String, Option<String>>,
+    patches: Keyed<PatchKey, FilePatch>,
+    conflicts: Keyed<String, Conflict>,
+    commits: Keyed<String, Commit>,
+    files: Keyed<(FilesOf, String), ChangedFiles>,
+    messages: Keyed<String, String>,
+    more: LoadingMore,
+    operations: HashMap<&'static str, OperationState>,
+}
+
+/// Loading more of the log: whether it's under way, and why it last failed, both of the log as it
+/// was then, so forgotten once it reloads.
+#[derive(Default)]
+struct LoadingMore {
+    task: Option<Task<()>>,
+    error: Option<QueryError>,
+}
+
+impl EventEmitter<Changed> for Repository {}
+
+impl Repository {
+    /// The repository `id`, asking `git` for what it loads. Nothing's loaded until it's shown.
+    pub fn new(id: RepositoryId, git: Rc<dyn RepositoryGit>) -> Self {
+        Repository {
+            id,
+            git,
+            status: Loaded::default(),
+            operation: Loaded::default(),
+            log: Loaded::default(),
+            refs: Loaded::default(),
+            remotes: Loaded::default(),
+            stashes: Loaded::default(),
+            worktrees: Loaded::default(),
+            push_target: Loaded::default(),
+            overview: Loaded::default(),
+            pushed_to: Keyed::new(KEPT_COMMITS),
+            patches: Keyed::new(KEPT_FILES),
+            conflicts: Keyed::new(KEPT_FILES),
+            commits: Keyed::new(KEPT_COMMITS),
+            files: Keyed::new(KEPT_COMMITS),
+            messages: Keyed::new(KEPT_COMMITS),
+            more: LoadingMore::default(),
+            operations: HashMap::new(),
+        }
+    }
+
+    pub fn id(&self) -> &RepositoryId {
+        &self.id
+    }
+
+    /// What it asks git.
+    pub fn git(&self) -> &Rc<dyn RepositoryGit> {
+        &self.git
+    }
+
+    pub fn status(&self) -> &Loaded<Opaque<Uncommitted>> {
+        &self.status
+    }
+
+    pub fn operation(&self) -> &Loaded<Option<Operation>> {
+        &self.operation
+    }
+
+    pub fn log(&self) -> &Loaded<Log> {
+        &self.log
+    }
+
+    pub fn refs(&self) -> &Loaded<Arc<[Ref]>> {
+        &self.refs
+    }
+
+    pub fn remotes(&self) -> &Loaded<Vec<String>> {
+        &self.remotes
+    }
+
+    pub fn stashes(&self) -> &Loaded<Arc<[Stash]>> {
+        &self.stashes
+    }
+
+    pub fn worktrees(&self) -> &Loaded<Arc<[Worktree]>> {
+        &self.worktrees
+    }
+
+    pub fn push_target(&self) -> &Loaded<PushTarget> {
+        &self.push_target
+    }
+
+    pub fn overview(&self) -> &Loaded<Overview> {
+        &self.overview
+    }
+
+    /// Loads `part` unless it's loaded, or loading: for a view about to show it.
+    pub fn show(&mut self, part: Part, cx: &mut Context<Self>) {
+        let stale = match part {
+            Part::Status => self.status.is_stale(),
+            Part::Operation => self.operation.is_stale(),
+            Part::Log => self.log.is_stale(),
+            Part::Refs => self.refs.is_stale(),
+            Part::Remotes => self.remotes.is_stale(),
+            Part::Stashes => self.stashes.is_stale(),
+            Part::Worktrees => self.worktrees.is_stale(),
+            Part::PushTarget => self.push_target.is_stale(),
+            Part::Overview => self.overview.is_stale(),
+            _ => false,
+        };
+        if stale && !self.is_loading(part) {
+            drop(self.reload(part, cx));
+        }
+    }
+
+    fn is_loading(&self, part: Part) -> bool {
+        match part {
+            Part::Status => self.status.is_fetching(),
+            Part::Operation => self.operation.is_fetching(),
+            Part::Log => self.log.is_fetching(),
+            Part::Refs => self.refs.is_fetching(),
+            Part::Remotes => self.remotes.is_fetching(),
+            Part::Stashes => self.stashes.is_fetching(),
+            Part::Worktrees => self.worktrees.is_fetching(),
+            Part::PushTarget => self.push_target.is_fetching(),
+            Part::Overview => self.overview.is_fetching(),
+            _ => false,
+        }
+    }
+
+    /// Whether `part` has been asked for: loaded, loading or failed.
+    fn is_used(&self, part: Part) -> bool {
+        match part {
+            Part::Status => self.status.is_used(),
+            Part::Operation => self.operation.is_used(),
+            Part::Log => self.log.is_used(),
+            Part::Refs => self.refs.is_used(),
+            Part::Remotes => self.remotes.is_used(),
+            Part::Stashes => self.stashes.is_used(),
+            Part::Worktrees => self.worktrees.is_used(),
+            Part::PushTarget => self.push_target.is_used(),
+            Part::Overview => self.overview.is_used(),
+            _ => false,
+        }
+    }
+
+    /// Loads `part` again now, in place of (and so cancelling) a load under way; resolves once
+    /// it's done. Only the parts a repository holds one of (not those loaded by key).
+    pub fn reload(&mut self, part: Part, cx: &mut Context<Self>) -> Reloading {
+        let git = Rc::clone(&self.git);
+        let wait = match part {
+            Part::Status => {
+                let previous = self.status.data().cloned();
+                let since = previous.as_ref().map(|status| status.version.clone());
+                let reply = git.status(since);
+                self.start(
+                    part,
+                    |repo| Some(&mut repo.status),
+                    async move {
+                        match reply.await? {
+                            // Only ever the answer when there was a previous status to compare
+                            // with.
+                            StatusReply::Unchanged { .. } => previous.ok_or_else(|| {
+                                QueryError::msg("The status was unchanged, from none.")
+                            }),
+                            StatusReply::Status(status) => Ok(Opaque::new(*status)),
+                        }
+                    }
+                    .boxed(),
+                    cx,
+                )
+            }
+            Part::Operation => {
+                self.start(part, |repo| Some(&mut repo.operation), git.operation(), cx)
+            }
+            Part::Log => {
+                let loaded = self.log.data().map_or(0, |log| log.commits.len());
+                let fetch = log_page(&*git, &self.id, 0, reload_limit(loaded));
+                // Loading more of the log as it was would leave it out of order.
+                if self.more.task.take().is_some() || self.more.error.take().is_some() {
+                    cx.emit(Changed(Part::More));
+                }
+                self.start(part, |repo| Some(&mut repo.log), fetch, cx)
+            }
+            Part::Refs => {
+                let refs = git.refs();
+                let fetch = async move { Ok(refs.await?.into()) }.boxed();
+                self.start(part, |repo| Some(&mut repo.refs), fetch, cx)
+            }
+            Part::Remotes => self.start(part, |repo| Some(&mut repo.remotes), git.remotes(), cx),
+            Part::Stashes => {
+                let stashes = git.stashes();
+                let fetch = async move { Ok(stashes.await?.into()) }.boxed();
+                self.start(part, |repo| Some(&mut repo.stashes), fetch, cx)
+            }
+            Part::Worktrees => {
+                let worktrees = git.worktrees();
+                let fetch = async move { Ok(worktrees.await?.into()) }.boxed();
+                self.start(part, |repo| Some(&mut repo.worktrees), fetch, cx)
+            }
+            Part::PushTarget => self.start(
+                part,
+                |repo| Some(&mut repo.push_target),
+                git.push_target(),
+                cx,
+            ),
+            Part::Overview => self.start(part, |repo| Some(&mut repo.overview), git.overview(), cx),
+            _ => None,
+        };
+        Reloading(wait.into_iter().collect())
+    }
+
+    /// Loads, with `fetch`, what `at` finds, in place of a load under way; a receiver told once
+    /// it's done. Says it `Changed` as it starts, and as it's done.
+    fn start<T: PartialEq + Send + 'static>(
+        &mut self,
+        part: Part,
+        at: impl Fn(&mut Self) -> Option<&mut Loaded<T>> + 'static,
+        fetch: GitTask<T>,
+        cx: &mut Context<Self>,
+    ) -> Option<oneshot::Receiver<()>> {
+        let at = Rc::new(at);
+        let fetch = cx.background_spawn(fetch);
+        let settle = Rc::clone(&at);
+        let task = cx.spawn(async move |this, cx| {
+            let result = fetch.await;
+            let _ = this.update(cx, |repo, cx| {
+                if let Some(loaded) = settle(repo) {
+                    loaded.settle(result);
+                    cx.emit(Changed(part));
+                    cx.notify();
+                }
+            });
+        });
+        let loaded = at(self)?;
+        loaded.start(task);
+        let wait = loaded.wait();
+        cx.emit(Changed(part));
+        cx.notify();
+        wait
+    }
+
+    /// Loads again what's shown of the repository, after it changed on disk, or a change to it (a
+    /// pull, say); what nothing shows is loaded again once something does. What the home page
+    /// shows of it (the overview) is only loaded there, when it's shown.
+    pub fn reload_all(&mut self, cx: &mut Context<Self>) -> Reloading {
+        let mut waits = self.reload_uncommitted(cx).0;
+        for part in [
+            Part::Operation,
+            Part::Log,
+            Part::Refs,
+            Part::Remotes,
+            Part::Stashes,
+            Part::Worktrees,
+            Part::PushTarget,
+        ] {
+            if self.is_used(part) {
+                waits.extend(self.reload(part, cx).0);
+            }
+        }
+        self.overview.mark_stale();
+        for sha in self.pushed_to.held_and_drop_rest(|_| true) {
+            waits.extend(self.load_pushed_to(sha, cx));
+        }
+        Reloading(waits)
+    }
+
+    /// Loads again what's shown of the uncommitted changes, after a file changed, or the index: the
+    /// status, and the patches and conflicted files on show.
+    pub fn reload_uncommitted(&mut self, cx: &mut Context<Self>) -> Reloading {
+        let mut waits = Vec::new();
+        if self.status.is_used() {
+            waits.extend(self.reload(Part::Status, cx).0);
+        }
+        let patches = self
+            .patches
+            .held_and_drop_rest(|(source, _)| is_uncommitted(source));
+        for key in patches {
+            let file = self
+                .patches
+                .get(&key)
+                .and_then(Loaded::data)
+                .map(|patch| patch.file.clone());
+            if let Some(file) = file {
+                waits.extend(self.load_patch(key.0, file, cx));
+            }
+        }
+        for path in self.conflicts.held_and_drop_rest(|_| true) {
+            waits.extend(self.load_conflict(path, cx));
+        }
+        cx.emit(Changed(Part::Patches));
+        Reloading(waits)
+    }
+
+    /// Loads again what was loaded before the repository came on show, when nothing watched it,
+    /// and may be out of date; not what's loading, which is loaded since.
+    pub fn reload_when_shown(&mut self, cx: &mut Context<Self>) {
+        for part in [
+            Part::Status,
+            Part::Operation,
+            Part::Log,
+            Part::Refs,
+            Part::Remotes,
+            Part::Stashes,
+            Part::Worktrees,
+            Part::PushTarget,
+        ] {
+            if self.is_used(part) && !self.is_loading(part) {
+                drop(self.reload(part, cx));
+            }
+        }
+        self.overview.mark_stale();
+        drop(self.pushed_to.held_and_drop_rest(|_| true));
+        drop(
+            self.patches
+                .held_and_drop_rest(|(source, _)| is_uncommitted(source)),
+        );
+        drop(self.conflicts.held_and_drop_rest(|_| true));
+    }
+
+    // Loading more of the log.
+
+    /// Whether more of the log is loading.
+    pub fn is_loading_more(&self) -> bool {
+        self.more.task.is_some()
+    }
+
+    /// Why loading more of the log last failed, if it did, since it last reloaded.
+    pub fn more_error(&self) -> Option<&QueryError> {
+        self.more.error.as_ref()
+    }
+
+    /// Whether there's more of the log to load, once it's loaded.
+    pub fn has_more(&self) -> bool {
+        self.log.data().is_some_and(|log| !log.complete)
+    }
+
+    /// Loads `NEXT_PAGE` more commits of the log, after those loaded, unless it's all loaded, or
+    /// loading, or reloading, which would leave that unused.
+    pub fn load_more(&mut self, cx: &mut Context<Self>) {
+        if !self.has_more() || self.log.is_fetching() || self.is_loading_more() {
+            return;
+        }
+        let Some(log) = self.log.data().cloned() else {
+            return;
+        };
+        let page =
+            cx.background_spawn(log_commits(&*self.git, log.commits.len() as u32, NEXT_PAGE));
+        self.more.error = None;
+        self.more.task = Some(cx.spawn(async move |this, cx| {
+            let result = page.await;
+            let _ = this.update(cx, |repo, cx| {
+                // A reload since dropped this task, so this follows on from what's there.
+                repo.more.task = None;
+                match result {
+                    Ok(commits) => {
+                        let complete = commits.len() < NEXT_PAGE as usize;
+                        repo.log.set(followed_by(&log, commits, complete));
+                        cx.emit(Changed(Part::Log));
+                    }
+                    Err(error) => repo.more.error = Some(error),
+                }
+                cx.emit(Changed(Part::More));
+                cx.notify();
+            });
+        }));
+        cx.emit(Changed(Part::More));
+        cx.notify();
+    }
+
+    // What's loaded by key.
+
+    /// Which remote branch has the commit `sha`, if that's loaded.
+    pub fn pushed_to(&self, sha: &str) -> Option<&Loaded<Option<String>>> {
+        self.pushed_to.get(&sha.to_owned())
+    }
+
+    /// Holds which remote branch has the commit `sha`, loading it unless it's loaded, and loading
+    /// it again as the refs change, while it's held.
+    pub fn hold_pushed_to(&mut self, sha: &str, cx: &mut Context<Self>) -> Hold {
+        let hold = self.pushed_to.hold(sha.to_owned());
+        if self.pushed_to.entry(sha.to_owned()).is_stale() {
+            drop(self.load_pushed_to(sha.to_owned(), cx));
+        }
+        hold
+    }
+
+    fn load_pushed_to(
+        &mut self,
+        sha: String,
+        cx: &mut Context<Self>,
+    ) -> Option<oneshot::Receiver<()>> {
+        let fetch = match Sha::parse(sha.clone()) {
+            Ok(commit) => self.git.pushed_to(commit),
+            Err(error) => failed(self.git.invalid(error)),
+        };
+        self.pushed_to.entry(sha.clone());
+        self.start(
+            Part::PushedTo,
+            move |repo| repo.pushed_to.get_mut(&sha),
+            fetch,
+            cx,
+        )
+    }
+
+    /// The patch of the file at `path` in `source`, if that's loaded.
+    pub fn patch(&self, source: &DiffSource, path: &str) -> Option<&Loaded<FilePatch>> {
+        self.patches.get(&(source.clone(), path.to_owned()))
+    }
+
+    /// Holds the patch of `file` in `source`, loading it unless it's loaded, and loading it again
+    /// as the uncommitted changes change, if it's of those, while it's held.
+    pub fn hold_patch(
+        &mut self,
+        source: &DiffSource,
+        file: &ChangedFile,
+        cx: &mut Context<Self>,
+    ) -> Hold {
+        let key = (source.clone(), file.path.clone());
+        let hold = self.patches.hold(key.clone());
+        if self.patches.entry(key).is_stale() {
+            drop(self.load_patch(source.clone(), file.clone(), cx));
+        }
+        hold
+    }
+
+    /// The patch of `file` in `source`: what's loaded, or what loads; e.g. for a file about to be
+    /// opened.
+    pub fn fetch_patch(
+        &mut self,
+        source: &DiffSource,
+        file: &ChangedFile,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<FilePatch, QueryError>> {
+        let key = (source.clone(), file.path.clone());
+        let wait = {
+            let loaded = self.patches.entry(key.clone());
+            if loaded.is_fetching() {
+                loaded.wait()
+            } else if loaded.is_stale() {
+                self.load_patch(source.clone(), file.clone(), cx)
+            } else {
+                None
+            }
+        };
+        cx.spawn(async move |this, cx| {
+            if let Some(wait) = wait {
+                let _ = wait.await;
+            }
+            this.read_with(cx, |repo, _| loaded_result(repo.patches.get(&key)))?
+        })
+    }
+
+    fn load_patch(
+        &mut self,
+        source: DiffSource,
+        file: ChangedFile,
+        cx: &mut Context<Self>,
+    ) -> Option<oneshot::Receiver<()>> {
+        let input = FileInput {
+            path: file.path.clone(),
+            orig_path: file.orig_path.clone(),
+        };
+        let patch = match &source {
+            DiffSource::Commit { sha } => match Sha::parse(sha.clone()) {
+                Ok(commit) => self.git.commit_file_patch(commit, input),
+                Err(error) => failed(self.git.invalid(error)),
+            },
+            DiffSource::Stash { sha } => match FullSha::parse(sha.clone()) {
+                Ok(stash) => self.git.stash_file_patch(stash, input),
+                Err(error) => failed(self.git.invalid(error)),
+            },
+            DiffSource::Unstaged => {
+                let untracked = file.status == FileStatus::Untracked;
+                self.git.unstaged_file_patch(input, untracked)
+            }
+            DiffSource::Staged => self.git.staged_file_patch(input),
+        };
+        let key = (source.clone(), file.path.clone());
+        let fetch = async move {
+            let patch = patch.await?;
+            Ok(FilePatch {
+                key: diff_file_key(&source, &file.path),
+                file,
+                patch: patch.into(),
+            })
+        }
+        .boxed();
+        self.patches.entry(key.clone());
+        self.start(
+            Part::Patches,
+            move |repo| repo.patches.get_mut(&key),
+            fetch,
+            cx,
+        )
+    }
+
+    /// The conflicted file at `path`, if it's loaded.
+    pub fn conflict(&self, path: &str) -> Option<&Loaded<Conflict>> {
+        self.conflicts.get(&path.to_owned())
+    }
+
+    /// Holds the conflicted file at `path`, loading it unless it's loaded, and loading it again
+    /// as the uncommitted changes change, while it's held.
+    pub fn hold_conflict(&mut self, path: &str, cx: &mut Context<Self>) -> Hold {
+        let hold = self.conflicts.hold(path.to_owned());
+        if self.conflicts.entry(path.to_owned()).is_stale() {
+            drop(self.load_conflict(path.to_owned(), cx));
+        }
+        hold
+    }
+
+    /// The conflicted file at `path`: what's loaded, or what loads; e.g. for one about to be
+    /// opened.
+    pub fn fetch_conflict(
+        &mut self,
+        path: &str,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<Conflict, QueryError>> {
+        let path = path.to_owned();
+        let wait = {
+            let loaded = self.conflicts.entry(path.clone());
+            if loaded.is_fetching() {
+                loaded.wait()
+            } else if loaded.is_stale() {
+                self.load_conflict(path.clone(), cx)
+            } else {
+                None
+            }
+        };
+        cx.spawn(async move |this, cx| {
+            if let Some(wait) = wait {
+                let _ = wait.await;
+            }
+            this.read_with(cx, |repo, _| loaded_result(repo.conflicts.get(&path)))?
+        })
+    }
+
+    fn load_conflict(
+        &mut self,
+        path: String,
+        cx: &mut Context<Self>,
+    ) -> Option<oneshot::Receiver<()>> {
+        let fetch = match NonEmpty::parse(path.clone()) {
+            Ok(file) => self.git.conflict(file),
+            Err(error) => failed(self.git.invalid(error)),
+        };
+        self.conflicts.entry(path.clone());
+        self.start(
+            Part::Conflicts,
+            move |repo| repo.conflicts.get_mut(&path),
+            fetch,
+            cx,
+        )
+    }
+
+    /// The commit `sha`, if it's loaded, or in the log: the log has all of a commit, so git isn't
+    /// asked for it again.
+    pub fn commit(&self, sha: &str) -> Option<&Commit> {
+        self.commits
+            .get(&sha.to_owned())
+            .and_then(Loaded::data)
+            .or_else(|| self.commit_in_log(sha))
+    }
+
+    /// Why loading the commit `sha` failed, if it did.
+    pub fn commit_error(&self, sha: &str) -> Option<&QueryError> {
+        self.commits.get(&sha.to_owned()).and_then(Loaded::error)
+    }
+
+    fn commit_in_log(&self, sha: &str) -> Option<&Commit> {
+        self.log
+            .data()?
+            .commits
+            .iter()
+            .find(|commit| commit.sha == sha)
+    }
+
+    /// Holds the commit `sha`, loading it unless it's loaded or in the log.
+    pub fn hold_commit(&mut self, sha: &str, cx: &mut Context<Self>) -> Hold {
+        let hold = self.commits.hold(sha.to_owned());
+        if let Some(commit) = self.commit_in_log(sha).cloned() {
+            self.commits.set(sha.to_owned(), commit);
+        } else if self.commits.entry(sha.to_owned()).is_stale()
+            && !self.commits.entry(sha.to_owned()).is_fetching()
+        {
+            let sha = sha.to_owned();
+            let fetch = match Sha::parse(sha.clone()) {
+                Ok(commit) => self.git.commit(commit),
+                Err(error) => failed(self.git.invalid(error)),
+            };
+            drop(self.start(
+                Part::Commits,
+                move |repo| repo.commits.get_mut(&sha),
+                fetch,
+                cx,
+            ));
+        }
+        hold
+    }
+
+    /// The files the commit or stash `sha` changed, if they're loaded.
+    pub fn files(&self, of: FilesOf, sha: &str) -> Option<&Loaded<ChangedFiles>> {
+        self.files.get(&(of, sha.to_owned()))
+    }
+
+    /// Holds the files the commit or stash `sha` changed, loading them unless they're loaded.
+    pub fn hold_files(&mut self, of: FilesOf, sha: &str, cx: &mut Context<Self>) -> Hold {
+        let key = (of, sha.to_owned());
+        let hold = self.files.hold(key.clone());
+        let loaded = self.files.entry(key.clone());
+        if loaded.is_stale() && !loaded.is_fetching() {
+            let sha = sha.to_owned();
+            let files = match of {
+                FilesOf::Commit => match Sha::parse(sha.clone()) {
+                    Ok(commit) => self.git.commit_files(commit),
+                    Err(error) => failed(self.git.invalid(error)),
+                },
+                FilesOf::Stash => match FullSha::parse(sha.clone()) {
+                    Ok(stash) => self.git.stash_files(stash),
+                    Err(error) => failed(self.git.invalid(error)),
+                },
+            };
+            let fetch = async move {
+                Ok(ChangedFiles {
+                    sha,
+                    files: Opaque::new(files.await?),
+                })
+            }
+            .boxed();
+            drop(self.start(
+                Part::Commits,
+                move |repo| repo.files.get_mut(&key),
+                fetch,
+                cx,
+            ));
+        }
+        hold
+    }
+
+    /// The commit `sha`'s whole message, if it's loaded.
+    pub fn message(&self, sha: &str) -> Option<&Loaded<String>> {
+        self.messages.get(&sha.to_owned())
+    }
+
+    /// Holds the commit `sha`'s whole message, loading it unless it's loaded.
+    pub fn hold_message(&mut self, sha: &str, cx: &mut Context<Self>) -> Hold {
+        let hold = self.messages.hold(sha.to_owned());
+        let loaded = self.messages.entry(sha.to_owned());
+        if loaded.is_stale() && !loaded.is_fetching() {
+            let sha = sha.to_owned();
+            let fetch = match Sha::parse(sha.clone()) {
+                Ok(commit) => self.git.commit_message(commit),
+                Err(error) => failed(self.git.invalid(error)),
+            };
+            drop(self.start(
+                Part::Commits,
+                move |repo| repo.messages.get_mut(&sha),
+                fetch,
+                cx,
+            ));
+        }
+        hold
+    }
+
+    // Setting what's loaded: what a change knows it changed, and tests' data.
+
+    pub fn set_status(&mut self, status: Uncommitted, cx: &mut Context<Self>) {
+        self.status.cancel();
+        self.status.set(Opaque::new(status));
+        self.changed(Part::Status, cx);
+    }
+
+    pub fn set_operation(&mut self, operation: Option<Operation>, cx: &mut Context<Self>) {
+        self.operation.cancel();
+        self.operation.set(operation);
+        self.changed(Part::Operation, cx);
+    }
+
+    pub fn set_log(&mut self, log: Log, cx: &mut Context<Self>) {
+        self.log.cancel();
+        self.log.set(log);
+        self.changed(Part::Log, cx);
+    }
+
+    pub fn set_refs(&mut self, refs: Vec<Ref>, cx: &mut Context<Self>) {
+        self.refs.cancel();
+        self.refs.set(refs.into());
+        self.changed(Part::Refs, cx);
+    }
+
+    pub fn set_remotes(&mut self, remotes: Vec<String>, cx: &mut Context<Self>) {
+        self.remotes.cancel();
+        self.remotes.set(remotes);
+        self.changed(Part::Remotes, cx);
+    }
+
+    pub fn set_stashes(&mut self, stashes: Vec<Stash>, cx: &mut Context<Self>) {
+        self.stashes.cancel();
+        self.stashes.set(stashes.into());
+        self.changed(Part::Stashes, cx);
+    }
+
+    pub fn set_worktrees(&mut self, worktrees: Vec<Worktree>, cx: &mut Context<Self>) {
+        self.worktrees.cancel();
+        self.worktrees.set(worktrees.into());
+        self.changed(Part::Worktrees, cx);
+    }
+
+    pub fn set_push_target(&mut self, target: PushTarget, cx: &mut Context<Self>) {
+        self.push_target.cancel();
+        self.push_target.set(target);
+        self.changed(Part::PushTarget, cx);
+    }
+
+    pub fn set_overview(&mut self, overview: Overview, cx: &mut Context<Self>) {
+        self.overview.cancel();
+        self.overview.set(overview);
+        self.changed(Part::Overview, cx);
+    }
+
+    pub fn set_pushed_to(&mut self, sha: &str, remote: Option<String>, cx: &mut Context<Self>) {
+        self.pushed_to.set(sha.to_owned(), remote);
+        self.changed(Part::PushedTo, cx);
+    }
+
+    pub fn set_patch(&mut self, source: &DiffSource, patch: FilePatch, cx: &mut Context<Self>) {
+        self.patches
+            .set((source.clone(), patch.file.path.clone()), patch);
+        self.changed(Part::Patches, cx);
+    }
+
+    pub fn set_conflict(&mut self, path: &str, conflict: Conflict, cx: &mut Context<Self>) {
+        self.conflicts.set(path.to_owned(), conflict);
+        self.changed(Part::Conflicts, cx);
+    }
+
+    pub fn set_commit(&mut self, commit: Commit, cx: &mut Context<Self>) {
+        self.commits.set(commit.sha.clone(), commit);
+        self.changed(Part::Commits, cx);
+    }
+
+    pub fn set_files(&mut self, of: FilesOf, files: ChangedFiles, cx: &mut Context<Self>) {
+        self.files.set((of, files.sha.clone()), files);
+        self.changed(Part::Commits, cx);
+    }
+
+    pub fn set_message(&mut self, sha: &str, message: String, cx: &mut Context<Self>) {
+        self.messages.set(sha.to_owned(), message);
+        self.changed(Part::Commits, cx);
+    }
+
+    /// Changes the status with `update`, if it's loaded, as a change knows it changed it, ahead of
+    /// the reload that follows; a load under way, from before the change, is dropped.
+    pub fn update_status(
+        &mut self,
+        update: impl FnOnce(&Uncommitted) -> Uncommitted,
+        cx: &mut Context<Self>,
+    ) {
+        self.status.cancel();
+        if self.status.update(|status| Opaque::new(update(status))) {
+            self.changed(Part::Status, cx);
+        }
+    }
+
+    fn changed(&mut self, part: Part, cx: &mut Context<Self>) {
+        cx.emit(Changed(part));
+        cx.notify();
+    }
+
+    // Changes: their state.
+
+    /// The change `name`'s state: idle, without an error, if it's not been run, or went through.
+    pub fn operation_state(&self, name: &str) -> OperationState {
+        self.operations.get(name).cloned().unwrap_or_default()
+    }
+
+    /// Whether any of the changes `names` is running.
+    pub fn is_running(&self, names: &[&str]) -> bool {
+        names.iter().any(|name| self.operation_state(name).running)
+    }
+
+    /// Forgets why the change `name` last failed, unless it's running.
+    pub fn dismiss(&mut self, name: &str, cx: &mut Context<Self>) {
+        if self.operation_state(name).running {
+            return;
+        }
+        if self.operations.remove(name).is_some() {
+            self.changed(Part::Operations, cx);
+        }
+    }
+
+    /// Runs the change `name`, which `work` does, unless it's running: `None` then. Its state is
+    /// kept (see [`operation_state`](Self::operation_state)) until it's run again, or dismissed;
+    /// the receiver is told what it resolved to, for the view that ran it to act on if it's still
+    /// there.
+    pub fn run<R: 'static>(
+        &mut self,
+        name: &'static str,
+        work: impl FnOnce(&mut Self, &mut Context<Self>) -> Task<Result<R, QueryError>>,
+        cx: &mut Context<Self>,
+    ) -> Option<oneshot::Receiver<Result<R, QueryError>>> {
+        if self.operation_state(name).running {
+            return None;
+        }
+        self.operations.insert(
+            name,
+            OperationState {
+                running: true,
+                error: None,
+            },
+        );
+        self.changed(Part::Operations, cx);
+        let work = work(self, cx);
+        let (done, result) = oneshot::channel();
+        cx.spawn(async move |this, cx| {
+            let outcome = work.await;
+            let _ = this.update(cx, |repo, cx| {
+                match &outcome {
+                    // Nothing to keep for one that went through.
+                    Ok(_) => repo.operations.remove(name),
+                    Err(error) => repo.operations.insert(
+                        name,
+                        OperationState {
+                            running: false,
+                            error: Some(error.clone()),
+                        },
+                    ),
+                };
+                repo.changed(Part::Operations, cx);
+            });
+            let _ = done.send(outcome);
+        })
+        .detach();
+        Some(result)
+    }
+
+    /// Runs `action`, git's part of a change, on the background executor, then reloads what's
+    /// shown of the repository, also after a failure: the action may have changed it partway, e.g.
+    /// a pop that conflicts. Resolves once that's reloaded.
+    pub fn reloading<R: Send + 'static>(
+        &mut self,
+        action: GitTask<R>,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<R, QueryError>> {
+        let action = cx.background_spawn(action);
+        cx.spawn(async move |this, cx| {
+            let result = action.await;
+            let reloading = this.update(cx, |repo, cx| repo.reload_all(cx));
+            if let Ok(reloading) = reloading {
+                reloading.await;
+            }
+            result
+        })
+    }
+}
+
+/// `limit` commits of the log after skipping `skip`, as a [`Log`] of the repository `id`.
+fn log_page(git: &dyn RepositoryGit, id: &RepositoryId, skip: u32, limit: u32) -> GitTask<Log> {
+    let commits = log_commits(git, skip, limit);
+    let repository_id = id.to_string();
+    async move {
+        let commits = commits.await?;
+        Ok(Log {
+            repository_id,
+            complete: commits.len() < limit as usize,
+            commits: commits.into(),
+        })
+    }
+    .boxed()
+}
+
+fn log_commits(git: &dyn RepositoryGit, skip: u32, limit: u32) -> GitTask<Vec<Commit>> {
+    match Page::new(limit, skip) {
+        Ok(page) => git.log(page),
+        Err(error) => failed(git.invalid(error)),
+    }
+}
+
+fn failed<T: Send + 'static>(error: QueryError) -> GitTask<T> {
+    async move { Err(error) }.boxed()
+}
+
+/// What `loaded` has, or why it doesn't: for one that was just loaded.
+fn loaded_result<T: Clone>(loaded: Option<&Loaded<T>>) -> Result<T, QueryError> {
+    let loaded = loaded.ok_or_else(|| QueryError::msg("It was dropped as it loaded."))?;
+    match (loaded.error(), loaded.data()) {
+        (Some(error), _) => Err(error.clone()),
+        (None, Some(data)) => Ok(data.clone()),
+        (None, None) => Err(QueryError::msg("The load was cancelled.")),
+    }
+}
+
+/// Every repository opened, by id: each one's [`Repository`], kept while the app runs, so what's
+/// loaded of one is there when it's shown again.
+#[derive(Default)]
+pub struct Repositories {
+    open: HashMap<RepositoryId, Entity<Repository>>,
+}
+
+impl Global for Repositories {}
+
+impl Repositories {
+    /// The repository `id`, opened with the app's git if it wasn't.
+    pub fn open(id: &RepositoryId, cx: &mut App) -> Entity<Repository> {
+        if let Some(repository) = cx
+            .try_global::<Repositories>()
+            .and_then(|repositories| repositories.open.get(id))
+        {
+            return repository.clone();
+        }
+        let git = GitRepository::new(Services::global(cx).git().clone(), id.clone());
+        Repositories::insert(id, Rc::new(git), cx)
+    }
+
+    /// Opens the repository `id` with `git`, in place of one that was: for tests.
+    pub fn insert(
+        id: &RepositoryId,
+        git: Rc<dyn RepositoryGit>,
+        cx: &mut App,
+    ) -> Entity<Repository> {
+        let repository = cx.new(|_| Repository::new(id.clone(), git));
+        cx.default_global::<Repositories>()
+            .open
+            .insert(id.clone(), repository.clone());
+        repository
+    }
+
+    /// The repository `id`, if it's been opened.
+    pub fn get(id: &str, cx: &App) -> Option<Entity<Repository>> {
+        let repositories = cx.try_global::<Repositories>()?;
+        repositories
+            .open
+            .iter()
+            .find(|(open, _)| open.as_str() == id)
+            .map(|(_, repository)| repository.clone())
+    }
+
+    /// Forgets the repository `id`, as it was removed from Gitto.
+    pub fn close(id: &str, cx: &mut App) {
+        if cx.has_global::<Repositories>() {
+            cx.global_mut::<Repositories>()
+                .open
+                .retain(|open, _| open.as_str() != id);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::{Cell, RefCell};
+
+    use gitto_git::features::status::schema::{
+        Head, StatusCounts, StatusSummary, Unchanged, WorkingTreeFiles,
+    };
+    use gpui_kit::TestAppContext;
+
+    use super::*;
+
+    fn repository_id() -> RepositoryId {
+        RepositoryId::parse("01890a5d-ac96-774b-bcce-b302099a8057").unwrap()
+    }
+
+    fn uncommitted() -> Uncommitted {
+        Uncommitted {
+            head: Head::Branch {
+                name: "main".into(),
+                sha: "abc".into(),
+            },
+            upstream: None,
+            ahead: 0,
+            behind: 0,
+            counts: StatusCounts {
+                files: 1,
+                staged: 0,
+                unstaged: 1,
+                conflicted: 0,
+            },
+            changes: WorkingTreeFiles {
+                staged: vec![],
+                unstaged: vec![
+                    serde_json::from_value(serde_json::json!({
+                        "path": "a.txt",
+                        "status": "modified",
+                        "origPath": null,
+                        "additions": 1,
+                        "deletions": 0,
+                    }))
+                    .unwrap(),
+                ],
+                uncounted: false,
+                marker_free: vec![],
+            },
+            version: "v1".into(),
+        }
+    }
+
+    fn commit(sha: &str) -> Commit {
+        Commit {
+            sha: sha.into(),
+            parents: vec![],
+            author_name: "Ada".into(),
+            author_email: "ada@example.com".into(),
+            authored_at: 0,
+            committed_at: 0,
+            refs: vec![],
+            subject: sha.into(),
+            body: String::new(),
+        }
+    }
+
+    fn commits(range: std::ops::Range<usize>) -> Vec<Commit> {
+        range.map(|n| commit(&format!("{n:040x}"))).collect()
+    }
+
+    /// A page of the log asked for: its skip and limit, and what answers it.
+    type Asked = (u32, u32, oneshot::Sender<Vec<Commit>>);
+
+    /// A repository's git that answers the status with `replies`, in turn, and each page of the
+    /// log when the test says; it counts what it's asked.
+    #[derive(Default)]
+    struct Git {
+        replies: RefCell<Vec<StatusReply>>,
+        since: RefCell<Vec<Option<String>>>,
+        pages: RefCell<Vec<Asked>>,
+        refs: Cell<usize>,
+        overviews: Cell<usize>,
+    }
+
+    impl RepositoryGit for Git {
+        fn status(&self, since: Option<String>) -> GitTask<StatusReply> {
+            self.since.borrow_mut().push(since);
+            let reply = self.replies.borrow_mut().remove(0);
+            async move { Ok(reply) }.boxed()
+        }
+
+        fn log(&self, page: Page) -> GitTask<Vec<Commit>> {
+            let (answer, answered) = oneshot::channel();
+            self.pages
+                .borrow_mut()
+                .push((page.skip(), page.limit(), answer));
+            async move { Ok(answered.await.unwrap()) }.boxed()
+        }
+
+        fn refs(&self) -> GitTask<Vec<Ref>> {
+            self.refs.set(self.refs.get() + 1);
+            async { Ok(vec![]) }.boxed()
+        }
+
+        fn overview(&self) -> GitTask<Overview> {
+            self.overviews.set(self.overviews.get() + 1);
+            async { Err(QueryError::msg("No overview.")) }.boxed()
+        }
+    }
+
+    impl Git {
+        /// Answers the first page asked for that's still waiting with `commits`; what it asked.
+        fn answer(&self, commits: Vec<Commit>) -> (u32, u32) {
+            let (skip, limit, answer) = self.pages.borrow_mut().remove(0);
+            answer.send(commits).unwrap();
+            (skip, limit)
+        }
+    }
+
+    fn open(git: &Rc<Git>, cx: &mut TestAppContext) -> Entity<Repository> {
+        let git: Rc<dyn RepositoryGit> = git.clone();
+        cx.new(|_| Repository::new(repository_id(), git))
+    }
+
+    // `git/queries/status.test.ts`.
+
+    #[gpui_kit::test]
+    fn are_only_sent_again_when_they_changed(cx: &mut TestAppContext) {
+        let git = Rc::new(Git::default());
+        *git.replies.borrow_mut() = vec![
+            StatusReply::Status(Box::new(uncommitted())),
+            StatusReply::Unchanged {
+                unchanged: Unchanged,
+            },
+        ];
+        let repository = open(&git, cx);
+        repository.update(cx, |repository, cx| repository.show(Part::Status, cx));
+        cx.run_until_parked();
+        let loaded = repository.read_with(cx, |repository, _| repository.status().data().cloned());
+        let loaded = loaded.unwrap();
+        assert_eq!(loaded.changes, uncommitted().changes);
+
+        let reload = repository.update(cx, |repository, cx| repository.reload(Part::Status, cx));
+        cx.run_until_parked();
+        reload.into_future().now_or_never().unwrap();
+        assert_eq!(*git.since.borrow(), [None, Some("v1".to_owned())]);
+        let shown = repository.read_with(cx, |repository, _| repository.status().data().cloned());
+        // The same files, not a copy.
+        assert!(Opaque::ptr_eq(&shown.unwrap(), &loaded));
+    }
+
+    #[gpui_kit::test]
+    fn are_left_out_of_the_summary(cx: &mut TestAppContext) {
+        let git = Rc::new(Git::default());
+        *git.replies.borrow_mut() = vec![StatusReply::Status(Box::new(uncommitted()))];
+        let repository = open(&git, cx);
+        repository.update(cx, |repository, cx| repository.show(Part::Status, cx));
+        cx.run_until_parked();
+        let summary = repository.read_with(cx, |repository, _| {
+            repository.status().data().map(|status| status.summary())
+        });
+        assert_eq!(
+            summary.unwrap(),
+            StatusSummary {
+                head: uncommitted().head,
+                upstream: None,
+                ahead: 0,
+                behind: 0,
+                counts: uncommitted().counts,
+            }
+        );
+    }
+
+    // `lib/query-client.test.ts`.
+
+    #[gpui_kit::test]
+    fn a_repositorys_data_isnt_loaded_again_when_something_else_that_shows_it_is_rendered(
+        cx: &mut TestAppContext,
+    ) {
+        let git = Rc::new(Git::default());
+        let repository = open(&git, cx);
+        repository.update(cx, |repository, cx| repository.show(Part::Refs, cx));
+        cx.run_until_parked();
+        repository.update(cx, |repository, cx| repository.show(Part::Refs, cx));
+        cx.run_until_parked();
+        assert_eq!(git.refs.get(), 1);
+    }
+
+    #[gpui_kit::test]
+    fn a_repositorys_data_is_loaded_again_once_its_said_to_have_changed(cx: &mut TestAppContext) {
+        let git = Rc::new(Git::default());
+        let repository = open(&git, cx);
+        repository.update(cx, |repository, cx| drop(repository.reload_all(cx)));
+        cx.run_until_parked();
+        // Nothing showed it.
+        assert_eq!(git.refs.get(), 0);
+        repository.update(cx, |repository, cx| repository.show(Part::Refs, cx));
+        cx.run_until_parked();
+        repository.update(cx, |repository, cx| drop(repository.reload_all(cx)));
+        cx.run_until_parked();
+        assert_eq!(git.refs.get(), 2);
+    }
+
+    #[gpui_kit::test]
+    fn loads_the_overview_where_its_shown_and_not_as_the_repository_changes(
+        cx: &mut TestAppContext,
+    ) {
+        let git = Rc::new(Git::default());
+        let repository = open(&git, cx);
+        repository.update(cx, |repository, cx| repository.show(Part::Overview, cx));
+        cx.run_until_parked();
+        repository.update(cx, |repository, cx| drop(repository.reload_all(cx)));
+        cx.run_until_parked();
+        assert_eq!(git.overviews.get(), 1);
+        let failed = repository.read_with(cx, |repository, _| {
+            repository.overview().error().map(QueryError::message)
+        });
+        assert_eq!(failed.as_deref(), Some("No overview."));
+        // Shown again, it's out of date.
+        repository.update(cx, |repository, cx| repository.show(Part::Overview, cx));
+        cx.run_until_parked();
+        assert_eq!(git.overviews.get(), 2);
+    }
+
+    // `git/queries/history.test.ts`.
+
+    #[gpui_kit::test]
+    fn loads_more_and_reloads_as_many(cx: &mut TestAppContext) {
+        let git = Rc::new(Git::default());
+        let repository = open(&git, cx);
+        repository.update(cx, |repository, cx| repository.show(Part::Log, cx));
+        cx.run_until_parked();
+        assert_eq!(
+            git.answer(commits(0..200)),
+            (0, super::super::history::FIRST_PAGE)
+        );
+        cx.run_until_parked();
+        assert!(repository.read_with(cx, |repository, _| repository.has_more()));
+
+        repository.update(cx, |repository, cx| repository.load_more(cx));
+        cx.run_until_parked();
+        // Each commit only once: the history moved by one since.
+        assert_eq!(git.answer(commits(199..1199)), (200, NEXT_PAGE));
+        cx.run_until_parked();
+        let log = repository.read_with(cx, |repository, _| repository.log().data().cloned());
+        let log = log.unwrap();
+        assert_eq!(log.commits.len(), 1199);
+        assert!(!log.complete);
+        assert!(!repository.read_with(cx, |repository, _| repository.is_loading_more()));
+
+        let reload = repository.update(cx, |repository, cx| repository.reload(Part::Log, cx));
+        cx.run_until_parked();
+        assert_eq!(git.answer(commits(0..10)), (0, 1199));
+        cx.run_until_parked();
+        reload.into_future().now_or_never().unwrap();
+        let log = repository.read_with(cx, |repository, _| repository.log().data().cloned());
+        assert!(log.unwrap().complete);
+        assert!(!repository.read_with(cx, |repository, _| repository.has_more()));
+    }
+
+    #[gpui_kit::test]
+    fn drops_a_page_loaded_while_the_log_reloaded(cx: &mut TestAppContext) {
+        let git = Rc::new(Git::default());
+        let repository = open(&git, cx);
+        repository.update(cx, |repository, cx| repository.show(Part::Log, cx));
+        cx.run_until_parked();
+        git.answer(commits(0..200));
+        cx.run_until_parked();
+
+        repository.update(cx, |repository, cx| repository.load_more(cx));
+        cx.run_until_parked();
+        let reload = repository.update(cx, |repository, cx| repository.reload(Part::Log, cx));
+        cx.run_until_parked();
+        // The reload's answer comes first, then the page's.
+        let (_, _, page) = git.pages.borrow_mut().remove(0);
+        assert_eq!(
+            git.answer(commits(0..200)),
+            (0, super::super::history::FIRST_PAGE)
+        );
+        cx.run_until_parked();
+        reload.into_future().now_or_never().unwrap();
+        let _ = page.send(commits(200..1200));
+        cx.run_until_parked();
+
+        let log = repository.read_with(cx, |repository, _| repository.log().data().cloned());
+        assert_eq!(log.unwrap().commits.len(), 200);
+        // Whether it was loading is of the log before the reload.
+        assert!(!repository.read_with(cx, |repository, _| repository.is_loading_more()));
+    }
+
+    #[gpui_kit::test]
+    fn takes_a_commit_from_the_log(cx: &mut TestAppContext) {
+        let git = Rc::new(Git::default());
+        let repository = open(&git, cx);
+        let sha = format!("{:040x}", 1);
+        repository.update(cx, |repository, cx| {
+            repository.set_log(
+                Log {
+                    repository_id: repository_id().to_string(),
+                    commits: commits(0..3).into(),
+                    complete: true,
+                },
+                cx,
+            );
+            drop(repository.hold_commit(&sha, cx));
+        });
+        cx.run_until_parked();
+        repository.read_with(cx, |repository, _| {
+            assert_eq!(repository.commit(&sha).unwrap().sha, sha);
+            assert!(repository.commit_error(&sha).is_none());
+        });
+    }
+
+    // `git/queries/operation.test.ts`.
+
+    #[gpui_kit::test]
+    fn runs_one_at_a_time_per_repository_and_says_why_it_failed(cx: &mut TestAppContext) {
+        let git = Rc::new(Git::default());
+        let repository = open(&git, cx);
+        let (finish, finished) = oneshot::channel::<Result<(), QueryError>>();
+        let finished = Cell::new(Some(finished));
+        let pull = |repository: &mut Repository, cx: &mut Context<Repository>| {
+            repository.run(
+                "pull",
+                |_, cx| {
+                    let finished = finished.take().unwrap();
+                    cx.background_spawn(async move { finished.await.unwrap() })
+                },
+                cx,
+            )
+        };
+
+        let result = repository
+            .update(cx, |repository, cx| pull(repository, cx))
+            .unwrap();
+        cx.run_until_parked();
+        assert!(repository.read_with(cx, |repository, _| {
+            repository.operation_state("pull").running
+        }));
+        // Not again while it runs.
+        assert!(
+            repository
+                .update(cx, |repository, cx| pull(repository, cx))
+                .is_none()
+        );
+
+        finish.send(Err(QueryError::msg("No upstream."))).unwrap();
+        cx.run_until_parked();
+        let state = repository.read_with(cx, |repository, _| repository.operation_state("pull"));
+        assert!(!state.running);
+        assert_eq!(state.error.unwrap().message(), "No upstream.");
+        assert!(result.now_or_never().unwrap().unwrap().is_err());
+
+        repository.update(cx, |repository, cx| repository.dismiss("pull", cx));
+        assert_eq!(
+            repository.read_with(cx, |repository, _| repository.operation_state("pull")),
+            OperationState::default()
+        );
+    }
+
+    #[gpui_kit::test]
+    fn forgets_one_that_went_through_and_reloads_the_repository(cx: &mut TestAppContext) {
+        let git = Rc::new(Git::default());
+        let repository = open(&git, cx);
+        repository.update(cx, |repository, cx| repository.show(Part::Refs, cx));
+        cx.run_until_parked();
+        let result = repository
+            .update(cx, |repository, cx| {
+                repository.run(
+                    "push",
+                    |repository, cx| repository.reloading(async { Ok(7) }.boxed(), cx),
+                    cx,
+                )
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(result.now_or_never().unwrap().unwrap().unwrap(), 7);
+        assert_eq!(
+            repository.read_with(cx, |repository, _| repository.operation_state("push")),
+            OperationState::default()
+        );
+        assert_eq!(git.refs.get(), 2);
+    }
+}
