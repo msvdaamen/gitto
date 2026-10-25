@@ -7,6 +7,3 @@ pub mod discard;
 pub mod lines;
 pub mod patch_version;
 pub mod schema;
-
-#[cfg(test)]
-mod test_status;

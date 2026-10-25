@@ -131,16 +131,17 @@ impl RepositoryWatcher {
         }
         self.unwatch_timer = None;
 
+        // Without a working tree watch, anything might have changed; with one, only if it did.
+        let uncommitted_changed = if self.working_tree.is_running() {
+            self.changed
+        } else {
+            was_focused == Some(false)
+        };
         if !self.git_dir.is_running() {
             // A commit or a checkout might have been missed, so everything's loaded again.
             self.reload_all(cx);
             self.watch_git_dir(cx);
-        } else if if self.working_tree.is_running() {
-            self.changed
-        } else {
-            was_focused == Some(false)
-        } {
-            // Without a working tree watch, anything might have changed; with one, only if it did.
+        } else if uncommitted_changed {
             self.reload_uncommitted(cx);
         }
         self.changed = false;
@@ -216,9 +217,6 @@ fn forward<T: Send + 'static>(
     });
     let consume = cx.spawn(async move |this, cx| {
         while let Some(item) = receiver.next().await {
-            let what = this
-                .update(cx, |watcher, _| watch(watcher).what)
-                .unwrap_or_default();
             match item {
                 Ok(event) => {
                     if this
@@ -229,6 +227,9 @@ fn forward<T: Send + 'static>(
                     }
                 }
                 Err(error) => {
+                    let what = this
+                        .update(cx, |watcher, _| watch(watcher).what)
+                        .unwrap_or_default();
                     log::error!("Stopped watching {what}: {error}");
                     break;
                 }

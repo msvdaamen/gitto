@@ -501,34 +501,10 @@ mod tests {
     use crate::features::staging;
     use crate::features::staging::commands::stage_all;
     use crate::features::status::commands::get_status;
-    use crate::features::status::parse::{STATUS_ARGS, parse_status};
     use crate::input::Paths;
-    use crate::schema::FileStatus;
     use crate::test_support::conflicts::{Files, Sides, files, text_conflict, try_git};
+    use crate::test_support::status::{rows, status_files};
     use crate::test_support::{Fixture, git, valid};
-
-    type Row = (String, Option<&'static str>, Option<&'static str>);
-
-    /// Each changed file, with how it changed in the index and the working tree.
-    async fn status_files(repo: &Repo) -> Vec<Row> {
-        parse_status(&repo.read(STATUS_ARGS).await.unwrap())
-            .files
-            .into_iter()
-            .map(|file| {
-                (
-                    file.path,
-                    file.staged.map(FileStatus::as_str),
-                    file.unstaged.map(FileStatus::as_str),
-                )
-            })
-            .collect()
-    }
-
-    fn rows(rows: &[(&str, Option<&'static str>, Option<&'static str>)]) -> Vec<Row> {
-        rows.iter()
-            .map(|(path, staged, unstaged)| (path.to_string(), *staged, *unstaged))
-            .collect()
-    }
 
     /// `getStatus(repo).changes.markerFree`.
     async fn status_marker_free(repo: &Repo) -> Vec<String> {
