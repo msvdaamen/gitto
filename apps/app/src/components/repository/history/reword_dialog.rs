@@ -21,7 +21,7 @@ use crate::data::{Mutation, Query, QueryError};
 use crate::theme::PaletteExt as _;
 
 /// How wide the dialog is (`max-w-[440px]`), in rems of the 15px base.
-const WIDTH: f32 = 29.33;
+const WIDTH: Rems = Rems(440. / 15.);
 
 /// Rewording a commit: the repository and the commit's SHA, and the message to give it.
 pub type RewordMutation = Mutation<(RepositoryId, Reword), String>;
@@ -163,7 +163,7 @@ impl RewordDialog {
             window.open_dialog(cx, move |dialog, window, _| {
                 let cancel = this.clone();
                 dialog
-                    .w(Rems(WIDTH).to_pixels(window.rem_size()))
+                    .w(WIDTH.to_pixels(window.rem_size()))
                     .close_button(false)
                     // Enter in the summary saves (see `submit`), which closes it once it's done:
                     // not at once, as it stays open if that fails.
@@ -216,16 +216,12 @@ impl RewordDialog {
         self.summary.update(cx, |input, cx| {
             input.set_placeholder(placeholder, window, cx)
         });
-        let Some(original) = self
-            .original
-            .as_ref()
-            .and_then(|query| query.is_success().then(|| query.data()).flatten())
-        else {
-            return;
-        };
         if self.loaded.is_some() {
             return;
         }
+        let Some(original) = self.original() else {
+            return;
+        };
         let message = split_message(&original);
         if !self.edited {
             self.set_fields(&message, window, cx);
