@@ -60,6 +60,37 @@ pub fn shown_path_in(shown: &ShownFile, source: &DiffSource) -> Option<String> {
         .map(|(_, path)| path.clone())
 }
 
+/// `list`, whose files open, and load ahead once the pointer rests on one, as `source`'s, through
+/// `owner`'s events; the file on show marked (TS's `ChangedFilesSection`, given an opener). Their
+/// lines are counted, unlike the working tree's.
+pub fn openable_files<T: EventEmitter<CommitDetailsEvent>>(
+    list: ChangedFileList,
+    source: DiffSource,
+    shown_file: &ShownFile,
+    hover: &Entity<HoverIntent>,
+    cx: &Context<T>,
+) -> ChangedFileList {
+    let opener = cx.entity().downgrade();
+    let prefetcher = opener.clone();
+    let prefetch_source = source.clone();
+    list.open_path(shown_path_in(shown_file, &source))
+        .on_open(move |file, _, cx| {
+            let event = CommitDetailsEvent::OpenFile {
+                source: source.clone(),
+                file: file.clone(),
+            };
+            let _ = opener.update(cx, |_, cx| cx.emit(event));
+        })
+        .on_prefetch(hover, move |file, _, cx| {
+            let event = CommitDetailsEvent::PrefetchFile {
+                source: prefetch_source.clone(),
+                file: file.clone(),
+                uncounted: false,
+            };
+            let _ = prefetcher.update(cx, |_, cx| cx.emit(event));
+        })
+}
+
 /// What the details show: the part for the kind of row selected.
 enum Body {
     Commit(Entity<SelectedCommit>),
@@ -450,27 +481,7 @@ impl Render for SelectedCommit {
                 .unwrap_or_else(|| Opaque::new(Vec::new())),
         );
         if openable {
-            let open_source = source.clone();
-            let prefetch_source = source.clone();
-            let opener = cx.entity().downgrade();
-            let prefetcher = opener.clone();
-            list = list
-                .open_path(shown_path_in(&self.shown_file, &source))
-                .on_open(move |file, _, cx| {
-                    let event = CommitDetailsEvent::OpenFile {
-                        source: open_source.clone(),
-                        file: file.clone(),
-                    };
-                    let _ = opener.update(cx, |_, cx| cx.emit(event));
-                })
-                .on_prefetch(&self.hover, move |file, _, cx| {
-                    let event = CommitDetailsEvent::PrefetchFile {
-                        source: prefetch_source.clone(),
-                        file: file.clone(),
-                        uncounted: false,
-                    };
-                    let _ = prefetcher.update(cx, |_, cx| cx.emit(event));
-                });
+            list = openable_files(list, source, &self.shown_file, &self.hover, cx);
         }
         self.list
             .render("commit-files", top, hasher.finish(), list, cx)
