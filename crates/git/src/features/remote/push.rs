@@ -1,5 +1,7 @@
 //! Pushing the checked-out branch, and where the Push button pushes it.
 
+use std::collections::HashSet;
+
 use super::blockers::Action;
 use super::config::{map_ref, push_remote, read_config, remote_names};
 use super::progress::why_detached;
@@ -286,12 +288,7 @@ async fn had_commit(run: &GitCommand, branch: &str, tracking: Option<&str>) -> R
         .run(["log", "--walk-reflogs", "--format=%H", &local])
         .await
         .unwrap_or_default();
-    let mut tips: Vec<&str> = Vec::new();
-    for tip in reflog.split('\n').filter(|tip| !tip.is_empty()) {
-        if !tips.contains(&tip) {
-            tips.push(tip);
-        }
-    }
+    let tips: HashSet<&str> = reflog.split('\n').filter(|tip| !tip.is_empty()).collect();
     if tips.is_empty() {
         return Ok(false);
     }
