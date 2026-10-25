@@ -1,5 +1,6 @@
 //! Where a repository keeps what git knows of it. Ported from `packages/git/src/core/git-dirs.ts`.
 
+use std::io;
 use std::path::{Path, PathBuf};
 
 use super::errors::Result;
@@ -38,8 +39,15 @@ pub async fn git_dirs(repo: &Repo) -> Result<GitDirs> {
 }
 
 /// `path` with symlinks resolved, as Node's `realpath` has it (not as a `\\?\` path on Windows).
+/// A failure names `path`, as Node's does: the OS's message alone doesn't say which one it was.
 pub async fn real_path(path: impl AsRef<Path>) -> Result<PathBuf> {
-    let real = async_fs::canonicalize(path.as_ref()).await?;
+    let path = path.as_ref();
+    let real = async_fs::canonicalize(path).await.map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("{error}, realpath '{}'", path.display()),
+        )
+    })?;
     Ok(dunce::simplified(&real).to_owned())
 }
 
@@ -80,5 +88,19 @@ mod tests {
             assert_eq!(other.git_dir, path.join(".git/worktrees/dirs-linked"));
             assert_eq!(other.common_dir, path.join(".git"));
         });
+    }
+
+    #[test]
+    fn real_path_names_the_path_it_couldnt_resolve() {
+        let fx = Fixture::new();
+        let missing = fx.root().join("missing");
+        let error = smol::block_on(real_path(&missing)).unwrap_err();
+        assert!(matches!(error, crate::Error::Io(_)), "{error:?}");
+        assert!(
+            error
+                .to_string()
+                .ends_with(&format!(", realpath '{}'", missing.display())),
+            "{error}"
+        );
     }
 }

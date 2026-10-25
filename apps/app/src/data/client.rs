@@ -103,9 +103,10 @@ impl From<std::io::Error> for QueryError {
     }
 }
 
+/// With its causes (`{:#}`), which its `Display` alone leaves out.
 impl From<anyhow::Error> for QueryError {
     fn from(error: anyhow::Error) -> Self {
-        QueryError::msg(error.to_string())
+        QueryError::msg(format!("{error:#}"))
     }
 }
 
@@ -360,15 +361,13 @@ impl<T: Clone + PartialEq + Send + 'static> QueryEntry<T> {
         self.updates
     }
 
-    /// Takes on `options`' way of loading, as the latest `Query` to show it gives them.
+    /// Takes on `options`' way of loading, as the latest `Query` to show it gives them: their
+    /// settings, or the client's defaults for the ones they leave out, so what an earlier `Query`
+    /// set (an unwatched one's stale time, say) doesn't stick to a watched one of the same key.
     pub(crate) fn set_options(&mut self, options: &QueryOptions<T>) {
         self.fetch = Some(options.fetch.clone());
-        if options.stale_time.is_some() {
-            self.stale_time = options.stale_time.clone();
-        }
-        if options.refetch_on_window_focus.is_some() {
-            self.refetch_on_window_focus = options.refetch_on_window_focus.clone();
-        }
+        self.stale_time = options.stale_time.clone();
+        self.refetch_on_window_focus = options.refetch_on_window_focus.clone();
         if let Some(gc_time) = options.gc_time {
             self.gc_time = gc_time;
         }
@@ -493,12 +492,14 @@ impl<T: Clone + PartialEq + Send + 'static> QueryEntry<T> {
         cx.notify();
     }
 
-    /// Sets its data, as if it had loaded it (TanStack's `setQueryData`).
+    /// Sets its data, as if it had loaded it (TanStack's `setQueryData`): fresh, so no longer
+    /// invalidated.
     pub fn set_data(&mut self, data: T, cx: &mut Context<Self>) {
         self.data = Some(data);
         self.error = None;
         self.data_updated_at = Some(cx.background_executor().now());
         self.updates += 1;
+        self.is_invalidated = false;
         cx.notify();
     }
 }
@@ -1067,6 +1068,41 @@ mod tests {
             cx.update(|cx| QueryClient::get_entry::<String>(&key, cx))
                 .is_none()
         );
+    }
+
+    #[gpui_kit::test]
+    fn a_watched_query_doesnt_keep_an_unwatched_ones_settings(cx: &mut TestAppContext) {
+        cx.update(QueryClient::init);
+        let loads = Rc::new(Cell::new(0));
+        // The home page's, loaded whenever it's shown.
+        let home = cx.new(|cx| Probe {
+            _query: Query::new(crate::data::watch::unwatched(options(&loads)), cx),
+        });
+        cx.run_until_parked();
+        drop(home);
+        cx.update(|_| {});
+
+        // The repository's page's, of the same key: only loaded again once invalidated.
+        let _repository = cx.new(|cx| Probe {
+            _query: Query::new(options(&loads), cx),
+        });
+        cx.run_until_parked();
+        cx.update(QueryClient::window_focused);
+        cx.run_until_parked();
+        assert_eq!(loads.get(), 1);
+    }
+
+    #[gpui_kit::test]
+    fn setting_a_querys_data_makes_it_fresh(cx: &mut TestAppContext) {
+        cx.update(QueryClient::init);
+        let key = crate::data::keys::refs("repo");
+        cx.update(|cx| QueryClient::set_data(&key, 1, cx));
+        cx.update(|cx| {
+            let _ = QueryClient::invalidate(&key, cx);
+        });
+        cx.update(|cx| QueryClient::set_data(&key, 2, cx));
+        let entry = cx.update(|cx| QueryClient::get_entry::<i32>(&key, cx).unwrap());
+        assert!(!entry.read_with(cx, |entry, _| entry.is_invalidated()));
     }
 
     #[gpui_kit::test]
