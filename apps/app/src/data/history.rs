@@ -320,8 +320,7 @@ fn loaded<T: PartialEq + Send + Sync + 'static>(query: &Query<Arc<[T]>>) -> Arc<
 /// for it again. Loaded on its own otherwise. Shown with `Query::set_options` in place of the one
 /// before, which stays on show while it loads, instead of nothing.
 pub fn commit_details_options(id: &RepositoryId, sha: &str, cx: &App) -> QueryOptions<Commit> {
-    let log = keys::log(id);
-    let initial_sha = sha.to_owned();
+    let initial = commit_in_log(id, sha);
     let sha = sha.to_owned();
     QueryOptions::new(
         keys::commit(id, &sha),
@@ -330,15 +329,23 @@ pub fn commit_details_options(id: &RepositoryId, sha: &str, cx: &App) -> QueryOp
             async move { get_commit(&repo, &parse::<Sha>(sha)?).await }
         }),
     )
-    .initial_data(move |cx| {
+    .initial_data(initial)
+    .stale_time(StaleTime::Infinite)
+    .keep_previous_data()
+}
+
+/// The commit `sha` as the repository `id`'s cached log has it, if it's in it: a commit's details'
+/// initial data (see [`commit_details_options`]).
+fn commit_in_log(id: &RepositoryId, sha: &str) -> impl Fn(&App) -> Option<Commit> + 'static {
+    let log = keys::log(id);
+    let sha = sha.to_owned();
+    move |cx| {
         QueryClient::get_data::<Log>(&log, cx)?
             .commits
             .iter()
-            .find(|commit| commit.sha == initial_sha)
+            .find(|commit| commit.sha == sha)
             .cloned()
-    })
-    .stale_time(StaleTime::Infinite)
-    .keep_previous_data()
+    }
 }
 
 /// A commit's details' query (see [`commit_details_options`]).
@@ -526,16 +533,8 @@ mod tests {
         let options = QueryOptions::<Commit>::new(keys::commit(&id, &sha), |_, _| {
             async { Err(QueryError::msg("Asked git.")) }.boxed()
         });
-        let initial_sha = sha.clone();
-        let log_key = keys::log(&id);
         let options = options
-            .initial_data(move |cx| {
-                QueryClient::get_data::<Log>(&log_key, cx)?
-                    .commits
-                    .iter()
-                    .find(|commit| commit.sha == initial_sha)
-                    .cloned()
-            })
+            .initial_data(commit_in_log(&id, &sha))
             .stale_time(StaleTime::Infinite);
         struct Details {
             query: Query<Commit>,
