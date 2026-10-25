@@ -1,13 +1,10 @@
 //! Committing, rewording, and what's read of a commit. Ported from `git/queries/commit.ts`.
 
-use std::future::Future;
+use gitto_git::input::{RepositoryId, Sha};
+use gpui_kit::{App, Context, Entity};
 
-use gitto_git::ApiError;
-use gitto_git::input::{FullSha, Message, RepositoryId, Sha};
-use gpui_kit::{App, AppContext as _, Context, Entity, Task};
-
-use super::call::{call, loads};
-use super::client::{QueryClient, QueryError, QueryOptions, StaleTime};
+use super::call::loads;
+use super::client::{QueryOptions, StaleTime};
 use super::keys;
 use super::mutation::Mutation;
 use super::query::Query;
@@ -44,42 +41,11 @@ pub fn create_commit_mutation(cx: &mut App) -> Entity<Mutation<(RepositoryId, Ne
 pub fn reword_commit_mutation(cx: &mut App) -> Entity<Mutation<(RepositoryId, Reword), String>> {
     Mutation::new(
         |(id, reword): (RepositoryId, Reword), cx: &mut App| {
-            let action = call(cx, &id, move |repo| async move {
-                let sha = repo.input(FullSha::parse(reword.sha))?;
-                let message = repo.input(Message::parse(reword.message))?;
-                repo.reword_commit(sha, message).await
-            });
-            refresh_after_commit(id, action, cx)
+            Repositories::open(&id, cx)
+                .update(cx, |repository, cx| repository.reword_commit(reword, cx))
         },
         cx,
     )
-}
-
-/// Runs a commit's `action`, then reloads what it changed: the whole repository once it's done,
-/// waited for; after a failure, the uncommitted changes only (`refreshAfterCommit`).
-fn refresh_after_commit<R: Send + 'static>(
-    id: RepositoryId,
-    action: impl Future<Output = Result<R, ApiError>> + Send + 'static,
-    cx: &mut App,
-) -> Task<Result<R, QueryError>> {
-    cx.spawn(async move |cx| {
-        let result = cx.background_spawn(action).await;
-        match result {
-            Ok(result) => {
-                cx.update(|cx| QueryClient::invalidate(&keys::repository(&id), cx))
-                    .await;
-                Ok(result)
-            }
-            Err(error) => {
-                // A failure saying HEAD has moved means the status is behind; reloaded without
-                // waiting for it, so the error shows right away.
-                cx.update(|cx| {
-                    let _ = QueryClient::invalidate(&keys::uncommitted(&id), cx);
-                });
-                Err(error.into())
-            }
-        }
-    })
 }
 
 /// A commit's full message, as written; it never changes.

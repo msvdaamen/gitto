@@ -16,7 +16,7 @@ use futures::future::BoxFuture;
 use gitto_git::features::history::commands::Page;
 use gitto_git::features::history::schema::Commit;
 use gitto_git::features::stash::schema::Stash;
-use gitto_git::features::status::schema::{StatusSummary, Uncommitted};
+use gitto_git::features::status::schema::StatusSummary;
 use gitto_git::features::worktree::schema::Worktree;
 use gitto_git::input::{RepositoryId, Sha};
 use gpui_kit::{App, AppContext as _, Context, Entity, Subscription, Task};
@@ -24,12 +24,11 @@ use gpui_kit::{App, AppContext as _, Context, Entity, Subscription, Task};
 use super::call::{git, loads};
 use super::client::{QueryClient, QueryError, QueryOptions, StaleTime};
 use super::keys;
+use super::loaded::Loaded;
 use super::mutation::Mutation;
-use super::opaque::Opaque;
 use super::query::Query;
-use super::stash::stashes_query;
-use super::status::{head_sha, status_query};
-use super::worktree::worktrees_query;
+use super::repository::{Part, Repository};
+use super::status::head_sha;
 use gitto_ui::git::status::has_uncommitted_changes;
 
 /// How many commits the history loads first: a few screenfuls, so it shows quickly.
@@ -223,93 +222,60 @@ impl LogQuery {
     }
 }
 
-/// What the history table shows (`useHistory`): the log, and what's shown among it. The rows are
-/// laid out from these (see the module's doc): the log's commits with the stashes among them, a
-/// row of the uncommitted changes if there are any, and the other worktrees' checkouts on their
-/// labels.
-pub struct History {
-    log: LogQuery,
-    status: Query<Opaque<Uncommitted>, StatusSummary>,
-    stashes: Query<Arc<[Stash]>>,
-    worktrees: Query<Arc<[Worktree]>>,
-}
+/// What the history table shows of a repository (`useHistory`): the log, and what's shown among
+/// it. The rows are laid out from these (see the module's doc): the log's commits with the stashes
+/// among them, a row of the uncommitted changes if there are any, and the other worktrees'
+/// checkouts on their labels.
+pub struct History<'a>(pub &'a Repository);
 
-impl History {
-    pub fn new<V: 'static>(id: &RepositoryId, cx: &mut Context<V>) -> Self {
-        History::with_get(id, git_log(cx), cx)
-    }
-
-    /// With the log read by `get`: e.g. a test's, which pages it itself.
-    pub fn with_get<V: 'static>(id: &RepositoryId, get: GetLog, cx: &mut Context<V>) -> Self {
-        History {
-            log: LogQuery::with_get(id, get, cx),
-            status: status_query(id, cx),
-            stashes: stashes_query(id, cx),
-            worktrees: worktrees_query(id, cx),
-        }
-    }
-
-    pub fn log(&self) -> &LogQuery {
-        &self.log
-    }
+impl History<'_> {
+    /// What of a repository the history shows.
+    pub const PARTS: &'static [Part] = &[
+        Part::Log,
+        Part::More,
+        Part::Status,
+        Part::Stashes,
+        Part::Worktrees,
+    ];
 
     /// The log's commits, once it's loaded.
-    pub fn commits(&self) -> Option<Log> {
-        self.log.query().data()
-    }
-
-    pub fn status(&self) -> &Query<Opaque<Uncommitted>, StatusSummary> {
-        &self.status
-    }
-
-    pub fn stashes(&self) -> &Query<Arc<[Stash]>> {
-        &self.stashes
-    }
-
-    pub fn worktrees(&self) -> &Query<Arc<[Worktree]>> {
-        &self.worktrees
+    pub fn commits(&self) -> Option<&Log> {
+        self.0.log().data()
     }
 
     /// Whether there are uncommitted changes, for their row. The layout only depends on the log,
     /// the stashes, this and HEAD; not on the rest of the status, which reloads whenever a file
     /// changes.
     pub fn has_changes(&self) -> bool {
-        has_uncommitted_changes(self.status.data().as_ref())
+        has_uncommitted_changes(self.summary().as_ref())
+    }
+
+    pub fn summary(&self) -> Option<StatusSummary> {
+        self.0.status().data().map(|status| status.summary())
     }
 
     /// The commit HEAD points at; `None` before the first commit, or until the status loads.
     pub fn head(&self) -> Option<String> {
-        self.status
-            .data()
-            .and_then(|status| head_sha(&status.head).map(str::to_owned))
+        let status = self.0.status().data()?;
+        head_sha(&status.head).map(str::to_owned)
     }
 
     /// The stashes to show among the log: none until they've loaded, rather than holding up the
     /// history for them, and none if they couldn't be: the Pop button says why.
     pub fn shown_stashes(&self) -> Arc<[Stash]> {
-        loaded(&self.stashes)
+        loaded(self.0.stashes())
     }
 
     /// The worktrees whose checkouts the labels show: none until they've loaded, and if they
     /// couldn't be, as with the stashes.
     pub fn shown_worktrees(&self) -> Arc<[Worktree]> {
-        loaded(&self.worktrees)
-    }
-
-    /// Whether there's more of the log to load, once it's loaded.
-    pub fn has_more(&self) -> bool {
-        self.log.has_more()
-    }
-
-    /// Loads more of the log (see `LogQuery::load_more`).
-    pub fn load_more(&self, cx: &mut App) {
-        self.log.load_more(cx)
+        loaded(self.0.worktrees())
     }
 }
 
-fn loaded<T: PartialEq + Send + Sync + 'static>(query: &Query<Arc<[T]>>) -> Arc<[T]> {
-    match query.data() {
-        Some(data) if query.is_success() => data,
+fn loaded<T>(loaded: &Loaded<Arc<[T]>>) -> Arc<[T]> {
+    match loaded.data() {
+        Some(data) if loaded.is_success() => Arc::clone(data),
         _ => Arc::from(Vec::new()),
     }
 }

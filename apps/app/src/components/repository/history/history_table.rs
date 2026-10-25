@@ -33,17 +33,17 @@ use super::commit_row::{HistoryCommitRow, RowProps};
 use super::history_graph::graph_width;
 use super::history_option::{MenuBuilder, RowPosition};
 use super::ref_labels::{LabelActions, MoreLabels};
-use super::reword_dialog::{RewordEvent, RewordMutation};
+use super::reword_dialog::RewordEvent;
 use super::stash_row::HistoryStashRow;
 use super::wip_row::{HistoryWipRow, WipSummary};
 use crate::components::repository::branch_menu::BranchMenuProvider;
 use crate::components::ui::{
     EmptyState, IconName, LoadingState, UpdatingIndicator, VirtualList, is_near_end,
 };
-use crate::data::branch::{BranchChange, switch_branch_operation};
-use crate::data::diff::{ChangedFiles, FilesOf, ShownFiles, changed_files_query};
-use crate::data::history::{GetLog, History, git_log};
-use crate::data::{Operations, Query};
+use crate::data::diff::{ChangedFiles, FilesOf, ShownFiles, select_shown_files};
+use crate::data::history::History;
+use crate::data::keyed::Hold;
+use crate::data::{Changed, Part, Shown};
 use crate::state::clock::Clock;
 use crate::state::delayed::{DELAY, Delayed};
 use crate::theme::PaletteExt as _;
@@ -67,27 +67,19 @@ pub enum HistoryEvent {
     Select(String),
 }
 
-/// What the history runs: git, or a test's.
-#[derive(Clone)]
-pub struct HistorySources {
-    /// Reads a page of the log.
-    pub log: GetLog,
-    /// Switches branches, when a branch's label is double-clicked.
-    pub switch: BranchChange<String>,
-    /// Rewords the last commit; the app's when `None`.
-    pub reword: Option<Entity<RewordMutation>>,
-}
+/// What the history table shows of the repository: the history's, and whether a change (a
+/// switch, say) is running.
+const PARTS: &[Part] = &[
+    Part::Log,
+    Part::More,
+    Part::Status,
+    Part::Stashes,
+    Part::Worktrees,
+    Part::Operations,
+];
 
-impl HistorySources {
-    /// Git's.
-    pub fn new(cx: &App) -> Self {
-        HistorySources {
-            log: git_log(cx),
-            switch: switch_branch_operation(),
-            reword: None,
-        }
-    }
-}
+/// Picks the files on show of [`ChangedFiles`], counting their lines once per list.
+type SelectFiles = Box<dyn Fn(&ChangedFiles) -> ShownFiles>;
 
 /// The rows as laid out from what they're made of: laid out again only when that changes.
 struct Layout {
@@ -136,8 +128,7 @@ struct MoreLabelsState {
 /// the first row, so the details show it too.
 pub struct HistoryTable {
     repository_id: RepositoryId,
-    sources: HistorySources,
-    history: History,
+    repository: Shown,
     search: SharedString,
     needle: String,
     selected_id: Option<String>,
@@ -148,8 +139,10 @@ pub struct HistoryTable {
     fell_back: Option<(Option<String>, String)>,
     layout: Layout,
     filtered: Filtered,
-    /// The files of the row the details show, for its line totals.
-    totals: Option<(String, Query<ChangedFiles, ShownFiles>)>,
+    /// The files of the row the details show, for its line totals: its id, and whose files they
+    /// are, held.
+    totals: Option<(String, FilesOf, Hold)>,
+    select_files: SelectFiles,
     /// The log is reloaded whenever a branch or tag changes, which takes a while in a big
     /// repository; and more of it loads as its end comes near.
     updating: Entity<Delayed>,
@@ -164,7 +157,7 @@ pub struct HistoryTable {
     scroll: UniformListScrollHandle,
     /// Scrolls the table sideways when its pane is narrower than the table's least width.
     sideways: ScrollHandle,
-    _history_subscriptions: Vec<Subscription>,
+    _history_changes: Subscription,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -178,24 +171,9 @@ impl Focusable for HistoryTable {
 
 impl HistoryTable {
     pub fn new(repository_id: RepositoryId, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let sources = HistorySources::new(cx);
-        HistoryTable::with(repository_id, sources, window, cx)
-    }
-
-    /// Running what `sources` runs: e.g. a test's.
-    pub fn with(
-        repository_id: RepositoryId,
-        sources: HistorySources,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let history = History::with_get(&repository_id, Rc::clone(&sources.log), cx);
-        let commit_menu = cx.new(|cx| match &sources.reword {
-            Some(reword) => {
-                CommitMenu::with_reword(repository_id.clone(), reword.clone(), window, cx)
-            }
-            None => CommitMenu::new(repository_id.clone(), window, cx),
-        });
+        let repository = Shown::new(&repository_id, PARTS, cx);
+        let history_changes = HistoryTable::watch(&repository, cx);
+        let commit_menu = cx.new(|cx| CommitMenu::new(repository_id.clone(), window, cx));
         let updating = cx.new(|cx| Delayed::new(false, DELAY, cx));
         let loading_more = cx.new(|cx| Delayed::new(false, DELAY, cx));
         let branch_menu = BranchMenuProvider::current(cx);
@@ -208,8 +186,6 @@ impl HistoryTable {
             cx.subscribe_in(&commit_menu, window, |this, _, event, _, cx| match event {
                 RewordEvent::Reworded { from, to } => this.replace_selected(from, to, cx),
             }),
-            // A switch shows in the toolbar; a label double-clicked meanwhile does nothing.
-            cx.observe_global::<Operations>(|_, cx| cx.notify()),
         ];
         if let Some(provider) = &branch_menu {
             subscriptions.push(cx.observe(provider, |this, _, cx| {
@@ -230,8 +206,7 @@ impl HistoryTable {
         let rows = Rc::clone(&layout.rows);
         let mut table = HistoryTable {
             repository_id,
-            sources,
-            history,
+            repository,
             search: SharedString::default(),
             needle: String::new(),
             selected_id: None,
@@ -244,6 +219,7 @@ impl HistoryTable {
                 shown: None,
             },
             totals: None,
+            select_files: Box::new(select_shown_files()),
             updating,
             loading_more,
             commit_menu,
@@ -253,24 +229,20 @@ impl HistoryTable {
             keyboard: false,
             scroll: UniformListScrollHandle::new(),
             sideways: ScrollHandle::new(),
-            _history_subscriptions: Vec::new(),
+            _history_changes: history_changes,
             _subscriptions: subscriptions,
         };
-        table.watch_history(cx);
         table.sync(cx);
         table
     }
 
     /// Lays the rows out again, and so on, as what they're made of changes.
-    fn watch_history(&mut self, cx: &mut Context<Self>) {
-        let history = &self.history;
-        self._history_subscriptions = vec![
-            cx.observe(history.log().query().entry(), |this, _, cx| this.sync(cx)),
-            cx.observe(history.log().more(), |this, _, cx| this.sync(cx)),
-            cx.observe(history.status().entry(), |this, _, cx| this.sync(cx)),
-            cx.observe(history.stashes().entry(), |this, _, cx| this.sync(cx)),
-            cx.observe(history.worktrees().entry(), |this, _, cx| this.sync(cx)),
-        ];
+    fn watch(repository: &Shown, cx: &mut Context<Self>) -> Subscription {
+        cx.subscribe(repository.entity(), |this, _, Changed(part), cx| {
+            if History::PARTS.contains(part) {
+                this.sync(cx)
+            }
+        })
     }
 
     pub fn repository_id(&self) -> &RepositoryId {
@@ -287,7 +259,8 @@ impl HistoryTable {
         if self.repository_id == repository_id {
             return;
         }
-        self.history = History::with_get(&repository_id, Rc::clone(&self.sources.log), cx);
+        self.repository.set(&repository_id, cx);
+        self._history_changes = HistoryTable::watch(&self.repository, cx);
         self.repository_id = repository_id.clone();
         self.fell_back = None;
         self.totals = None;
@@ -297,7 +270,6 @@ impl HistoryTable {
             menu.set_repository(repository_id, window, cx)
         });
         self.scroll.scroll_to_item(0, ScrollStrategy::Top);
-        self.watch_history(cx);
         self.sync(cx);
         cx.notify();
     }
@@ -372,7 +344,7 @@ impl HistoryTable {
 
     /// Whose files the line totals are of, if any: the selected row's, once the details show it.
     pub fn totals_of(&self) -> Option<&str> {
-        self.totals.as_ref().map(|(id, _)| id.as_str())
+        self.totals.as_ref().map(|(id, _, _)| id.as_str())
     }
 
     /// The commit menu, and its dialog.
@@ -388,7 +360,7 @@ impl HistoryTable {
     /// shows, falling back to the first row, the line totals' files, and what says the history
     /// is loading.
     fn sync(&mut self, cx: &mut Context<Self>) {
-        self.lay_out();
+        self.lay_out(cx);
         self.filter();
 
         // Nothing selected yet, or the selected row is gone: report the row the table falls back
@@ -408,23 +380,25 @@ impl HistoryTable {
 
         self.sync_totals(cx);
 
-        let refetching = self.history.log().query().is_refetching();
+        let repository = self.repository.read(cx);
+        let refetching = repository.log().is_refetching();
+        let more_pending = repository.is_loading_more();
         self.updating
             .update(cx, |updating, cx| updating.set(refetching, cx));
-        let more_pending = self.history.log().more().read(cx).is_pending();
         self.loading_more
             .update(cx, |loading, cx| loading.set(more_pending, cx));
         cx.notify();
     }
 
     /// Lays the rows out again, if what they're made of changed.
-    fn lay_out(&mut self) {
-        let log = self.history.commits();
-        let commits = log.as_ref().map(|log| Arc::clone(&log.commits));
-        let stashes = self.history.shown_stashes();
-        let worktrees = self.history.shown_worktrees();
-        let has_changes = self.history.has_changes();
-        let head = self.history.head();
+    fn lay_out(&mut self, cx: &App) {
+        let history = History(self.repository.read(cx));
+        let log = history.commits();
+        let commits = log.map(|log| Arc::clone(&log.commits));
+        let stashes = history.shown_stashes();
+        let worktrees = history.shown_worktrees();
+        let has_changes = history.has_changes();
+        let head = history.head();
         let layout = &self.layout;
         let unchanged = layout.repository_id == self.repository_id
             && match (&layout.commits, &commits) {
@@ -439,7 +413,7 @@ impl HistoryTable {
         if unchanged {
             return;
         }
-        let rows: Vec<HistoryRow> = match &log {
+        let rows: Vec<HistoryRow> = match log {
             Some(log) => {
                 let entries = with_stashes(&log.commits, &stashes);
                 let graph = history_graph(&entries, has_changes, head.as_deref());
@@ -505,19 +479,21 @@ impl HistoryTable {
             Some((id, of)) => {
                 if self.totals_of() != Some(id.as_str()) {
                     let sha = stash_sha(&id).unwrap_or(&id).to_owned();
-                    let query = changed_files_query(&self.repository_id, &sha, of, cx);
-                    self.totals = Some((id, query));
+                    let hold = self
+                        .repository
+                        .update(cx, |repository, cx| repository.hold_files(of, &sha, cx));
+                    self.totals = Some((id, of, hold));
                 }
             }
         }
     }
 
     /// The selected row's line totals, once its files have loaded.
-    fn totals(&self) -> Option<(String, LineCounts)> {
-        let (id, query) = self.totals.as_ref()?;
-        let shown = query.data()?;
+    fn totals(&self, cx: &App) -> Option<(String, LineCounts)> {
+        let (id, of, _) = self.totals.as_ref()?;
         let sha = stash_sha(id).unwrap_or(id);
-        (shown.shown_sha == sha).then(|| (id.clone(), shown.totals))
+        let files = self.repository.read(cx).files(*of, sha)?.data()?;
+        Some((id.clone(), (self.select_files)(files).totals))
     }
 
     /// Selects the commit `to` in place of `from` if that one's selected: it was rewritten as
@@ -602,8 +578,9 @@ impl HistoryTable {
     /// what's loaded: a search that finds little would have it load page after page. A page that
     /// couldn't be loaded isn't tried again until the history is reloaded.
     fn load_more_near_end(&mut self, cx: &mut Context<Self>) {
-        if self.needle.is_empty() && self.history.log().more().read(cx).error().is_none() {
-            self.history.load_more(cx);
+        if self.needle.is_empty() && self.repository.read(cx).more_error().is_none() {
+            self.repository
+                .update(cx, |repository, cx| repository.load_more(cx));
         }
     }
 
@@ -676,8 +653,8 @@ impl HistoryTable {
     }
 
     /// The uncommitted changes' row's summary.
-    fn wip_summary(&self) -> WipSummary {
-        let status = self.history.status().data();
+    fn wip_summary(&self, cx: &App) -> WipSummary {
+        let status = History(self.repository.read(cx)).summary();
         WipSummary {
             counts: status.as_ref().map(|status| status.counts),
             branch: status
@@ -738,7 +715,7 @@ impl HistoryTable {
                 .text_size(SMALL_TEXT)
                 .text_color(if error { palette.coral } else { palette.faint })
         };
-        if let Some(error) = self.history.log().more().read(cx).error() {
+        if let Some(error) = self.repository.read(cx).more_error() {
             return Some(
                 footer(true)
                     .child(format!("Couldn't load more history: {}", error.message()))
@@ -758,15 +735,16 @@ impl HistoryTable {
         let selected = self.selected().map(|row| row.id().to_owned());
         let focused = self.focus.is_focused(window);
         let table = cx.entity().downgrade();
-        let switch = self.sources.switch.clone();
-        let repository_id = self.repository_id.clone();
         let label_actions = LabelActions {
             switch: Rc::new({
-                let repository_id = repository_id.clone();
+                let repository = self.repository.entity().clone();
                 move |reference, _, cx| {
-                    // Only a branch that isn't checked out says it can be switched to; the
-                    // operation does nothing for the other.
-                    let _ = switch.run(&repository_id, reference, cx);
+                    // Only a branch that isn't checked out says it can be switched to; switching
+                    // does nothing for the other. A switch shows in the toolbar; a label
+                    // double-clicked meanwhile does nothing.
+                    repository.update(cx, |repository, cx| {
+                        drop(repository.switch_branch(reference, cx))
+                    });
                 }
             }),
             open_worktree: Rc::new({
@@ -790,8 +768,8 @@ impl HistoryTable {
             outlined: self.keyboard && focused,
             graph,
             needle: self.needle.clone().into(),
-            totals: self.totals(),
-            wip: self.wip_summary(),
+            totals: self.totals(cx),
+            wip: self.wip_summary(cx),
             labels: label_actions,
             commit_menu: self.commit_menu.clone(),
             commit_menu_open: self.commit_menu.read(cx).open_for().cloned(),
@@ -909,8 +887,12 @@ impl RowsContext {
 impl Render for HistoryTable {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = *cx.palette();
-        let log = self.history.log().query();
-        let loading = log.data().is_none() && log.error().is_none();
+        let log = self.repository.read(cx).log();
+        let loading = log.is_pending();
+        let error = log
+            .error()
+            .filter(|_| log.data().is_none())
+            .map(|error| error.message().to_owned());
         // Before the history's loaded, the header's sized for one lane.
         let graph = graph_width(if loading { 1 } else { self.layout.lanes });
         let updating = self.updating.read(cx).is_on();
@@ -918,13 +900,13 @@ impl Render for HistoryTable {
             LoadingState::new("history-loading", "Loading history…")
                 .fill()
                 .into_any_element()
-        } else if let Some(error) = log.error().filter(|_| log.data().is_none()) {
+        } else if let Some(error) = error {
             EmptyState::new(
                 "history-error",
                 IconName::TriangleAlert,
                 "Couldn't load history",
             )
-            .message(error.message().to_owned())
+            .message(error)
             .error()
             .into_any_element()
         } else if self.shown_count() == 0 {
