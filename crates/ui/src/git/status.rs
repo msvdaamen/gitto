@@ -7,10 +7,7 @@ use gitto_git::features::status::schema::{Head, StatusSummary};
 
 /// What to call HEAD: the branch name, or "detached HEAD".
 pub fn head_label(head: &Head) -> &str {
-    match head {
-        Head::Detached { .. } => "detached HEAD",
-        Head::Branch { name, .. } | Head::Unborn { name } => name,
-    }
+    head_branch(head).unwrap_or("detached HEAD")
 }
 
 /// The commit HEAD points at; `None` on a branch without commits yet.
