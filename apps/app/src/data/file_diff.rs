@@ -38,14 +38,13 @@ pub struct DiffSourceFiles {
 
 impl DiffSourceFiles {
     pub fn new<V: 'static>(id: &RepositoryId, source: DiffSource, cx: &mut Context<V>) -> Self {
-        let sha = sha_of(&source).to_owned();
         let commit = Query::with_select(
-            changed_files_options(id, &sha, FilesOf::Commit, is_commit(&source), cx),
+            source_files_options(id, &source, FilesOf::Commit, cx),
             select_shown_files(),
             cx,
         );
         let stash = Query::with_select(
-            changed_files_options(id, &sha, FilesOf::Stash, is_stash(&source), cx),
+            source_files_options(id, &source, FilesOf::Stash, cx),
             select_shown_files(),
             cx,
         );
@@ -66,19 +65,11 @@ impl DiffSourceFiles {
         source: DiffSource,
         cx: &mut Context<V>,
     ) {
-        let sha = sha_of(&source).to_owned();
-        self.commit.set_options(
-            changed_files_options(id, &sha, FilesOf::Commit, is_commit(&source), cx),
-            cx,
-        );
-        self.stash.set_options(
-            changed_files_options(id, &sha, FilesOf::Stash, is_stash(&source), cx),
-            cx,
-        );
-        let uncommitted = source.is_uncommitted();
-        if self.working_tree.is_enabled() != uncommitted {
-            self.working_tree.set_enabled(uncommitted, cx);
-        }
+        self.commit
+            .set_options(source_files_options(id, &source, FilesOf::Commit, cx), cx);
+        self.stash
+            .set_options(source_files_options(id, &source, FilesOf::Stash, cx), cx);
+        self.working_tree.set_enabled(source.is_uncommitted(), cx);
         self.source = source;
         cx.notify();
     }
@@ -143,19 +134,20 @@ impl DiffSourceFiles {
     }
 }
 
-fn sha_of(source: &DiffSource) -> &str {
-    match source {
-        DiffSource::Commit { sha } | DiffSource::Stash { sha } => sha,
-        DiffSource::Unstaged | DiffSource::Staged => "",
-    }
-}
-
-fn is_commit(source: &DiffSource) -> bool {
-    matches!(source, DiffSource::Commit { .. })
-}
-
-fn is_stash(source: &DiffSource) -> bool {
-    matches!(source, DiffSource::Stash { .. })
+/// The options of the files of `of` that [`DiffSourceFiles`] keeps for `source`: the commit's or
+/// stash's own if it's one of those, disabled otherwise.
+fn source_files_options(
+    id: &RepositoryId,
+    source: &DiffSource,
+    of: FilesOf,
+    cx: &App,
+) -> QueryOptions<ChangedFiles> {
+    let (sha, enabled) = match source {
+        DiffSource::Commit { sha } => (sha.as_str(), of == FilesOf::Commit),
+        DiffSource::Stash { sha } => (sha.as_str(), of == FilesOf::Stash),
+        DiffSource::Unstaged | DiffSource::Staged => ("", false),
+    };
+    changed_files_options(id, sha, of, enabled, cx)
 }
 
 /// One file's patch in a source, with the file and its `DiffSource::file_key`, so what's shown can

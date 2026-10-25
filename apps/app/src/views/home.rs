@@ -18,8 +18,9 @@ use crate::theme::PaletteExt as _;
 
 /// The widest the page's content gets (`max-w-322.5`, 1290px), in rems.
 pub const CONTENT_MAX_WIDTH: f32 = 86.;
-/// The activity column's width (320px), and below [`LARGE`] (280px).
+/// The activity column's width (320px), in rems.
 pub const ASIDE_WIDTH: f32 = 21.33;
+/// The activity column's width below [`LARGE`] (280px), in rems.
 pub const ASIDE_WIDTH_NARROW: f32 = 18.67;
 
 /// Window widths where the layout changes, as TS's `lg` and `md`: below `LARGE` the activity

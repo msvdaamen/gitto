@@ -19,7 +19,9 @@ use gitto_git::features::status::schema::{Head, StatusCounts, Uncommitted, Worki
 use gitto_git::features::worktree::schema::Worktree;
 use gitto_git::input::RepositoryId;
 use gitto_repository::Repository;
-use gpui_kit::TestAppContext;
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::test::{TestEventExt as _, TestQueryExt as _};
+use gpui_kit::{AnyWindowHandle, AppContext as _, MouseButton, Pixels, Point, TestAppContext};
 use tempfile::TempDir;
 
 use crate::data::repositories::RepositorySource;
@@ -195,4 +197,41 @@ pub fn stash(sha: char, message: &str) -> Stash {
         message: message.into(),
         created_at: 1,
     }
+}
+
+/// Whether a dialog is open in `window`.
+pub fn has_dialog(window: AnyWindowHandle, cx: &mut TestAppContext) -> bool {
+    cx.update_window(window, |_, window, cx| window.has_active_dialog(cx))
+        .unwrap()
+}
+
+/// Clicks what's labelled `label` in `window`, e.g. a dialog's button.
+pub fn click_label(window: AnyWindowHandle, label: &str, cx: &mut TestAppContext) {
+    let center = cx
+        .update_window(window, |_, window, _| {
+            window.find_by_label(label).bounds().center()
+        })
+        .unwrap();
+    click_at(window, center, cx);
+}
+
+/// Clicks the last of what's labelled `label` in `window`: a dialog's button, over one labelled
+/// the same under it.
+pub fn click_last_label(window: AnyWindowHandle, label: &str, cx: &mut TestAppContext) {
+    let center = cx
+        .update_window(window, |_, window, _| {
+            let found = window.find_all_by_label(label);
+            found.last().unwrap().bounds().center()
+        })
+        .unwrap();
+    click_at(window, center, cx);
+}
+
+fn click_at(window: AnyWindowHandle, at: Point<Pixels>, cx: &mut TestAppContext) {
+    cx.update_window(window, |_, window, cx| {
+        window.pointer_down(at, MouseButton::Left, cx);
+        window.pointer_up(at, MouseButton::Left, cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
 }

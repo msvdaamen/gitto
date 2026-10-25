@@ -33,8 +33,8 @@ type RepositoryOptions<T> = Rc<dyn Fn(&RepositoryId, &App) -> QueryOptions<T>>;
 type MakeMutation<I> = Rc<dyn Fn(&mut App) -> Entity<Mutation<I>>>;
 
 /// A commit's or a stash's changed files' options (see `changed_files_options`).
-pub type ChangedFilesOptions =
-    Rc<dyn Fn(&RepositoryId, &str, FilesOf, bool, &App) -> QueryOptions<ChangedFiles>>;
+type ChangedFilesOptions =
+    Rc<dyn Fn(&RepositoryId, &str, FilesOf, &App) -> QueryOptions<ChangedFiles>>;
 
 /// What the details load (a commit, the files it changed, the stashes, the status, the operation
 /// under way, the last commit's message and where it was pushed) and change (committing, staging,
@@ -59,9 +59,7 @@ impl DetailsData {
     pub fn git() -> Self {
         DetailsData {
             commit: Rc::new(commit_details_options),
-            changed_files: Rc::new(|id, sha, of, enabled, cx| {
-                changed_files_options(id, sha, of, enabled, cx)
-            }),
+            changed_files: Rc::new(|id, sha, of, cx| changed_files_options(id, sha, of, true, cx)),
             stashes: Rc::new(stashes_options),
             status: Rc::new(git_status),
             operation: Rc::new(operation_in_progress_options),
@@ -85,7 +83,7 @@ impl DetailsData {
         of: FilesOf,
         cx: &App,
     ) -> QueryOptions<ChangedFiles> {
-        (self.changed_files)(id, sha, of, true, cx)
+        (self.changed_files)(id, sha, of, cx)
     }
 
     pub fn stashes(&self, id: &RepositoryId, cx: &App) -> QueryOptions<Arc<[Stash]>> {
@@ -143,7 +141,7 @@ impl DetailsData {
 
     pub fn with_changed_files(
         mut self,
-        files: impl Fn(&RepositoryId, &str, FilesOf, bool, &App) -> QueryOptions<ChangedFiles> + 'static,
+        files: impl Fn(&RepositoryId, &str, FilesOf, &App) -> QueryOptions<ChangedFiles> + 'static,
     ) -> Self {
         self.changed_files = Rc::new(files);
         self
