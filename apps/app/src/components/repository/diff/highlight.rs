@@ -98,6 +98,11 @@ impl<T> LineSpans<T> {
     }
 }
 
+/// What a scoped thread returned; its panic passed on as it was, with its message.
+fn joined<T>(result: std::thread::Result<T>) -> T {
+    result.unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+}
+
 /// What's highlighted in each line of a diff's sides.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DiffHighlights {
@@ -129,11 +134,7 @@ impl DiffHighlights {
             let deletions = scope.spawn(|| side_syntax(Side::Deletions));
             let changed = scope.spawn(|| changed_words(diff));
             let additions = side_syntax(Side::Additions);
-            (
-                deletions.join().expect("highlighting a side doesn't panic"),
-                additions,
-                changed.join().expect("comparing lines doesn't panic"),
-            )
+            (joined(deletions.join()), additions, joined(changed.join()))
         });
         DiffHighlights {
             syntax: [deletions, additions],
