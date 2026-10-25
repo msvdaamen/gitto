@@ -212,6 +212,10 @@ impl Autosave {
 
     /// `text` was saved, or not.
     fn saved(&mut self, text: String, result: Result<String, QueryError>, cx: &mut Context<Self>) {
+        // Stopped meanwhile: nothing left to save, nor to say about it.
+        if self.version.is_none() {
+            return;
+        }
         match result {
             Err(error) => {
                 let message = error.message();
@@ -222,8 +226,6 @@ impl Autosave {
                 };
                 self.set_state(state, cx);
             }
-            // Stopped meanwhile: nothing left to save.
-            Ok(_) if self.version.is_none() => {}
             Ok(version) => {
                 self.version = Some(version);
                 if self.unsaved.as_deref() == Some(&text) {
@@ -448,6 +450,31 @@ mod tests {
         let sent = autosave.update(cx, |autosave, cx| autosave.flush_now(cx));
         assert!(sent.is_some());
         assert_eq!(calls.borrow().last(), Some(&call("ab", "v0", false)));
+    }
+
+    #[gpui_kit::test]
+    fn says_nothing_of_a_save_that_failed_after_it_was_stopped(cx: &mut TestAppContext) {
+        let finish = Rc::new(RefCell::new(None::<oneshot::Sender<String>>));
+        let pending = Rc::clone(&finish);
+        let (autosave, _) = autosave(cx, move |_, _, _, cx| {
+            let (send, receive) = oneshot::channel::<String>();
+            *pending.borrow_mut() = Some(send);
+            cx.spawn(async move |_| {
+                receive.await.ok();
+                Err(changed_on_disk())
+            })
+        });
+        autosave.update(cx, |autosave, cx| {
+            autosave.start("v0".into(), cx);
+            autosave.change("a".into(), cx);
+        });
+        wait(cx, DELAY);
+        assert_eq!(state(&autosave, cx), SaveState::Saving);
+        // The edits are dropped while they're being saved, which then fails.
+        autosave.update(cx, |autosave, cx| autosave.stop(cx));
+        drop(finish.borrow_mut().take());
+        cx.run_until_parked();
+        assert_eq!(state(&autosave, cx), SaveState::Saved);
     }
 
     #[gpui_kit::test]
