@@ -549,6 +549,38 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn asks_again_once_made_again_for_the_repository_turned_down(cx: &mut TestAppContext) {
+        let (_, push, pull) = operations(|_, _| Err(rejected(true)));
+        let _dir = setup(cx);
+        let id = seed(target(), cx);
+        let again = (id.clone(), push.clone(), pull.clone());
+        let (window, page) = crate::test_support::open(cx, move |window, cx| Page {
+            button: Some(cx.new(|cx| PushButton::with_operations(id, push, pull, window, cx))),
+        });
+        click(window, "push", cx);
+        // Another repository on show: the page drops the button, and its dialog goes with it.
+        page.update(cx, |page, cx| {
+            page.button = None;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(!has_dialog(window, cx));
+
+        // Back to it: the push is still turned down, so it's asked about again.
+        cx.update_window(window, |_, window, cx| {
+            page.update(cx, |page, cx| {
+                let (id, push, pull) = again;
+                page.button =
+                    Some(cx.new(|cx| PushButton::with_operations(id, push, pull, window, cx)));
+                cx.notify();
+            })
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert!(has_dialog(window, cx));
+    }
+
+    #[gpui_kit::test]
     fn leaves_the_remote_alone_when_cancelled(cx: &mut TestAppContext) {
         let (calls, push, pull) = operations(|_, _| Err(rejected(true)));
         let (_dir, window, button) = render(cx, target(), push, pull);
