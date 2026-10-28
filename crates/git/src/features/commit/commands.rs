@@ -69,7 +69,7 @@ impl fmt::Display for Message {
 /// mistake. Nothing needs to be staged to only reword it: an amend may leave the commit empty, so
 /// an empty one can be reworded.
 ///
-/// Its place in the repository's writes is taken when it's called, not when it's first polled.
+/// Its place in the repository's writes is taken when it's first polled (see `Repo::exclusive`).
 pub fn create_commit(
     repo: &Repo,
     message: &Message,
@@ -98,7 +98,7 @@ pub fn create_commit(
 /// git rewords a commit in a rebase.
 ///
 /// Its own function, rather than an option of `create_commit`, for that SHA, which committing
-/// doesn't look up. Its place in the repository's writes is taken when it's called.
+/// doesn't look up. Its place in the repository's writes is taken when it's first polled.
 pub fn reword_commit(
     repo: &Repo,
     sha: &FullSha,

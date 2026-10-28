@@ -112,7 +112,7 @@ pub async fn get_log(repo: &Repo, page: Page) -> Result<Vec<Commit>> {
         .as_deref()
         .is_some_and(|commits| !children_first(commits))
     {
-        repo.sort_log();
+        repo.mark_log_needs_sorting();
         commits = None;
     }
     let commits = match commits {

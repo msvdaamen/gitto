@@ -314,8 +314,8 @@ pub struct SaveExpectation {
 /// it, then put in its place, so it's never found half written. A link isn't saved through, nor is
 /// a file that isn't UTF-8. Resolves to the saved file's version.
 ///
-/// Its place in line, after the saves to the same path asked for before it, is taken when it's
-/// called, not when it's first polled.
+/// Its place in line, after the saves to the same path before it, is taken when it's first polled
+/// (see `WriteQueue`).
 pub fn save_working_tree_file(
     repo: &Repo,
     path: &str,
