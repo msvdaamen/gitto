@@ -324,8 +324,8 @@ async fn read_output(
     output
 }
 
-/// `git` with `args`, to run in `cwd` with `options`, in a session of its own (see `run_git_bytes`),
-/// and with the PATH `path`, if it's not Gitto's own (see `shell_path`).
+/// `git` with `args`, to run in `cwd` with `options`, in a session of its own (see
+/// `run_git_bytes`), and with the PATH `path`, if it's not Gitto's own (see `shell_path`).
 fn git_command(
     cwd: &Path,
     args: &[OsString],
