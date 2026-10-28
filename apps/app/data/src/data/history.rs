@@ -134,7 +134,7 @@ fn loaded<T>(loaded: &Loaded<Arc<[T]>>) -> Arc<[T]> {
 
 #[cfg(test)]
 mod tests {
-    use gitto_git::features::history::commands::Page;
+    use gitto_git::Page;
     use gitto_git::input::RepositoryId;
 
     use super::*;

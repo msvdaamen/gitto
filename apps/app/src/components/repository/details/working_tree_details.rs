@@ -3,7 +3,7 @@
 
 use std::rc::Rc;
 
-use gitto_git::features::staging::discard::DiscardSide;
+use gitto_git::DiscardSide;
 use gitto_git::features::status::schema::{StatusSummary, Uncommitted};
 use gitto_git::input::RepositoryId;
 use gitto_ui_logic::git::changes::is_nested_repository;

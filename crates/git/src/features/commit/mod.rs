@@ -3,4 +3,4 @@
 //!
 //! Ported from `packages/git/src/features/commit/`.
 
-pub mod commands;
+pub(crate) mod commands;

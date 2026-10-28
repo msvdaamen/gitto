@@ -2,6 +2,6 @@
 //!
 //! Ported from `packages/git/src/features/refs/`.
 
-pub mod commands;
+pub(crate) mod commands;
 pub mod parse;
 pub mod schema;

@@ -2,5 +2,5 @@
 //!
 //! Ported from `packages/git/src/features/operation/`.
 
-pub mod commands;
+pub(crate) mod commands;
 pub mod schema;

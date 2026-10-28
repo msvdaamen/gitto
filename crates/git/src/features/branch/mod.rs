@@ -2,9 +2,9 @@
 //!
 //! Ported from `packages/git/src/features/branch/`.
 
-pub mod commands;
-pub mod delete;
+pub(crate) mod commands;
+pub(crate) mod delete;
 pub mod in_use;
-pub mod merge;
-pub mod rebase;
+pub(crate) mod merge;
+pub(crate) mod rebase;
 pub mod schema;

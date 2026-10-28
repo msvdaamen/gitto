@@ -9,10 +9,10 @@ use futures::FutureExt as _;
 use futures::channel::oneshot;
 use futures::future::BoxFuture;
 
+use gitto_git::Discarded;
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::features::history::schema::Commit;
 use gitto_git::features::operation::schema::Operation;
-use gitto_git::features::staging::discard::Discarded;
 use gitto_git::features::stash::schema::Stash;
 use gitto_git::features::status::schema::{
     Head, StatusCounts, StatusReply, Uncommitted, WorkingTreeFiles,

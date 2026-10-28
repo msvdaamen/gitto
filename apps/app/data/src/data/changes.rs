@@ -13,11 +13,11 @@ use std::path::PathBuf;
 
 use futures::FutureExt as _;
 use futures::channel::oneshot;
+use gitto_git::Discarded;
+use gitto_git::ShownConflict;
 use gitto_git::features::branch::schema::{MergeOutcome, RebaseOutcome};
-use gitto_git::features::conflicts::commands::ShownConflict;
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::features::operation::schema::OperationKind;
-use gitto_git::features::staging::discard::Discarded;
 use gitto_git::input::{BranchName, BranchRef, FileInput, FullSha, NonEmpty, Paths, RepositoryId};
 use gitto_git::schema::FileStatus;
 use gpui_kit::{AppContext as _, Context, Task};

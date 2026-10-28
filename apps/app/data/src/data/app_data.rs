@@ -13,8 +13,8 @@
 use futures::FutureExt as _;
 use futures::channel::oneshot;
 use gitto_git::GitInstall;
-use gitto_git::features::user::commands::get_user_name;
 use gitto_git::features::version::check;
+use gitto_git::get_user_name;
 use gitto_repository::Repository;
 use gpui_kit::{App, AppContext as _, Context, Entity, EventEmitter, Global};
 

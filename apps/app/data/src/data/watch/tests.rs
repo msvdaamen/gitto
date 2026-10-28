@@ -6,7 +6,7 @@ use futures::stream;
 use gpui_kit::{AppContext as _, Entity, TestAppContext};
 
 use futures::FutureExt as _;
-use gitto_git::features::history::commands::Page;
+use gitto_git::Page;
 use gitto_git::features::history::schema::Commit;
 use gitto_git::features::refs::schema::Ref;
 use gitto_git::features::status::schema::{

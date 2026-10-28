@@ -42,7 +42,7 @@ use gitto_app_data::data::commit::Reword;
 use gitto_app_data::data::diff::{ChangedFiles, FilesOf};
 use gitto_app_data::data::git::{GitTask, RepositoryGit};
 use gitto_app_data::data::{DataError, Field, Opaque};
-use gitto_git::features::history::commands::Page;
+use gitto_git::Page;
 use gitto_git::features::status::schema::StatusReply;
 use gitto_git::input::{BranchName, BranchRef, FullSha, Message, NonEmpty};
 

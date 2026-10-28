@@ -2,8 +2,8 @@
 //!
 //! Ported from `packages/git/src/features/staging/`.
 
-pub mod commands;
-pub mod discard;
+pub(crate) mod commands;
+pub(crate) mod discard;
 pub mod lines;
 pub mod patch_version;
 pub mod schema;

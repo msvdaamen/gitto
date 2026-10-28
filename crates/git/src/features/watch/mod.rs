@@ -3,7 +3,7 @@
 //! Ported from `packages/git/src/features/watch/`.
 
 mod batches;
-pub mod commands;
+pub(crate) mod commands;
 mod generator;
 pub mod git_dirs;
 pub mod schema;

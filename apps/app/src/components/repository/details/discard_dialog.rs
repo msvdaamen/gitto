@@ -4,8 +4,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use gitto_git::DiscardSide;
 use gitto_git::features::diff::schema::ChangedFile;
-use gitto_git::features::staging::discard::DiscardSide;
 use gitto_git::schema::FileStatus;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};

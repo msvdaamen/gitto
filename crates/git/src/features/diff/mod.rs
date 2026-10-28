@@ -2,7 +2,7 @@
 //!
 //! Ported from `packages/git/src/features/diff/`.
 
-pub mod commands;
+pub(crate) mod commands;
 pub mod limits;
 pub mod parse;
 pub mod schema;

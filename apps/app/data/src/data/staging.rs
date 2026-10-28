@@ -1,8 +1,8 @@
 //! Staging, unstaging and discarding changes: whole files, or lines of them. Ported from
 //! `git/queries/staging.ts`.
 
+use gitto_git::DiscardSide;
 use gitto_git::features::diff::schema::ChangedFile;
-use gitto_git::features::staging::discard::DiscardSide;
 use gitto_git::features::staging::schema::LineSelection;
 use gitto_git::input::RepositoryId;
 use gpui_kit::{App, Entity};
