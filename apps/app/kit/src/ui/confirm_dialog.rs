@@ -154,8 +154,8 @@ mod tests {
     }
 
     /// A dialog asking to remove something, counting the removes and the cancels.
-    fn open(cx: &mut TestAppContext) -> (tempfile::TempDir, AnyWindowHandle, Counts) {
-        let dir = test_support::init(cx);
+    fn open(cx: &mut TestAppContext) -> (AnyWindowHandle, Counts) {
+        test_support::init(cx);
         let (window, _) = test_support::open(cx, |_, _| Host);
         let counts = Counts::default();
         let (removed, cancelled) = (Rc::clone(&counts.removed), Rc::clone(&counts.cancelled));
@@ -169,7 +169,7 @@ mod tests {
         })
         .unwrap();
         cx.run_until_parked();
-        (dir, window, counts)
+        (window, counts)
     }
 
     fn has_dialog(window: AnyWindowHandle, cx: &mut TestAppContext) -> bool {
@@ -179,7 +179,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn cancels_on_enter(cx: &mut TestAppContext) {
-        let (_dir, window, counts) = open(cx);
+        let (window, counts) = open(cx);
         assert!(has_dialog(window, cx));
         cx.update_window(window, |_, window, cx| window.press("enter", cx))
             .unwrap();
@@ -190,7 +190,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn runs_the_action_chosen(cx: &mut TestAppContext) {
-        let (_dir, window, counts) = open(cx);
+        let (window, counts) = open(cx);
         cx.update_window(window, |_, window, cx| {
             window.render_frame(cx);
             window.click(("action", 0usize), cx);

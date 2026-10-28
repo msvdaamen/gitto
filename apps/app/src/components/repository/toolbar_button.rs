@@ -278,7 +278,7 @@ impl RenderOnce for ToolbarButton {
                 FailurePopover::new(
                     SharedString::from(format!("{}-failure", self.id)),
                     failure.title,
-                    failure.error,
+                    failure.error.map(|error| error.to_string().into()),
                     button,
                 )
                 .on_dismiss(move |window, cx| on_dismiss(window, cx))

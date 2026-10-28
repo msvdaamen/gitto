@@ -1,5 +1,6 @@
 //! The width of a resizable panel, in GPUI's `f32` pixels. Ported from `hooks/panel-width.ts`.
 
+use std::ops::RangeInclusive;
 use std::rc::Rc;
 
 use crate::services::LocalStorage;
@@ -15,6 +16,11 @@ pub struct PanelBounds {
 impl PanelBounds {
     pub const fn new(initial: f32, min: f32, max: f32) -> Self {
         PanelBounds { initial, min, max }
+    }
+
+    /// How narrow and wide it can be made, as a resize handle takes it.
+    pub fn range(self) -> RangeInclusive<f32> {
+        self.min..=self.max
     }
 
     /// `width` within the bounds, in whole pixels.

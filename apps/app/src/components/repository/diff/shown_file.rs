@@ -20,7 +20,7 @@ use gitto_app_data::data::keyed::Hold;
 use gitto_app_data::data::{
     DataError, Loaded, Opaque, Part, Repositories, Repository, observe_parts,
 };
-use gitto_app_data::state::delayed::{DELAY, Delayed};
+use gitto_app_kit::delayed::{DELAY, Delayed};
 use gitto_ui_logic::git::diff_source::{DiffSource, diff_file_key, is_same_source, is_uncommitted};
 
 /// Changed lines above which a file's changes are only shown when asked: reading and parsing them

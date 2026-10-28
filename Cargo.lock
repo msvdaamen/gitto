@@ -2143,11 +2143,8 @@ dependencies = [
 name = "gitto-app-kit"
 version = "0.1.0"
 dependencies = [
- "gitto-app-data",
- "gitto-git",
  "gpui-kit",
  "serde_json",
- "tempfile",
 ]
 
 [[package]]

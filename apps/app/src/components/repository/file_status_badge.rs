@@ -1,12 +1,14 @@
-//! A file's status as a letter. Ported from `components/ui/file-status-badge.tsx`.
+//! A file's status as a letter. Ported from `components/ui/file-status-badge.tsx`: a primitive
+//! there, but one of git's file statuses, which the app's primitives (`gitto-app-kit`) know nothing
+//! of.
 
 use gitto_git::FileStatus;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::prelude::*;
 use gpui_kit::{App, ElementId, FontWeight, Window, div};
 
-use super::tone::Tone;
-use crate::theme::PaletteExt as _;
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::Tone;
 
 /// The letter for a status, like `M` for modified.
 pub fn file_status_label(status: FileStatus) -> &'static str {

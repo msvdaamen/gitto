@@ -44,7 +44,7 @@ use gitto_app_data::data::history::History;
 use gitto_app_data::data::keyed::Hold;
 use gitto_app_data::data::{Changed, Part, Shown};
 use gitto_app_data::state::clock::Clock;
-use gitto_app_data::state::delayed::{DELAY, Delayed};
+use gitto_app_kit::delayed::{DELAY, Delayed};
 use gitto_app_kit::theme::PaletteExt as _;
 use gitto_app_kit::ui::{
     EmptyState, IconName, LoadingState, UpdatingIndicator, VirtualList, is_near_end,

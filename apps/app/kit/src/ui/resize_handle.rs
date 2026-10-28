@@ -16,6 +16,7 @@
 //!     }))
 //! ```
 
+use std::ops::RangeInclusive;
 use std::rc::Rc;
 
 use gpui_kit::prelude::*;
@@ -23,8 +24,6 @@ use gpui_kit::{
     App, Axis, DragMoveEvent, ElementId, Empty, Entity, FocusHandle, KeyDownEvent, MouseButton,
     Role, SharedString, Window,
 };
-
-use gitto_app_data::state::panel_width::PanelBounds;
 
 /// How far an arrow key moves the edge, in pixels.
 pub const KEYBOARD_STEP: f32 = 16.;
@@ -73,7 +72,8 @@ type OnResize = Rc<dyn Fn(f32, bool, &mut Window, &mut App) + 'static>;
 type OnReset = Rc<dyn Fn(&mut Window, &mut App) + 'static>;
 
 /// A draggable line on the edge of a panel that resizes it (see the module's doc). Double-click
-/// resets the width; with focus, the arrow keys nudge it, Home and End take it to its bounds.
+/// resets the width; with focus, the arrow keys nudge it, Home and End take it to the narrowest
+/// and widest the panel can be made, `range`.
 /// `on_resize` is given the width to resize to, and whether to save it: always, from the
 /// keyboard, and once a drag is let go of; not while it's dragged.
 #[derive(IntoElement)]
@@ -83,7 +83,7 @@ pub struct ResizeHandle {
     side: HandleSide,
     label: SharedString,
     width: f32,
-    bounds: PanelBounds,
+    range: RangeInclusive<f32>,
     on_resize: Option<OnResize>,
     on_reset: Option<OnReset>,
 }
@@ -94,7 +94,7 @@ impl ResizeHandle {
         side: HandleSide,
         label: impl Into<SharedString>,
         width: f32,
-        bounds: PanelBounds,
+        range: RangeInclusive<f32>,
     ) -> Self {
         ResizeHandle {
             id: ElementId::Name(format!("resize-{panel}").into()),
@@ -102,7 +102,7 @@ impl ResizeHandle {
             side,
             label: label.into(),
             width,
-            bounds,
+            range,
             on_resize: None,
             on_reset: None,
         }
@@ -123,7 +123,12 @@ impl ResizeHandle {
 }
 
 /// The width a key takes the panel to, from `width`; `None` for a key that doesn't move it.
-pub fn width_for_key(key: &str, side: HandleSide, width: f32, bounds: PanelBounds) -> Option<f32> {
+pub fn width_for_key(
+    key: &str,
+    side: HandleSide,
+    width: f32,
+    range: &RangeInclusive<f32>,
+) -> Option<f32> {
     let (grow, shrink) = match side {
         HandleSide::Start => ("right", "left"),
         HandleSide::End => ("left", "right"),
@@ -131,8 +136,8 @@ pub fn width_for_key(key: &str, side: HandleSide, width: f32, bounds: PanelBound
     match key {
         key if key == grow => Some(width + KEYBOARD_STEP),
         key if key == shrink => Some(width - KEYBOARD_STEP),
-        "home" => Some(bounds.min),
-        "end" => Some(bounds.max),
+        "home" => Some(*range.start()),
+        "end" => Some(*range.end()),
         _ => None,
     }
 }
@@ -150,7 +155,7 @@ impl RenderOnce for ResizeHandle {
         let panel = self.panel;
         let side = self.side;
         let width = self.width;
-        let bounds = self.bounds;
+        let range = self.range;
         let on_resize = self.on_resize;
         let on_reset = self.on_reset;
         gpui_kit::component::resize_handle::<PanelDrag, PanelDrag>(self.id, Axis::Horizontal)
@@ -168,7 +173,7 @@ impl RenderOnce for ResizeHandle {
             .on_key_down({
                 let on_resize = on_resize.clone();
                 move |event: &KeyDownEvent, window, cx| {
-                    let Some(next) = width_for_key(&event.keystroke.key, side, width, bounds)
+                    let Some(next) = width_for_key(&event.keystroke.key, side, width, &range)
                     else {
                         return;
                     };
@@ -219,21 +224,41 @@ fn save_dragged(
 
 #[cfg(test)]
 mod tests {
-    use std::rc::Rc;
-
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{AnyWindowHandle, Context, IntoElement, TestAppContext, div, point, px};
 
     use super::*;
     use crate::test_support;
-    use gitto_app_data::services::LocalStorage;
-    use gitto_app_data::state::panel_width::PanelWidth;
 
-    const BOUNDS: PanelBounds = PanelBounds::new(220., 160., 480.);
+    const INITIAL: f32 = 220.;
+    const RANGE: RangeInclusive<f32> = 160.0..=480.;
 
-    /// A panel on the left of its handle (TS's `renderHandle`), its width kept in `storage`.
+    /// A panel's width as its owner keeps it: within its range, and the width last saved.
+    struct Panel {
+        width: f32,
+        saved: Option<f32>,
+    }
+
+    impl Panel {
+        fn width(&self) -> f32 {
+            self.width
+        }
+
+        fn set_width(&mut self, width: f32, save: bool) {
+            self.width = width.clamp(*RANGE.start(), *RANGE.end()).round();
+            if save {
+                self.saved = Some(self.width);
+            }
+        }
+
+        fn reset(&mut self) {
+            self.set_width(INITIAL, true);
+        }
+    }
+
+    /// A panel on the left of its handle (TS's `renderHandle`).
     struct Host {
-        panel: PanelWidth,
+        panel: Panel,
         side: HandleSide,
     }
 
@@ -256,7 +281,7 @@ mod tests {
                 .child(div().flex_none().w(px(self.panel.width())).h_full())
                 .child(
                     div().relative().w_0().h_full().child(
-                        ResizeHandle::new("test", side, "Resize panel", self.panel.width(), BOUNDS)
+                        ResizeHandle::new("test", side, "Resize panel", self.panel.width(), RANGE)
                             .on_resize(move |width, save, _, cx| {
                                 let _ = this.update(cx, |host, cx| {
                                     host.panel.set_width(width, save);
@@ -274,20 +299,13 @@ mod tests {
         }
     }
 
-    fn render_handle(
-        side: HandleSide,
-        cx: &mut TestAppContext,
-    ) -> (
-        tempfile::TempDir,
-        Rc<LocalStorage>,
-        AnyWindowHandle,
-        Entity<Host>,
-    ) {
-        let dir = test_support::init(cx);
-        let storage = Rc::new(LocalStorage::in_memory());
-        let panel = PanelWidth::new("test", BOUNDS, Rc::clone(&storage));
-        let (window, host) = test_support::open(cx, |_, _| Host { panel, side });
-        (dir, storage, window, host)
+    fn render_handle(side: HandleSide, cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<Host>) {
+        test_support::init(cx);
+        let panel = Panel {
+            width: INITIAL,
+            saved: None,
+        };
+        test_support::open(cx, |_, _| Host { panel, side })
     }
 
     fn width(host: &Entity<Host>, cx: &mut TestAppContext) -> f32 {
@@ -301,7 +319,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn nudges_a_panel_on_its_left_with_the_arrow_keys_ui(cx: &mut TestAppContext) {
-        let (_dir, _, window, host) = render_handle(HandleSide::Start, cx);
+        let (window, host) = render_handle(HandleSide::Start, cx);
         cx.update_window(window, |_, window, cx| window.click("resize-test", cx))
             .unwrap();
 
@@ -318,7 +336,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn grows_a_panel_on_its_right_with_the_left_arrow_key_ui(cx: &mut TestAppContext) {
-        let (_dir, _, window, host) = render_handle(HandleSide::End, cx);
+        let (window, host) = render_handle(HandleSide::End, cx);
         cx.update_window(window, |_, window, cx| window.click("resize-test", cx))
             .unwrap();
         press(window, "left", cx);
@@ -327,7 +345,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn saves_the_width_its_dragged_to_once_its_let_go_of(cx: &mut TestAppContext) {
-        let (_dir, storage, window, host) = render_handle(HandleSide::Start, cx);
+        let (window, host) = render_handle(HandleSide::Start, cx);
         cx.update_window(window, |_, window, cx| {
             let start = window.find("resize-test").bounds().center();
             window.drag(start, point(px(320.), start.y), cx);
@@ -335,15 +353,12 @@ mod tests {
         .unwrap();
         cx.run_until_parked();
         assert_eq!(width(&host, cx), 320.);
-        assert_eq!(
-            storage.get_item("gitto-panel-width:test").as_deref(),
-            Some("320")
-        );
+        assert_eq!(host.read_with(cx, |host, _| host.panel.saved), Some(320.));
     }
 
     #[gpui_kit::test]
     fn resets_the_width_on_double_click(cx: &mut TestAppContext) {
-        let (_dir, _, window, host) = render_handle(HandleSide::Start, cx);
+        let (window, host) = render_handle(HandleSide::Start, cx);
         host.update(cx, |host, cx| {
             host.panel.set_width(400., true);
             cx.notify();
@@ -359,17 +374,17 @@ mod tests {
     #[test]
     fn nudges_a_panel_on_its_left_with_the_arrow_keys() {
         let side = HandleSide::Start;
-        assert_eq!(width_for_key("right", side, 220., BOUNDS), Some(236.));
-        assert_eq!(width_for_key("left", side, 236., BOUNDS), Some(220.));
-        assert_eq!(width_for_key("end", side, 220., BOUNDS), Some(480.));
-        assert_eq!(width_for_key("home", side, 220., BOUNDS), Some(160.));
-        assert_eq!(width_for_key("a", side, 220., BOUNDS), None);
+        assert_eq!(width_for_key("right", side, 220., &RANGE), Some(236.));
+        assert_eq!(width_for_key("left", side, 236., &RANGE), Some(220.));
+        assert_eq!(width_for_key("end", side, 220., &RANGE), Some(480.));
+        assert_eq!(width_for_key("home", side, 220., &RANGE), Some(160.));
+        assert_eq!(width_for_key("a", side, 220., &RANGE), None);
     }
 
     #[test]
     fn grows_a_panel_on_its_right_with_the_left_arrow_key() {
         assert_eq!(
-            width_for_key("left", HandleSide::End, 220., BOUNDS),
+            width_for_key("left", HandleSide::End, 220., &RANGE),
             Some(236.)
         );
     }

@@ -15,6 +15,7 @@ pub mod branch_form;
 pub mod branch_menu;
 pub mod create_branch_dialog;
 pub mod delete_branch_dialog;
+pub mod file_status_badge;
 pub mod operation_bar;
 pub mod pull_button;
 pub mod push_button;

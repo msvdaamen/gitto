@@ -266,7 +266,7 @@ impl Render for OperationBar {
                     FailurePopover::new(
                         "abort-failure",
                         format!("Abort {name}"),
-                        abort_state.error,
+                        abort_state.error.map(|error| error.to_string().into()),
                         action_button("abort")
                             .label("Abort")
                             .disabled(pending)
@@ -282,7 +282,7 @@ impl Render for OperationBar {
                     FailurePopover::new(
                         "continue-failure",
                         format!("Continue {name}"),
-                        proceed_state.error,
+                        proceed_state.error.map(|error| error.to_string().into()),
                         action_button("continue")
                             .primary()
                             .label(label)

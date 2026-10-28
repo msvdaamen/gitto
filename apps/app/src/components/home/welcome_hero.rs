@@ -158,7 +158,7 @@ impl RenderOnce for WelcomeHero {
                                 FailurePopover::new(
                                     "open-repository-failure",
                                     "Open repository",
-                                    self.open_error,
+                                    self.open_error.map(|error| error.to_string().into()),
                                     Button::new("open-repository")
                                         .primary()
                                         .icon(Icon::new(IconName::Folder))

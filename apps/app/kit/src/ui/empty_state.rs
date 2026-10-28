@@ -11,8 +11,8 @@ use gpui_kit::{
 };
 
 use super::icons::{Icon, IconName};
+use crate::delayed::Delayed;
 use crate::theme::PaletteExt as _;
-use gitto_app_data::state::delayed::Delayed;
 
 /// How long something loads before [`LoadingState`] says so: a quick load doesn't flash it.
 pub const LOADING_SHOWN_AFTER: Duration = Duration::from_millis(150);

@@ -14,11 +14,11 @@ use gpui_kit::{
     TestSupportExt as _, Window, div, rems,
 };
 
+use crate::components::repository::file_status_badge::FileStatusBadge;
 use gitto_app_data::data::Opaque;
 use gitto_app_kit::theme::PaletteExt as _;
 use gitto_app_kit::ui::{
-    ContextMenuExt as _, FileStatusBadge, Icon, IconName, LineStats, PopupMenu, VirtualList,
-    menu_frame,
+    ContextMenuExt as _, Icon, IconName, LineStats, PopupMenu, VirtualList, menu_frame,
 };
 
 /// How long the pointer rests on a file before it's taken for one about to be opened.

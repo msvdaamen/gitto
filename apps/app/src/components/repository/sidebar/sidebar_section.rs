@@ -184,7 +184,7 @@ impl SidebarSection {
                 FailurePopover::new(
                     SharedString::from(format!("{}-failure", self.id)),
                     failure.title,
-                    failure.error,
+                    failure.error.map(|error| error.to_string().into()),
                     FailureAnchor::default(),
                 )
                 .on_dismiss(move |window, cx| on_dismiss(window, cx)),

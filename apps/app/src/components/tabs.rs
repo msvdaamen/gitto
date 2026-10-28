@@ -381,7 +381,7 @@ impl Tabs {
                         FailurePopover::new(
                             SharedString::from(format!("tab-failure-{id}")),
                             format!("{action} {name}"),
-                            error,
+                            error.map(|error| error.to_string().into()),
                             Button::new(SharedString::from(format!("remove-{id}")))
                                 .ghost()
                                 .xsmall()
@@ -476,7 +476,7 @@ impl Render for Tabs {
                     FailurePopover::new(
                         "open-repository-failure",
                         "Open repository",
-                        open_error,
+                        open_error.map(|error| error.to_string().into()),
                         Button::new("open-repository")
                             .ghost()
                             .small()

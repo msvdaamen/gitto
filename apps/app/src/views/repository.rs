@@ -504,7 +504,7 @@ impl RepositoryView {
         };
         let this = cx.entity().downgrade();
         let reset = this.clone();
-        ResizeHandle::new(panel, side, label, width, bounds)
+        ResizeHandle::new(panel, side, label, width, bounds.range())
             .on_resize(move |width, save, _, cx| {
                 let _ = this.update(cx, |this, cx| {
                     match panel {

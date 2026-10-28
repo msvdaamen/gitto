@@ -343,15 +343,19 @@ impl RepositoryToolbar {
             busy,
             selected: false,
         };
-        FailurePopover::new("current-branch-failure", title, error, trigger).on_dismiss(
-            move |_, cx| {
-                if let Some(kind) = dismiss {
-                    dismissed.update(cx, |repository, cx| {
-                        repository.dismiss(kind.operation(), cx)
-                    });
-                }
-            },
+        FailurePopover::new(
+            "current-branch-failure",
+            title,
+            error.map(|error| error.to_string().into()),
+            trigger,
         )
+        .on_dismiss(move |_, cx| {
+            if let Some(kind) = dismiss {
+                dismissed.update(cx, |repository, cx| {
+                    repository.dismiss(kind.operation(), cx)
+                });
+            }
+        })
     }
 }
 

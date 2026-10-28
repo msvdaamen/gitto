@@ -1,26 +1,16 @@
-//! For tests: GPUI Kit and the theme on in-memory services, and a window to render views in.
+//! For tests: GPUI Kit and the theme, and a window to render views in.
 
-use gitto_app_data::services::Services;
 use gpui_kit::{
     AnyWindowHandle, AppContext as _, Bounds, Context, Entity, Render, TestAppContext,
     WindowBounds, WindowOptions, px, size,
 };
-use tempfile::TempDir;
 
-/// Sets up GPUI Kit, and the services and theme the primitives read, as the app does; the
-/// folder the services keep their files in lives as long as what's returned. Motion is reduced,
-/// so dialogs open where they end up at once.
-pub fn init(cx: &mut TestAppContext) -> TempDir {
+/// Sets up GPUI Kit, and the theme the primitives read, as the app does, saving it nowhere.
+/// Motion is reduced, so dialogs open where they end up at once.
+pub fn init(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     cx.update(|cx| cx.set_reduce_motion(true));
-    let dir = tempfile::tempdir().expect("a temporary folder");
-    let services = Services::in_memory(dir.path()).expect("in-memory services");
-    let storage = services.storage().clone();
-    cx.update(|cx| {
-        cx.set_global(services);
-        crate::theme::init(Some(storage), cx);
-    });
-    dir
+    cx.update(|cx| crate::theme::init(None, None, cx));
 }
 
 /// Opens a 1200 by 800 window showing the view `build` makes.

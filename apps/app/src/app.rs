@@ -12,6 +12,7 @@ use crate::identity;
 use crate::views::root::AppShell;
 use gitto_app_data::services::{AppPaths, Services, logger};
 use gitto_app_data::state::router::{Route, Router};
+use gitto_app_kit::theme;
 
 actions!(
     gitto,
@@ -73,7 +74,11 @@ fn start_services() -> anyhow::Result<Services> {
 pub fn init(services: Services, route: Route, cx: &mut App) {
     let storage = services.storage().clone();
     cx.set_global(services);
-    gitto_app_kit::theme::init(Some(storage), cx);
+    let saved = storage.get_item(theme::STORAGE_KEY);
+    let save: theme::SaveTheme = Box::new(move |picked| {
+        let _ = storage.set_item(theme::STORAGE_KEY, picked.as_str());
+    });
+    theme::init(saved.as_deref(), Some(save), cx);
     gitto_app_data::data::init(cx);
     Router::init(route, cx);
     cx.bind_keys([KeyBinding::new("secondary-q", Quit, None)]);

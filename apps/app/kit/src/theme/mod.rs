@@ -23,7 +23,6 @@ use gpui_kit::component::{Colorize as _, Theme, ThemeConfig, ThemeMode};
 use gpui_kit::{App, Global, Hsla, Rgba};
 
 pub use self::palette::Palette;
-use gitto_app_data::services::LocalStorage;
 
 /// The key the theme is saved under, as `hooks/theme.ts` saved it in `localStorage`.
 pub const STORAGE_KEY: &str = "gitto-theme";
@@ -66,21 +65,26 @@ impl AppTheme {
         }
     }
 
-    /// The saved theme: light if it says so, dark otherwise (`load` in `hooks/theme.ts`).
-    pub fn load(storage: &LocalStorage) -> Self {
-        match storage.get_item(STORAGE_KEY).as_deref() {
+    /// The theme saved as `saved`: light if it says so, dark otherwise (`load` in
+    /// `hooks/theme.ts`).
+    pub fn from_saved(saved: Option<&str>) -> Self {
+        match saved {
             Some("light") => AppTheme::Light,
             _ => AppTheme::Dark,
         }
     }
 }
 
+/// Saves the theme the user picked, as the app keeps it (under [`STORAGE_KEY`], in what the
+/// renderer kept in `localStorage`); it still applies if it can't be saved.
+pub type SaveTheme = Box<dyn Fn(AppTheme)>;
+
 /// The active theme and its palette (a GPUI global).
 struct ActiveTheme {
     theme: AppTheme,
     palette: Palette,
-    /// Where it's saved, if anywhere.
-    storage: Option<Rc<LocalStorage>>,
+    /// Saves it, if it's saved anywhere.
+    save: Option<Rc<SaveTheme>>,
 }
 
 impl Global for ActiveTheme {}
@@ -103,10 +107,10 @@ impl PaletteExt for App {
     }
 }
 
-/// Installs Gitto's light and dark themes and applies the one saved in `storage` (dark without
-/// one). Call once, after `gpui_kit::init`.
-pub fn init(storage: Option<Rc<LocalStorage>>, cx: &mut App) {
-    let theme = storage.as_deref().map(AppTheme::load).unwrap_or_default();
+/// Installs Gitto's light and dark themes and applies the one saved as `saved` (dark without
+/// one); `save` saves the one the user picks from then on. Call once, after `gpui_kit::init`.
+pub fn init(saved: Option<&str>, save: Option<SaveTheme>, cx: &mut App) {
+    let theme = AppTheme::from_saved(saved);
     let inter = cx
         .text_system()
         .all_font_names()
@@ -119,7 +123,7 @@ pub fn init(storage: Option<Rc<LocalStorage>>, cx: &mut App) {
     cx.set_global(ActiveTheme {
         theme,
         palette: Palette::of(theme),
-        storage,
+        save: save.map(Rc::new),
     });
     apply(theme, cx);
 }
@@ -130,8 +134,9 @@ pub fn set(theme: AppTheme, cx: &mut App) {
     let active = cx.global_mut::<ActiveTheme>();
     active.theme = theme;
     active.palette = Palette::of(theme);
-    if let Some(storage) = &active.storage {
-        let _ = storage.set_item(STORAGE_KEY, theme.as_str());
+    let save = active.save.clone();
+    if let Some(save) = save {
+        save(theme);
     }
     apply(theme, cx);
 }
@@ -345,23 +350,17 @@ mod tests {
 
     #[test]
     fn starts_from_the_saved_theme_and_saves_a_toggle() {
-        let storage = LocalStorage::in_memory();
-        storage.set_item(STORAGE_KEY, "light").unwrap();
-
-        let theme = AppTheme::load(&storage);
+        let theme = AppTheme::from_saved(Some("light"));
         assert_eq!(theme, AppTheme::Light);
         let toggled = theme.toggled();
-        storage.set_item(STORAGE_KEY, toggled.as_str()).unwrap();
         assert_eq!(toggled, AppTheme::Dark);
-        assert_eq!(storage.get_item(STORAGE_KEY).as_deref(), Some("dark"));
+        assert_eq!(toggled.as_str(), "dark");
     }
 
     #[test]
     fn falls_back_to_dark() {
-        assert_eq!(AppTheme::load(&LocalStorage::in_memory()), AppTheme::Dark);
-        let storage = LocalStorage::in_memory();
-        storage.set_item(STORAGE_KEY, "sepia").unwrap();
-        assert_eq!(AppTheme::load(&storage), AppTheme::Dark);
+        assert_eq!(AppTheme::from_saved(None), AppTheme::Dark);
+        assert_eq!(AppTheme::from_saved(Some("sepia")), AppTheme::Dark);
     }
 
     #[test]
@@ -382,6 +381,8 @@ mod tests {
 
 #[cfg(test)]
 mod ui_tests {
+    use std::cell::RefCell;
+
     use gpui_kit::TestAppContext;
 
     use super::*;
@@ -389,7 +390,7 @@ mod ui_tests {
     #[gpui_kit::test]
     fn still_toggles_without_storage(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
-        cx.update(|cx| init(None, cx));
+        cx.update(|cx| init(None, None, cx));
         assert_eq!(cx.update(|cx| cx.app_theme()), AppTheme::Dark);
         assert!(cx.update(|cx| Theme::global(cx).is_dark()));
 
@@ -401,13 +402,16 @@ mod ui_tests {
 
     #[gpui_kit::test]
     fn starts_from_the_saved_theme(cx: &mut TestAppContext) {
-        let storage = Rc::new(LocalStorage::in_memory());
-        storage.set_item(STORAGE_KEY, "light").unwrap();
+        let saved = Rc::new(RefCell::new(Vec::new()));
+        let save: SaveTheme = Box::new({
+            let saved = Rc::clone(&saved);
+            move |theme| saved.borrow_mut().push(theme)
+        });
         cx.update(gpui_kit::init);
-        cx.update(|cx| init(Some(Rc::clone(&storage)), cx));
+        cx.update(|cx| init(Some("light"), Some(save), cx));
         assert_eq!(cx.update(|cx| cx.app_theme()), AppTheme::Light);
         cx.update(toggle);
-        assert_eq!(storage.get_item(STORAGE_KEY).as_deref(), Some("dark"));
+        assert_eq!(*saved.borrow(), [AppTheme::Dark]);
     }
 
     trait Background {

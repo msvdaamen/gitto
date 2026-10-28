@@ -3,7 +3,8 @@
 //!
 //! - [`router`]: the page on show (TanStack Router).
 //! - [`panel_width`], [`collapsed`], [`diff_style`]: what's remembered across restarts.
-//! - [`settled`], [`delayed`]: values that follow another, in time; entities, observed.
+//! - [`settled`]: a value that follows another, in time; an entity, observed. `delayed.ts` is
+//!   `gitto_app_kit::delayed`.
 //! - [`clock`]: the minute tick relative times follow (`relative-time.ts`).
 //! - [`update`], [`whats_new`]: the app's own version and changes.
 //! - [`lingering`]: a value that lingers once it's gone; a plain value a view keeps (most dialogs
@@ -17,7 +18,6 @@
 
 pub mod clock;
 pub mod collapsed;
-pub mod delayed;
 pub mod diff_style;
 pub mod lingering;
 pub mod panel_width;

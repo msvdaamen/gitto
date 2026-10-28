@@ -29,7 +29,7 @@ use gitto_app_data::data::staging::{
 };
 use gitto_app_data::data::status::head_sha;
 use gitto_app_data::data::{Changed, DataError, Mutation, Opaque, Part, Shown};
-use gitto_app_data::state::delayed::{DELAY, Delayed};
+use gitto_app_kit::delayed::{DELAY, Delayed};
 use gitto_app_kit::theme::PaletteExt as _;
 use gitto_app_kit::ui::{
     Badge, IconButton, IconName, LinkButton, Mascot, SectionHeader, Tone, UpdatingIndicator,
