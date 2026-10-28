@@ -167,7 +167,8 @@ impl CommitDetails {
         cx.notify();
     }
 
-    /// The file whose changes are on show, if any, by its source and path.
+    /// The file whose changes are on show, if any, by its source and path: the part on show
+    /// marks it, and the details themselves show nothing of it.
     pub fn set_shown_file(&mut self, shown: ShownFile, cx: &mut Context<Self>) {
         if self.shown_file == shown {
             return;
@@ -185,7 +186,6 @@ impl CommitDetails {
             }
             None => {}
         }
-        cx.notify();
     }
 
     /// Brings the part on show in line with the selected row: the same part, told the commit or
@@ -212,8 +212,7 @@ impl CommitDetails {
                 tree.set_shown_file(shown, cx);
                 tree
             });
-            self._body_events = Some(cx.subscribe(&tree, |_, _, event, cx| cx.emit(event.clone())));
-            self.body = Some((repository_id, Body::WorkingTree(tree)));
+            self.adopt(repository_id, tree, Body::WorkingTree, cx);
         } else if let Some(sha) = stash_sha(&id) {
             if let Some((_, Body::Stash(stash))) = self.body.as_ref().filter(|_| same_repository) {
                 stash.update(cx, |stash, cx| stash.set_sha(sha, cx));
@@ -224,9 +223,7 @@ impl CommitDetails {
                 stash.set_shown_file(shown, cx);
                 stash
             });
-            self._body_events =
-                Some(cx.subscribe(&stash, |_, _, event, cx| cx.emit(event.clone())));
-            self.body = Some((repository_id, Body::Stash(stash)));
+            self.adopt(repository_id, stash, Body::Stash, cx);
         } else {
             if let Some((_, Body::Commit(commit))) = self.body.as_ref().filter(|_| same_repository)
             {
@@ -238,10 +235,22 @@ impl CommitDetails {
                 commit.set_shown_file(shown, cx);
                 commit
             });
-            self._body_events =
-                Some(cx.subscribe(&commit, |_, _, event, cx| cx.emit(event.clone())));
-            self.body = Some((repository_id, Body::Commit(commit)));
+            self.adopt(repository_id, commit, Body::Commit, cx);
         }
+    }
+
+    /// Shows `part`, of `repository_id`, passing its events on.
+    fn adopt<T: EventEmitter<CommitDetailsEvent>>(
+        &mut self,
+        repository_id: RepositoryId,
+        part: Entity<T>,
+        body: fn(Entity<T>) -> Body,
+        cx: &mut Context<Self>,
+    ) {
+        self._body_events = Some(cx.subscribe(&part, |_, _, event: &CommitDetailsEvent, cx| {
+            cx.emit(event.clone())
+        }));
+        self.body = Some((repository_id, body(part)));
     }
 
     fn title(&self) -> &'static str {
