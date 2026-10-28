@@ -66,11 +66,6 @@ impl ApiError {
         &self.message
     }
 
-    /// The HTTP status it had in the Electron app, e.g. 409 for `PUSH_REWRITTEN`.
-    pub fn status(&self) -> u16 {
-        self.code.status()
-    }
-
     /// Whether it's a bug, to report (see `ApiCode::is_bug`): git failing in a way Gitto doesn't
     /// expect, Gitto's own bug, a list of repositories that couldn't be read, or input the UI
     /// shouldn't have sent. Not one that's how things are, like a conflict.
@@ -212,7 +207,6 @@ mod tests {
             forcible: true,
         });
         assert_eq!(rewritten.code().code(), "PUSH_REWRITTEN");
-        assert_eq!(rewritten.status(), 409);
         assert!(!rewritten.is_bug());
         let behind = ApiError::new(Error::PushRejected {
             message: "Behind.".into(),
@@ -239,12 +233,11 @@ mod tests {
     fn hides_what_gittos_own_bugs_say_from_the_user() {
         let bug = ApiError::new(Error::Bug("Unexpected output: x".into()));
         assert_eq!(
-            (bug.code().code(), bug.message(), bug.is_bug(), bug.status()),
+            (bug.code().code(), bug.message(), bug.is_bug()),
             (
                 "INTERNAL_SERVER_ERROR",
                 "Something went wrong in Gitto.",
-                true,
-                500
+                true
             )
         );
         // Kept for the logs.
@@ -276,7 +269,6 @@ mod tests {
             (error.code().code(), error.message(), error.is_bug()),
             ("BAD_REQUEST", "Input validation failed", true)
         );
-        assert_eq!(error.status(), 400);
         assert_eq!(error.error().to_string(), "Not a branch. (\"x\")");
     }
 

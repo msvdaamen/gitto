@@ -294,7 +294,6 @@ fn tells_the_renderer_a_push_it_can_force_apart_from_other_failures() {
             .await
             .unwrap_err();
         assert_eq!(error.code(), ApiCode::PushRewritten);
-        assert_eq!(error.status(), 409);
         assert_eq!(
             api_error(error),
             (
