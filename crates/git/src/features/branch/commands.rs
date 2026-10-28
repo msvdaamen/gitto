@@ -189,10 +189,9 @@ pub async fn tracking_branch(run: &GitCommand, reference: &str, name: &str) -> R
     let (tracking, remotes) =
         futures::try_join!(tracking_locals(run, reference), list_remotes(run))?;
     // Without the remote, or (the remote's gone, its branches left) the name's first part.
-    let local = match remote_of(&remotes, name) {
-        Some(remote) => &name[remote.len() + 1..],
-        None => name.find('/').map_or(name, |slash| &name[slash + 1..]),
-    };
+    let local = remote_of(&remotes, name)
+        .and_then(|remote| name.strip_prefix(remote)?.strip_prefix('/'))
+        .unwrap_or_else(|| name.split_once('/').map_or(name, |(_, rest)| rest));
     let branch = tracking
         .iter()
         .find(|candidate| candidate.current)
