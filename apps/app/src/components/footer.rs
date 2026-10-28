@@ -6,7 +6,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::{App, Context, Entity, Subscription, Window, div, rems};
 
 use super::app_version::AppVersion;
-use gitto_app_data::data::{Part, Repositories, Repository, observe_selected};
+use gitto_app_data::data::{Field, Part, Repositories, Repository, observe_selected};
 use gitto_app_data::state::router::Router;
 use gitto_app_data::state::update::UpdateStatus;
 use gitto_app_kit::theme::PaletteExt as _;
@@ -51,7 +51,7 @@ impl Footer {
         }
         self.status = id.map(|id| {
             let repository = Repositories::open(id, cx);
-            repository.update(cx, |repository, cx| repository.show(Part::Status, cx));
+            repository.update(cx, |repository, cx| repository.show(Field::Status, cx));
             let subscription = observe_selected(&repository, Part::Status, summary, cx);
             (repository, subscription)
         });

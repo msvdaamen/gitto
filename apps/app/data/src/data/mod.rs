@@ -86,7 +86,8 @@ pub use self::loaded::Loaded;
 pub use self::mutation::Mutation;
 pub use self::opaque::Opaque;
 pub use self::repository::{
-    ChangeState, Changed, Part, Repositories, Repository, Shown, observe_parts, observe_selected,
+    ChangeState, Changed, Field, Part, Repositories, Repository, Shown, observe_parts,
+    observe_selected,
 };
 pub use self::watch::RepositoryWatcher;
 

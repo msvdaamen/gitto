@@ -275,7 +275,7 @@ mod tests {
     use super::*;
     use crate::test_support;
     use gitto_app_data::data::git::{GitTask, RepositoryGit};
-    use gitto_app_data::data::{DataError, Part};
+    use gitto_app_data::data::{DataError, Field};
 
     /// A repository's git that counts how many times it's asked for the status, which it can't
     /// give.
@@ -351,7 +351,7 @@ mod tests {
         let id = RepositoryId::parse(uuid::Uuid::now_v7().to_string()).unwrap();
         let statuses = Rc::new(Statuses::default());
         let repository = cx.update(|cx| Repositories::insert(&id, statuses.clone(), cx));
-        repository.update(cx, |repository, cx| repository.show(Part::Status, cx));
+        repository.update(cx, |repository, cx| repository.show(Field::Status, cx));
         cx.run_until_parked();
         assert!(has_dialog(window, cx));
 

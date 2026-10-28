@@ -44,7 +44,7 @@ use super::file_diff::FilePatch;
 use super::git::{GitRepository, GitTask, RepositoryGit};
 use super::history::{Log, NEXT_PAGE, followed_by, reload_limit};
 use super::keyed::{Hold, Keyed};
-use super::loaded::Loaded;
+use super::loaded::{LoadState, Loaded};
 use super::opaque::Opaque;
 use crate::services::Services;
 use gitto_ui_logic::git::diff_source::{DiffSource, diff_file_key, is_uncommitted};
@@ -84,6 +84,74 @@ pub enum Part {
     More,
     /// Whether a [`Change`] to the repository (a pull, say) is running, and why it last failed.
     Changes,
+}
+
+impl Part {
+    /// The field it's of, if it's one's.
+    pub fn field(self) -> Option<Field> {
+        Some(match self {
+            Part::Status => Field::Status,
+            Part::Operation => Field::Operation,
+            Part::Log => Field::Log,
+            Part::Refs => Field::Refs,
+            Part::Remotes => Field::Remotes,
+            Part::Stashes => Field::Stashes,
+            Part::Worktrees => Field::Worktrees,
+            Part::PushTarget => Field::PushTarget,
+            Part::Overview => Field::Overview,
+            Part::PushedTo
+            | Part::Patches
+            | Part::Conflicts
+            | Part::Commits
+            | Part::More
+            | Part::Changes => return None,
+        })
+    }
+}
+
+/// What a repository holds one of, and loads whole: what a view asks for with
+/// [`Repository::show`], and loads again with [`Repository::reload`]. What's loaded by key, like a
+/// file's patch, a view holds instead (`hold_*`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Field {
+    Status,
+    Operation,
+    Log,
+    Refs,
+    Remotes,
+    Stashes,
+    Worktrees,
+    PushTarget,
+    Overview,
+}
+
+impl Field {
+    pub const ALL: [Field; 9] = [
+        Field::Status,
+        Field::Operation,
+        Field::Log,
+        Field::Refs,
+        Field::Remotes,
+        Field::Stashes,
+        Field::Worktrees,
+        Field::PushTarget,
+        Field::Overview,
+    ];
+
+    /// What a repository says changed of it.
+    pub fn part(self) -> Part {
+        match self {
+            Field::Status => Part::Status,
+            Field::Operation => Part::Operation,
+            Field::Log => Part::Log,
+            Field::Refs => Part::Refs,
+            Field::Remotes => Part::Remotes,
+            Field::Stashes => Part::Stashes,
+            Field::Worktrees => Part::Worktrees,
+            Field::PushTarget => Part::PushTarget,
+            Field::Overview => Part::Overview,
+        }
+    }
 }
 
 /// What a [`Repository`] says when what it holds of `Part` changed: its data, why it failed, or
@@ -234,62 +302,36 @@ impl Repository {
         &self.overview
     }
 
-    /// Loads `part` unless it's loaded, or loading: for a view about to show it.
-    pub fn show(&mut self, part: Part, cx: &mut Context<Self>) {
-        let stale = match part {
-            Part::Status => self.status.is_stale(),
-            Part::Operation => self.operation.is_stale(),
-            Part::Log => self.log.is_stale(),
-            Part::Refs => self.refs.is_stale(),
-            Part::Remotes => self.remotes.is_stale(),
-            Part::Stashes => self.stashes.is_stale(),
-            Part::Worktrees => self.worktrees.is_stale(),
-            Part::PushTarget => self.push_target.is_stale(),
-            Part::Overview => self.overview.is_stale(),
-            _ => false,
-        };
-        if stale && !self.is_loading(part) {
-            drop(self.reload(part, cx));
+    /// Loads `field` unless it's loaded, or loading: for a view about to show it.
+    pub fn show(&mut self, field: Field, cx: &mut Context<Self>) {
+        let state = self.state(field);
+        if state.is_stale() && !state.is_fetching() {
+            drop(self.reload(field, cx));
         }
     }
 
-    fn is_loading(&self, part: Part) -> bool {
-        match part {
-            Part::Status => self.status.is_fetching(),
-            Part::Operation => self.operation.is_fetching(),
-            Part::Log => self.log.is_fetching(),
-            Part::Refs => self.refs.is_fetching(),
-            Part::Remotes => self.remotes.is_fetching(),
-            Part::Stashes => self.stashes.is_fetching(),
-            Part::Worktrees => self.worktrees.is_fetching(),
-            Part::PushTarget => self.push_target.is_fetching(),
-            Part::Overview => self.overview.is_fetching(),
-            _ => false,
+    /// Where `field` is in loading, whatever it holds.
+    fn state(&self, field: Field) -> &dyn LoadState {
+        match field {
+            Field::Status => &self.status,
+            Field::Operation => &self.operation,
+            Field::Log => &self.log,
+            Field::Refs => &self.refs,
+            Field::Remotes => &self.remotes,
+            Field::Stashes => &self.stashes,
+            Field::Worktrees => &self.worktrees,
+            Field::PushTarget => &self.push_target,
+            Field::Overview => &self.overview,
         }
     }
 
-    /// Whether `part` has been asked for: loaded, loading or failed.
-    fn is_used(&self, part: Part) -> bool {
-        match part {
-            Part::Status => self.status.is_used(),
-            Part::Operation => self.operation.is_used(),
-            Part::Log => self.log.is_used(),
-            Part::Refs => self.refs.is_used(),
-            Part::Remotes => self.remotes.is_used(),
-            Part::Stashes => self.stashes.is_used(),
-            Part::Worktrees => self.worktrees.is_used(),
-            Part::PushTarget => self.push_target.is_used(),
-            Part::Overview => self.overview.is_used(),
-            _ => false,
-        }
-    }
-
-    /// Loads `part` again now, in place of (and so cancelling) a load under way; resolves once
-    /// it's done. Only the parts a repository holds one of (not those loaded by key).
-    pub fn reload(&mut self, part: Part, cx: &mut Context<Self>) -> Reloading {
+    /// Loads `field` again now, in place of (and so cancelling) a load under way; resolves once
+    /// it's done.
+    pub fn reload(&mut self, field: Field, cx: &mut Context<Self>) -> Reloading {
         let git = Rc::clone(&self.git);
-        let wait = match part {
-            Part::Status => {
+        let part = field.part();
+        let wait = match field {
+            Field::Status => {
                 let previous = self.status.data().cloned();
                 let since = previous.as_ref().map(|status| status.version.clone());
                 let reply = git.status(since);
@@ -310,10 +352,10 @@ impl Repository {
                     cx,
                 )
             }
-            Part::Operation => {
+            Field::Operation => {
                 self.start(part, |repo| Some(&mut repo.operation), git.operation(), cx)
             }
-            Part::Log => {
+            Field::Log => {
                 let loaded = self.log.data().map_or(0, |log| log.commits.len());
                 let fetch = log_page(&*git, &self.id, 0, reload_limit(loaded));
                 // Loading more of the log as it was would leave it out of order.
@@ -322,30 +364,31 @@ impl Repository {
                 }
                 self.start(part, |repo| Some(&mut repo.log), fetch, cx)
             }
-            Part::Refs => {
+            Field::Refs => {
                 let refs = git.refs();
                 let fetch = async move { Ok(refs.await?.into()) }.boxed();
                 self.start(part, |repo| Some(&mut repo.refs), fetch, cx)
             }
-            Part::Remotes => self.start(part, |repo| Some(&mut repo.remotes), git.remotes(), cx),
-            Part::Stashes => {
+            Field::Remotes => self.start(part, |repo| Some(&mut repo.remotes), git.remotes(), cx),
+            Field::Stashes => {
                 let stashes = git.stashes();
                 let fetch = async move { Ok(stashes.await?.into()) }.boxed();
                 self.start(part, |repo| Some(&mut repo.stashes), fetch, cx)
             }
-            Part::Worktrees => {
+            Field::Worktrees => {
                 let worktrees = git.worktrees();
                 let fetch = async move { Ok(worktrees.await?.into()) }.boxed();
                 self.start(part, |repo| Some(&mut repo.worktrees), fetch, cx)
             }
-            Part::PushTarget => self.start(
+            Field::PushTarget => self.start(
                 part,
                 |repo| Some(&mut repo.push_target),
                 git.push_target(),
                 cx,
             ),
-            Part::Overview => self.start(part, |repo| Some(&mut repo.overview), git.overview(), cx),
-            _ => None,
+            Field::Overview => {
+                self.start(part, |repo| Some(&mut repo.overview), git.overview(), cx)
+            }
         };
         Reloading(wait.into_iter().collect())
     }
@@ -385,20 +428,16 @@ impl Repository {
     /// shows of it (the overview) is only loaded there, when it's shown.
     pub fn reload_all(&mut self, cx: &mut Context<Self>) -> Reloading {
         let mut waits = self.reload_uncommitted(cx).0;
-        for part in [
-            Part::Operation,
-            Part::Log,
-            Part::Refs,
-            Part::Remotes,
-            Part::Stashes,
-            Part::Worktrees,
-            Part::PushTarget,
-        ] {
-            if self.is_used(part) {
-                waits.extend(self.reload(part, cx).0);
+        for field in Field::ALL {
+            match field {
+                // Reloaded with the uncommitted changes.
+                Field::Status => {}
+                // Loaded where it's shown (see above).
+                Field::Overview => self.overview.mark_stale(),
+                _ if self.state(field).is_used() => waits.extend(self.reload(field, cx).0),
+                _ => {}
             }
         }
-        self.overview.mark_stale();
         for sha in self.pushed_to.held_and_drop_rest(|_| true) {
             waits.extend(self.load_pushed_to(sha, cx));
         }
@@ -420,7 +459,7 @@ impl Repository {
     ) -> Reloading {
         let mut waits = Vec::new();
         if self.status.is_used() {
-            waits.extend(self.reload(Part::Status, cx).0);
+            waits.extend(self.reload(Field::Status, cx).0);
         }
         let patches = self.patches.held_and_drop_rest(|key| {
             is_uncommitted(&key.0) && kept.as_ref().is_none_or(|kept| kept != key)
@@ -445,21 +484,16 @@ impl Repository {
     /// Loads again what was loaded before the repository came on show, when nothing watched it,
     /// and may be out of date; not what's loading, which is loaded since.
     pub fn reload_when_shown(&mut self, cx: &mut Context<Self>) {
-        for part in [
-            Part::Status,
-            Part::Operation,
-            Part::Log,
-            Part::Refs,
-            Part::Remotes,
-            Part::Stashes,
-            Part::Worktrees,
-            Part::PushTarget,
-        ] {
-            if self.is_used(part) && !self.is_loading(part) {
-                drop(self.reload(part, cx));
+        for field in Field::ALL {
+            if field == Field::Overview {
+                self.overview.mark_stale();
+                continue;
+            }
+            let state = self.state(field);
+            if state.is_used() && !state.is_fetching() {
+                drop(self.reload(field, cx));
             }
         }
-        self.overview.mark_stale();
         drop(self.pushed_to.held_and_drop_rest(|_| true));
         drop(
             self.patches
@@ -1111,8 +1145,8 @@ impl Shown {
         cx: &mut Context<V>,
     ) -> Self {
         repository.update(cx, |repository, cx| {
-            for part in parts {
-                repository.show(*part, cx);
+            for field in parts.iter().filter_map(|part| part.field()) {
+                repository.show(field, cx);
             }
         });
         let changes = observe_parts(&repository, parts, cx);
@@ -1248,7 +1282,7 @@ impl Repositories {
             repository.update(cx, |repository, cx| {
                 drop(repository.reload_all(cx));
                 if repository.overview.is_used() {
-                    drop(repository.reload(Part::Overview, cx));
+                    drop(repository.reload(Field::Overview, cx));
                 }
             });
         }
@@ -1385,6 +1419,14 @@ mod tests {
         cx.new(|_| Repository::new(repository_id(), git))
     }
 
+    #[test]
+    fn says_each_field_changed_as_a_part_of_its_own() {
+        for field in Field::ALL {
+            assert_eq!(field.part().field(), Some(field));
+        }
+        assert_eq!(Part::Patches.field(), None);
+    }
+
     // `git/queries/status.test.ts`.
 
     #[gpui_kit::test]
@@ -1397,13 +1439,13 @@ mod tests {
             },
         ];
         let repository = open(&git, cx);
-        repository.update(cx, |repository, cx| repository.show(Part::Status, cx));
+        repository.update(cx, |repository, cx| repository.show(Field::Status, cx));
         cx.run_until_parked();
         let loaded = repository.read_with(cx, |repository, _| repository.status().data().cloned());
         let loaded = loaded.unwrap();
         assert_eq!(loaded.changes, uncommitted().changes);
 
-        let reload = repository.update(cx, |repository, cx| repository.reload(Part::Status, cx));
+        let reload = repository.update(cx, |repository, cx| repository.reload(Field::Status, cx));
         cx.run_until_parked();
         reload.into_future().now_or_never().unwrap();
         assert_eq!(*git.since.borrow(), [None, Some("v1".to_owned())]);
@@ -1417,7 +1459,7 @@ mod tests {
         let git = Rc::new(Git::default());
         *git.replies.borrow_mut() = vec![StatusReply::Status(Box::new(uncommitted()))];
         let repository = open(&git, cx);
-        repository.update(cx, |repository, cx| repository.show(Part::Status, cx));
+        repository.update(cx, |repository, cx| repository.show(Field::Status, cx));
         cx.run_until_parked();
         let summary = repository.read_with(cx, |repository, _| {
             repository.status().data().map(|status| status.summary())
@@ -1442,9 +1484,9 @@ mod tests {
     ) {
         let git = Rc::new(Git::default());
         let repository = open(&git, cx);
-        repository.update(cx, |repository, cx| repository.show(Part::Refs, cx));
+        repository.update(cx, |repository, cx| repository.show(Field::Refs, cx));
         cx.run_until_parked();
-        repository.update(cx, |repository, cx| repository.show(Part::Refs, cx));
+        repository.update(cx, |repository, cx| repository.show(Field::Refs, cx));
         cx.run_until_parked();
         assert_eq!(git.refs.get(), 1);
     }
@@ -1457,7 +1499,7 @@ mod tests {
         cx.run_until_parked();
         // Nothing showed it.
         assert_eq!(git.refs.get(), 0);
-        repository.update(cx, |repository, cx| repository.show(Part::Refs, cx));
+        repository.update(cx, |repository, cx| repository.show(Field::Refs, cx));
         cx.run_until_parked();
         repository.update(cx, |repository, cx| drop(repository.reload_all(cx)));
         cx.run_until_parked();
@@ -1470,7 +1512,7 @@ mod tests {
     ) {
         let git = Rc::new(Git::default());
         let repository = open(&git, cx);
-        repository.update(cx, |repository, cx| repository.show(Part::Overview, cx));
+        repository.update(cx, |repository, cx| repository.show(Field::Overview, cx));
         cx.run_until_parked();
         repository.update(cx, |repository, cx| drop(repository.reload_all(cx)));
         cx.run_until_parked();
@@ -1480,7 +1522,7 @@ mod tests {
         });
         assert_eq!(failed.as_deref(), Some("No overview."));
         // Shown again, it's out of date.
-        repository.update(cx, |repository, cx| repository.show(Part::Overview, cx));
+        repository.update(cx, |repository, cx| repository.show(Field::Overview, cx));
         cx.run_until_parked();
         assert_eq!(git.overviews.get(), 2);
     }
@@ -1491,7 +1533,7 @@ mod tests {
     fn loads_more_and_reloads_as_many(cx: &mut TestAppContext) {
         let git = Rc::new(Git::default());
         let repository = open(&git, cx);
-        repository.update(cx, |repository, cx| repository.show(Part::Log, cx));
+        repository.update(cx, |repository, cx| repository.show(Field::Log, cx));
         cx.run_until_parked();
         assert_eq!(
             git.answer(commits(0..200)),
@@ -1511,7 +1553,7 @@ mod tests {
         assert!(!log.complete);
         assert!(!repository.read_with(cx, |repository, _| repository.is_loading_more()));
 
-        let reload = repository.update(cx, |repository, cx| repository.reload(Part::Log, cx));
+        let reload = repository.update(cx, |repository, cx| repository.reload(Field::Log, cx));
         cx.run_until_parked();
         assert_eq!(git.answer(commits(0..10)), (0, 1199));
         cx.run_until_parked();
@@ -1525,14 +1567,14 @@ mod tests {
     fn drops_a_page_loaded_while_the_log_reloaded(cx: &mut TestAppContext) {
         let git = Rc::new(Git::default());
         let repository = open(&git, cx);
-        repository.update(cx, |repository, cx| repository.show(Part::Log, cx));
+        repository.update(cx, |repository, cx| repository.show(Field::Log, cx));
         cx.run_until_parked();
         git.answer(commits(0..200));
         cx.run_until_parked();
 
         repository.update(cx, |repository, cx| repository.load_more(cx));
         cx.run_until_parked();
-        let reload = repository.update(cx, |repository, cx| repository.reload(Part::Log, cx));
+        let reload = repository.update(cx, |repository, cx| repository.reload(Field::Log, cx));
         cx.run_until_parked();
         // The reload's answer comes first, then the page's.
         let (_, _, page) = git.pages.borrow_mut().remove(0);
@@ -1625,7 +1667,7 @@ mod tests {
     fn forgets_one_that_went_through_and_reloads_the_repository(cx: &mut TestAppContext) {
         let git = Rc::new(Git::default());
         let repository = open(&git, cx);
-        repository.update(cx, |repository, cx| repository.show(Part::Refs, cx));
+        repository.update(cx, |repository, cx| repository.show(Field::Refs, cx));
         cx.run_until_parked();
         let result = repository
             .update(cx, |repository, cx| {

@@ -8,7 +8,7 @@ use gitto_git::input::RepositoryId;
 use gitto_repository::Repository;
 use gpui_kit::{App, Context, Entity, Subscription};
 
-use gitto_app_data::data::{Changed, DataError, Part, Repositories};
+use gitto_app_data::data::{Changed, DataError, Field, Part, Repositories};
 
 /// A repository on the home page, with what's loaded of it so far.
 #[derive(Debug, Clone, PartialEq)]
@@ -49,10 +49,10 @@ impl RepositorySummaries {
     fn reload(repository: &Entity<gitto_app_data::data::Repository>, cx: &mut App) {
         repository.update(cx, |repository, cx| {
             if !repository.status().is_fetching() {
-                drop(repository.reload(Part::Status, cx));
+                drop(repository.reload(Field::Status, cx));
             }
             if !repository.overview().is_fetching() {
-                drop(repository.reload(Part::Overview, cx));
+                drop(repository.reload(Field::Overview, cx));
             }
         });
     }

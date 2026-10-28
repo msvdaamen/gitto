@@ -15,7 +15,7 @@ use super::error::DataError;
 use super::keyed::Hold;
 use super::loaded::Loaded;
 use super::opaque::Opaque;
-use super::repository::{Part, Repositories, Repository};
+use super::repository::{Field, Repositories, Repository};
 use gitto_ui_logic::git::diff_source::{DiffSource, is_uncommitted};
 
 /// One file's patch in a source, with the file and its `DiffSource::file_key`, so what's shown can
@@ -71,7 +71,7 @@ impl DiffSourceFiles {
             DiffSource::Commit { sha } => Some(repository.hold_files(FilesOf::Commit, sha, cx)),
             DiffSource::Stash { sha } => Some(repository.hold_files(FilesOf::Stash, sha, cx)),
             DiffSource::Unstaged | DiffSource::Staged => {
-                repository.show(Part::Status, cx);
+                repository.show(Field::Status, cx);
                 None
             }
         });

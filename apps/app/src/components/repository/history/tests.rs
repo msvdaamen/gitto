@@ -41,7 +41,7 @@ use gitto_app_data::data::branch::{Merge, NewBranchFrom, Rebase};
 use gitto_app_data::data::commit::Reword;
 use gitto_app_data::data::diff::{ChangedFiles, FilesOf};
 use gitto_app_data::data::git::{GitTask, RepositoryGit};
-use gitto_app_data::data::{DataError, Opaque, Part};
+use gitto_app_data::data::{DataError, Field, Opaque};
 use gitto_git::features::history::commands::Page;
 use gitto_git::features::status::schema::StatusReply;
 use gitto_git::input::{BranchName, BranchRef, FullSha, Message, NonEmpty};
@@ -239,7 +239,7 @@ impl RepositoryGit for Calls {
 fn reload_log(id: &RepositoryId, cx: &mut TestAppContext) {
     cx.update(|cx| {
         repository_entity(id, cx)
-            .update(cx, |repository, cx| drop(repository.reload(Part::Log, cx)))
+            .update(cx, |repository, cx| drop(repository.reload(Field::Log, cx)))
     });
 }
 

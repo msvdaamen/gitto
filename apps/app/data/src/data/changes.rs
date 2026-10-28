@@ -866,6 +866,7 @@ mod tests {
     use gpui_kit::{Entity, TestAppContext};
 
     use super::*;
+    use crate::data::Field;
     use crate::data::git::RepositoryGit;
 
     fn repository_id() -> RepositoryId {
@@ -906,7 +907,7 @@ mod tests {
     fn open(git: &Rc<Git>, cx: &mut TestAppContext) -> Entity<Repository> {
         let shared: Rc<dyn RepositoryGit> = git.clone();
         let repository = cx.new(|_| Repository::new(repository_id(), shared));
-        repository.update(cx, |repository, cx| repository.show(Part::Refs, cx));
+        repository.update(cx, |repository, cx| repository.show(Field::Refs, cx));
         cx.run_until_parked();
         assert_eq!(git.refs.get(), 1);
         repository

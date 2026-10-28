@@ -15,7 +15,7 @@ use gitto_git::features::status::schema::{
 
 use super::*;
 use crate::data::git::{GitTask, RepositoryGit};
-use crate::data::{Part, Repository};
+use crate::data::{Field, Repository};
 
 /// A watch stream whose items the test pushes; counts how many are open.
 struct Procedure<T> {
@@ -164,8 +164,8 @@ fn open(git: &Rc<Git>, cx: &mut TestAppContext) -> Entity<Repository> {
     let shared: Rc<dyn RepositoryGit> = git.clone();
     let repository = cx.update(|cx| Repositories::insert(&repository_id(), shared, cx));
     repository.update(cx, |repository, cx| {
-        repository.show(Part::Status, cx);
-        repository.show(Part::Refs, cx);
+        repository.show(Field::Status, cx);
+        repository.show(Field::Refs, cx);
     });
     cx.run_until_parked();
     repository
@@ -244,7 +244,7 @@ fn doesnt_refetch_what_was_loaded_while_switching_to_the_repository(cx: &mut Tes
     let git = Rc::new(Git::default());
     let repository = open(&git, cx);
     // The log, loading since it came on show, before the watcher started.
-    repository.update(cx, |repository, cx| repository.show(Part::Log, cx));
+    repository.update(cx, |repository, cx| repository.show(Field::Log, cx));
     cx.run_until_parked();
     assert_eq!((git.refs.get(), git.log.get()), (1, 1));
 

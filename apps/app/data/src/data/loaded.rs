@@ -162,6 +162,28 @@ impl<T> Loaded<T> {
     }
 }
 
+/// Where a [`Loaded`] is in loading, whatever it holds: for its owner to tell which of what it
+/// holds to load.
+pub trait LoadState {
+    fn is_stale(&self) -> bool;
+    fn is_fetching(&self) -> bool;
+    fn is_used(&self) -> bool;
+}
+
+impl<T> LoadState for Loaded<T> {
+    fn is_stale(&self) -> bool {
+        Loaded::is_stale(self)
+    }
+
+    fn is_fetching(&self) -> bool {
+        Loaded::is_fetching(self)
+    }
+
+    fn is_used(&self) -> bool {
+        Loaded::is_used(self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
