@@ -67,8 +67,8 @@ impl RepositoryService {
             name: basename(&repo_path),
             path: repo_path,
         };
-        listed(ListAction::Update, self.store.create(&repository).await)?;
-        Ok(repository)
+        // The one listed at its path: this one, unless it was added meanwhile.
+        listed(ListAction::Update, self.store.create(&repository).await)
     }
 
     /// Removes the repository from Gitto; the folder on disk is left untouched.
@@ -257,6 +257,20 @@ mod tests {
         let again = f.add(path.join("../gitto/.")).unwrap();
 
         assert_eq!(again, first);
+        assert_eq!(f.names(), ["gitto"]);
+    }
+
+    #[test]
+    fn adds_a_repository_added_twice_at_once_once() {
+        let f = fixture();
+        let path = f.folder("gitto", true);
+
+        let (first, second) = smol::block_on(futures::future::join(
+            f.service.add_repository(&path),
+            f.service.add_repository(&path),
+        ));
+
+        assert_eq!(first.unwrap(), second.unwrap());
         assert_eq!(f.names(), ["gitto"]);
     }
 

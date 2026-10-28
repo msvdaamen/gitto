@@ -39,8 +39,10 @@ impl RepositoryStore {
         self.db.run(move |conn| get_by(conn, "path", &path)).await
     }
 
-    /// Adds `repository` after the others.
-    pub async fn create(&self, repository: &Repository) -> rusqlite::Result<()> {
+    /// Adds `repository` after the others, unless one with its path is listed already: resolves to
+    /// the one listed at its path, which is that one if it was. So adding a folder twice at once,
+    /// with a double click say, lists it once, and neither fails.
+    pub async fn create(&self, repository: &Repository) -> rusqlite::Result<Repository> {
         let repository = repository.clone();
         self.db.run(move |conn| create(conn, &repository)).await
     }
@@ -96,12 +98,13 @@ fn get_by(
     .optional()
 }
 
-fn create(conn: &Connection, repository: &Repository) -> rusqlite::Result<()> {
+fn create(conn: &Connection, repository: &Repository) -> rusqlite::Result<Repository> {
     conn.execute(
-        r#"insert into "repositories" ("id", "name", "path", "position") values (?, ?, ?, (SELECT coalesce(max("repositories"."position"), -1) + 1 FROM "repositories"))"#,
+        r#"insert into "repositories" ("id", "name", "path", "position") values (?, ?, ?, (SELECT coalesce(max("repositories"."position"), -1) + 1 FROM "repositories")) on conflict ("path") do nothing"#,
         params![repository.id.to_string(), repository.name, repository.path],
     )?;
-    Ok(())
+    // There is one now, whichever add put it there.
+    get_by(conn, "path", &repository.path)?.ok_or(rusqlite::Error::QueryReturnedNoRows)
 }
 
 fn delete(conn: &Connection, id: &str) -> rusqlite::Result<()> {
@@ -290,16 +293,15 @@ mod tests {
     }
 
     #[test]
-    fn refuses_a_second_repository_with_the_same_path() {
+    fn keeps_the_repository_already_at_a_path() {
         let store = store_with(&["a"]);
         let same_path = Repository {
             id: id("other"),
             ..repository("a")
         };
-        let error = smol::block_on(store.create(&same_path)).unwrap_err();
         assert_eq!(
-            error.to_string(),
-            "UNIQUE constraint failed: repositories.path"
+            smol::block_on(store.create(&same_path)).unwrap(),
+            repository("a")
         );
         assert_eq!(ids(&store), ["a"]);
     }
