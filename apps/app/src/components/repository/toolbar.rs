@@ -640,15 +640,13 @@ mod tests {
         fake_git(&a, Rc::new(Failing), cx);
         let repository = cx.update(|cx| gitto_app_data::data::Repositories::open(&a, cx));
         repository.update(cx, |repository, cx| {
-            let merge = Merge {
-                reference: "refs/heads/feature".into(),
-                into: "main".into(),
-            };
+            let merge = Merge::parse("refs/heads/feature", "main").unwrap();
             drop(repository.merge(merge, cx));
         });
         cx.run_until_parked();
         repository.update(cx, |repository, cx| {
-            drop(repository.delete_branch("refs/heads/feature".into(), cx));
+            let reference = BranchRef::parse("refs/heads/feature").unwrap();
+            drop(repository.delete_branch(reference, cx));
         });
         cx.run_until_parked();
         let shown = toolbar.read_with(cx, |toolbar, _| toolbar.branch_failure());

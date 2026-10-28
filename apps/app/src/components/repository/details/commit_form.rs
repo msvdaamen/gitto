@@ -281,13 +281,15 @@ impl CommitForm {
             .as_ref()
             .and_then(|_| self.amended_message(cx))
             .unwrap_or_else(|| join_message(&self.message(cx)));
-        let input = (
-            self.repository_id.clone(),
-            NewCommit {
-                message,
-                amend: amended.clone(),
-            },
-        );
+        let input = match NewCommit::parse(message, amended.clone()) {
+            Ok(commit) => (self.repository_id.clone(), commit),
+            Err(error) => {
+                let error = self.repository.read(cx).git().invalid(error);
+                self.commit
+                    .update(cx, |commit, cx| commit.refuse(error, cx));
+                return;
+            }
+        };
         let done = self
             .commit
             .update(cx, |commit, cx| commit.mutate(input, cx));

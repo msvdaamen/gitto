@@ -135,10 +135,7 @@ impl Form {
 }
 
 fn amended(message: &str, sha: &str) -> NewCommit {
-    NewCommit {
-        message: message.to_owned(),
-        amend: Some(sha.to_owned()),
-    }
+    NewCommit::parse(message, Some(sha.to_owned())).unwrap()
 }
 
 #[gpui_kit::test]
@@ -478,10 +475,7 @@ fn commits_with_the_shortcut_from_either_field(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(
         form.committed(),
-        [NewCommit {
-            message: "Shortcut\n\nBody".into(),
-            amend: None,
-        }]
+        [NewCommit::parse("Shortcut\n\nBody", None).unwrap()]
     );
     // The draft's cleared, without a line added to the description first.
     assert_eq!(form.fields(cx), (String::new(), String::new()));

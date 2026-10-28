@@ -1,6 +1,7 @@
 //! Committing and rewording. Ported from `git/queries/commit.ts`.
 
-use gitto_git::input::RepositoryId;
+use gitto_git::Result;
+use gitto_git::input::{FullSha, Message, RepositoryId};
 use gpui_kit::{App, Entity};
 
 use super::mutation::Mutation;
@@ -10,15 +11,35 @@ use super::repository::Repositories;
 /// commit instead.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewCommit {
-    pub message: String,
-    pub amend: Option<String>,
+    pub message: Message,
+    pub amend: Option<FullSha>,
+}
+
+impl NewCommit {
+    /// The commit with `message`, amending `amend`, if they're valid.
+    pub fn parse(message: impl Into<String>, amend: Option<String>) -> Result<Self> {
+        Ok(NewCommit {
+            message: Message::parse(message)?,
+            amend: amend.map(FullSha::parse).transpose()?,
+        })
+    }
 }
 
 /// A rewording of HEAD's commit, `sha`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Reword {
-    pub sha: String,
-    pub message: String,
+    pub sha: FullSha,
+    pub message: Message,
+}
+
+impl Reword {
+    /// The rewording of `sha` with `message`, if they're valid.
+    pub fn parse(sha: impl Into<String>, message: impl Into<String>) -> Result<Self> {
+        Ok(Reword {
+            sha: FullSha::parse(sha)?,
+            message: Message::parse(message)?,
+        })
+    }
 }
 
 /// Commits what's staged in the repository it's given (see [`NewCommit`]; `useCreateCommit`).

@@ -18,9 +18,7 @@ use gitto_git::features::conflicts::commands::ShownConflict;
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::features::operation::schema::OperationKind;
 use gitto_git::features::staging::discard::Discarded;
-use gitto_git::input::{
-    BranchName, BranchRef, FileInput, Folder, FullSha, Message, NonEmpty, Paths, RepositoryId,
-};
+use gitto_git::input::{BranchName, BranchRef, FileInput, FullSha, NonEmpty, Paths, RepositoryId};
 use gitto_git::schema::FileStatus;
 use gpui_kit::{AppContext as _, Context, Task};
 
@@ -142,7 +140,7 @@ pub(crate) enum Scope {
 
 impl Repository {
     /// `input`, checked as the UI hands it over (see `RepositoryGit::invalid`), as git's part of a
-    /// change.
+    /// change: the paths of files, from their lists.
     fn checked<T, R: Send + 'static>(
         &self,
         input: gitto_git::Result<T>,
@@ -204,13 +202,11 @@ impl Repository {
     /// Pulls a local branch that isn't checked out, by its short name, fast-forwarding it to its
     /// upstream without touching the working tree (`usePullBranch`). It counts as running until
     /// the repository has reloaded, also after a failure: its remote was fetched all the same.
-    pub fn pull_branch(&mut self, branch: String, cx: &mut Context<Self>) -> Done {
+    pub fn pull_branch(&mut self, branch: NonEmpty, cx: &mut Context<Self>) -> Done {
         self.run(
             Change::PullBranch,
             |repository, cx| {
-                let git = repository.git().clone();
-                let action =
-                    repository.checked(NonEmpty::parse(branch), |branch| git.pull(Some(branch)));
+                let action = repository.git().pull(Some(branch));
                 repository.after(action, |_| Then::AwaitReload(Scope::All), cx)
             },
             cx,
@@ -273,14 +269,11 @@ impl Repository {
     /// Creates a branch, by its name, at HEAD and switches to it, taking the uncommitted changes
     /// along (`useCreateBranch`). It counts as running until the repository has reloaded, so the
     /// toolbar names the new branch once it's done.
-    pub fn create_branch(&mut self, name: String, cx: &mut Context<Self>) -> Done {
+    pub fn create_branch(&mut self, name: BranchName, cx: &mut Context<Self>) -> Done {
         self.change_branches(
             Change::CreateBranch,
             |repository, cx| {
-                let git = repository.git().clone();
-                let action = repository.checked(BranchName::parse(name), |name| {
-                    git.create_branch(name, None)
-                });
+                let action = repository.git().create_branch(name, None);
                 repository.after(action, |_| Then::AwaitReload(Scope::All), cx)
             },
             cx,
@@ -292,7 +285,7 @@ impl Repository {
     /// kept in the stash when they conflict with it. It counts as running until the repository has
     /// reloaded, also after a failure: it may have switched and stashed. Switching to the
     /// checked-out branch does nothing, rather than reloading the whole repository.
-    pub fn switch_branch(&mut self, reference: String, cx: &mut Context<Self>) -> Done {
+    pub fn switch_branch(&mut self, reference: BranchRef, cx: &mut Context<Self>) -> Done {
         self.change_branches(
             Change::Switch,
             |repository, cx| {
@@ -303,10 +296,7 @@ impl Repository {
                 if checked_out {
                     return Task::ready(Ok(()));
                 }
-                let git = repository.git().clone();
-                let action = repository.checked(BranchRef::parse(reference), |reference| {
-                    git.switch_branch(reference)
-                });
+                let action = repository.git().switch_branch(reference);
                 repository.after(action, |_| Then::AwaitReload(Scope::All), cx)
             },
             cx,
@@ -321,11 +311,7 @@ impl Repository {
         self.change_branches(
             Change::Switch,
             |repository, cx| {
-                let git = repository.git().clone();
-                let parsed = BranchName::parse(input.name)
-                    .and_then(|name| Ok((name, BranchRef::parse(input.from)?)));
-                let action =
-                    repository.checked(parsed, |(name, from)| git.create_branch(name, Some(from)));
+                let action = repository.git().create_branch(input.name, Some(input.from));
                 repository.after(action, |_| Then::AwaitReload(Scope::All), cx)
             },
             cx,
@@ -333,14 +319,11 @@ impl Repository {
     }
 
     /// Deletes a branch, by its full ref name (`useDeleteBranch`).
-    pub fn delete_branch(&mut self, reference: String, cx: &mut Context<Self>) -> Done {
+    pub fn delete_branch(&mut self, reference: BranchRef, cx: &mut Context<Self>) -> Done {
         self.change_branches(
             Change::DeleteBranch,
             |repository, cx| {
-                let git = repository.git().clone();
-                let action = repository.checked(BranchRef::parse(reference), |reference| {
-                    git.delete_branch(reference)
-                });
+                let action = repository.git().delete_branch(reference);
                 repository.after(action, |_| Then::AwaitReload(Scope::All), cx)
             },
             cx,
@@ -357,12 +340,7 @@ impl Repository {
             Change::Merge,
             |repository, cx| {
                 let up_to_date = up_to_date_message(&input.into, &input.reference);
-                let git = repository.git().clone();
-                let parsed = BranchRef::parse(input.reference)
-                    .and_then(|reference| Ok((reference, NonEmpty::parse(input.into)?)));
-                let action = repository.checked(parsed, |(reference, into)| {
-                    git.merge_branch(reference, into)
-                });
+                let action = repository.git().merge_branch(input.reference, input.into);
                 repository.integrating(
                     action,
                     |outcome| *outcome == MergeOutcome::UpToDate,
@@ -383,12 +361,9 @@ impl Repository {
             Change::Rebase,
             |repository, cx| {
                 let up_to_date = up_to_date_message(&input.branch, &input.reference);
-                let git = repository.git().clone();
-                let parsed = BranchRef::parse(input.reference)
-                    .and_then(|reference| Ok((reference, NonEmpty::parse(input.branch)?)));
-                let action = repository.checked(parsed, |(reference, branch)| {
-                    git.rebase_branch(reference, branch)
-                });
+                let action = repository
+                    .git()
+                    .rebase_branch(input.reference, input.branch);
                 repository.integrating(
                     action,
                     |outcome| *outcome == RebaseOutcome::UpToDate,
@@ -469,25 +444,19 @@ impl Repository {
     }
 
     /// Pops a stash, by its SHA: the newest, from the toolbar, or the one picked in a list.
-    pub fn pop_stash(&mut self, from: PopFrom, sha: String, cx: &mut Context<Self>) -> Done {
+    pub fn pop_stash(&mut self, from: PopFrom, sha: FullSha, cx: &mut Context<Self>) -> Done {
         self.change_stashes(
             Change::Pop(from),
-            |repository| {
-                let git = repository.git().clone();
-                repository.checked(FullSha::parse(sha), |sha| git.pop_stash(sha))
-            },
+            |repository| repository.git().pop_stash(sha),
             cx,
         )
     }
 
     /// Drops a stash, by its SHA.
-    pub fn drop_stash(&mut self, sha: String, cx: &mut Context<Self>) -> Done {
+    pub fn drop_stash(&mut self, sha: FullSha, cx: &mut Context<Self>) -> Done {
         self.change_stashes(
             Change::DropStash,
-            |repository| {
-                let git = repository.git().clone();
-                repository.checked(FullSha::parse(sha), |sha| git.drop_stash(sha))
-            },
+            |repository| repository.git().drop_stash(sha),
             cx,
         )
     }
@@ -514,15 +483,10 @@ impl Repository {
         self.run(
             Change::AddWorktree,
             |repository, cx| {
-                let git = repository.git().clone();
-                let parsed = Folder::parse(input.path).and_then(|folder| {
-                    let branch = BranchRef::parse(input.branch)?;
-                    let new_branch = input.new_branch.map(BranchName::parse).transpose()?;
-                    Ok((folder, branch, new_branch))
-                });
-                let action = repository.checked(parsed, |(folder, branch, new_branch)| {
-                    git.add_worktree(folder, branch, new_branch)
-                });
+                let action =
+                    repository
+                        .git()
+                        .add_worktree(input.path, input.branch, input.new_branch);
                 repository.after(action, |_| Then::AwaitReload(Scope::All), cx)
             },
             cx,
@@ -645,10 +609,7 @@ impl Repository {
         commit: NewCommit,
         cx: &mut Context<Self>,
     ) -> Task<Result<(), DataError>> {
-        let git = self.git().clone();
-        let parsed = Message::parse(commit.message)
-            .and_then(|message| Ok((message, commit.amend.map(FullSha::parse).transpose()?)));
-        let action = self.checked(parsed, |(message, amend)| git.create_commit(message, amend));
+        let action = self.git().create_commit(commit.message, commit.amend);
         self.after(action, after_commit, cx)
     }
 
@@ -659,10 +620,7 @@ impl Repository {
         reword: Reword,
         cx: &mut Context<Self>,
     ) -> Task<Result<String, DataError>> {
-        let git = self.git().clone();
-        let parsed =
-            FullSha::parse(reword.sha).and_then(|sha| Ok((sha, Message::parse(reword.message)?)));
-        let action = self.checked(parsed, |(sha, message)| git.reword_commit(sha, message));
+        let action = self.git().reword_commit(reword.sha, reword.message);
         self.after(action, after_commit, cx)
     }
 
@@ -917,8 +875,8 @@ mod tests {
 
     fn merge_feature() -> Merge {
         Merge {
-            reference: "refs/heads/feature".into(),
-            into: "main".into(),
+            reference: BranchRef::parse("refs/heads/feature").unwrap(),
+            into: NonEmpty::parse("main").unwrap(),
         }
     }
 
@@ -987,7 +945,7 @@ mod tests {
         let done = repository
             .update(cx, |repository, cx| {
                 repository.set_status(status, cx);
-                repository.switch_branch("refs/heads/main".into(), cx)
+                repository.switch_branch(BranchRef::parse("refs/heads/main").unwrap(), cx)
             })
             .unwrap();
         cx.run_until_parked();
@@ -1004,7 +962,7 @@ mod tests {
         let repository = open(&git, cx);
         let _deleting = repository
             .update(cx, |repository, cx| {
-                repository.delete_branch("refs/heads/old".into(), cx)
+                repository.delete_branch(BranchRef::parse("refs/heads/old").unwrap(), cx)
             })
             .unwrap();
         assert!(repository.read_with(cx, |repository, _| repository.branches_changing()));
@@ -1013,6 +971,22 @@ mod tests {
         finish.send(()).unwrap();
         cx.run_until_parked();
         assert!(!repository.read_with(cx, |repository, _| repository.branches_changing()));
+    }
+
+    #[gpui_kit::test]
+    fn shows_input_a_view_couldnt_make_as_its_change_failing(cx: &mut TestAppContext) {
+        let git = Rc::new(Git::default());
+        let repository = open(&git, cx);
+        let done = repository.update(cx, |repository, cx| {
+            let reference = BranchRef::parse("");
+            repository.parsing(Change::Switch, reference, Repository::switch_branch, cx)
+        });
+        // It didn't run, and says why.
+        assert!(done.is_none());
+        let state =
+            repository.read_with(cx, |repository, _| repository.change_state(Change::Switch));
+        assert!(!state.running);
+        assert!(state.error.is_some());
     }
 
     #[test]

@@ -39,7 +39,7 @@ use gitto_git::input::{FileInput, FullSha, NonEmpty, RepositoryId, Sha};
 use gitto_git::schema::FileStatus;
 use gpui_kit::{App, AppContext as _, Context, Entity, EventEmitter, Global, Subscription, Task};
 
-use super::changes::{Change, ChangeGroup};
+use super::changes::{Change, ChangeGroup, Done};
 use super::diff::{ChangedFiles, FilesOf};
 use super::error::DataError;
 use super::file_diff::FilePatch;
@@ -1068,6 +1068,33 @@ impl Repository {
         })
         .detach();
         Some(result)
+    }
+
+    /// Runs `change` with `input`, as a view made it from what git said or what was typed, as
+    /// `then` does, if it's valid. If it isn't, that's a bug (see `RepositoryGit::invalid`): the
+    /// change doesn't run (`None`), and shows as failing, unless it's running.
+    pub fn parsing<T, R>(
+        &mut self,
+        change: Change,
+        input: gitto_git::Result<T>,
+        then: impl FnOnce(&mut Self, T, &mut Context<Self>) -> Done<R>,
+        cx: &mut Context<Self>,
+    ) -> Done<R> {
+        let error = match input {
+            Ok(input) => return then(self, input, cx),
+            Err(error) => self.git.invalid(error),
+        };
+        if !self.change_state(change).running {
+            self.changes.insert(
+                change,
+                ChangeState {
+                    running: false,
+                    error: Some(error),
+                },
+            );
+            self.changed(Part::Changes, cx);
+        }
+        None
     }
 }
 

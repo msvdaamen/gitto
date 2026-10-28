@@ -1,6 +1,6 @@
 //! The toolbar's Stash and Pop. Ported from `components/repository/stash-buttons.tsx`.
 
-use gitto_git::input::RepositoryId;
+use gitto_git::input::{FullSha, RepositoryId};
 use gitto_ui_logic::git::stash::{can_pop, pop_title, stash_blocker, stash_title};
 use gpui_kit::component::h_flex;
 use gpui_kit::prelude::*;
@@ -93,8 +93,14 @@ impl StashButtons {
             })
             .on_click(move |_, _, cx| {
                 if let Some(newest) = newest.clone() {
+                    let newest = FullSha::parse(newest);
                     pop.update(cx, |repository, cx| {
-                        drop(repository.pop_stash(PopFrom::Toolbar, newest, cx))
+                        drop(repository.parsing(
+                            Change::Pop(PopFrom::Toolbar),
+                            newest,
+                            |repository, sha, cx| repository.pop_stash(PopFrom::Toolbar, sha, cx),
+                            cx,
+                        ))
                     });
                 }
             })

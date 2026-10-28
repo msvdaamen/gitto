@@ -1,6 +1,6 @@
 //! The toolbar's Branch. Ported from `components/repository/branch-button.tsx`.
 
-use gitto_git::input::RepositoryId;
+use gitto_git::input::{BranchName, RepositoryId};
 use gitto_ui_logic::git::status::{branch_source, has_uncommitted_changes};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::popover::Popover;
@@ -10,7 +10,7 @@ use gpui_kit::{Anchor, App, Context, Entity, Focusable as _, Subscription, Windo
 use super::branch_form::{BranchForm, NAME_PLACEHOLDER, submitted_name};
 use super::toolbar_button::{HideBelow, ToolbarButton};
 use gitto_app_data::data::Change;
-use gitto_app_data::data::{Part, Shown};
+use gitto_app_data::data::{Part, Repository, Shown};
 use gitto_app_kit::ui::IconName;
 
 /// Creates a branch from the current one and switches to it, with a popover to name it, and says
@@ -103,10 +103,11 @@ impl BranchButton {
         }
         self.open = false;
         cx.notify();
-        let name = trimmed.to_string();
-        let done = self
-            .repository
-            .update(cx, |repository, cx| repository.create_branch(name, cx));
+        let name = BranchName::parse(trimmed.clone());
+        let done = self.repository.update(cx, |repository, cx| {
+            let create = Repository::create_branch;
+            repository.parsing(Change::CreateBranch, name, create, cx)
+        });
         let Some(done) = done else {
             return;
         };

@@ -103,10 +103,7 @@ struct Calls {
 /// The menus' repository's git, which records what it was asked to run.
 impl RepositoryGit for Calls {
     fn merge_branch(&self, reference: BranchRef, into: NonEmpty) -> GitTask<MergeOutcome> {
-        self.merges.borrow_mut().push(Merge {
-            reference: reference.as_str().to_owned(),
-            into: into.as_str().to_owned(),
-        });
+        self.merges.borrow_mut().push(Merge { reference, into });
         *self.now.borrow_mut() = self.after_merge.borrow_mut().take();
         let outcome = self.merge_outcome.borrow_mut().take();
         async move { Ok(outcome.unwrap_or(MergeOutcome::Merged)) }.boxed()
@@ -329,10 +326,7 @@ fn merges_and_opens_the_first_conflicted_file_when_it_stops_at_conflicts(cx: &mu
     choose(window, "Merge topic into main", cx);
     assert_eq!(
         *calls.merges.borrow(),
-        [Merge {
-            reference: "refs/heads/topic".into(),
-            into: "main".into(),
-        }]
+        [Merge::parse("refs/heads/topic", "main").unwrap()]
     );
     let resolved = host.read_with(cx, |host, _| host.resolved.borrow().clone());
     // The one with markers left first.

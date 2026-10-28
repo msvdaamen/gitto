@@ -11,7 +11,7 @@ use gpui_kit::{App, Context, Entity, Focusable as _, Subscription, Window, rems}
 use super::branch_form::{BranchForm, NAME_PLACEHOLDER, submitted_name};
 use gitto_app_data::data::Change;
 use gitto_app_data::data::branch::NewBranchFrom;
-use gitto_app_data::data::{Part, Shown};
+use gitto_app_data::data::{Part, Repository, Shown};
 use gitto_app_data::state::lingering::Lingering;
 
 /// How wide the dialog is (`max-w-[320px]`), in rems of the 15px base.
@@ -165,12 +165,10 @@ impl CreateBranchDialog {
             return;
         }
         self.close(window, cx);
-        let input = NewBranchFrom {
-            name: trimmed.clone(),
-            from,
-        };
+        let input = NewBranchFrom::parse(trimmed.clone(), from);
         let done = self.repository.update(cx, |repository, cx| {
-            repository.create_branch_from(input, cx)
+            let create = Repository::create_branch_from;
+            repository.parsing(Change::Switch, input, create, cx)
         });
         let Some(done) = done else {
             return;
@@ -216,10 +214,8 @@ mod tests {
     impl RepositoryGit for Creates {
         fn create_branch(&self, name: BranchName, from: Option<BranchRef>) -> GitTask<()> {
             self.0.borrow_mut().push(NewBranchFrom {
-                name: name.as_str().to_owned(),
-                from: from
-                    .map(|from| from.as_str().to_owned())
-                    .unwrap_or_default(),
+                name,
+                from: from.expect("a branch made from another"),
             });
             async { Ok(()) }.boxed()
         }
@@ -282,10 +278,7 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(
             *calls.0.borrow(),
-            [NewBranchFrom {
-                name: "topic".into(),
-                from: "refs/remotes/origin/feature".into(),
-            }]
+            [NewBranchFrom::parse("topic", "refs/remotes/origin/feature").unwrap()]
         );
         assert!(!dialog.read_with(cx, |dialog, _| dialog.is_open()));
         // Created: the next one gets a fresh name.

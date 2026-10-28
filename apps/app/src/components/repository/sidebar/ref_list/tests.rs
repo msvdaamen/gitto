@@ -118,27 +118,19 @@ impl RepositoryGit for Fakes {
 
     fn create_branch(&self, name: BranchName, from: Option<BranchRef>) -> GitTask<()> {
         let input = NewBranchFrom {
-            name: name.as_str().to_owned(),
-            from: from
-                .map(|from| from.as_str().to_owned())
-                .unwrap_or_default(),
+            name,
+            from: from.expect("a branch made from another"),
         };
         self.create.run(input, ())
     }
 
     fn merge_branch(&self, reference: BranchRef, into: NonEmpty) -> GitTask<MergeOutcome> {
-        let input = Merge {
-            reference: reference.as_str().to_owned(),
-            into: into.as_str().to_owned(),
-        };
+        let input = Merge { reference, into };
         self.merge.run(input, MergeOutcome::Merged)
     }
 
     fn rebase_branch(&self, reference: BranchRef, branch: NonEmpty) -> GitTask<RebaseOutcome> {
-        let input = Rebase {
-            reference: reference.as_str().to_owned(),
-            branch: branch.as_str().to_owned(),
-        };
+        let input = Rebase { reference, branch };
         self.rebase.run(input, RebaseOutcome::Rebased)
     }
 
@@ -168,9 +160,9 @@ impl RepositoryGit for Fakes {
         new_branch: Option<BranchName>,
     ) -> GitTask<()> {
         let input = AddWorktreeInput {
-            path: folder.as_str().to_owned(),
-            branch: branch.as_str().to_owned(),
-            new_branch: new_branch.map(|name| name.as_str().to_owned()),
+            path: folder,
+            branch,
+            new_branch,
         };
         self.add.run(input, ())
     }
@@ -842,10 +834,7 @@ fn creates_a_branch_from_the_one_right_clicked_and_switches_to_it_as_a_switch(
     f.press("enter", cx);
     assert_eq!(
         f.fakes.create.calls(),
-        [NewBranchFrom {
-            name: "topic".into(),
-            from: "refs/heads/feature".into(),
-        }]
+        [NewBranchFrom::parse("topic", "refs/heads/feature").unwrap()]
     );
     // The dialog closes, and the current branch shows it running.
     assert!(!f.has_dialog(cx));
@@ -905,10 +894,7 @@ fn creates_one_from_a_remote_branch(cx: &mut TestAppContext) {
     f.press("enter", cx);
     assert_eq!(
         f.fakes.create.calls(),
-        [NewBranchFrom {
-            name: "topic".into(),
-            from: "refs/remotes/origin/feature".into(),
-        }]
+        [NewBranchFrom::parse("topic", "refs/remotes/origin/feature").unwrap()]
     );
 }
 
@@ -964,10 +950,7 @@ fn merges_the_branch_right_clicked_into_the_checked_out_one_showing_it_running(
     f.choose("Merge feature into main", cx);
     assert_eq!(
         f.fakes.merge.calls(),
-        [Merge {
-            reference: "refs/heads/feature".into(),
-            into: "main".into(),
-        }]
+        [Merge::parse("refs/heads/feature", "main").unwrap()]
     );
     assert!(f.is_busy(cx));
 
@@ -991,10 +974,7 @@ fn merges_a_remote_branch(cx: &mut TestAppContext) {
     f.choose("Merge origin/feature into main", cx);
     assert_eq!(
         f.fakes.merge.calls(),
-        [Merge {
-            reference: "refs/remotes/origin/feature".into(),
-            into: "main".into(),
-        }]
+        [Merge::parse("refs/remotes/origin/feature", "main").unwrap()]
     );
 }
 
@@ -1095,10 +1075,7 @@ fn rebases_the_checked_out_branch_onto_the_one_right_clicked_showing_it_running(
     f.choose("Rebase main onto feature", cx);
     assert_eq!(
         f.fakes.rebase.calls(),
-        [Rebase {
-            reference: "refs/heads/feature".into(),
-            branch: "main".into(),
-        }]
+        [Rebase::parse("refs/heads/feature", "main").unwrap()]
     );
     assert!(f.is_busy(cx));
 
@@ -1277,7 +1254,8 @@ fn doesnt_delete_one_while_another_stash_action_runs(cx: &mut TestAppContext) {
     // Begun straight on the actions: the dialog keeps the rest from being used, so this
     // stands for a pop begun some other way.
     f.repository(cx).update(cx, |repository, cx| {
-        drop(repository.pop_stash(PopFrom::Picked, newer().sha, cx))
+        let sha = FullSha::parse(newer().sha).unwrap();
+        drop(repository.pop_stash(PopFrom::Picked, sha, cx))
     });
     cx.run_until_parked();
     f.choose("Delete", cx);
@@ -1580,11 +1558,12 @@ fn adds_a_worktree_for_a_branch_suggesting_a_folder_beside_the_repository(cx: &m
     f.choose("Add worktree", cx);
     assert_eq!(
         f.fakes.add.calls(),
-        [AddWorktreeInput {
-            path: "/w/repo-origin-feature".into(),
-            branch: "refs/remotes/origin/feature".into(),
-            new_branch: None,
-        }]
+        [AddWorktreeInput::parse(
+            "/w/repo-origin-feature",
+            "refs/remotes/origin/feature",
+            None
+        )
+        .unwrap()]
     );
     // The dialog closes, and the section shows it running.
     assert!(!f.has_dialog(cx));

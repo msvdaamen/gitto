@@ -192,10 +192,7 @@ impl RepositoryGit for Fakes {
     }
 
     fn create_commit(&self, message: Message, amend: Option<FullSha>) -> GitTask<()> {
-        let commit = NewCommit {
-            message: message.as_str().to_owned(),
-            amend: amend.map(|sha| sha.as_str().to_owned()),
-        };
+        let commit = NewCommit { message, amend };
         let answer = self.commits.answer(&commit.message);
         self.committed.borrow_mut().push(commit);
         answer

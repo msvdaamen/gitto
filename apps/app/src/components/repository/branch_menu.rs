@@ -27,7 +27,7 @@ use gitto_git::features::refs::schema::RefKind;
 use gitto_git::features::remote::remote_name::remote_of;
 use gitto_git::features::status::schema::Head;
 use gitto_git::features::worktree::schema::Worktree;
-use gitto_git::input::RepositoryId;
+use gitto_git::input::{BranchRef, NonEmpty, RepositoryId};
 use gitto_ui_logic::git::status::{branch_name, head_label, is_checked_out};
 use gitto_ui_logic::git::worktree::{can_open_worktree, tracking_branches, worktree_on};
 use gpui_kit::component::menu::PopupMenu;
@@ -222,9 +222,10 @@ impl BranchMenuProvider {
             deletion,
             move |deletion, _, cx| {
                 deleting.set(false);
-                let reference = deletion.reference().to_owned();
+                let reference = BranchRef::parse(deletion.reference());
                 delete.update(cx, |repository, cx| {
-                    drop(repository.delete_branch(reference, cx))
+                    let delete = Repository::delete_branch;
+                    drop(repository.parsing(Change::DeleteBranch, reference, delete, cx))
                 });
             },
             move |_, _| cancelled.set(false),
@@ -238,12 +239,13 @@ impl BranchMenuProvider {
     /// failed.
     pub fn pull(&mut self, reference: &str, cx: &mut Context<Self>) {
         let here = self.shown(cx).checked_out_here(reference);
-        let branch = branch_name(reference).to_owned();
+        let branch = NonEmpty::parse(branch_name(reference));
         self.repository.update(cx, |repository, cx| {
             if here {
                 drop(repository.pull(cx));
             } else {
-                drop(repository.pull_branch(branch, cx));
+                let pull = Repository::pull_branch;
+                drop(repository.parsing(Change::PullBranch, branch, pull, cx));
             }
         });
     }
@@ -267,7 +269,10 @@ impl BranchMenuProvider {
             return;
         };
         self.integrate(
-            move |repository, cx| repository.merge(Merge { reference, into }, cx),
+            move |repository, cx| {
+                let merge = Merge::parse(reference, into);
+                repository.parsing(Change::Merge, merge, Repository::merge, cx)
+            },
             |outcome: &MergeOutcome| *outcome == MergeOutcome::Conflicts,
             cx,
         );
@@ -280,7 +285,10 @@ impl BranchMenuProvider {
             return;
         };
         self.integrate(
-            move |repository, cx| repository.rebase(Rebase { reference, branch }, cx),
+            move |repository, cx| {
+                let rebase = Rebase::parse(reference, branch);
+                repository.parsing(Change::Rebase, rebase, Repository::rebase, cx)
+            },
             |outcome: &RebaseOutcome| *outcome == RebaseOutcome::Conflicts,
             cx,
         );

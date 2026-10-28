@@ -17,7 +17,7 @@ use super::branch_form::NAME_PLACEHOLDER;
 use gitto_app_data::data::Change;
 use gitto_app_data::data::repositories::find;
 use gitto_app_data::data::worktree::AddWorktreeInput;
-use gitto_app_data::data::{AppData, AppPart, Part, Shown};
+use gitto_app_data::data::{AppData, AppPart, Part, Repository, Shown};
 use gitto_app_data::services::SystemContext;
 use gitto_app_data::state::lingering::Lingering;
 use gitto_app_kit::theme::PaletteExt as _;
@@ -344,14 +344,12 @@ impl AddWorktreeDialog {
         self.open = false;
         window.close_dialog(cx);
         cx.notify();
-        let input = AddWorktreeInput {
-            path: path.clone(),
-            branch,
-            new_branch: (!made.is_empty()).then(|| made.clone()),
-        };
-        let done = self
-            .repository
-            .update(cx, |repository, cx| repository.add_worktree(input, cx));
+        let new_branch = (!made.is_empty()).then(|| made.clone());
+        let input = AddWorktreeInput::parse(path.clone(), branch, new_branch);
+        let done = self.repository.update(cx, |repository, cx| {
+            let add = Repository::add_worktree;
+            repository.parsing(Change::AddWorktree, input, add, cx)
+        });
         let Some(done) = done else {
             return;
         };
@@ -403,9 +401,9 @@ mod tests {
             new_branch: Option<BranchName>,
         ) -> GitTask<()> {
             self.0.borrow_mut().push(AddWorktreeInput {
-                path: folder.as_str().to_owned(),
-                branch: branch.as_str().to_owned(),
-                new_branch: new_branch.map(|name| name.as_str().to_owned()),
+                path: folder,
+                branch,
+                new_branch,
             });
             async { Ok(()) }.boxed()
         }
@@ -523,11 +521,7 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(
             *adds.0.borrow(),
-            [AddWorktreeInput {
-                path: "/work/gitto-topic".into(),
-                branch: "refs/heads/topic".into(),
-                new_branch: None,
-            }]
+            [AddWorktreeInput::parse("/work/gitto-topic", "refs/heads/topic", None).unwrap()]
         );
         assert!(!dialog.read_with(cx, |dialog, _| dialog.is_open()));
         assert_eq!(value(&folder, cx), "");

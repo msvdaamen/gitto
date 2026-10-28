@@ -190,10 +190,7 @@ impl RepositoryGit for Calls {
     }
 
     fn reword_commit(&self, sha: FullSha, message: Message) -> GitTask<String> {
-        self.reworded.borrow_mut().push(Reword {
-            sha: sha.as_str().to_owned(),
-            message: message.as_str().to_owned(),
-        });
+        self.reworded.borrow_mut().push(Reword { sha, message });
         let outcome = self
             .reword
             .borrow_mut()
@@ -209,27 +206,19 @@ impl RepositoryGit for Calls {
     }
 
     fn merge_branch(&self, reference: BranchRef, into: NonEmpty) -> GitTask<MergeOutcome> {
-        self.merges.borrow_mut().push(Merge {
-            reference: reference.as_str().to_owned(),
-            into: into.as_str().to_owned(),
-        });
+        self.merges.borrow_mut().push(Merge { reference, into });
         async { Ok(MergeOutcome::Merged) }.boxed()
     }
 
     fn rebase_branch(&self, reference: BranchRef, branch: NonEmpty) -> GitTask<RebaseOutcome> {
-        self.rebases.borrow_mut().push(Rebase {
-            reference: reference.as_str().to_owned(),
-            branch: branch.as_str().to_owned(),
-        });
+        self.rebases.borrow_mut().push(Rebase { reference, branch });
         async { Ok(RebaseOutcome::Rebased) }.boxed()
     }
 
     fn create_branch(&self, name: BranchName, from: Option<BranchRef>) -> GitTask<()> {
         self.created.borrow_mut().push(NewBranchFrom {
-            name: name.as_str().to_owned(),
-            from: from
-                .map(|from| from.as_str().to_owned())
-                .unwrap_or_default(),
+            name,
+            from: from.expect("a branch made from another"),
         });
         async { Ok(()) }.boxed()
     }
@@ -953,10 +942,11 @@ fn edits_the_last_commits_message_keeping_the_rewritten_commit_selected(cx: &mut
     history.press("enter", cx);
     assert_eq!(
         *history.calls.reworded.borrow(),
-        [Reword {
-            sha: "e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5".into(),
-            message: "Reworded\n\nWhy it was made\n".into(),
-        }]
+        [Reword::parse(
+            "e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
+            "Reworded\n\nWhy it was made\n"
+        )
+        .unwrap()]
     );
     assert!(!history.has_dialog(cx));
     assert_eq!(history.selected(cx).as_deref(), Some("f6"));
@@ -1223,10 +1213,7 @@ fn creates_a_branch_from_the_one_right_clicked_handing_the_focus_back_to_the_lis
     history.press("enter", cx);
     assert_eq!(
         *history.calls.created.borrow(),
-        [NewBranchFrom {
-            name: "topic".into(),
-            from: "refs/heads/main".into(),
-        }]
+        [NewBranchFrom::parse("topic", "refs/heads/main").unwrap()]
     );
 }
 
@@ -1248,10 +1235,7 @@ fn creates_a_branch_from_one_right_clicked_among_the_rest_of_a_rows_labels(
     history.press("enter", cx);
     assert_eq!(
         *history.calls.created.borrow(),
-        [NewBranchFrom {
-            name: "topic".into(),
-            from: "refs/heads/feature".into(),
-        }]
+        [NewBranchFrom::parse("topic", "refs/heads/feature").unwrap()]
     );
 }
 
@@ -1276,10 +1260,7 @@ fn merges_a_branch_right_clicked_among_the_rest_of_a_rows_labels_into_the_checke
     history.choose("Merge origin/release into main", cx);
     assert_eq!(
         *history.calls.merges.borrow(),
-        [Merge {
-            reference: "refs/remotes/origin/release".into(),
-            into: "main".into(),
-        }]
+        [Merge::parse("refs/remotes/origin/release", "main").unwrap()]
     );
 }
 
@@ -1299,10 +1280,7 @@ fn rebases_the_checked_out_branch_onto_a_branch_right_clicked_among_a_rows_label
     history.choose("Rebase main onto origin/release", cx);
     assert_eq!(
         *history.calls.rebases.borrow(),
-        [Rebase {
-            reference: "refs/remotes/origin/release".into(),
-            branch: "main".into(),
-        }]
+        [Rebase::parse("refs/remotes/origin/release", "main").unwrap()]
     );
 }
 

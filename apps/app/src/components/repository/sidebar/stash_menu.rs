@@ -11,6 +11,7 @@
 use std::rc::Rc;
 
 use gitto_git::features::stash::schema::Stash;
+use gitto_git::input::FullSha;
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::{App, Entity, Window};
 
@@ -71,9 +72,14 @@ impl StashMenu {
             "Pop stash",
             !poppable || pending,
             move |_, _, cx| {
-                let sha = sha.clone();
+                let sha = FullSha::parse(sha.clone());
                 pop.update(cx, |repository, cx| {
-                    drop(repository.pop_stash(PopFrom::Picked, sha, cx))
+                    drop(repository.parsing(
+                        Change::Pop(PopFrom::Picked),
+                        sha,
+                        |repository, sha, cx| repository.pop_stash(PopFrom::Picked, sha, cx),
+                        cx,
+                    ))
                 });
             },
         ))
@@ -88,7 +94,10 @@ impl StashMenu {
     /// Deletes `stash` on `repository`, once that's confirmed: not while another stash action
     /// runs.
     pub fn drop(repository: &Entity<Repository>, stash: &Stash, cx: &mut App) {
-        let sha = stash.sha.clone();
-        repository.update(cx, |repository, cx| drop(repository.drop_stash(sha, cx)));
+        let sha = FullSha::parse(stash.sha.clone());
+        repository.update(cx, |repository, cx| {
+            let drop_stash = Repository::drop_stash;
+            drop(repository.parsing(Change::DropStash, sha, drop_stash, cx))
+        });
     }
 }

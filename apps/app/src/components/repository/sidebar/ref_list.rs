@@ -8,7 +8,7 @@ use std::sync::Arc;
 use gitto_git::features::refs::schema::{Ref, RefKind};
 use gitto_git::features::stash::schema::Stash;
 use gitto_git::features::worktree::schema::Worktree;
-use gitto_git::input::RepositoryId;
+use gitto_git::input::{BranchRef, RepositoryId};
 use gitto_ui_logic::git::ref_tree::{RefTreeNode, build_ref_tree, flatten_ref_tree};
 use gitto_ui_logic::git::stash::can_pop;
 use gitto_ui_logic::git::status::branch_name;
@@ -31,7 +31,7 @@ use super::worktree_menu::WorktreeMenu;
 use crate::components::repository::branch_menu::{BranchMenuProvider, branch_menu};
 use crate::components::repository::row_menu::RowMenu;
 use crate::views::repository::MEDIUM;
-use gitto_app_data::data::{Part, Shown};
+use gitto_app_data::data::{Change, Part, Repository, Shown};
 use gitto_app_data::services::Services;
 use gitto_app_data::state::clock::Clock;
 use gitto_app_data::state::collapsed::Collapsed;
@@ -295,9 +295,10 @@ impl RefList {
         let others = self.other_worktrees(cx);
         match worktree_on(Some(&others), reference) {
             None => {
-                let reference = reference.to_owned();
+                let reference = BranchRef::parse(reference);
                 self.repository.update(cx, |repository, cx| {
-                    drop(repository.switch_branch(reference, cx))
+                    let switch = Repository::switch_branch;
+                    drop(repository.parsing(Change::Switch, reference, switch, cx))
                 });
             }
             Some(worktree) if can_open_worktree(worktree) => {

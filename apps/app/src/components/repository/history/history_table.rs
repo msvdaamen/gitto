@@ -11,7 +11,7 @@ use std::sync::Arc;
 use gitto_git::features::history::schema::Commit;
 use gitto_git::features::stash::schema::Stash;
 use gitto_git::features::worktree::schema::Worktree;
-use gitto_git::input::RepositoryId;
+use gitto_git::input::{BranchRef, RepositoryId};
 use gitto_ui_logic::git::ref_labels::checkouts;
 use gitto_ui_logic::git::rows::{
     HistoryRow, history_graph, stash_sha, to_history_rows, with_stashes,
@@ -42,7 +42,7 @@ use crate::components::repository::branch_menu::BranchMenuProvider;
 use gitto_app_data::data::diff::{ChangedFiles, FilesOf, ShownFiles, select_shown_files};
 use gitto_app_data::data::history::History;
 use gitto_app_data::data::keyed::Hold;
-use gitto_app_data::data::{Changed, Part, Shown};
+use gitto_app_data::data::{Change, Changed, Part, Repository, Shown};
 use gitto_app_data::state::clock::Clock;
 use gitto_app_kit::delayed::{DELAY, Delayed};
 use gitto_app_kit::theme::PaletteExt as _;
@@ -745,7 +745,13 @@ impl HistoryTable {
                     // does nothing for the other. A switch shows in the toolbar; a label
                     // double-clicked meanwhile does nothing.
                     repository.update(cx, |repository, cx| {
-                        drop(repository.switch_branch(reference, cx))
+                        let reference = BranchRef::parse(reference);
+                        drop(repository.parsing(
+                            Change::Switch,
+                            reference,
+                            Repository::switch_branch,
+                            cx,
+                        ))
                     });
                 }
             }),

@@ -294,13 +294,15 @@ impl RewordDialog {
         if !self.is_savable(cx) {
             return;
         }
-        let input = (
-            self.repository_id.clone(),
-            Reword {
-                sha: from.clone(),
-                message,
-            },
-        );
+        let input = match Reword::parse(from.clone(), message) {
+            Ok(reword) => (self.repository_id.clone(), reword),
+            Err(error) => {
+                let error = self.repository.read(cx).git().invalid(error);
+                self.reword
+                    .update(cx, |reword, cx| reword.refuse(error, cx));
+                return;
+            }
+        };
         let done = self
             .reword
             .update(cx, |reword, cx| reword.mutate(input, cx));

@@ -80,6 +80,18 @@ impl<I: Clone + 'static, R: 'static> Mutation<I, R> {
         result
     }
 
+    /// Fails it with `error` without running it, as for input its view couldn't make: a bug,
+    /// that shows as its last run failing.
+    pub fn refuse(&mut self, error: DataError, cx: &mut Context<Self>) {
+        self.generation += 1;
+        self.state = ChangeState {
+            running: false,
+            error: Some(error),
+        };
+        self.input = None;
+        cx.notify();
+    }
+
     /// Whether its last run is under way, and why it failed, if it did.
     pub fn state(&self) -> &ChangeState {
         &self.state
