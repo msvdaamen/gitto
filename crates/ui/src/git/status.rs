@@ -39,8 +39,9 @@ pub fn is_checked_out(head: &Head, r#ref: &str) -> bool {
     head_branch(head).is_some_and(|name| r#ref.strip_prefix("refs/heads/") == Some(name))
 }
 
-pub fn has_uncommitted_changes(status: Option<&StatusSummary>) -> bool {
-    status.is_some_and(|status| status.counts.files > 0)
+/// Whether anything is uncommitted: a file changed, staged or not.
+pub fn has_uncommitted_changes(status: &StatusSummary) -> bool {
+    status.counts.files > 0
 }
 
 /// How HEAD compares to its upstream: "synced", or how many commits ahead and behind, e.g. "↑2 ↓1".
@@ -84,6 +85,7 @@ pub fn branch_source(head: &Head) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gitto_git::features::status::schema::StatusCounts;
 
     fn main() -> Head {
         Head::Branch {
@@ -132,6 +134,24 @@ mod tests {
                 "Not on a branch: HEAD is detached, or a rebase is under way."
             );
         }
+    }
+
+    #[test]
+    fn has_uncommitted_changes_when_a_file_changed() {
+        let status = |files| StatusSummary {
+            head: main(),
+            upstream: None,
+            ahead: 0,
+            behind: 0,
+            counts: StatusCounts {
+                files,
+                staged: 0,
+                unstaged: files,
+                conflicted: 0,
+            },
+        };
+        assert!(has_uncommitted_changes(&status(1)));
+        assert!(!has_uncommitted_changes(&status(0)));
     }
 
     #[test]

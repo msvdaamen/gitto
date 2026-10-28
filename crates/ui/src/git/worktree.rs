@@ -7,8 +7,8 @@ use super::short_sha;
 use super::status::branch_name;
 
 /// The worktree the local branch `ref` (a full ref name) is checked out in, if any.
-pub fn worktree_on<'a>(worktrees: Option<&'a [Worktree]>, r#ref: &str) -> Option<&'a Worktree> {
-    worktrees?
+pub fn worktree_on<'a>(worktrees: &'a [Worktree], r#ref: &str) -> Option<&'a Worktree> {
+    worktrees
         .iter()
         .find(|worktree| worktree.branch.as_deref() == Some(r#ref))
 }
@@ -46,14 +46,14 @@ pub fn tracking_branch<'a>(refs: &'a [Ref], r#ref: &str) -> Option<&'a Ref> {
 /// any: the one it's checked out in, or for a remote branch, the one the local branch tracking it
 /// is (see [`tracking_branch`]).
 pub fn checked_out_in<'a>(
-    worktrees: Option<&'a [Worktree]>,
-    refs: Option<&[Ref]>,
+    worktrees: &'a [Worktree],
+    refs: &[Ref],
     r#ref: &str,
 ) -> Option<&'a Worktree> {
     if !r#ref.starts_with("refs/remotes/") {
         return worktree_on(worktrees, r#ref);
     }
-    let local = tracking_branch(refs.unwrap_or_default(), r#ref)?;
+    let local = tracking_branch(refs, r#ref)?;
     worktree_on(worktrees, &local.full_name)
 }
 
@@ -168,11 +168,11 @@ mod tests {
                 worktree("/repo-f", Some("refs/heads/f")),
             ];
             assert_eq!(
-                path(worktree_on(Some(&worktrees), "refs/heads/f")),
+                path(worktree_on(&worktrees, "refs/heads/f")),
                 Some("/repo-f")
             );
-            assert_eq!(worktree_on(Some(&worktrees), "refs/heads/gone"), None);
-            assert_eq!(worktree_on(None, "refs/heads/main"), None);
+            assert_eq!(worktree_on(&worktrees, "refs/heads/gone"), None);
+            assert_eq!(worktree_on(&[], "refs/heads/main"), None);
         }
     }
 
@@ -228,28 +228,21 @@ mod tests {
         fn is_the_worktree_a_local_branch_is_checked_out_in() {
             let (worktrees, refs) = (worktrees(), refs());
             assert_eq!(
-                path(checked_out_in(
-                    Some(&worktrees),
-                    Some(&refs),
-                    "refs/heads/feature"
-                )),
+                path(checked_out_in(&worktrees, &refs, "refs/heads/feature")),
                 Some("/repo-f")
             );
-            assert_eq!(
-                checked_out_in(Some(&worktrees), Some(&refs), "refs/heads/other"),
-                None
-            );
+            assert_eq!(checked_out_in(&worktrees, &refs, "refs/heads/other"), None);
         }
 
         #[test]
         fn is_the_worktree_the_branch_tracking_a_remote_one_is_checked_out_in() {
             let (worktrees, refs) = (worktrees(), refs());
-            let checked_out = |r#ref| path(checked_out_in(Some(&worktrees), Some(&refs), r#ref));
+            let checked_out = |r#ref| path(checked_out_in(&worktrees, &refs, r#ref));
             assert_eq!(checked_out("refs/remotes/origin/main"), Some("/repo"));
             assert_eq!(checked_out("refs/remotes/origin/feature"), Some("/repo-f"));
             assert_eq!(checked_out("refs/remotes/origin/other"), None);
             assert_eq!(
-                checked_out_in(Some(&worktrees), None, "refs/remotes/origin/main"),
+                checked_out_in(&worktrees, &[], "refs/remotes/origin/main"),
                 None
             );
         }

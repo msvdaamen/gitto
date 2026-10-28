@@ -47,12 +47,9 @@ pub fn pop_blocker(counts: &StatusCounts, stashes: &[Stash]) -> Option<&'static 
     None
 }
 
-/// Whether a stash can be popped: the status and the stashes have loaded, and nothing blocks it.
-pub fn can_pop(counts: Option<&StatusCounts>, stashes: Option<&[Stash]>) -> bool {
-    match (counts, stashes) {
-        (Some(counts), Some(stashes)) => pop_blocker(counts, stashes).is_none(),
-        _ => false,
-    }
+/// Whether a stash can be popped: nothing blocks it (see [`pop_blocker`]).
+pub fn can_pop(counts: &StatusCounts, stashes: &[Stash]) -> bool {
+    pop_blocker(counts, stashes).is_none()
 }
 
 /// Which stash popping would put back, or why it can't.
@@ -155,11 +152,10 @@ mod tests {
     }
 
     #[test]
-    fn can_pop_once_the_status_and_stashes_have_loaded() {
+    fn can_pop_when_nothing_blocks_it() {
         let stashes = [stash("WIP")];
-        assert!(can_pop(Some(&clean()), Some(&stashes)));
-        assert!(!can_pop(None, Some(&stashes)));
-        assert!(!can_pop(Some(&clean()), None));
-        assert!(!can_pop(Some(&conflicted()), Some(&stashes)));
+        assert!(can_pop(&clean(), &stashes));
+        assert!(!can_pop(&clean(), &[]));
+        assert!(!can_pop(&conflicted(), &stashes));
     }
 }
