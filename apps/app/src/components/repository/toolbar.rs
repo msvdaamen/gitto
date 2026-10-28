@@ -419,14 +419,7 @@ impl Render for RepositoryToolbar {
                 h_flex()
                     .flex_none()
                     .gap_0p5()
-                    .child(
-                        ToolbarButton::new("undo", IconName::Undo2, "Undo")
-                            .hide_below(HideBelow::Large),
-                    )
-                    .child(
-                        ToolbarButton::new("redo", IconName::Redo2, "Redo")
-                            .hide_below(HideBelow::Large),
-                    )
+                    .children(undo_and_redo())
                     .child(Divider::new().tall())
                     .child(self.pull.clone())
                     .child(self.push.clone())
@@ -450,6 +443,15 @@ impl Render for RepositoryToolbar {
                 .on_click(cx.listener(|_, _, _, cx| cx.emit(ToolbarEvent::ToggleDetails))),
             )
     }
+}
+
+/// Undo and Redo, which don't do anything yet: disabled, saying so.
+fn undo_and_redo() -> [ToolbarButton; 2] {
+    [
+        ToolbarButton::new("undo", IconName::Undo2, "Undo").title("Undo (coming soon)"),
+        ToolbarButton::new("redo", IconName::Redo2, "Redo").title("Redo (coming soon)"),
+    ]
+    .map(|button| button.hide_below(HideBelow::Large).disabled(true))
 }
 
 #[cfg(test)]
@@ -664,6 +666,17 @@ mod tests {
                 .is_none()
         );
         assert!(cx.update(|cx| merge.state(&a, cx)).error.is_none());
+    }
+
+    #[test]
+    fn says_undo_and_redo_are_still_to_come() {
+        for button in undo_and_redo() {
+            assert!(button.is_disabled());
+            assert_eq!(
+                button.tooltip().as_ref(),
+                format!("{} (coming soon)", button.label())
+            );
+        }
     }
 
     #[test]
