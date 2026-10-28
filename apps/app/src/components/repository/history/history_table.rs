@@ -16,12 +16,15 @@ use gitto_ui::git::ref_labels::checkouts;
 use gitto_ui::git::rows::{HistoryRow, history_graph, stash_sha, to_history_rows, with_stashes};
 use gitto_ui::git::search::{matches_search, search_needle};
 use gitto_ui::git::status::head_label;
+use gpui_kit::base::actions::{
+    SelectDown, SelectFirst, SelectLast, SelectPageDown, SelectPageUp, SelectUp,
+};
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
-    KeyDownEvent, Rems, Role, ScrollStrategy, SharedString, Subscription, Task,
-    TestSupportExt as _, UniformListScrollHandle, WeakEntity, Window, div,
+    AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, KeyBinding,
+    Rems, Role, ScrollStrategy, SharedString, Subscription, Task, TestSupportExt as _,
+    UniformListScrollHandle, WeakEntity, Window, div,
 };
 
 use super::columns::{CELL_PADDING, Column, HEADER_HEIGHT, LABEL_TEXT, ROW_HEIGHT, SMALL_TEXT};
@@ -55,6 +58,22 @@ pub const LOAD_AHEAD: usize = 100;
 /// from the count onto them.
 const MORE_OPEN_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
 const MORE_CLOSE_DELAY: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// The key context the history's keys are bound in (see [`bind_keys`]).
+const KEY_CONTEXT: &str = "HistoryList";
+
+/// Binds the history's keys: the arrows move the selection a row, Page Up and Down a page, Home
+/// and End to the first row and the last.
+pub fn bind_keys(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("up", SelectUp, Some(KEY_CONTEXT)),
+        KeyBinding::new("down", SelectDown, Some(KEY_CONTEXT)),
+        KeyBinding::new("pageup", SelectPageUp, Some(KEY_CONTEXT)),
+        KeyBinding::new("pagedown", SelectPageDown, Some(KEY_CONTEXT)),
+        KeyBinding::new("home", SelectFirst, Some(KEY_CONTEXT)),
+        KeyBinding::new("end", SelectLast, Some(KEY_CONTEXT)),
+    ]);
+}
 
 /// What the history asks of the page.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -551,28 +570,23 @@ impl HistoryTable {
         cx.notify();
     }
 
-    /// Moves the selection with the arrow keys, Page Up and Down, Home and End.
-    fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let keystroke = &event.keystroke;
-        if keystroke.modifiers.modified() {
+    /// Moves the selection to the row on show `to` picks, from the selected one's place (-1 when
+    /// the search hides it), among `count` rows, a page being `page` of them (see
+    /// [`bind_keys`]).
+    fn move_selection(
+        &mut self,
+        to: impl FnOnce(isize, isize, isize) -> isize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let count = self.shown_count();
+        if count == 0 {
+            cx.propagate();
             return;
         }
-        let count = self.shown_count();
         let current = self.selected_ix().map_or(-1, |ix| ix as isize);
         let page = self.page_size(window) as isize;
-        let target = match keystroke.key.as_str() {
-            "down" => current + 1,
-            "up" => current - 1,
-            "pagedown" => current + page,
-            "pageup" => current - page,
-            "home" => 0,
-            "end" => count as isize - 1,
-            _ => return,
-        };
-        if count == 0 {
-            return;
-        }
-        cx.stop_propagation();
+        let target = to(current, count as isize, page);
         let ix = target.clamp(0, count as isize - 1) as usize;
         self.keyboard = true;
         if Some(ix) != self.selected_ix()
@@ -582,6 +596,35 @@ impl HistoryTable {
         }
         self.scroll.scroll_to_item(ix, ScrollStrategy::Nearest);
         cx.notify();
+    }
+
+    fn select_up(&mut self, _: &SelectUp, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_selection(|current, _, _| current - 1, window, cx);
+    }
+
+    fn select_down(&mut self, _: &SelectDown, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_selection(|current, _, _| current + 1, window, cx);
+    }
+
+    fn select_page_up(&mut self, _: &SelectPageUp, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_selection(|current, _, page| current - page, window, cx);
+    }
+
+    fn select_page_down(
+        &mut self,
+        _: &SelectPageDown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_selection(|current, _, page| current + page, window, cx);
+    }
+
+    fn select_first(&mut self, _: &SelectFirst, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_selection(|_, _, _| 0, window, cx);
+    }
+
+    fn select_last(&mut self, _: &SelectLast, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_selection(|_, count, _| count - 1, window, cx);
     }
 
     /// How many rows Page Up and Down move by: what fits in view, less a row to keep one in
@@ -942,8 +985,13 @@ impl Render for HistoryTable {
                     .test_support()
                     .aria_label("Commit history")
                     .track_focus(&self.focus)
-                    .key_context("HistoryList")
-                    .on_key_down(cx.listener(Self::on_key_down))
+                    .key_context(KEY_CONTEXT)
+                    .on_action(cx.listener(Self::select_up))
+                    .on_action(cx.listener(Self::select_down))
+                    .on_action(cx.listener(Self::select_page_up))
+                    .on_action(cx.listener(Self::select_page_down))
+                    .on_action(cx.listener(Self::select_first))
+                    .on_action(cx.listener(Self::select_last))
                     .flex_1()
                     .min_h_0()
                     .w_full()

@@ -19,10 +19,11 @@ use gitto_git::features::status::schema::{Head, Uncommitted};
 use gitto_git::features::worktree::schema::Worktree;
 use gitto_git::input::RepositoryId;
 use gitto_ui::git::rows::{WIP_ID, stash_row_id};
+use gpui_kit::base::actions::{SelectFirst, SelectLast, SelectUp};
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _};
 use gpui_kit::{
-    AnyWindowHandle, App, AppContext as _, Context, Entity, Focusable as _, IntoElement,
+    Action, AnyWindowHandle, App, AppContext as _, Context, Entity, Focusable as _, IntoElement,
     MouseButton, ParentElement as _, Render, Role, ScrollStrategy, SharedString, Styled as _,
     Subscription, TestAppContext, Window, div,
 };
@@ -594,6 +595,26 @@ fn stops_at_the_first_and_the_last_row(cx: &mut TestAppContext) {
     history.press("down", cx);
     assert_eq!(history.selected(cx).as_deref(), Some("a1"));
     history.press("home", cx);
+    assert_eq!(history.selected(cx).as_deref(), Some("e5"));
+}
+
+#[gpui_kit::test]
+fn moves_the_selection_with_the_actions_its_keys_are_bound_to(cx: &mut TestAppContext) {
+    let history = render(cx, Start::default());
+    history.focus(cx);
+    let dispatch = |action: Box<dyn Action>, cx: &mut TestAppContext| {
+        cx.update_window(history.window, |_, window, cx| {
+            window.dispatch_action(action, cx)
+        })
+        .unwrap();
+        cx.run_until_parked();
+    };
+
+    dispatch(Box::new(SelectLast), cx);
+    assert_eq!(history.selected(cx).as_deref(), Some("a1"));
+    dispatch(Box::new(SelectUp), cx);
+    assert_eq!(history.selected(cx).as_deref(), Some("b2"));
+    dispatch(Box::new(SelectFirst), cx);
     assert_eq!(history.selected(cx).as_deref(), Some("e5"));
 }
 
