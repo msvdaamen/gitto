@@ -367,10 +367,13 @@ mod tests {
             fs::create_dir(root_dir.join("new")).unwrap();
             let folder = root_dir.join("new");
             wait_for(Duration::from_secs(5), || lock(&seen).contains(&folder)).await;
-            async_io::Timer::after(Duration::from_millis(200)).await;
-            fs::write(root_dir.join("new").join("b"), "x").unwrap();
+            // Watched once another thread got to it: written again until it's seen.
             let file = root_dir.join("new").join("b");
-            wait_for(Duration::from_secs(5), || lock(&seen).contains(&file)).await;
+            wait_for(Duration::from_secs(5), || {
+                fs::write(&file, "x").unwrap();
+                lock(&seen).contains(&file)
+            })
+            .await;
 
             subscription.unsubscribe().await;
             assert!(

@@ -674,10 +674,20 @@ mod tests {
         }
     }
 
-    /// Runs `change` once the watcher has had time to start; it only sees what happens after that.
-    async fn soon(change: impl FnOnce()) {
-        Timer::after(Duration::from_millis(200)).await;
-        change();
+    /// The working tree's changes, once it's watched: it only sees what happens after that.
+    async fn watched_tree(repo: &Repo) -> Watching<Result<()>> {
+        let probe = Probe::new();
+        let changes = watching(watch_working_tree_with(repo.clone(), probe.subscribe()));
+        probe.subscribed(1).await;
+        changes
+    }
+
+    /// The git directory's changes, once it's watched: it only sees what happens after that.
+    async fn watched_git_dir(repo: &Repo) -> Watching<Result<Vec<GitDirChange>>> {
+        let probe = Probe::new();
+        let changes = watching(watch_git_dir_with(repo.clone(), probe.subscribe()));
+        probe.subscribed(1).await;
+        changes
     }
 
     fn write(path: impl AsRef<Path>, contents: &str) {
@@ -698,11 +708,10 @@ mod tests {
         let path = fx.create_repo("watched");
         smol::block_on(async {
             let repo = fx.repos.open("watched").await.unwrap();
-            let changes = watching(watch_working_tree(&repo));
+            let changes = watched_tree(&repo).await;
 
-            let (next, ()) =
-                futures::join!(changes.next(), soon(|| write(path.join("file.txt"), "x")));
-            assert!(is_change(next));
+            write(path.join("file.txt"), "x");
+            assert!(is_change(changes.next().await));
 
             assert!(changes.abort().await);
         });
@@ -714,11 +723,10 @@ mod tests {
         let path = fx.create_repo("watched-git-dir");
         smol::block_on(async {
             let repo = fx.repos.open("watched-git-dir").await.unwrap();
-            let changes = watching(watch_working_tree(&repo));
+            let changes = watched_tree(&repo).await;
 
-            let (next, ()) =
-                futures::join!(changes.next(), soon(|| write(path.join("file.txt"), "x")));
-            assert!(is_change(next));
+            write(path.join("file.txt"), "x");
+            assert!(is_change(changes.next().await));
 
             git(&path, ["add", "file.txt"]);
             assert!(changes.quiet().await);
@@ -733,11 +741,10 @@ mod tests {
         fs::create_dir(path.join("build")).unwrap();
         smol::block_on(async {
             let repo = fx.repos.open("watched-tree").await.unwrap();
-            let changes = watching(watch_working_tree(&repo));
+            let changes = watched_tree(&repo).await;
 
-            let (next, ()) =
-                futures::join!(changes.next(), soon(|| write(path.join("file.txt"), "x")));
-            assert!(is_change(next));
+            write(path.join("file.txt"), "x");
+            assert!(is_change(changes.next().await));
 
             // Ignored.
             write(path.join("build").join("out.txt"), "x");
@@ -758,11 +765,10 @@ mod tests {
         write(path.join(".gitignore"), "dist/\n*.log\n");
         smol::block_on(async {
             let repo = fx.repos.open("watched-new-ignored").await.unwrap();
-            let changes = watching(watch_working_tree(&repo));
+            let changes = watched_tree(&repo).await;
 
-            let (next, ()) =
-                futures::join!(changes.next(), soon(|| write(path.join("file.txt"), "x")));
-            assert!(is_change(next));
+            write(path.join("file.txt"), "x");
+            assert!(is_change(changes.next().await));
 
             // Like a build: a new ignored folder, written to repeatedly. Left out once it's seen,
             // which reports nothing: the tree is watched all the while it starts over.
@@ -787,11 +793,10 @@ mod tests {
         write(path.join(".gitignore"), "dist/\n");
         smol::block_on(async {
             let repo = fx.repos.open("watched-new-ignored-empty").await.unwrap();
-            let changes = watching(watch_working_tree(&repo));
+            let changes = watched_tree(&repo).await;
 
-            let (next, ()) =
-                futures::join!(changes.next(), soon(|| write(path.join("file.txt"), "x")));
-            assert!(is_change(next));
+            write(path.join("file.txt"), "x");
+            assert!(is_change(changes.next().await));
 
             // As on Linux, where a file written right after its folder is often missed: only the
             // folder is reported. Left out from then on all the same.
@@ -811,14 +816,11 @@ mod tests {
         write(path.join("docs").join(".DS_Store"), "x");
         smol::block_on(async {
             let repo = fx.repos.open("watched-only-ignored").await.unwrap();
-            let changes = watching(watch_working_tree(&repo));
+            let changes = watched_tree(&repo).await;
 
             // There from the start: no rule ignores the folder, only what's in it so far.
-            let (next, ()) = futures::join!(
-                changes.next(),
-                soon(|| write(path.join("docs").join("plan.md"), "x"))
-            );
-            assert!(is_change(next));
+            write(path.join("docs").join("plan.md"), "x");
+            assert!(is_change(changes.next().await));
 
             // New, with an ignored file first: still watched after that's dropped.
             fs::create_dir(path.join("notes")).unwrap();
@@ -915,11 +917,10 @@ mod tests {
         fs::create_dir(path.join("src")).unwrap();
         smol::block_on(async {
             let repo = fx.repos.open("watched-rules").await.unwrap();
-            let changes = watching(watch_working_tree(&repo));
+            let changes = watched_tree(&repo).await;
 
-            let (next, ()) =
-                futures::join!(changes.next(), soon(|| write(path.join("file.txt"), "x")));
-            assert!(is_change(next));
+            write(path.join("file.txt"), "x");
+            assert!(is_change(changes.next().await));
 
             // `build` is no longer ignored, `src` now is.
             write(path.join(".gitignore"), "src/\n");
@@ -945,16 +946,11 @@ mod tests {
         let path = fx.create_repo("watched-refs");
         smol::block_on(async {
             let repo = fx.repos.open("watched-refs").await.unwrap();
-            let changes = watching(watch_git_dir(&repo));
+            let changes = watched_git_dir(&repo).await;
 
-            let (next, ()) = futures::join!(
-                changes.next(),
-                soon(|| {
-                    write(path.join("file.txt"), "x");
-                    git(&path, ["add", "file.txt"]);
-                })
-            );
-            assert_eq!(changed(next), [Index]);
+            write(path.join("file.txt"), "x");
+            git(&path, ["add", "file.txt"]);
+            assert_eq!(changed(changes.next().await), [Index]);
 
             git(&path, ["commit", "-q", "-m", "First"]);
             assert!(changed(changes.next().await).contains(&Refs));
@@ -975,13 +971,12 @@ mod tests {
         let path = fx.create_repo("watched-both");
         smol::block_on(async {
             let repo = fx.repos.open("watched-both").await.unwrap();
-            let changes = watching(watch_git_dir(&repo));
+            let changes = watched_git_dir(&repo).await;
 
             // Like the UI does when the window gets and loses focus.
-            let tree = watching(watch_working_tree(&repo));
-            let (next, ()) =
-                futures::join!(tree.next(), soon(|| write(path.join("file.txt"), "x")));
-            assert!(is_change(next));
+            let tree = watched_tree(&repo).await;
+            write(path.join("file.txt"), "x");
+            assert!(is_change(tree.next().await));
             assert!(tree.abort().await);
 
             git(&path, ["add", "file.txt"]);
@@ -1004,8 +999,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("watched-index").await.unwrap();
             get_status(&repo).await.unwrap();
-            let changes = watching(watch_git_dir(&repo));
-            Timer::after(Duration::from_millis(200)).await;
+            let changes = watched_git_dir(&repo).await;
 
             // Another tool's `git status` refreshes the index after a file was touched: nothing
             // changed.
@@ -1043,13 +1037,10 @@ mod tests {
         fs::create_dir(path.join(".git").join("reftable")).unwrap();
         smol::block_on(async {
             let repo = fx.repos.open("watched-reftable").await.unwrap();
-            let changes = watching(watch_git_dir(&repo));
+            let changes = watched_git_dir(&repo).await;
 
-            let (next, ()) = futures::join!(
-                changes.next(),
-                soon(|| write(path.join(".git").join("reftable").join("tables.list"), "x"))
-            );
-            assert_eq!(changed(next), [Refs]);
+            write(path.join(".git").join("reftable").join("tables.list"), "x");
+            assert_eq!(changed(changes.next().await), [Refs]);
         });
     }
 
@@ -1094,16 +1085,11 @@ mod tests {
         fx.add_path("watched-linked", &linked);
         smol::block_on(async {
             let repo = fx.repos.open("watched-linked").await.unwrap();
-            let changes = watching(watch_git_dir(&repo));
+            let changes = watched_git_dir(&repo).await;
 
-            let (next, ()) = futures::join!(
-                changes.next(),
-                soon(|| {
-                    write(linked.join("file.txt"), "x");
-                    git(&linked, ["add", "file.txt"]);
-                })
-            );
-            assert_eq!(changed(next), [Index]);
+            write(linked.join("file.txt"), "x");
+            git(&linked, ["add", "file.txt"]);
+            assert_eq!(changed(changes.next().await), [Index]);
 
             // The main worktree's index isn't this one's.
             write(main.join("other.txt"), "x");
