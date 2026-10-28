@@ -52,16 +52,6 @@ impl StashButtons {
         &self.repository_id
     }
 
-    /// Shows another repository's.
-    pub fn set_repository(&mut self, repository_id: RepositoryId, cx: &mut Context<Self>) {
-        if self.repository_id != repository_id {
-            self.status = status_query(&repository_id, cx);
-            self.stashes = stashes_query(&repository_id, cx);
-            self.repository_id = repository_id;
-            cx.notify();
-        }
-    }
-
     /// Stash, as it is now. Until the status has loaded, it's disabled.
     pub fn stash_button(&self, cx: &App) -> ToolbarButton {
         let id = self.repository_id.clone();

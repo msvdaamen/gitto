@@ -3,9 +3,10 @@
 
 use gitto_git::input::RepositoryId;
 use gpui_kit::prelude::*;
-use gpui_kit::{Context, Window, div};
+use gpui_kit::{Context, Entity, Window, div};
 
 use crate::components::placeholder::Placeholder;
+use crate::components::repository::branch_menu::BranchMenuProvider;
 use crate::theme::PaletteExt as _;
 
 /// The repository's local branches, remotes, tags, stashes and worktrees, in collapsible
@@ -16,13 +17,21 @@ use crate::theme::PaletteExt as _;
 /// Stub: renders a placeholder.
 pub struct RefsSidebar {
     repository_id: RepositoryId,
+    /// What its branches' menus are built from (see `branch_menu`); the stub has none.
+    _branch_menu: Entity<BranchMenuProvider>,
     open: bool,
 }
 
 impl RefsSidebar {
-    pub fn new(repository_id: RepositoryId, _: &mut Window, _: &mut Context<Self>) -> Self {
+    pub fn new(
+        repository_id: RepositoryId,
+        branch_menu: Entity<BranchMenuProvider>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Self {
         RefsSidebar {
             repository_id,
+            _branch_menu: branch_menu,
             open: true,
         }
     }
