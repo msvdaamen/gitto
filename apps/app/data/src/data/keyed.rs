@@ -103,6 +103,13 @@ impl<K: Clone + Eq + Hash, T> Keyed<K, T> {
             .collect()
     }
 
+    /// Drops the entries nothing holds or loads: for a repository that's gone off show, which
+    /// needn't keep them till it's shown again.
+    pub fn drop_unheld(&mut self) {
+        self.entries
+            .retain(|_, entry| entry.is_held() || entry.loaded.is_fetching());
+    }
+
     /// Sets `key`'s data, as if it had loaded it.
     pub fn set(&mut self, key: K, data: T)
     where
@@ -162,6 +169,16 @@ mod tests {
         drop(held);
         keyed.set("e", 5);
         assert!(keyed.get(&"a").is_none());
+    }
+
+    #[test]
+    fn drops_what_nothing_holds_or_loads() {
+        let mut keyed = Keyed::<&str, i32>::new(8);
+        let _held = keyed.hold("a");
+        keyed.set("b", 2);
+        keyed.drop_unheld();
+        assert!(keyed.get(&"a").is_some());
+        assert!(keyed.get(&"b").is_none());
     }
 
     #[test]

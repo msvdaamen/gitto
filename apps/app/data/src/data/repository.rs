@@ -504,6 +504,19 @@ impl Repository {
         drop(self.conflicts.held_and_drop_rest(|_| true));
     }
 
+    /// Drops what's kept by a key that nothing shows, as the repository went off show (see
+    /// `RepositoryWatcher`): each repository opened kept some of each, for the rest of the
+    /// session. What's shown again is loaded again.
+    pub fn went_off_show(&mut self) {
+        self.pushed_to.drop_unheld();
+        self.patches.drop_unheld();
+        self.conflicts.drop_unheld();
+        self.blobs.drop_unheld();
+        self.commits.drop_unheld();
+        self.files.drop_unheld();
+        self.messages.drop_unheld();
+    }
+
     // Loading more of the log.
 
     /// Whether more of the log is loading.

@@ -259,6 +259,18 @@ fn doesnt_refetch_what_was_loaded_while_switching_to_the_repository(cx: &mut Tes
 }
 
 #[gpui_kit::test]
+fn drops_what_nothing_shows_once_its_no_longer_watched(cx: &mut TestAppContext) {
+    let mut watched = watch(true, cx);
+    let repository = cx.update(|cx| Repositories::get(repository_id().as_str(), cx).unwrap());
+    let sha = "a".repeat(40);
+    repository.update(cx, |repository, cx| {
+        repository.set_message(&sha, "Kept a while".into(), cx)
+    });
+    watched.cleanup(cx);
+    assert!(repository.read_with(cx, |repository, _| repository.message(&sha).is_none()));
+}
+
+#[gpui_kit::test]
 fn doesnt_open_again_a_repository_removed_while_it_was_watched(cx: &mut TestAppContext) {
     let mut watched = watch(true, cx);
     cx.update(|cx| Repositories::close(repository_id().as_str(), cx));
