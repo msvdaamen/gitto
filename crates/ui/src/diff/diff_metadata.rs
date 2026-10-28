@@ -22,6 +22,16 @@ pub enum Side {
     Additions,
 }
 
+impl fmt::Display for Side {
+    /// The file it is, as messages name it: the old one or the new one.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Side::Deletions => "old",
+            Side::Additions => "new",
+        })
+    }
+}
+
 /// How a file changed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChangeType {
@@ -387,6 +397,24 @@ pub fn diff_from_files(
         .expect("a patch with a file's headers")
 }
 
+/// Why a diff couldn't be filled in with its files (see [`hydrate`]): it was asked of one that
+/// can't be, or without the files it needs, which is the caller's mistake, not the files'.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum HydrateError {
+    /// It has the whole files already.
+    #[error("The diff has its whole files already.")]
+    NotPartial,
+    /// It needs the file on this side, which wasn't given.
+    #[error("Filling in the diff needs its {0} file.")]
+    MissingSide(Side),
+    /// A file only moved is filled in with its new side alone.
+    #[error("A moved file's diff is filled in with its new file alone.")]
+    OldSideOfMove,
+    /// An added or deleted file's patch has all of it already.
+    #[error("An added or deleted file's diff has all its lines already.")]
+    WholeFile,
+}
+
 /// `diff`, a partial one, filled in with both files whole (`hydratePartialDiff`): its sides are
 /// the files' lines, and its hunks index into them. Only a change, or a move, can be: an added or
 /// deleted file's patch has all of it already.
@@ -394,15 +422,15 @@ pub fn hydrate(
     diff: &FileDiff,
     old: Option<LoadedSide<'_>>,
     new: Option<LoadedSide<'_>>,
-) -> Result<FileDiff, String> {
+) -> Result<FileDiff, HydrateError> {
     if !diff.is_partial {
-        return Err("hydratePartialDiff: fileDiff must be partial".to_owned());
+        return Err(HydrateError::NotPartial);
     }
     let mut hydrated = diff.clone();
     match diff.kind {
         ChangeType::Change | ChangeType::RenameChanged => {
-            let old = required(diff, old, "oldFile")?;
-            let new = required(diff, new, "newFile")?;
+            let old = old.ok_or(HydrateError::MissingSide(Side::Deletions))?;
+            let new = new.ok_or(HydrateError::MissingSide(Side::Additions))?;
             let deletions = Lines::of(old.contents);
             let additions = Lines::of(new.contents);
             hydrated.hunks = hydrate_hunks(&diff.hunks);
@@ -413,13 +441,9 @@ pub fn hydrate(
             Ok(hydrated)
         }
         ChangeType::RenamePure => {
-            let new = required(diff, new, "newFile")?;
+            let new = new.ok_or(HydrateError::MissingSide(Side::Additions))?;
             if old.is_some() {
-                return Err(format!(
-                    "hydratePartialDiff: {} diff for {} requires oldFile to be null",
-                    diff.kind.as_str(),
-                    diff.name
-                ));
+                return Err(HydrateError::OldSideOfMove);
             }
             let lines = Arc::new(Lines::of(new.contents));
             hydrated.deletion_lines = Arc::clone(&lines);
@@ -428,26 +452,8 @@ pub fn hydrate(
             hydrated.cache_key = hydrated_cache_key(diff, None, Some(new));
             Ok(hydrated)
         }
-        ChangeType::New | ChangeType::Deleted => Err(format!(
-            "hydratePartialDiff: {} diffs cannot be hydrated from loaded files",
-            diff.kind.as_str()
-        )),
+        ChangeType::New | ChangeType::Deleted => Err(HydrateError::WholeFile),
     }
-}
-
-/// `file`, which hydrating `diff` needs.
-fn required<'a>(
-    diff: &FileDiff,
-    file: Option<LoadedSide<'a>>,
-    which: &str,
-) -> Result<LoadedSide<'a>, String> {
-    file.ok_or_else(|| {
-        format!(
-            "hydratePartialDiff: {} diff for {} requires {which}",
-            diff.kind.as_str(),
-            diff.name
-        )
-    })
 }
 
 fn hydrated_cache_key(
@@ -1122,7 +1128,10 @@ mod tests {
         assert_eq!(hydrated.deletion_lines.len(), 3);
         assert_eq!(hydrated.hunks[0].deletion_line_index, 1);
         assert_eq!(hydrated.cache_key.as_deref(), Some("test:0:hydrated"));
-        assert!(hydrate(&hydrated, None, None).is_err());
+        assert_eq!(
+            hydrate(&hydrated, None, None),
+            Err(HydrateError::NotPartial)
+        );
     }
 
     #[test]

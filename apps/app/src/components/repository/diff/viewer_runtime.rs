@@ -65,17 +65,38 @@ impl LoadedFile {
     }
 }
 
+/// Why a patch couldn't be shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum PatchError {
+    #[error("The patch has no file in it.")]
+    NoFile,
+}
+
+/// Why the file on show couldn't be read whole into its diff, to show the lines around its
+/// changes: it couldn't be read, or it isn't the file the patch is of any more (see [`FitError`]),
+/// both said to the user as they are; or it was asked of a diff that can't be filled in, which is
+/// the viewer's mistake ([`HydrateError`]).
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum LoadFilesError {
+    #[error("The patch doesn't name its files.")]
+    Unnamed,
+    #[error("{}", .0.message())]
+    Read(QueryError),
+    #[error(transparent)]
+    Fit(#[from] FitError),
+    #[error(transparent)]
+    Hydrate(#[from] HydrateError),
+}
+
 /// Reads one side of the file on show in full, by the object name the patch has for it.
 pub type LoadFile = Rc<dyn Fn(Side, &str, &mut App) -> Task<Result<LoadedFile, QueryError>>>;
 
 /// The one file in `patch` (`parsePatch`). A file that changed type, e.g. from a symbolic link, is
 /// a deletion and an addition to git, each with the whole of its side: shown as one change, from
 /// the one's contents to the other's.
-pub fn parse_patch(patch: &str, cache_key: &str) -> Result<FileDiff, String> {
+pub fn parse_patch(patch: &str, cache_key: &str) -> Result<FileDiff, PatchError> {
     let mut files = parse_patch_files(patch, Some(cache_key)).into_iter();
-    let file = files
-        .next()
-        .ok_or_else(|| "The patch has no file in it.".to_owned())?;
+    let file = files.next().ok_or(PatchError::NoFile)?;
     if let Some(other) = files.next()
         && file.kind == ChangeType::Deleted
         && other.kind == ChangeType::New
@@ -150,7 +171,7 @@ impl ParsedPatches {
     }
 
     /// [`parse_patch`], of a patch that may have been parsed lately (`parsed`).
-    pub fn parsed(&mut self, patch: &Arc<str>, key: &str) -> Result<Arc<FileDiff>, String> {
+    pub fn parsed(&mut self, patch: &Arc<str>, key: &str) -> Result<Arc<FileDiff>, PatchError> {
         if let Some(diff) = self.get(patch, key) {
             return Ok(diff);
         }
@@ -184,7 +205,7 @@ impl ViewerRuntime {
         patch: Arc<str>,
         key: String,
         cx: &mut App,
-    ) -> Task<Result<Arc<FileDiff>, String>> {
+    ) -> Task<Result<Arc<FileDiff>, PatchError>> {
         if let Some(diff) = Self::global(cx).parsed.get(&patch, &key) {
             return Task::ready(Ok(diff));
         }
@@ -258,7 +279,11 @@ pub fn highlighted(diff: &Arc<FileDiff>, wait: Duration, cx: &mut App) -> Task<(
 
 /// Parses and highlights a patch ahead of showing it, with the same `cache_key`, so it shows at
 /// once (`preparePatch`). Fails if it can't be parsed.
-pub fn prepare_patch(patch: Arc<str>, cache_key: String, cx: &mut App) -> Task<Result<(), String>> {
+pub fn prepare_patch(
+    patch: Arc<str>,
+    cache_key: String,
+    cx: &mut App,
+) -> Task<Result<(), PatchError>> {
     let parsing = ViewerRuntime::parse(patch, cache_key, cx);
     cx.spawn(async move |cx| {
         let diff = parsing.await?;
@@ -332,15 +357,15 @@ pub fn load_files(
     diff: Arc<FileDiff>,
     load_file: &LoadFile,
     cx: &mut App,
-) -> Task<Result<LoadedFiles, String>> {
+) -> Task<Result<LoadedFiles, LoadFilesError>> {
     let (Some(prev), Some(new)) = (diff.prev_object_id.clone(), diff.new_object_id.clone()) else {
-        return Task::ready(Err("The patch doesn't name its files.".to_owned()));
+        return Task::ready(Err(LoadFilesError::Unnamed));
     };
     let old_file = load_file(Side::Deletions, &prev, cx);
     let new_file = load_file(Side::Additions, &new, cx);
     cx.spawn(async move |cx| {
-        let old = old_file.await.map_err(|error| error.message())?;
-        let read = new_file.await.map_err(|error| error.message())?;
+        let old = old_file.await.map_err(LoadFilesError::Read)?;
+        let read = new_file.await.map_err(LoadFilesError::Read)?;
         let version = read.version().map(str::to_owned);
         let hydrated = cx
             .background_spawn(async move {
@@ -361,12 +386,9 @@ pub fn load_files(
                     }),
                 )?;
                 if !has_matching_ends(&hydrated) {
-                    return Err(
-                        "The file has changed since its changes were loaded. Try again in a moment."
-                            .to_owned(),
-                    );
+                    return Err(FitError::Changed.into());
                 }
-                Ok(Arc::new(hydrated))
+                Ok::<_, LoadFilesError>(Arc::new(hydrated))
             })
             .await?;
         // Highlighted before it's handed over (see `EXPAND_HIGHLIGHT_WAIT`).
@@ -437,10 +459,7 @@ mod tests {
 
     #[test]
     fn says_a_patch_without_a_file_has_none() {
-        assert_eq!(
-            parse_patch("", "empty").unwrap_err(),
-            "The patch has no file in it."
-        );
+        assert_eq!(parse_patch("", "empty").unwrap_err(), PatchError::NoFile);
     }
 
     // parsed

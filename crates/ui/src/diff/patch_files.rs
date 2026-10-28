@@ -20,7 +20,7 @@ pub type Expanded = BTreeMap<usize, Expansion>;
 /// where the patch has it. A file in the working tree can have changed since its patch was read,
 /// and one with CRLF line ends throughout is compared with LF ones (git's `core.autocrlf`), which
 /// the contents are changed to then (see `as_lf`). Fails if they aren't.
-pub fn fit_to_patch(diff: &FileDiff, side: Side, contents: &str) -> Result<String, String> {
+pub fn fit_to_patch(diff: &FileDiff, side: Side, contents: &str) -> Result<String, FitError> {
     if has_patch_lines(diff, side, contents) {
         return Ok(contents.to_owned());
     }
@@ -51,18 +51,30 @@ fn has_bare_lf(contents: &str) -> bool {
         .any(|(ix, byte)| *byte == b'\n' && (ix == 0 || bytes[ix - 1] != b'\r'))
 }
 
-fn changed_error(contents: &str) -> String {
+/// Why a file read whole couldn't be fitted to its patch: what's on disk isn't what the patch is
+/// of. Said to the user as it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum FitError {
+    /// The file changed since its patch was read.
+    #[error("The file has changed since its changes were loaded. Try again in a moment.")]
+    Changed,
+    /// Its line ends are mixed, which git's patch has as all LF.
+    #[error("This file mixes CRLF and LF line ends, which git shows as all LF here.")]
+    MixedLineEnds,
+}
+
+fn changed_error(contents: &str) -> FitError {
     if contents.contains("\r\n") && has_bare_lf(contents) {
-        "This file mixes CRLF and LF line ends, which git shows as all LF here.".to_owned()
+        FitError::MixedLineEnds
     } else {
-        "The file has changed since its changes were loaded. Try again in a moment.".to_owned()
+        FitError::Changed
     }
 }
 
 /// `contents`, if they're all of `lines`, the new side of a patch that has the whole file (an
 /// added one), with LF line ends for CRLF ones as [`fit_to_patch`] takes them. Fails if they
 /// aren't.
-pub fn fit_to_lines(lines: &Lines, contents: &str) -> Result<String, String> {
+pub fn fit_to_lines(lines: &Lines, contents: &str) -> Result<String, FitError> {
     let whole = lines.text();
     if contents == whole {
         return Ok(contents.to_owned());
@@ -328,9 +340,10 @@ mod tests {
     fn refuses_a_file_that_has_changed_since() {
         let diff = changed10();
         let error = fit_to_patch(&diff, Side::Additions, &lines(40, &[(10, "TEN")])).unwrap_err();
-        assert!(error.contains("has changed"), "{error}");
+        assert_eq!(error, FitError::Changed);
+        assert!(error.to_string().contains("has changed"), "{error}");
         let error = fit_to_patch(&diff, Side::Additions, &lines(11, &[(10, "ten")])).unwrap_err();
-        assert!(error.contains("has changed"), "{error}");
+        assert_eq!(error, FitError::Changed);
     }
 
     #[test]
@@ -348,7 +361,8 @@ mod tests {
         let crlf = lines(40, &[(10, "ten")]).replace('\n', "\r\n");
         let mixed = format!("{}\n", crlf.strip_suffix("\r\n").unwrap());
         let error = fit_to_patch(&changed10(), Side::Additions, &mixed).unwrap_err();
-        assert!(error.contains("mixes CRLF and LF"), "{error}");
+        assert_eq!(error, FitError::MixedLineEnds);
+        assert!(error.to_string().contains("mixes CRLF and LF"), "{error}");
     }
 
     // fitToLines
@@ -365,11 +379,7 @@ mod tests {
         assert_eq!(fit_to_lines(&ended, "a\r\nb\r\n").unwrap(), "a\nb\n");
         let mut one = Lines::new();
         one.push("a\n");
-        assert!(
-            fit_to_lines(&one, "a\nmore\n")
-                .unwrap_err()
-                .contains("has changed")
-        );
+        assert_eq!(fit_to_lines(&one, "a\nmore\n"), Err(FitError::Changed));
     }
 
     // hasMatchingEnds

@@ -275,12 +275,12 @@ impl PatchViewer {
         self.showing = Some(cx.spawn(async move |this, cx| {
             let diff = match parsing.await {
                 Ok(diff) => diff,
-                Err(message) => {
+                Err(error) => {
                     let _ = this.update(cx, |this, cx| {
                         if this.next.as_ref() == Some(&next) {
                             cx.emit(PatchViewerEvent::Failed {
                                 file_key: next.file_key.clone(),
-                                message,
+                                message: error.to_string(),
                             });
                         }
                     });
@@ -511,8 +511,8 @@ impl PatchViewer {
                             this.watch_highlights(cx);
                         }
                     }
-                    Err(message) => {
-                        this.failures.push((Arc::clone(&diff), message));
+                    Err(error) => {
+                        this.failures.push((Arc::clone(&diff), error.to_string()));
                         this.relayout();
                     }
                 }
