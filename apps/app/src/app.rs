@@ -72,7 +72,7 @@ fn start_services() -> anyhow::Result<Services> {
 pub fn init(services: Services, route: Route, cx: &mut App) {
     let storage = services.storage().clone();
     cx.set_global(services);
-    crate::theme::init(Some(storage), cx);
+    crate::theme::init(Some(storage.clone()), cx);
     crate::data::init(cx);
     crate::state::init(cx);
     Router::init(route, cx);
@@ -80,6 +80,15 @@ pub fn init(services: Services, route: Route, cx: &mut App) {
     crate::components::tabs::bind_keys(cx);
     crate::components::ui::resize_handle::bind_keys(cx);
     cx.on_action(|_: &Quit, cx| cx.quit());
+    // What the UI remembers is saved off the UI thread: what's still being saved is, before
+    // Gitto goes.
+    cx.on_app_quit(move |_| {
+        if let Err(error) = storage.flush() {
+            log::error!("Couldn't save what the UI remembers: {error}");
+        }
+        async {}
+    })
+    .detach();
 }
 
 /// Opens Gitto's window, centered.
