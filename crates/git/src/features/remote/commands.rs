@@ -3,13 +3,11 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
 
-use futures::FutureExt;
-
 use super::blockers::{Action, no_upstream};
 use super::config::{PullFf, PullRebase, RemoteConfig, read_config};
 use super::progress::{in_progress, interruption, progress, why_detached};
 use crate::core::errors::{Error, GitError, GitErrorKind, Result};
-use crate::core::git_dirs::{GitDirs, git_dirs};
+use crate::core::git_dirs::git_dirs;
 use crate::core::repo::{GitCommand, Repo, current_branch, ref_exists, resolve_ref, succeeds};
 use crate::core::runner::{RunOptions, spawn_detached};
 use crate::features::branch::in_use::branches_in_use;
@@ -84,13 +82,17 @@ fn git_fetch(
 /// waits for (and holds up) the other writes to the repository: the fetch takes as long as the
 /// network.
 pub async fn pull(repo: &Repo) -> Result<()> {
-    // Where git keeps FETCH_HEAD and the state of a rebase; asked for once, alongside the branch.
-    // Taken only once the branch is read, which can fail first: that's the error to report.
-    let dirs = git_dirs(repo).boxed().shared();
+    // Where git keeps FETCH_HEAD and the state of a rebase, asked for alongside the branch. The
+    // branch is read first, which can fail first: that's the error to report.
     let run = repo.git();
-    let (read, dirs) = futures::join!(read_branch(&run, dirs.clone()), dirs);
-    let (branch, upstream, settings) = read?;
+    let (read, dirs) = futures::join!(read_branch(&run), git_dirs(repo));
+    let read = read?;
     let git_dir = dirs?.git_dir;
+    let Some((branch, upstream, settings)) = read else {
+        return Err(Error::NoUpstream(
+            why_detached(&git_dir, Action::Pull).await,
+        ));
+    };
     // Its merge commit is worded unless the pull will rebase, or only fast-forward, which makes
     // none (as the settings say before fetching).
     let word = settings.branch(&branch).makes_merge_commit();
@@ -281,21 +283,15 @@ struct Upstream {
     tracking: Option<String>,
 }
 
-/// The checked-out branch, the upstream it pulls from, and the settings; fails if there isn't
-/// one. `dirs` is only waited for with HEAD detached.
-async fn read_branch(
-    run: &GitCommand,
-    dirs: impl Future<Output = Result<GitDirs>>,
-) -> Result<(String, Upstream, RemoteConfig)> {
+/// The checked-out branch, the upstream it pulls from, and the settings; `None` with HEAD
+/// detached. Fails if the branch has no upstream.
+async fn read_branch(run: &GitCommand) -> Result<Option<(String, Upstream, RemoteConfig)>> {
     let (branch, config) = futures::try_join!(current_branch(run), read_config(run))?;
     let Some(branch) = branch else {
-        let git_dir = dirs.await?.git_dir;
-        return Err(Error::NoUpstream(
-            why_detached(&git_dir, Action::Pull).await,
-        ));
+        return Ok(None);
     };
     let upstream = read_upstream(run, &branch, &config).await?;
-    Ok((branch, upstream, config))
+    Ok(Some((branch, upstream, config)))
 }
 
 /// The upstream `branch` pulls from, as `config` has it; fails if there isn't one.
