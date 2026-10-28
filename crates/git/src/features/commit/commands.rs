@@ -258,7 +258,7 @@ mod tests {
                     kind: CommitRefKind::Local,
                     name: "main".into(),
                     full_name: "refs/heads/main".into(),
-                    current: Some(true),
+                    current: true,
                 }]
             );
         });

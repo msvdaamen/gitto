@@ -75,7 +75,7 @@ fn parse_decorations(decorations: &str) -> Vec<CommitRef> {
                     kind: CommitRefKind::Head,
                     name: "HEAD".to_owned(),
                     full_name: "HEAD".to_owned(),
-                    current: None,
+                    current: false,
                 });
             }
             let checked_out = decoration.strip_prefix("HEAD -> ");
@@ -87,7 +87,7 @@ fn parse_decorations(decorations: &str) -> Vec<CommitRef> {
                 kind: parsed.kind.into(),
                 name: parsed.name,
                 full_name: full_name.to_owned(),
-                current: checked_out.map(|_| true),
+                current: checked_out.is_some(),
             })
         })
         .collect()
@@ -102,7 +102,7 @@ mod tests {
             kind,
             name: name.to_owned(),
             full_name: full_name.to_owned(),
-            current: current.then_some(true),
+            current,
         }
     }
 
@@ -228,6 +228,11 @@ mod tests {
                 { "kind": "local", "name": "main", "fullName": "refs/heads/main", "current": true },
                 { "kind": "local", "name": "side", "fullName": "refs/heads/side" },
             ])
+        );
+        // And read back as it was.
+        assert_eq!(
+            serde_json::from_value::<Vec<CommitRef>>(json).unwrap(),
+            refs
         );
     }
 }

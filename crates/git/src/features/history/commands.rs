@@ -257,13 +257,13 @@ mod tests {
                         kind: CommitRefKind::Local,
                         name: "main".into(),
                         full_name: "refs/heads/main".into(),
-                        current: Some(true),
+                        current: true,
                     },
                     CommitRef {
                         kind: CommitRefKind::Tag,
                         name: "v1".into(),
                         full_name: "refs/tags/v1".into(),
-                        current: None,
+                        current: false,
                     },
                 ]
             );
