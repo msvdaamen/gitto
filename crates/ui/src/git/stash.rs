@@ -35,10 +35,13 @@ pub fn stash_title(head: &Head, counts: &StatusCounts) -> String {
     }
 }
 
+/// Why there's no stash to pop.
+const NO_STASHES: &str = "No stashes to pop.";
+
 /// Why the newest stash can't be popped, if it can't.
 pub fn pop_blocker(counts: &StatusCounts, stashes: &[Stash]) -> Option<&'static str> {
     if stashes.is_empty() {
-        return Some("No stashes to pop.");
+        return Some(NO_STASHES);
     }
     // Git won't pop over them.
     if counts.conflicted > 0 {
@@ -54,10 +57,13 @@ pub fn can_pop(counts: &StatusCounts, stashes: &[Stash]) -> bool {
 
 /// Which stash popping would put back, or why it can't.
 pub fn pop_title(counts: &StatusCounts, stashes: &[Stash]) -> String {
-    match pop_blocker(counts, stashes) {
-        Some(blocker) => blocker.to_owned(),
-        None => format!("Pop \"{}\"", stashes[0].message),
+    if let Some(blocker) = pop_blocker(counts, stashes) {
+        return blocker.to_owned();
     }
+    let Some(newest) = stashes.first() else {
+        return NO_STASHES.to_owned();
+    };
+    format!("Pop \"{}\"", newest.message)
 }
 
 #[cfg(test)]
