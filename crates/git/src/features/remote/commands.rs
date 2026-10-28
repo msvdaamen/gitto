@@ -10,6 +10,7 @@ use crate::core::errors::{Error, GitError, GitErrorKind, Result};
 use crate::core::git_dirs::git_dirs;
 use crate::core::repo::{GitCommand, Repo, current_branch, ref_exists, resolve_ref, succeeds};
 use crate::core::runner::{RunOptions, spawn_detached};
+use crate::core::trace::trace;
 use crate::features::branch::in_use::branches_in_use;
 
 /// The remotes, by name, as `run` lists them.
@@ -31,7 +32,8 @@ pub async fn fetch_all(repo: &Repo) -> Result<()> {
 
 /// Fetches `remotes` and prunes, as `fetch_all` does, once a pull has merged: not waited for, so
 /// a remote that's slow to answer doesn't hold up the pull, and one that can't be reached doesn't
-/// fail it (that's for the Fetch button to explain). The watcher picks up the branches it changes.
+/// fail it (that's for the Fetch button to explain; it's traced). The watcher picks up the
+/// branches it changes.
 fn fetch_after_pull(repo: &Repo, remotes: Vec<String>) {
     if remotes.is_empty() {
         return;
@@ -41,7 +43,9 @@ fn fetch_after_pull(repo: &Repo, remotes: Vec<String>) {
     // Queued (as fetches are) before the pull returns, so a fetch started after it waits for this.
     let fetch = git_fetch(&repo.fetcher(), &args, &[]);
     spawn_detached(async move {
-        let _ = fetch.await;
+        if let Err(error) = fetch.await {
+            trace(format_args!("fetch after pull failed: {error}"));
+        }
     });
 }
 
