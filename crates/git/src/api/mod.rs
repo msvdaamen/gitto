@@ -3,15 +3,15 @@
 //! each feature's `contract.ts` and `handler.ts`, and the error handling of
 //! `packages/rpc/src/server.ts`.
 //!
-//! The UI holds one [`GitApi`]. It opens a repository by its id with [`GitApi::open`], which
-//! first requires a git Gitto supports, as `withRepo` did, and then calls the features with the
-//! `Repo` directly: there's no method per procedure. A contract's input checks are the types the
+//! The UI holds one [`GitApi`]. It runs a feature in a repository by its id with
+//! [`GitApi::call`], which first requires a git Gitto supports, as `withRepo` did, and then hands
+//! the feature the `Repo`: there's no method per procedure. A contract's input checks are the types the
 //! features take (see [`crate::input`]), and most handlers only passed the input on. What the
 //! others did is here: [`pull`] picks the branch to pull, the watches open the repository and
 //! stream what changed ([`GitApi::watch_git_dir`], [`GitApi::watch_working_tree`]), and
-//! `status.get` is `get_status_since`. `version.check` is `features::version::check` with
-//! [`GitApi::version`]; `user.name` is `features::user::commands::get_user_name`, which needs
-//! neither a repository nor a supported git.
+//! `status.get` is `get_status_since`. `version.check` is [`GitApi::version`]'s `check`;
+//! `user.name` is [`get_user_name`](crate::get_user_name), which needs neither a repository nor a
+//! supported git.
 //!
 //! An error reaches the UI as an [`ApiError`], with the code, the message and whether it's a bug,
 //! as the renderer got it. [`GitApi::call`] does it all: opens the repository, runs what's asked
@@ -84,7 +84,10 @@ impl GitApi {
     /// `withRepo`): nothing runs with one it doesn't, as its commands would fail partway, or be
     /// misread, rather than say why. Fails with `Error::UnsupportedGit`, or as `GitRepos::open`
     /// does: `Error::RepositoryNotFound`, `Error::FolderNotFound`, `Error::RepositoryList`.
-    pub fn open(&self, id: &RepositoryId) -> impl Future<Output = Result<Repo>> + Send + use<> {
+    pub(crate) fn open(
+        &self,
+        id: &RepositoryId,
+    ) -> impl Future<Output = Result<Repo>> + Send + use<> {
         let repos = self.repos.clone();
         let version = Arc::clone(&self.version);
         let id = id.clone();

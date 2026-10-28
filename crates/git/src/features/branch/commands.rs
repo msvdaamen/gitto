@@ -1026,13 +1026,11 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("create-from-other-refs").await.unwrap();
 
-            // A tag is refused as the input's parsed: `from` is a `BranchRef`.
+            // A tag, or a link to the remote's default branch, is refused as the input's parsed:
+            // `from` is a `BranchRef`.
             assert!(BranchRef::parse("refs/tags/v1").is_err());
-            for from in [
-                "refs/heads/other~1",
-                "refs/heads/missing",
-                "refs/remotes/origin/HEAD",
-            ] {
+            assert!(BranchRef::parse("refs/remotes/origin/HEAD").is_err());
+            for from in ["refs/heads/other~1", "refs/heads/missing"] {
                 let error = create_branch(&repo, &valid("topic"), Some(&valid(from)))
                     .await
                     .unwrap_err();
