@@ -19,14 +19,17 @@ pub const MIGRATIONS: &[&str] = &[include_str!("../migrations/0001_repositories.
 /// by a newer Gitto: what it has could mean something else to this one.
 pub fn migrate(conn: &mut Connection, migrations: &[&str]) -> Result<()> {
     let applied: u32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    let known = migrations.len() as u32;
+    let known = u32::try_from(migrations.len()).unwrap_or(u32::MAX);
     if applied > known {
         return Err(Error::TooNew {
             version: applied,
             known,
         });
     }
-    for (version, sql) in (1..).zip(migrations).skip(applied as usize) {
+    for (version, sql) in (1..).zip(migrations) {
+        if version <= applied {
+            continue;
+        }
         let tx = conn.transaction()?;
         tx.execute_batch(sql)?;
         tx.pragma_update(None, "user_version", version)?;
