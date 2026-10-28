@@ -1,7 +1,6 @@
 //! **Stub.** A repository in the home page's list. Replaces
 //! `components/home/repository-card.tsx`.
 
-use gitto_git::input::RepositoryId;
 use gpui_kit::prelude::*;
 use gpui_kit::{App, SharedString, Window, div};
 
@@ -28,11 +27,7 @@ impl RenderOnce for RepositoryCard {
         div()
             .id(SharedString::from(format!("repository-card-{id}")))
             .h_20()
-            .on_click(move |_, _, cx| {
-                if let Ok(id) = RepositoryId::parse(id.clone()) {
-                    Router::navigate(Route::Repository(id), cx);
-                }
-            })
+            .on_click(move |_, _, cx| Router::navigate(Route::Repository(id.clone()), cx))
             .child(
                 Placeholder::new("Repository card", "components/home/repository-card.tsx")
                     .detail(self.summary.repository.name.clone()),

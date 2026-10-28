@@ -9,12 +9,12 @@ use std::rc::Rc;
 
 use futures::FutureExt as _;
 use futures::future::BoxFuture;
-use gitto_git::ApiError;
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::features::status::commands::get_status_since;
 use gitto_git::features::status::schema::{Head, StatusReply, StatusSummary, Uncommitted};
 use gitto_git::input::RepositoryId;
 use gitto_git::schema::FileStatus;
+use gitto_git::{ApiError, ContentVersion};
 use gpui_kit::{App, Context};
 
 use super::client::{QueryClient, QueryOptions};
@@ -26,15 +26,19 @@ use crate::services::Services;
 
 /// Asks for the status of a repository, given the version of the one the caller has, if any
 /// (`rpc.git.status.get`): the app's goes to git, tests' are made up.
-pub type GetStatus =
-    Rc<dyn Fn(RepositoryId, Option<String>) -> BoxFuture<'static, Result<StatusReply, ApiError>>>;
+pub type GetStatus = Rc<
+    dyn Fn(
+        RepositoryId,
+        Option<ContentVersion>,
+    ) -> BoxFuture<'static, Result<StatusReply, ApiError>>,
+>;
 
 /// Git's `status.get` (see [`GetStatus`]).
 pub fn git_status(cx: &App) -> GetStatus {
     let git = Services::global(cx).git().clone();
     Rc::new(move |id, since| {
         git.call("status.get", &id, move |repo| async move {
-            get_status_since(&repo, since.as_deref()).await
+            get_status_since(&repo, since.as_ref()).await
         })
         .boxed()
     })
@@ -67,7 +71,7 @@ pub fn uncommitted_options(id: &RepositoryId, get: GetStatus) -> QueryOptions<Op
 
 /// Where HEAD is, and how many files changed (`selectSummary`).
 pub fn select_summary(data: &Opaque<Uncommitted>) -> StatusSummary {
-    data.summary()
+    data.summary.clone()
 }
 
 /// The conflicted files, and which of them have no conflict markers left.
@@ -103,7 +107,7 @@ pub fn first_to_resolve(conflicted: &ConflictedFiles) -> Option<&ChangedFile> {
 /// The conflicted file to open first (see [`first_to_resolve`]) as the repository `id`'s cached
 /// status has it; `None` if none is, or the status isn't there. For once a merge or rebase has
 /// stopped at conflicts and the status has reloaded.
-pub fn first_conflicted_file(id: &str, cx: &App) -> Option<ChangedFile> {
+pub fn first_conflicted_file(id: &RepositoryId, cx: &App) -> Option<ChangedFile> {
     let status = QueryClient::get_data::<Opaque<Uncommitted>>(&keys::status(id), cx)?;
     first_to_resolve(&select_conflicted(&status)).cloned()
 }
@@ -179,18 +183,20 @@ mod tests {
 
     fn status() -> Uncommitted {
         Uncommitted {
-            head: Head::Branch {
-                name: "main".into(),
-                sha: "abc".into(),
-            },
-            upstream: None,
-            ahead: 0,
-            behind: 0,
-            counts: StatusCounts {
-                files: 1,
-                staged: 0,
-                unstaged: 1,
-                conflicted: 0,
+            summary: StatusSummary {
+                head: Head::Branch {
+                    name: "main".into(),
+                    sha: "abc".into(),
+                },
+                upstream: None,
+                ahead: 0,
+                behind: 0,
+                counts: StatusCounts {
+                    files: 1,
+                    staged: 0,
+                    unstaged: 1,
+                    conflicted: 0,
+                },
             },
             changes: WorkingTreeFiles {
                 staged: vec![],
@@ -212,7 +218,7 @@ mod tests {
     }
 
     /// `rpc.git.status.get`, answering `replies` in turn, and the `since` it was asked with.
-    fn mock(replies: Vec<StatusReply>) -> (GetStatus, Rc<RefCell<Vec<Option<String>>>>) {
+    fn mock(replies: Vec<StatusReply>) -> (GetStatus, Rc<RefCell<Vec<Option<ContentVersion>>>>) {
         let calls = Rc::new(RefCell::new(Vec::new()));
         let replies = Rc::new(RefCell::new(replies.into_iter()));
         let get: GetStatus = {
@@ -261,7 +267,7 @@ mod tests {
         cx.run_until_parked();
         refetch.now_or_never().unwrap();
 
-        assert_eq!(*calls.borrow(), [None, Some("v1".to_owned())]);
+        assert_eq!(*calls.borrow(), [None, Some(ContentVersion::from("v1"))]);
         let cached = cx.update(|cx| {
             QueryClient::get_data::<Opaque<Uncommitted>>(&keys::status(&repository_id()), cx)
         });
@@ -288,16 +294,7 @@ mod tests {
         let (get, _) = mock(vec![StatusReply::Status(Box::new(status()))]);
         let probe = probe(get, select_summary, cx);
         let summary = probe.read_with(cx, |probe, _| probe.query.data().unwrap());
-        assert_eq!(
-            summary,
-            StatusSummary {
-                head: status().head,
-                upstream: None,
-                ahead: 0,
-                behind: 0,
-                counts: status().counts,
-            }
-        );
+        assert_eq!(summary, status().summary);
     }
 
     #[test]

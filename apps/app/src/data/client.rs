@@ -705,6 +705,10 @@ mod tests {
     use super::*;
     use crate::data::query::Query;
 
+    fn repo() -> gitto_git::input::RepositoryId {
+        gitto_git::input::RepositoryId::parse("01890a5d-ac96-774b-bcce-b302099a8057").unwrap()
+    }
+
     /// A view showing a query.
     struct Probe {
         _query: Query<i32>,
@@ -713,7 +717,7 @@ mod tests {
     /// The status's query (under `keys::repository`), counting its loads.
     fn options(loads: &Rc<Cell<usize>>) -> QueryOptions<i32> {
         let loads = Rc::clone(loads);
-        QueryOptions::new(crate::data::keys::status("repo"), move |_, _| {
+        QueryOptions::new(crate::data::keys::status(&repo()), move |_, _| {
             loads.set(loads.get() + 1);
             async { Ok(1) }.boxed()
         })
@@ -752,7 +756,7 @@ mod tests {
         cx.update(|_| {});
 
         cx.update(|cx| {
-            let _ = QueryClient::invalidate(&crate::data::keys::repository("repo"), cx);
+            let _ = QueryClient::invalidate(&crate::data::keys::repository(&repo()), cx);
         });
         cx.run_until_parked();
         assert_eq!(loads.get(), 1);
@@ -788,7 +792,7 @@ mod tests {
     #[gpui_kit::test]
     fn setting_a_querys_data_makes_it_fresh(cx: &mut TestAppContext) {
         cx.update(QueryClient::init);
-        let key = crate::data::keys::refs("repo");
+        let key = crate::data::keys::refs(&repo());
         cx.update(|cx| QueryClient::set_data(&key, 1, cx));
         cx.update(|cx| {
             let _ = QueryClient::invalidate(&key, cx);
@@ -808,11 +812,11 @@ mod tests {
         cx.run_until_parked();
         drop(probe);
         cx.update(|_| {});
-        let key = crate::data::keys::status("repo");
+        let key = crate::data::keys::status(&repo());
         // Noticed unshown, then kept for GC_TIME.
-        cx.update(|cx| QueryClient::entry::<i32>(&crate::data::keys::log("repo"), cx));
+        cx.update(|cx| QueryClient::entry::<i32>(&crate::data::keys::log(&repo()), cx));
         cx.executor().advance_clock(GC_TIME);
-        cx.update(|cx| QueryClient::entry::<i32>(&crate::data::keys::log("repo"), cx));
+        cx.update(|cx| QueryClient::entry::<i32>(&crate::data::keys::log(&repo()), cx));
         assert!(
             cx.update(|cx| QueryClient::get_entry::<i32>(&key, cx))
                 .is_none()

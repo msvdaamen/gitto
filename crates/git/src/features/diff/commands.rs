@@ -9,7 +9,7 @@ use futures::future::BoxFuture;
 use super::limits::{MAX_BLOB_BYTES, MAX_PATCH_BYTES};
 use super::parse::parse_diff;
 use super::schema::ChangedFile;
-use super::working_tree::check_working_tree_path;
+use super::working_tree::{check_working_tree_path, decode_utf8};
 use crate::core::errors::{Error, GitError, Result};
 use crate::core::repo::{GitCommand, Repo};
 use crate::core::runner::RunOptions;
@@ -28,6 +28,7 @@ pub async fn get_commit_files(repo: &Repo, sha: &Sha) -> Result<Vec<ChangedFile>
             "-z",
             "--no-commit-id",
             "--diff-merges=first-parent",
+            "--end-of-options",
             sha.as_str(),
         ])
         .await?;
@@ -37,11 +38,7 @@ pub async fn get_commit_files(repo: &Repo, sha: &Sha) -> Result<Vec<ChangedFile>
 /// The patch of one file a commit changed, compared to its first parent like `get_commit_files`,
 /// so its lines are the ones counted there. A renamed file needs its old path too, to be found as
 /// one. With full object names on its `index` line, which `get_blob` reads the whole file by.
-pub fn get_commit_file_patch(
-    repo: &Repo,
-    sha: &Sha,
-    file: &FileInput,
-) -> BoxFuture<'static, Result<String>> {
+pub async fn get_commit_file_patch(repo: &Repo, sha: &Sha, file: &FileInput) -> Result<String> {
     let mut args = vec![
         "diff-tree",
         "-p",
@@ -51,11 +48,12 @@ pub fn get_commit_file_patch(
         "--full-index",
         "--no-commit-id",
         "--diff-merges=first-parent",
+        "--end-of-options",
         sha.as_str(),
         "--",
     ];
     args.extend(file_paths(file));
-    read_patch(&repo.git(), args)
+    read_patch(&repo.git(), args).await
 }
 
 /// The patch of one file's unstaged changes: the working tree compared to the index, as in the
@@ -242,15 +240,30 @@ pub const PORCELAIN_DIFF: [&str; 4] = [
 ];
 
 /// The contents of a file, by its object name; fails with `Error::FileTooLarge` above
-/// `MAX_BLOB_BYTES`.
+/// `MAX_BLOB_BYTES`, and with `Error::NotUtf8` for one that isn't UTF-8, as
+/// `read_working_tree_file` does for the other side of a diff.
 pub async fn get_blob(repo: &Repo, oid: &FullSha) -> Result<String> {
-    let size = repo.read(["cat-file", "-s", oid.as_str()]).await?;
-    // A size that isn't a number (it always is) is no reason not to read it, as in TS (`NaN`).
-    let bytes = size.trim().parse::<u64>().unwrap_or(0);
+    let size = repo
+        .read(["cat-file", "-s", "--end-of-options", oid.as_str()])
+        .await?;
+    let bytes: u64 = size
+        .trim()
+        .parse()
+        .map_err(|_| Error::Bug(format!("Not a size from git: {size:?}")))?;
     if bytes > MAX_BLOB_BYTES {
         return Err(Error::FileTooLarge { bytes });
     }
-    repo.read(["cat-file", "blob", oid.as_str()]).await
+    // Capped too, in case another object took its name since (`git replace`).
+    let options =
+        RunOptions::default().max_output(MAX_BLOB_BYTES as usize, Error::FileTooLarge { bytes });
+    let blob = repo
+        .git()
+        .run_bytes_with(
+            ["cat-file", "blob", "--end-of-options", oid.as_str()],
+            options,
+        )
+        .await?;
+    decode_utf8(&blob)
 }
 
 #[cfg(test)]
@@ -267,13 +280,14 @@ mod tests {
     use crate::features::diff::working_tree::{
         SaveExpectation, read_working_tree_file, save_working_tree_file,
     };
+    use crate::input::RepoPath;
     use crate::schema::FileStatus;
     use crate::test_support::{Fixture, git, valid};
 
     fn file(path: &str, orig_path: Option<&str>) -> FileInput {
         FileInput {
-            path: path.to_owned(),
-            orig_path: orig_path.map(str::to_owned),
+            path: valid(path),
+            orig_path: orig_path.map(valid),
         }
     }
 
@@ -319,7 +333,7 @@ mod tests {
 
     fn expected(version: &str, overwrite: bool) -> SaveExpectation {
         SaveExpectation {
-            version: version.to_owned(),
+            version: version.into(),
             overwrite,
         }
     }
@@ -453,29 +467,42 @@ mod tests {
         });
     }
 
+    /// Writes `bytes` to the repository at `path` as a blob, and names it.
+    fn write_blob(path: &Path, bytes: &[u8]) -> FullSha {
+        let mut child = Command::new("git")
+            .args(["hash-object", "-w", "--stdin"])
+            .current_dir(path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(bytes).unwrap();
+        let output = child.wait_with_output().unwrap();
+        valid(String::from_utf8(output.stdout).unwrap().trim())
+    }
+
     #[test]
     fn wont_read_a_file_too_large_to_send_whole() {
         let fx = Fixture::new();
         smol::block_on(async {
             let repo = fx.create_history_repo("large-blob").await;
-            let mut child = Command::new("git")
-                .args(["hash-object", "-w", "--stdin"])
-                .current_dir(repo.path())
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .spawn()
-                .unwrap();
             let input = "x".repeat(MAX_BLOB_BYTES as usize + 1);
-            child
-                .stdin
-                .take()
-                .unwrap()
-                .write_all(input.as_bytes())
-                .unwrap();
-            let output = child.wait_with_output().unwrap();
-            let oid = String::from_utf8(output.stdout).unwrap().trim().to_owned();
-            let error = get_blob(&repo, &valid(&oid)).await.unwrap_err();
+            let oid = write_blob(repo.path(), input.as_bytes());
+            let error = get_blob(&repo, &oid).await.unwrap_err();
             assert!(matches!(error, Error::FileTooLarge { .. }), "{error:?}");
+        });
+    }
+
+    #[test]
+    fn wont_read_a_file_that_isnt_utf_8_as_text() {
+        let fx = Fixture::new();
+        smol::block_on(async {
+            let repo = fx.create_history_repo("latin-1-blob").await;
+            let oid = write_blob(repo.path(), b"caf\xe9\n");
+            let error = get_blob(&repo, &oid).await.unwrap_err();
+            assert!(matches!(error, Error::NotUtf8), "{error:?}");
+            let oid = write_blob(repo.path(), "café\n".as_bytes());
+            assert_eq!(get_blob(&repo, &oid).await.unwrap(), "café\n");
         });
     }
 
@@ -659,14 +686,14 @@ mod tests {
             let repo = fx.create_history_repo("read").await;
             fs::write(repo.path().join("crlf.txt"), "\u{FEFF}one\r\ntwo\r\n").unwrap();
             assert_eq!(
-                read_working_tree_file(&repo, "a file.txt")
+                read_working_tree_file(&repo, &valid("a file.txt"))
                     .await
                     .unwrap()
                     .contents,
                 "changed\n"
             );
             assert_eq!(
-                read_working_tree_file(&repo, "crlf.txt")
+                read_working_tree_file(&repo, &valid("crlf.txt"))
                     .await
                     .unwrap()
                     .contents,
@@ -691,15 +718,19 @@ mod tests {
                 ".git/config",
                 "/etc/hosts",
             ];
-            let errors =
-                futures::future::join_all(outside.map(|name| read_working_tree_file(&repo, name)))
-                    .await;
+            let outside = outside.map(valid::<RepoPath>);
+            let errors = futures::future::join_all(
+                outside
+                    .iter()
+                    .map(|name| read_working_tree_file(&repo, name)),
+            )
+            .await;
             for error in errors {
                 let error = error.unwrap_err();
                 assert!(is_outside(&error), "{error:?}");
             }
             assert_eq!(
-                read_working_tree_file(&repo, "inside")
+                read_working_tree_file(&repo, &valid("inside"))
                     .await
                     .unwrap()
                     .contents,
@@ -715,8 +746,9 @@ mod tests {
         smol::block_on(async {
             let repo = fx.create_history_repo("git-dir").await;
             symlink(".git", repo.path().join("meta"));
+            let names = ["meta/config", ".GIT/config"].map(valid::<RepoPath>);
             let errors = futures::future::join_all(
-                ["meta/config", ".GIT/config"].map(|name| read_working_tree_file(&repo, name)),
+                names.iter().map(|name| read_working_tree_file(&repo, name)),
             )
             .await;
             for error in errors {
@@ -737,12 +769,16 @@ mod tests {
                 .status()
                 .unwrap();
             assert!(status.success());
-            let error = read_working_tree_file(&repo, "gone.txt").await.unwrap_err();
+            let error = read_working_tree_file(&repo, &valid("gone.txt"))
+                .await
+                .unwrap_err();
             assert!(
                 matches!(error, Error::WorkingTreeFileNotFound { .. }),
                 "{error:?}"
             );
-            let error = read_working_tree_file(&repo, "pipe").await.unwrap_err();
+            let error = read_working_tree_file(&repo, &valid("pipe"))
+                .await
+                .unwrap_err();
             assert!(is_outside(&error), "{error:?}");
         });
     }
@@ -759,11 +795,11 @@ mod tests {
             )
             .unwrap();
             fs::write(path.join("latin1.txt"), [0x63, 0x61, 0x66, 0xe9]).unwrap();
-            let error = read_working_tree_file(&repo, "large.txt")
+            let error = read_working_tree_file(&repo, &valid("large.txt"))
                 .await
                 .unwrap_err();
             assert!(matches!(error, Error::FileTooLarge { .. }), "{error:?}");
-            let error = read_working_tree_file(&repo, "latin1.txt")
+            let error = read_working_tree_file(&repo, &valid("latin1.txt"))
                 .await
                 .unwrap_err();
             assert!(matches!(error, Error::NotUtf8), "{error:?}");
@@ -782,15 +818,19 @@ mod tests {
             let path = repo.path();
             fs::set_permissions(path.join("a file.txt"), fs::Permissions::from_mode(0o755))
                 .unwrap();
-            let version = read_working_tree_file(&repo, "a file.txt")
+            let version = read_working_tree_file(&repo, &valid("a file.txt"))
                 .await
                 .unwrap()
                 .version;
 
-            let saved =
-                save_working_tree_file(&repo, "a file.txt", "edited\n", &expected(&version, false))
-                    .await
-                    .unwrap();
+            let saved = save_working_tree_file(
+                &repo,
+                &valid("a file.txt"),
+                "edited\n",
+                &expected(&version, false),
+            )
+            .await
+            .unwrap();
             assert_eq!(
                 fs::read_to_string(path.join("a file.txt")).unwrap(),
                 "edited\n"
@@ -798,15 +838,20 @@ mod tests {
             assert_eq!(mode(&path.join("a file.txt")), 0o755);
             assert_eq!(
                 saved,
-                read_working_tree_file(&repo, "a file.txt")
+                read_working_tree_file(&repo, &valid("a file.txt"))
                     .await
                     .unwrap()
                     .version
             );
             // Saved again from there, as edits go on.
-            save_working_tree_file(&repo, "a file.txt", "again\n", &expected(&saved, false))
-                .await
-                .unwrap();
+            save_working_tree_file(
+                &repo,
+                &valid("a file.txt"),
+                "again\n",
+                &expected(&saved, false),
+            )
+            .await
+            .unwrap();
             assert_eq!(
                 fs::read_to_string(path.join("a file.txt")).unwrap(),
                 "again\n"
@@ -827,13 +872,20 @@ mod tests {
             let repo = fx.create_history_repo("save-crlf").await;
             let path = repo.path();
             fs::write(path.join("crlf.txt"), "\u{FEFF}one\r\ntwo\r\n").unwrap();
-            let read = read_working_tree_file(&repo, "crlf.txt").await.unwrap();
+            let read = read_working_tree_file(&repo, &valid("crlf.txt"))
+                .await
+                .unwrap();
 
             // Edited as git shows it with `core.autocrlf`: with LF line ends.
             let edited = read.contents.replace("\r\n", "\n").replacen("two", "2", 1);
-            save_working_tree_file(&repo, "crlf.txt", &edited, &expected(&read.version, false))
-                .await
-                .unwrap();
+            save_working_tree_file(
+                &repo,
+                &valid("crlf.txt"),
+                &edited,
+                &expected(&read.version, false),
+            )
+            .await
+            .unwrap();
             assert_eq!(
                 fs::read_to_string(path.join("crlf.txt")).unwrap(),
                 "\u{FEFF}one\r\n2\r\n"
@@ -847,24 +899,33 @@ mod tests {
         smol::block_on(async {
             let repo = fx.create_history_repo("save-changed").await;
             let path = repo.path();
-            let version = read_working_tree_file(&repo, "a file.txt")
+            let version = read_working_tree_file(&repo, &valid("a file.txt"))
                 .await
                 .unwrap()
                 .version;
             fs::write(path.join("a file.txt"), "from an editor\n").unwrap();
 
-            let error =
-                save_working_tree_file(&repo, "a file.txt", "mine\n", &expected(&version, false))
-                    .await
-                    .unwrap_err();
+            let error = save_working_tree_file(
+                &repo,
+                &valid("a file.txt"),
+                "mine\n",
+                &expected(&version, false),
+            )
+            .await
+            .unwrap_err();
             assert!(is_changed_on_disk(&error), "{error:?}");
             assert_eq!(
                 fs::read_to_string(path.join("a file.txt")).unwrap(),
                 "from an editor\n"
             );
-            save_working_tree_file(&repo, "a file.txt", "mine\n", &expected(&version, true))
-                .await
-                .unwrap();
+            save_working_tree_file(
+                &repo,
+                &valid("a file.txt"),
+                "mine\n",
+                &expected(&version, true),
+            )
+            .await
+            .unwrap();
             assert_eq!(
                 fs::read_to_string(path.join("a file.txt")).unwrap(),
                 "mine\n"
@@ -881,7 +942,11 @@ mod tests {
             let path = repo.path();
             symlink(path.join("c.txt"), path.join("link"));
             fs::write(path.join("latin1.txt"), [0x63, 0x61, 0x66, 0xe9]).unwrap();
-            let save = |name: &str| save_working_tree_file(&repo, name, "x\n", &expected("", true));
+            let (repo, overwrite) = (&repo, &expected("", true));
+            let save = |name: &str| {
+                let path = valid(name);
+                async move { save_working_tree_file(repo, &path, "x\n", overwrite).await }
+            };
 
             assert!(is_outside(&save("link").await.unwrap_err()));
             assert!(is_outside(&save("../outside.txt").await.unwrap_err()));
@@ -900,14 +965,15 @@ mod tests {
         smol::block_on(async {
             let repo = fx.create_history_repo("save-chained").await;
             let path = repo.path();
-            let version = read_working_tree_file(&repo, "a file.txt")
+            let version = read_working_tree_file(&repo, &valid("a file.txt"))
                 .await
                 .unwrap()
                 .version;
             // Both sent before either's done, as the last edits are when the window closes.
+            let (file, unchanged) = (valid("a file.txt"), expected(&version, false));
             let (first, second) = futures::join!(
-                save_working_tree_file(&repo, "a file.txt", "first\n", &expected(&version, false)),
-                save_working_tree_file(&repo, "a file.txt", "second\n", &expected(&version, false)),
+                save_working_tree_file(&repo, &file, "first\n", &unchanged),
+                save_working_tree_file(&repo, &file, "second\n", &unchanged),
             );
             first.unwrap();
             second.unwrap();
@@ -917,11 +983,43 @@ mod tests {
             );
             // Not once something else wrote it since.
             fs::write(path.join("a file.txt"), "from an editor\n").unwrap();
-            let error =
-                save_working_tree_file(&repo, "a file.txt", "third\n", &expected(&version, false))
-                    .await
-                    .unwrap_err();
+            let error = save_working_tree_file(
+                &repo,
+                &valid("a file.txt"),
+                "third\n",
+                &expected(&version, false),
+            )
+            .await
+            .unwrap_err();
             assert!(is_changed_on_disk(&error), "{error:?}");
+        });
+    }
+
+    #[test]
+    fn saves_to_a_file_one_after_the_other_whatever_path_names_it() {
+        let fx = Fixture::new();
+        smol::block_on(async {
+            let repo = fx.create_history_repo("save-paths").await;
+            let version = read_working_tree_file(&repo, &valid("a file.txt"))
+                .await
+                .unwrap()
+                .version;
+            let names =
+                ["a file.txt", "./a file.txt", "a file.txt", "./a file.txt"].map(valid::<RepoPath>);
+            let saves = names.iter().enumerate().map(|(index, name)| {
+                let contents = format!("{index}\n");
+                let expected = expected(&version, false);
+                let repo = &repo;
+                async move { save_working_tree_file(repo, name, &contents, &expected).await }
+            });
+            for saved in futures::future::join_all(saves).await {
+                saved.unwrap();
+            }
+            // Each read the file the one before it wrote, the last one last.
+            assert_eq!(
+                fs::read_to_string(repo.path().join("a file.txt")).unwrap(),
+                "3\n"
+            );
         });
     }
 
@@ -931,16 +1029,20 @@ mod tests {
         smol::block_on(async {
             let repo = fx.create_history_repo("save-deleted").await;
             let path = repo.path();
-            let version = read_working_tree_file(&repo, "a file.txt")
+            let version = read_working_tree_file(&repo, &valid("a file.txt"))
                 .await
                 .unwrap()
                 .version;
             fs::remove_file(path.join("a file.txt")).unwrap();
 
-            let error =
-                save_working_tree_file(&repo, "a file.txt", "mine\n", &expected(&version, false))
-                    .await
-                    .unwrap_err();
+            let error = save_working_tree_file(
+                &repo,
+                &valid("a file.txt"),
+                "mine\n",
+                &expected(&version, false),
+            )
+            .await
+            .unwrap_err();
             assert!(
                 matches!(
                     error,
@@ -952,9 +1054,14 @@ mod tests {
                 "{error:?}"
             );
             assert!(error.to_string().contains("was deleted"), "{error}");
-            save_working_tree_file(&repo, "a file.txt", "mine\n", &expected(&version, true))
-                .await
-                .unwrap();
+            save_working_tree_file(
+                &repo,
+                &valid("a file.txt"),
+                "mine\n",
+                &expected(&version, true),
+            )
+            .await
+            .unwrap();
             assert_eq!(
                 fs::read_to_string(path.join("a file.txt")).unwrap(),
                 "mine\n"

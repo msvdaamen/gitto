@@ -5,9 +5,9 @@
 use std::path::PathBuf;
 
 use futures::future::BoxFuture;
+use gitto_git::input::RepositoryId;
 use gitto_git::{RepositoryListError, RepositoryLookup};
 
-use crate::errors::{Error, ListAction, reason};
 use crate::service::RepositoryService;
 
 /// Finds a repository's folder by its id, so `gitto_git::GitApi::new(service)` opens the
@@ -16,28 +16,15 @@ use crate::service::RepositoryService;
 impl RepositoryLookup for RepositoryService {
     fn repository_path<'a>(
         &'a self,
-        repository_id: &'a str,
+        repository_id: &'a RepositoryId,
     ) -> BoxFuture<'a, Result<Option<PathBuf>, RepositoryListError>> {
         Box::pin(async move {
             let repository = self
-                .get_repository(repository_id)
+                .find(repository_id)
                 .await
-                .map_err(|error| list_error(&error))?;
+                .map_err(|error| error.as_repository_list_error().clone())?;
             Ok(repository.map(|repository| PathBuf::from(repository.path)))
         })
-    }
-}
-
-/// `error` as gitto-git says it: the same message, as both say it as `packages/repository` did.
-fn list_error(error: &Error) -> RepositoryListError {
-    let action = match error {
-        Error::List { action, .. } => *action,
-        // Looking a repository up only reads the list, which is all that can fail then.
-        Error::NotAGitRepository { .. } => ListAction::Read,
-    };
-    RepositoryListError {
-        action,
-        reason: reason(error),
     }
 }
 
@@ -51,7 +38,6 @@ mod tests {
     use gitto_db::Db;
     use gitto_git::features::status::commands::get_status_since;
     use gitto_git::features::status::schema::{Head, StatusReply};
-    use gitto_git::input::RepositoryId;
     use gitto_git::{ApiCode, ApiError, Error as GitError, GitApi};
 
     use super::*;
@@ -111,8 +97,9 @@ mod tests {
                 ],
             );
             fs::write(path.join("new.txt"), "new\n").unwrap();
-            let repository = smol::block_on(self.service.add_repository(&path)).unwrap();
-            RepositoryId::parse(repository.id).unwrap()
+            smol::block_on(self.service.add_repository(&path))
+                .unwrap()
+                .id
         }
 
         /// `status.get` of the repository with `id`, as the UI asks for it.
@@ -138,9 +125,9 @@ mod tests {
         };
 
         assert!(
-            matches!(&status.head, Head::Branch { name, .. } if name == "main"),
+            matches!(&status.summary.head, Head::Branch { name, .. } if name == "main"),
             "{:?}",
-            status.head
+            status.summary.head
         );
         let unstaged: Vec<_> = status.changes.unstaged.iter().map(|f| &f.path).collect();
         assert_eq!(unstaged, ["new.txt"]);
@@ -150,14 +137,14 @@ mod tests {
     fn says_a_repository_that_isnt_in_the_list_isnt_found() {
         let f = fixture();
         f.add_repository("gitto");
-        let missing = RepositoryId::parse(uuid::Uuid::now_v7().to_string()).unwrap();
+        let missing = RepositoryId::generate();
 
         let error = f.status(&missing).unwrap_err();
 
         assert_eq!(error.code(), ApiCode::NotFound);
         assert!(!error.is_bug());
         assert!(
-            matches!(error.error(), GitError::RepositoryNotFound { repository_id } if repository_id == missing.as_str()),
+            matches!(error.error(), GitError::RepositoryNotFound { repository_id } if *repository_id == missing),
             "{:?}",
             error.error()
         );
@@ -182,19 +169,5 @@ mod tests {
                     .to_owned()
             )
         );
-    }
-
-    #[test]
-    fn says_list_errors_as_the_repository_service_does() {
-        let error = Error::list(
-            ListAction::Update,
-            gitto_db::rusqlite::Error::SqliteFailure(
-                gitto_db::rusqlite::ffi::Error::new(5),
-                Some("database is locked".to_owned()),
-            ),
-        );
-        let list = list_error(&error);
-        assert_eq!(list.action, ListAction::Update);
-        assert_eq!(list.to_string(), error.to_string());
     }
 }

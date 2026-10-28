@@ -3,15 +3,15 @@
 //! each feature's `contract.ts` and `handler.ts`, and the error handling of
 //! `packages/rpc/src/server.ts`.
 //!
-//! The UI holds one [`GitApi`]. It opens a repository by its id with [`GitApi::open`], which
-//! first requires a git Gitto supports, as `withRepo` did, and then calls the features with the
-//! `Repo` directly: there's no method per procedure. A contract's input checks are the types the
+//! The UI holds one [`GitApi`]. It runs a feature in a repository by its id with
+//! [`GitApi::call`], which first requires a git Gitto supports, as `withRepo` did, and then hands
+//! the feature the `Repo`: there's no method per procedure. A contract's input checks are the types the
 //! features take (see [`crate::input`]), and most handlers only passed the input on. What the
 //! others did is here: [`pull`] picks the branch to pull, the watches open the repository and
 //! stream what changed ([`GitApi::watch_git_dir`], [`GitApi::watch_working_tree`]), and
-//! `status.get` is `get_status_since`. `version.check` is `features::version::check` with
-//! [`GitApi::version`]; `user.name` is `features::user::commands::get_user_name`, which needs
-//! neither a repository nor a supported git.
+//! `status.get` is `get_status_since`. `version.check` is [`GitApi::version`]'s `check`;
+//! `user.name` is [`get_user_name`](crate::get_user_name), which needs neither a repository nor a
+//! supported git.
 //!
 //! An error reaches the UI as an [`ApiError`], with the code, the message and whether it's a bug,
 //! as the renderer got it. [`GitApi::call`] does it all: opens the repository, runs what's asked
@@ -69,14 +69,10 @@ impl GitApi {
     }
 
     /// Has `report` told of each error that's a bug ([`ApiError::is_bug`]), with the procedure it
-    /// failed, e.g. to send it to a crash reporter (TS's `reportError`).
+    /// failed, e.g. to send it to a crash reporter (TS's `reportError`). It's logged already.
     pub fn on_bug(mut self, report: impl Fn(&ApiError, &str) + Send + Sync + 'static) -> Self {
         self.report_bug = Some(Arc::new(report));
         self
-    }
-
-    pub fn repos(&self) -> &GitRepos {
-        &self.repos
     }
 
     /// The installed git, which `features::version::check` says is supported or not.
@@ -88,7 +84,10 @@ impl GitApi {
     /// `withRepo`): nothing runs with one it doesn't, as its commands would fail partway, or be
     /// misread, rather than say why. Fails with `Error::UnsupportedGit`, or as `GitRepos::open`
     /// does: `Error::RepositoryNotFound`, `Error::FolderNotFound`, `Error::RepositoryList`.
-    pub fn open(&self, id: &RepositoryId) -> impl Future<Output = Result<Repo>> + Send + use<> {
+    pub(crate) fn open(
+        &self,
+        id: &RepositoryId,
+    ) -> impl Future<Output = Result<Repo>> + Send + use<> {
         let repos = self.repos.clone();
         let version = Arc::clone(&self.version);
         let id = id.clone();
@@ -129,15 +128,18 @@ impl GitApi {
         }
     }
 
-    /// `error` as the UI shows it, having failed `procedure`: logged, and reported if it's a bug
-    /// (`onError` in `server.ts`). For an error that didn't come through [`call`](Self::call).
+    /// `error` as the UI shows it, having failed `procedure`: logged (with `log`, as an error if
+    /// it's a bug and a warning otherwise), and reported if it's a bug (`onError` in `server.ts`).
+    /// For an error that didn't come through [`call`](Self::call).
     pub fn fail(&self, procedure: &str, error: Error) -> ApiError {
-        let error = ApiError::from(error);
-        eprintln!("{}", log_line(procedure, &error));
-        if error.is_bug()
-            && let Some(report) = &self.report_bug
-        {
-            report(&error, procedure);
+        let error = ApiError::new(error);
+        if error.is_bug() {
+            log::error!("{}", log_line(procedure, &error));
+            if let Some(report) = &self.report_bug {
+                report(&error, procedure);
+            }
+        } else {
+            log::warn!("{}", log_line(procedure, &error));
         }
         error
     }

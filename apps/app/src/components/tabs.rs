@@ -45,18 +45,18 @@ pub fn bind_keys(cx: &mut App) {
 }
 
 /// The ids in `list` that are in `other` too, in `list`'s order.
-fn common<'a>(list: &'a [String], other: &[String]) -> Vec<&'a String> {
+fn common<'a, T: PartialEq>(list: &'a [T], other: &[T]) -> Vec<&'a T> {
     list.iter().filter(|id| other.contains(id)).collect()
 }
 
 /// Whether the ids in both `a` and `b` are in the same order in each.
-pub fn same_order(a: &[String], b: &[String]) -> bool {
+pub fn same_order<T: PartialEq>(a: &[T], b: &[T]) -> bool {
     common(a, b) == common(b, a)
 }
 
 /// `order` with `id` moved to where `target` is.
-pub fn moved_to(order: &[String], id: &str, target: &str) -> Vec<String> {
-    let mut order: Vec<String> = order.to_vec();
+pub fn moved_to<T: PartialEq + Clone>(order: &[T], id: &T, target: &T) -> Vec<T> {
+    let mut order = order.to_vec();
     let Some(from) = order.iter().position(|other| other == id) else {
         return order;
     };
@@ -72,7 +72,7 @@ pub fn moved_to(order: &[String], id: &str, target: &str) -> Vec<String> {
 /// What a dragged tab carries: its repository.
 #[derive(Debug, Clone)]
 pub struct TabDrag {
-    id: String,
+    id: RepositoryId,
     name: SharedString,
 }
 
@@ -109,15 +109,15 @@ pub struct Tabs {
     repositories: Query<Vec<Repository>>,
     open_repository: Entity<OpenRepository>,
     /// The tabs' order once one's moved, until that's saved and read back.
-    moved_order: Option<Vec<String>>,
+    moved_order: Option<Vec<RepositoryId>>,
     /// The tab last moved, which says why if the new order couldn't be saved.
-    moved: Option<String>,
+    moved: Option<RepositoryId>,
     move_error: Option<QueryError>,
     /// The repository last tried to be removed, and why that failed.
-    removing: Option<String>,
+    removing: Option<RepositoryId>,
     remove_error: Option<QueryError>,
     /// Each repository's tab's, made and dropped as the list of repositories changes.
-    focus: HashMap<String, FocusHandle>,
+    focus: HashMap<RepositoryId, FocusHandle>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -160,7 +160,7 @@ impl Tabs {
         }
     }
 
-    fn saved_order(&self) -> Vec<String> {
+    fn saved_order(&self) -> Vec<RepositoryId> {
         self.repositories
             .data()
             .map(|repositories| {
@@ -174,7 +174,7 @@ impl Tabs {
 
     /// The repositories' ids in the order their tabs are shown: ids rather than the repositories,
     /// so the tabs stay as they are when the list is read again.
-    pub fn ordered(&self) -> Vec<String> {
+    pub fn ordered(&self) -> Vec<RepositoryId> {
         self.moved_order
             .clone()
             .unwrap_or_else(|| self.saved_order())
@@ -192,20 +192,16 @@ impl Tabs {
 
     /// Shows the tabs in `order` (with `id` moved) until it's saved, unless it's the order they
     /// had; puts them back, saying why, if it can't be saved.
-    fn reorder(&mut self, id: &str, order: Vec<String>, cx: &mut Context<Self>) {
+    fn reorder(&mut self, id: &RepositoryId, order: Vec<RepositoryId>, cx: &mut Context<Self>) {
         let unchanged = same_order(&order, &self.saved_order());
         self.moved_order = Some(order.clone());
         cx.notify();
         if unchanged {
             return;
         }
-        self.moved = Some(id.to_owned());
+        self.moved = Some(id.clone());
         self.move_error = None;
-        let ids = order
-            .iter()
-            .filter_map(|id| RepositoryId::parse(id.as_str()).ok())
-            .collect();
-        let saving = reorder_repositories(ids, cx);
+        let saving = reorder_repositories(order, cx);
         cx.spawn(async move |this, cx| {
             let result = saving.await;
             let _ = this.update(cx, |tabs, cx| {
@@ -221,7 +217,7 @@ impl Tabs {
     }
 
     /// Moves the tab `id` one place left (`-1`) or right (`1`); it keeps focus.
-    pub fn move_tab(&mut self, id: &str, by: isize, cx: &mut Context<Self>) {
+    pub fn move_tab(&mut self, id: &RepositoryId, by: isize, cx: &mut Context<Self>) {
         let mut order = self.ordered();
         let Some(from) = order.iter().position(|other| other == id) else {
             return;
@@ -235,7 +231,7 @@ impl Tabs {
         self.reorder(id, order, cx);
     }
 
-    fn drop_on(&mut self, dragged: &str, target: &str, cx: &mut Context<Self>) {
+    fn drop_on(&mut self, dragged: &RepositoryId, target: &RepositoryId, cx: &mut Context<Self>) {
         if dragged == target {
             return;
         }
@@ -243,23 +239,16 @@ impl Tabs {
         self.reorder(dragged, order, cx);
     }
 
-    fn remove(&mut self, id: String, cx: &mut Context<Self>) {
-        let Ok(repository_id) = RepositoryId::parse(id.as_str()) else {
-            return;
-        };
+    fn remove(&mut self, id: RepositoryId, cx: &mut Context<Self>) {
         self.removing = Some(id.clone());
         self.remove_error = None;
-        let removing = remove_repository(repository_id, cx);
+        let removing = remove_repository(id.clone(), cx);
         cx.spawn(async move |this, cx| {
             let result = removing.await;
             let _ = this.update(cx, |tabs, cx| {
                 match result {
                     Ok(()) => {
-                        if Router::current(cx)
-                            .repository_id()
-                            .map(|shown| shown.as_str())
-                            == Some(id.as_str())
-                        {
+                        if Router::current(cx).repository_id() == Some(&id) {
                             Router::navigate(Route::Home, cx);
                         }
                     }
@@ -307,9 +296,9 @@ impl Tabs {
         let palette = *cx.palette();
         let id = repository.id.clone();
         let focus = self.focus.get(&id).cloned();
-        let error = if self.moved.as_deref() == Some(id.as_str()) && self.move_error.is_some() {
+        let error = if self.moved.as_ref() == Some(&id) && self.move_error.is_some() {
             Some(("Move", self.move_error.clone()))
-        } else if self.removing.as_deref() == Some(id.as_str()) {
+        } else if self.removing.as_ref() == Some(&id) {
             Some(("Remove", self.remove_error.clone()))
         } else {
             None
@@ -328,11 +317,7 @@ impl Tabs {
             .aria_keyshortcuts(shortcuts)
             .on_click({
                 let id = id.clone();
-                move |_, _, cx| {
-                    if let Ok(id) = RepositoryId::parse(id.clone()) {
-                        Router::navigate(Route::Repository(id), cx);
-                    }
-                }
+                move |_, _, cx| Router::navigate(Route::Repository(id.clone()), cx)
             })
             .on_action(cx.listener({
                 let id = id.clone();
@@ -452,11 +437,7 @@ fn tab_frame(
 impl Render for Tabs {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let route = Router::current(cx);
-        let selected = |id: &str| {
-            route
-                .repository_id()
-                .is_some_and(|shown| shown.as_str() == id)
-        };
+        let selected = |id: &RepositoryId| route.repository_id() == Some(id);
         let repositories = self.repositories.data().unwrap_or_default();
         let shortcuts = aria_keyshortcuts(window, &[&MoveTabLeft, &MoveTabRight], KEY_CONTEXT);
         let mut tabs = Vec::new();
@@ -524,9 +505,10 @@ mod tests {
     #[test]
     fn moves_a_dropped_tab_to_where_it_was_dropped() {
         let order = ids(&["a", "b", "c"]);
-        assert_eq!(moved_to(&order, "a", "b"), ids(&["b", "a", "c"]));
-        assert_eq!(moved_to(&order, "c", "a"), ids(&["c", "a", "b"]));
-        assert_eq!(moved_to(&order, "a", "c"), ids(&["b", "c", "a"]));
+        let [a, b, c] = [0, 1, 2].map(|at| &order[at]);
+        assert_eq!(moved_to(&order, a, b), ids(&["b", "a", "c"]));
+        assert_eq!(moved_to(&order, c, a), ids(&["c", "a", "b"]));
+        assert_eq!(moved_to(&order, a, c), ids(&["b", "c", "a"]));
     }
 }
 
@@ -551,7 +533,7 @@ mod ui_tests {
     #[derive(Default)]
     struct Saved {
         repositories: RefCell<Vec<Repository>>,
-        reorders: RefCell<Vec<Vec<String>>>,
+        reorders: RefCell<Vec<Vec<RepositoryId>>>,
         fail: Cell<bool>,
     }
 
@@ -570,7 +552,6 @@ mod ui_tests {
         }
 
         fn reorder(&self, ids: Vec<RepositoryId>) -> BoxFuture<'static, Result<(), QueryError>> {
-            let ids: Vec<String> = ids.into_iter().map(String::from).collect();
             self.reorders.borrow_mut().push(ids.clone());
             if self.fail.get() {
                 return async { Err(QueryError::msg("The database is locked.")) }.boxed();
@@ -597,7 +578,7 @@ mod ui_tests {
 
     fn repository(name: &str) -> Repository {
         Repository {
-            id: uuid::Uuid::now_v7().to_string(),
+            id: RepositoryId::generate(),
             name: format!("repo-{name}"),
             path: format!("/w/{name}"),
         }
@@ -609,7 +590,7 @@ mod ui_tests {
     ) -> (
         tempfile::TempDir,
         Rc<Saved>,
-        Vec<String>,
+        Vec<RepositoryId>,
         AnyWindowHandle,
         Entity<Host>,
     ) {
@@ -631,11 +612,11 @@ mod ui_tests {
         (dir, saved, ids, window, host)
     }
 
-    fn order(host: &Entity<Host>, cx: &mut TestAppContext) -> Vec<String> {
+    fn order(host: &Entity<Host>, cx: &mut TestAppContext) -> Vec<RepositoryId> {
         host.read_with(cx, |host, cx| host.tabs.read(cx).ordered())
     }
 
-    fn move_right(id: &str, window: AnyWindowHandle, cx: &mut TestAppContext) {
+    fn move_right(id: &RepositoryId, window: AnyWindowHandle, cx: &mut TestAppContext) {
         cx.update_window(window, |_, window, cx| {
             window.click(SharedString::from(format!("tab-{id}")), cx);
             window.press("alt-shift-right", cx);
@@ -671,7 +652,7 @@ mod ui_tests {
         drop(cx.update(|cx| QueryClient::invalidate(&keys::repositories(), cx)));
         cx.run_until_parked();
 
-        let mut focused: Vec<String> = host.read_with(cx, |host, cx| {
+        let mut focused: Vec<RepositoryId> = host.read_with(cx, |host, cx| {
             host.tabs.read(cx).focus.keys().cloned().collect()
         });
         focused.sort();
@@ -703,6 +684,6 @@ mod ui_tests {
         let error = host.read_with(cx, |host, cx| host.tabs.read(cx).move_error.clone());
         assert_eq!(error.unwrap().message(), "The database is locked.");
         let moved = host.read_with(cx, |host, cx| host.tabs.read(cx).moved.clone());
-        assert_eq!(moved.as_deref(), Some(ids[0].as_str()));
+        assert_eq!(moved.as_ref(), Some(&ids[0]));
     }
 }

@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::blockers::PushBlocker;
+
 /// Where the Push button pushes the checked-out branch, or why it can't.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(
@@ -11,7 +13,7 @@ use serde::{Deserialize, Serialize};
 )]
 pub enum PushTarget {
     /// Not on a branch, a branch without commits, or no remote to push to.
-    Blocked { reason: String },
+    Blocked { reason: PushBlocker },
     Remote {
         /// The remote branch, by its remote's name and its own, e.g. `origin/feature`.
         name: String,
@@ -42,11 +44,14 @@ mod tests {
             r#"{"kind":"remote","name":"origin/main","isNew":false,"ahead":1,"pullsFrom":true}"#
         );
         let blocked = PushTarget::Blocked {
-            reason: "no".into(),
+            reason: PushBlocker::NotPushed {
+                remote: "origin".into(),
+                branch: "main".into(),
+            },
         };
         assert_eq!(
             serde_json::to_string(&blocked).unwrap(),
-            r#"{"kind":"blocked","reason":"no"}"#
+            r#"{"kind":"blocked","reason":{"kind":"notPushed","remote":"origin","branch":"main"}}"#
         );
     }
 }

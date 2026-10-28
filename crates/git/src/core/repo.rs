@@ -19,26 +19,27 @@ use super::runner::{
     CommitGraphs, IndexRefreshes, RunOptions, ShownStatuses, WriteQueue, lock, os_args,
     run_git_bytes,
 };
+use crate::input::RepositoryId;
 
 /// Finds the folder of a repository that's been added to Gitto, by its id (TS's
-/// `RepositoryService.getRepository`). A function `Fn(&str) -> Option<PathBuf>`, which can't fail,
-/// is one.
+/// `RepositoryService.getRepository`). A function `Fn(&RepositoryId) -> Option<PathBuf>`, which
+/// can't fail, is one.
 pub trait RepositoryLookup: Send + Sync + 'static {
     /// The folder of the repository with `repository_id`; `None` if there's none. Fails if Gitto's
     /// list of repositories couldn't be read, as its database is locked, say, saying why.
     fn repository_path<'a>(
         &'a self,
-        repository_id: &'a str,
+        repository_id: &'a RepositoryId,
     ) -> BoxFuture<'a, Result<Option<PathBuf>, RepositoryListError>>;
 }
 
 impl<F> RepositoryLookup for F
 where
-    F: Fn(&str) -> Option<PathBuf> + Send + Sync + 'static,
+    F: Fn(&RepositoryId) -> Option<PathBuf> + Send + Sync + 'static,
 {
     fn repository_path<'a>(
         &'a self,
-        repository_id: &'a str,
+        repository_id: &'a RepositoryId,
     ) -> BoxFuture<'a, Result<Option<PathBuf>, RepositoryListError>> {
         Box::pin(std::future::ready(Ok(self(repository_id))))
     }
@@ -90,14 +91,11 @@ impl GitRepos {
     /// (`Error::RepositoryNotFound`, `Error::FolderNotFound`), and so is any if the list of
     /// repositories couldn't be read (`Error::RepositoryList`). What's kept for it is made once.
     ///
-    /// Takes any id, for tests: the UI opens repositories by their [`RepositoryId`] with
-    /// `GitApi::open`, which also checks the installed git.
-    ///
-    /// [`RepositoryId`]: crate::input::RepositoryId
-    pub async fn open(&self, repository_id: &str) -> Result<Repo> {
+    /// The UI opens repositories through `GitApi::call`, which also checks the installed git.
+    pub(crate) async fn open(&self, repository_id: &RepositoryId) -> Result<Repo> {
         let Some(path) = self.inner.lookup.repository_path(repository_id).await? else {
             return Err(Error::RepositoryNotFound {
-                repository_id: repository_id.to_owned(),
+                repository_id: repository_id.clone(),
             });
         };
         // Checked up front: git can't start in a missing folder, and spawning it reports that as
@@ -128,7 +126,7 @@ impl GitRepos {
 }
 
 /// A repository on disk, with git commands bound to it. Cheap to clone; clones are the same
-/// repository.
+/// repository. Its commands' futures belong on a background executor (see [`GitCommand`]).
 #[derive(Clone)]
 pub struct Repo {
     inner: Arc<RepoInner>,
@@ -231,7 +229,8 @@ impl Repo {
         self.git().run_with(args, options)
     }
 
-    /// Runs a command that changes the repository, after any earlier writes to it have finished.
+    /// Runs a command that changes the repository, after any earlier writes to it have finished:
+    /// ones whose future was polled before this one's (see `GitCommand`).
     pub fn write<I, S>(&self, args: I) -> BoxFuture<'static, Result<String>>
     where
         I: IntoIterator<Item = S>,
@@ -280,7 +279,7 @@ impl Repo {
 
     /// Runs `task`, which runs commands through the `GitCommand` it's given, as one fetch (see
     /// `fetch`): no other fetch of the repository runs before it's done, e.g. to read the
-    /// FETCH_HEAD a fetch wrote. Its place in line is taken now.
+    /// FETCH_HEAD a fetch wrote. Its place in line is taken when the future is first polled.
     pub fn fetching<T, F, Fut>(&self, task: F) -> impl Future<Output = T> + use<T, F, Fut>
     where
         F: FnOnce(GitCommand) -> Fut,
@@ -296,8 +295,10 @@ impl Repo {
 
     /// Runs `task`, which runs commands through the `GitCommand` it's given, as one write: no
     /// other write to the repository runs before it's done. For a write that checks the repository
-    /// before and after. Its place in line is taken now. Don't use `writer()`/`write` inside it:
-    /// that waits for `task` to end, which never comes.
+    /// before and after. Its place in line is taken when the future is first polled. Don't use
+    /// `writer()`/`write` inside it, nor a feature that does: that waits for `task` to end, which
+    /// never comes (it's logged as a warning after a while, see `WriteQueue`). Run its commands
+    /// through the `GitCommand` it's given.
     pub fn exclusive<T, F, Fut>(&self, task: F) -> impl Future<Output = T> + use<T, F, Fut>
     where
         F: FnOnce(GitCommand) -> Fut,
@@ -325,12 +326,14 @@ impl Repo {
     }
 
     /// Whether the log has to be sorted by git: an earlier read, left unsorted, had a commit below
-    /// one of its parents (see `getLog`). Remembered while the app runs, with `sort_log`.
+    /// one of its parents (see `getLog`). Remembered while the app runs, once
+    /// `mark_log_needs_sorting` is called.
     pub fn sorts_log(&self) -> bool {
         self.inner.state.sorts_log.load(Ordering::Relaxed)
     }
 
-    pub fn sort_log(&self) {
+    /// Has git sort the log from now on (see `sorts_log`).
+    pub fn mark_log_needs_sorting(&self) {
         self.inner.state.sorts_log.store(true, Ordering::Relaxed);
     }
 
@@ -412,8 +415,17 @@ enum Via {
 /// reads (`Repo::git`), writes (`Repo::writer`), fetches (`Repo::fetcher`), or inside
 /// `Repo::exclusive` or `Repo::fetching`, whichever it came from. Cheap to clone.
 ///
+/// Its futures, and those of everything that runs git, block while they start it: the first poll
+/// forks and execs git, which takes a while in a large process like the app. Poll them on a
+/// background executor (GPUI's `background_spawn`, say), never the UI thread. What runs in the
+/// background without anyone waiting on it, like refreshing the index, runs on smol's global
+/// executor, whichever executor the caller polls on.
+///
 /// Each method takes the arguments when it's called and returns a `'static` future; git starts
 /// when it's first polled, and is stopped, with all it started, if it's dropped before git exits.
+/// A write's or fetch's place in line is taken when it's first polled too, not when it's made:
+/// futures made ahead can be awaited in any order, and ones polled together (with `join!`, say)
+/// run in the order they're first polled.
 #[derive(Clone)]
 pub struct GitCommand {
     repo: Arc<RepoInner>,
@@ -618,7 +630,7 @@ mod tests {
         impl RepositoryLookup for Locked {
             fn repository_path<'a>(
                 &'a self,
-                _: &'a str,
+                _: &'a RepositoryId,
             ) -> BoxFuture<'a, Result<Option<PathBuf>, RepositoryListError>> {
                 let locked = std::io::Error::other("database is locked");
                 let error = RepositoryListError::new(ListAction::Read, &locked);
@@ -626,7 +638,7 @@ mod tests {
             }
         }
 
-        let error = smol::block_on(GitRepos::new(Locked).open("any"))
+        let error = smol::block_on(GitRepos::new(Locked).open(&RepositoryId::generate()))
             .err()
             .unwrap();
         assert!(matches!(error, Error::RepositoryList(_)), "{error:?}");
@@ -811,7 +823,6 @@ mod tests {
             let order = &Mutex::new(Vec::new());
             let (finish, finished) = async_channel::bounded::<()>(1);
             let finished = &finished;
-            // Asked for in this order, and so run in it, however they're polled.
             let exclusive = repo.exclusive(|run| async move {
                 run.run(["status"]).await.unwrap();
                 finished.recv().await.unwrap();
@@ -826,8 +837,25 @@ mod tests {
                 async_io::Timer::after(Duration::from_millis(200)).await;
                 finish.send(()).await.unwrap();
             };
-            futures::join!(write, exclusive, release);
+            // Polled in this order, and so run in it.
+            futures::join!(exclusive, write, release);
             assert_eq!(*lock(order), ["exclusive", "write"]);
+        });
+    }
+
+    #[test]
+    fn writes_made_ahead_can_be_awaited_in_any_order() {
+        let fx = Fixture::new();
+        fx.create_repo("ahead");
+        smol::block_on(async {
+            let repo = fx.repos.open("ahead").await.unwrap();
+            let first = repo.write(["status"]);
+            let exclusive = repo.exclusive(|run| async move { run.run(["status"]).await });
+            let second = repo.write(["status"]);
+            // None waits on one made before it that isn't polled.
+            second.await.unwrap();
+            exclusive.await.unwrap();
+            first.await.unwrap();
         });
     }
 
@@ -902,7 +930,7 @@ mod tests {
                 .await
                 .unwrap();
             observed.status_took(Duration::from_millis(20));
-            observed.sort_log();
+            observed.mark_log_needs_sorting();
             let ran = |how, args: &[&str]| Observed::Ran {
                 how,
                 args: args.iter().map(|arg| arg.to_string()).collect(),
