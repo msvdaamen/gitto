@@ -432,30 +432,12 @@ mod tests {
     use std::process::Command;
 
     use super::*;
-    use crate::features::conflicts::commands::{get_conflict, mark_resolved};
-    use crate::features::diff::working_tree::{SaveExpectation, save_working_tree_file};
+    use crate::features::conflicts::commands::get_conflict;
     use crate::features::stash::commands::pop_stash;
-    use crate::test_support::conflicts::{Sides, commit_files, files, text_conflict, try_git};
+    use crate::test_support::conflicts::{
+        Sides, commit_files, files, resolve_text, text_conflict, try_git,
+    };
     use crate::test_support::{Fixture, git};
-
-    /// Resolves `f.txt`'s conflict as `contents`, and marks it resolved.
-    async fn resolve(repo: &Repo, contents: &str) {
-        let conflict = get_conflict(repo, "f.txt").await.unwrap();
-        let version = save_working_tree_file(
-            repo,
-            "f.txt",
-            contents,
-            &SaveExpectation {
-                version: conflict.text.unwrap().version,
-                overwrite: false,
-            },
-        )
-        .await
-        .unwrap();
-        mark_resolved(repo, "f.txt", Some(&version), false)
-            .await
-            .unwrap();
-    }
 
     /// `f.txt`'s contents as the conflict has them.
     async fn conflict_text(repo: &Repo) -> String {
@@ -520,7 +502,7 @@ mod tests {
                 .await
                 .unwrap_err();
             assert!(error.as_git().is_some(), "{error:?}");
-            resolve(&repo, "one\nresolved\nthree\n").await;
+            resolve_text(&repo, "one\nresolved\nthree\n").await;
             continue_operation(&repo, OperationKind::Merge)
                 .await
                 .unwrap();
@@ -642,7 +624,7 @@ mod tests {
             assert!(theirs.is_match(&text), "{text}");
 
             // The next commit conflicts with how this one was resolved: that's left to resolve too.
-            resolve(&repo, "one\nresolved\nthree\n").await;
+            resolve_text(&repo, "one\nresolved\nthree\n").await;
             continue_operation(&repo, OperationKind::Rebase)
                 .await
                 .unwrap();
@@ -658,7 +640,7 @@ mod tests {
                 "{operation:?}"
             );
 
-            resolve(&repo, "one\nresolved again\nthree\n").await;
+            resolve_text(&repo, "one\nresolved again\nthree\n").await;
             continue_operation(&repo, OperationKind::Rebase)
                 .await
                 .unwrap();
@@ -680,7 +662,7 @@ mod tests {
         rebase_interactively(&path, "s/^pick/reword/ if $. == 2");
         smol::block_on(async {
             let repo = fx.repos.open("op-rebase-reword").await.unwrap();
-            resolve(&repo, "one\nresolved\nthree\n").await;
+            resolve_text(&repo, "one\nresolved\nthree\n").await;
 
             let error = continue_operation(&repo, OperationKind::Rebase)
                 .await
@@ -727,7 +709,7 @@ mod tests {
         );
         smol::block_on(async {
             let repo = fx.repos.open("op-rebase-squash").await.unwrap();
-            resolve(&repo, "one\nresolved\nthree\n").await;
+            resolve_text(&repo, "one\nresolved\nthree\n").await;
 
             let error = continue_operation(&repo, OperationKind::Rebase)
                 .await
@@ -771,7 +753,7 @@ mod tests {
                 })
             );
 
-            resolve(&repo, "one\nours and theirs\nthree\n").await;
+            resolve_text(&repo, "one\nours and theirs\nthree\n").await;
             continue_operation(&repo, OperationKind::CherryPick)
                 .await
                 .unwrap();
@@ -790,7 +772,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("op-cherry-pick-empty").await.unwrap();
 
-            resolve(&repo, "one\nours\nthree\n").await;
+            resolve_text(&repo, "one\nours\nthree\n").await;
             continue_operation(&repo, OperationKind::CherryPick)
                 .await
                 .unwrap();
@@ -819,7 +801,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("op-cherry-pick-later-empty").await.unwrap();
 
-            resolve(&repo, "one\nours and theirs\nthree\n").await;
+            resolve_text(&repo, "one\nours and theirs\nthree\n").await;
             let error = continue_operation(&repo, OperationKind::CherryPick)
                 .await
                 .unwrap_err();
@@ -849,7 +831,7 @@ mod tests {
         try_git(&path, ["cherry-pick", "main..side"]);
         smol::block_on(async {
             let repo = fx.repos.open("op-cherry-picks-by-hand").await.unwrap();
-            resolve(&repo, "one\nresolved\nthree\n").await;
+            resolve_text(&repo, "one\nresolved\nthree\n").await;
             git(&path, ["commit", "-q", "--no-edit"]);
 
             assert_eq!(
