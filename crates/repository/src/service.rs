@@ -4,6 +4,7 @@
 use std::path::{Component, Path, PathBuf};
 
 use gitto_db::rusqlite;
+use gitto_git::input::RepositoryId;
 
 use crate::errors::{Error, ListAction, Result};
 use crate::store::RepositoryStore;
@@ -28,7 +29,7 @@ impl RepositoryService {
     }
 
     /// The repository with `id`; `None` if there's none.
-    pub async fn get_repository(&self, id: &str) -> Result<Option<Repository>> {
+    pub async fn get_repository(&self, id: &RepositoryId) -> Result<Option<Repository>> {
         listed(ListAction::Read, self.store.get_by_id(id).await)
     }
 
@@ -54,7 +55,7 @@ impl RepositoryService {
         }
 
         let repository = Repository {
-            id: uuid::Uuid::now_v7().to_string(),
+            id: RepositoryId::generate(),
             name: basename(&repo_path),
             path: repo_path,
         };
@@ -63,12 +64,12 @@ impl RepositoryService {
     }
 
     /// Removes the repository from Gitto; the folder on disk is left untouched.
-    pub async fn remove_repository(&self, id: &str) -> Result<()> {
+    pub async fn remove_repository(&self, id: &RepositoryId) -> Result<()> {
         listed(ListAction::Update, self.store.delete(id).await)
     }
 
     /// Puts the tabs in the order of `ids`; repositories missing from it keep their place after.
-    pub async fn reorder_repositories(&self, ids: &[String]) -> Result<()> {
+    pub async fn reorder_repositories(&self, ids: &[RepositoryId]) -> Result<()> {
         listed(ListAction::Update, self.store.reorder(ids).await)
     }
 }
@@ -184,9 +185,6 @@ mod tests {
 
         assert_eq!(repository.name, "gitto");
         assert_eq!(repository.path, text(&path));
-        let id = uuid::Uuid::parse_str(&repository.id).unwrap();
-        assert_eq!(id.get_version_num(), 7);
-        assert_eq!(repository.id, id.hyphenated().to_string());
         assert_eq!(
             smol::block_on(f.service.get_repositories()).unwrap(),
             std::slice::from_ref(&repository)
@@ -327,7 +325,7 @@ mod tests {
         );
         // Removing it again, or an id that was never there, is no error.
         smol::block_on(f.service.remove_repository(&one.id)).unwrap();
-        smol::block_on(f.service.remove_repository("missing")).unwrap();
+        smol::block_on(f.service.remove_repository(&RepositoryId::generate())).unwrap();
         assert_eq!(
             smol::block_on(f.service.get_repository(&two.id)).unwrap(),
             Some(two)
@@ -337,7 +335,7 @@ mod tests {
     #[test]
     fn reorders_the_repositories() {
         let f = fixture();
-        let ids: Vec<String> = ["one", "two", "three"]
+        let ids: Vec<RepositoryId> = ["one", "two", "three"]
             .into_iter()
             .map(|name| f.add(f.folder(name, true)).unwrap().id)
             .collect();
@@ -363,7 +361,8 @@ mod tests {
             "Gitto couldn't read its list of repositories: no such table: repositories."
         );
         assert!(error.is_bug());
-        let error = smol::block_on(f.service.get_repository("id")).unwrap_err();
+        let error =
+            smol::block_on(f.service.get_repository(&RepositoryId::generate())).unwrap_err();
         assert_eq!(
             error.to_string(),
             "Gitto couldn't read its list of repositories: no such table: repositories."

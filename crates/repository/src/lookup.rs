@@ -21,7 +21,7 @@ impl RepositoryLookup for RepositoryService {
     ) -> BoxFuture<'a, Result<Option<PathBuf>, RepositoryListError>> {
         Box::pin(async move {
             let repository = self
-                .get_repository(&repository_id.to_string())
+                .get_repository(repository_id)
                 .await
                 .map_err(|error| list_error(&error))?;
             Ok(repository.map(|repository| PathBuf::from(repository.path)))
@@ -111,8 +111,9 @@ mod tests {
                 ],
             );
             fs::write(path.join("new.txt"), "new\n").unwrap();
-            let repository = smol::block_on(self.service.add_repository(&path)).unwrap();
-            RepositoryId::parse(repository.id).unwrap()
+            smol::block_on(self.service.add_repository(&path))
+                .unwrap()
+                .id
         }
 
         /// `status.get` of the repository with `id`, as the UI asks for it.
@@ -150,7 +151,7 @@ mod tests {
     fn says_a_repository_that_isnt_in_the_list_isnt_found() {
         let f = fixture();
         f.add_repository("gitto");
-        let missing = RepositoryId::parse(uuid::Uuid::now_v7().to_string()).unwrap();
+        let missing = RepositoryId::generate();
 
         let error = f.status(&missing).unwrap_err();
 

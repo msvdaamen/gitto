@@ -2026,11 +2026,8 @@ dependencies = [
  "futures",
  "gitto-db",
  "gitto-git",
- "serde",
- "serde_json",
  "smol",
  "tempfile",
- "uuid",
 ]
 
 [[package]]

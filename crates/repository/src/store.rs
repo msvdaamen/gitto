@@ -3,7 +3,9 @@
 //! what Drizzle made of TS's queries.
 
 use gitto_db::Db;
+use gitto_db::rusqlite::types::Type;
 use gitto_db::rusqlite::{self, Connection, OptionalExtension, Row, params};
+use gitto_git::input::RepositoryId;
 
 use crate::types::Repository;
 
@@ -27,8 +29,8 @@ impl RepositoryStore {
         self.db.run(|conn| get_all(conn)).await
     }
 
-    pub async fn get_by_id(&self, id: &str) -> rusqlite::Result<Option<Repository>> {
-        let id = id.to_owned();
+    pub async fn get_by_id(&self, id: &RepositoryId) -> rusqlite::Result<Option<Repository>> {
+        let id = id.to_string();
         self.db.run(move |conn| get_by(conn, "id", &id)).await
     }
 
@@ -43,21 +45,27 @@ impl RepositoryStore {
         self.db.run(move |conn| create(conn, &repository)).await
     }
 
-    pub async fn delete(&self, id: &str) -> rusqlite::Result<()> {
-        let id = id.to_owned();
+    pub async fn delete(&self, id: &RepositoryId) -> rusqlite::Result<()> {
+        let id = id.to_string();
         self.db.run(move |conn| delete(conn, &id)).await
     }
 
     /// Puts the repositories in the order of `ids`; ones missing from it keep their place after.
-    pub async fn reorder(&self, ids: &[String]) -> rusqlite::Result<()> {
-        let ids = ids.to_vec();
+    pub async fn reorder(&self, ids: &[RepositoryId]) -> rusqlite::Result<()> {
+        let ids: Vec<String> = ids.iter().map(RepositoryId::to_string).collect();
         self.db.run(move |conn| reorder(conn, &ids)).await
     }
 }
 
+/// A repository's row. Ids are written hyphenated and in lower case, but read in either case, as
+/// they're the Electron app's too; one that isn't a repository id fails, as it's no row of Gitto's.
 fn repository(row: &Row<'_>) -> rusqlite::Result<Repository> {
+    let id: String = row.get(0)?;
+    let id = RepositoryId::parse(id).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(0, Type::Text, Box::new(error))
+    })?;
     Ok(Repository {
-        id: row.get(0)?,
+        id,
         name: row.get(1)?,
         path: row.get(2)?,
     })
@@ -91,7 +99,7 @@ fn get_by(
 fn create(conn: &Connection, repository: &Repository) -> rusqlite::Result<()> {
     conn.execute(
         r#"insert into "repositories" ("id", "name", "path", "position") values (?, ?, ?, (SELECT coalesce(max("repositories"."position"), -1) + 1 FROM "repositories"))"#,
-        params![repository.id, repository.name, repository.path],
+        params![repository.id.to_string(), repository.name, repository.path],
     )?;
     Ok(())
 }
@@ -130,43 +138,67 @@ mod tests {
         RepositoryStore::new(Db::open_in_memory().unwrap())
     }
 
-    fn repository(id: &str) -> Repository {
+    /// The id of the repository named `name` in these tests: its first six bytes, in the id's last
+    /// part, so ids sort as names do.
+    fn id(name: &str) -> RepositoryId {
+        let node = name
+            .bytes()
+            .take(6)
+            .fold(0u64, |node, byte| node << 8 | u64::from(byte));
+        RepositoryId::parse(format!("01900000-0000-7000-8000-{node:012x}")).unwrap()
+    }
+
+    /// The name of the repository with `id` (see [`id`]).
+    fn name_of(id: &str) -> String {
+        let node = u64::from_str_radix(&id[24..], 16).unwrap();
+        let bytes: Vec<u8> = node
+            .to_be_bytes()
+            .into_iter()
+            .skip_while(|&b| b == 0)
+            .collect();
+        String::from_utf8(bytes).unwrap()
+    }
+
+    fn repository(name: &str) -> Repository {
         Repository {
-            id: id.to_owned(),
-            name: format!("{id}-name"),
-            path: format!("/repos/{id}"),
+            id: id(name),
+            name: format!("{name}-name"),
+            path: format!("/repos/{name}"),
         }
     }
 
-    /// The ids, in the order of the tabs.
+    /// The repositories' names, in the order of the tabs.
     fn ids(store: &RepositoryStore) -> Vec<String> {
         smol::block_on(store.get_all())
             .unwrap()
             .into_iter()
-            .map(|repository| repository.id)
+            .map(|repository| name_of(&repository.id.to_string()))
             .collect()
     }
 
-    /// Each repository's id and position, by id.
+    /// Each repository's name and position, by id.
     fn positions(store: &RepositoryStore) -> Vec<(String, i64)> {
         smol::block_on(store.db.run(|conn| {
             conn.prepare(r#"select "id", "position" from "repositories" order by "id""#)?
-                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .query_map([], |row| {
+                    Ok((name_of(&row.get::<_, String>(0)?), row.get(1)?))
+                })?
                 .collect::<rusqlite::Result<_>>()
         }))
         .unwrap()
     }
 
-    fn store_with(ids: &[&str]) -> RepositoryStore {
+    fn store_with(names: &[&str]) -> RepositoryStore {
         let store = store();
-        for id in ids {
-            smol::block_on(store.create(&repository(id))).unwrap();
+        for name in names {
+            smol::block_on(store.create(&repository(name))).unwrap();
         }
         store
     }
 
-    fn strings(ids: &[&str]) -> Vec<String> {
-        ids.iter().map(|id| (*id).to_owned()).collect()
+    /// The ids of the repositories named `names`.
+    fn ids_of(names: &[&str]) -> Vec<RepositoryId> {
+        names.iter().map(|name| id(name)).collect()
     }
 
     #[test]
@@ -191,8 +223,8 @@ mod tests {
     #[test]
     fn adds_after_the_last_tab_when_others_were_removed() {
         let store = store_with(&["a", "b", "c"]);
-        smol::block_on(store.delete("c")).unwrap();
-        smol::block_on(store.delete("a")).unwrap();
+        smol::block_on(store.delete(&id("c"))).unwrap();
+        smol::block_on(store.delete(&id("a"))).unwrap();
         smol::block_on(store.create(&repository("d"))).unwrap();
         // One past the highest position, gaps and all.
         assert_eq!(positions(&store), [("b".into(), 1), ("d".into(), 2)]);
@@ -203,10 +235,43 @@ mod tests {
     fn gets_a_repository_by_id() {
         let store = store_with(&["a", "b"]);
         assert_eq!(
-            smol::block_on(store.get_by_id("b")).unwrap(),
+            smol::block_on(store.get_by_id(&id("b"))).unwrap(),
             Some(repository("b"))
         );
-        assert_eq!(smol::block_on(store.get_by_id("missing")).unwrap(), None);
+        assert_eq!(
+            smol::block_on(store.get_by_id(&id("missing"))).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn reads_ids_in_lower_case_and_refuses_ones_that_arent_repository_ids() {
+        let store = store();
+        smol::block_on(store.db.run(|conn| {
+            conn.execute_batch(
+                r#"insert into "repositories" ("id", "name", "path", "position")
+                   values ('01900000-0000-7000-8000-00000000000A', 'a', '/repos/a', 0)"#,
+            )
+        }))
+        .unwrap();
+        let all = smol::block_on(store.get_all()).unwrap();
+        assert_eq!(
+            all[0].id.to_string(),
+            "01900000-0000-7000-8000-00000000000a"
+        );
+
+        smol::block_on(store.db.run(|conn| {
+            conn.execute_batch(
+                r#"insert into "repositories" ("id", "name", "path", "position")
+                   values ('b', 'b', '/repos/b', 1)"#,
+            )
+        }))
+        .unwrap();
+        let error = smol::block_on(store.get_all()).unwrap_err();
+        assert!(
+            error.to_string().contains("Not a repository id. (\"b\")"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -228,7 +293,7 @@ mod tests {
     fn refuses_a_second_repository_with_the_same_path() {
         let store = store_with(&["a"]);
         let same_path = Repository {
-            id: "other".to_owned(),
+            id: id("other"),
             ..repository("a")
         };
         let error = smol::block_on(store.create(&same_path)).unwrap_err();
@@ -256,17 +321,17 @@ mod tests {
     #[test]
     fn deletes_a_repository() {
         let store = store_with(&["a", "b", "c"]);
-        smol::block_on(store.delete("b")).unwrap();
+        smol::block_on(store.delete(&id("b"))).unwrap();
         assert_eq!(ids(&store), ["a", "c"]);
         // An id that isn't there is no error.
-        smol::block_on(store.delete("missing")).unwrap();
+        smol::block_on(store.delete(&id("missing"))).unwrap();
         assert_eq!(ids(&store), ["a", "c"]);
     }
 
     #[test]
     fn reorders_the_repositories() {
         let store = store_with(&["a", "b", "c"]);
-        smol::block_on(store.reorder(&strings(&["c", "a", "b"]))).unwrap();
+        smol::block_on(store.reorder(&ids_of(&["c", "a", "b"]))).unwrap();
         assert_eq!(ids(&store), ["c", "a", "b"]);
         assert_eq!(
             positions(&store),
@@ -277,7 +342,7 @@ mod tests {
     #[test]
     fn keeps_the_place_of_repositories_missing_from_the_order_after_the_others() {
         let store = store_with(&["a", "b", "c", "d"]);
-        smol::block_on(store.reorder(&strings(&["d", "b"]))).unwrap();
+        smol::block_on(store.reorder(&ids_of(&["d", "b"]))).unwrap();
         // a and c keep their order, after the two in the list.
         assert_eq!(ids(&store), ["d", "b", "a", "c"]);
         assert_eq!(
@@ -301,7 +366,7 @@ mod tests {
     #[test]
     fn ignores_ids_that_are_not_in_the_list() {
         let store = store_with(&["a", "b"]);
-        smol::block_on(store.reorder(&strings(&["missing", "b", "a"]))).unwrap();
+        smol::block_on(store.reorder(&ids_of(&["missing", "b", "a"]))).unwrap();
         assert_eq!(ids(&store), ["b", "a"]);
         assert_eq!(positions(&store), [("a".into(), 2), ("b".into(), 1)]);
     }
@@ -309,7 +374,7 @@ mod tests {
     #[test]
     fn puts_a_repository_listed_twice_where_it_is_last_listed() {
         let store = store_with(&["a", "b", "c"]);
-        smol::block_on(store.reorder(&strings(&["a", "b", "a"]))).unwrap();
+        smol::block_on(store.reorder(&ids_of(&["a", "b", "a"]))).unwrap();
         assert_eq!(
             positions(&store),
             [("a".into(), 2), ("b".into(), 1), ("c".into(), 5)]
@@ -320,7 +385,7 @@ mod tests {
     #[test]
     fn adds_after_reordered_repositories() {
         let store = store_with(&["a", "b", "c"]);
-        smol::block_on(store.reorder(&strings(&["b"]))).unwrap();
+        smol::block_on(store.reorder(&ids_of(&["b"]))).unwrap();
         smol::block_on(store.create(&repository("d"))).unwrap();
         assert_eq!(ids(&store), ["b", "a", "c", "d"]);
     }
@@ -329,16 +394,17 @@ mod tests {
     fn reorders_all_or_nothing() {
         let store = store_with(&["a", "b"]);
         // A trigger that fails the second update, as a full disk might.
-        smol::block_on(store.db.run(|conn| {
-            conn.execute_batch(
+        let a = id("a");
+        smol::block_on(store.db.run(move |conn| {
+            conn.execute_batch(&format!(
                 r#"CREATE TRIGGER fail BEFORE UPDATE OF "position" ON "repositories"
-                   WHEN NEW."id" = 'a' AND NEW."position" = 1
+                   WHEN NEW."id" = '{a}' AND NEW."position" = 1
                    BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END;"#,
-            )
+            ))
         }))
         .unwrap();
 
-        let error = smol::block_on(store.reorder(&strings(&["b", "a"]))).unwrap_err();
+        let error = smol::block_on(store.reorder(&ids_of(&["b", "a"]))).unwrap_err();
 
         assert_eq!(error.to_string(), "database or disk is full");
         assert_eq!(positions(&store), [("a".into(), 0), ("b".into(), 1)]);
