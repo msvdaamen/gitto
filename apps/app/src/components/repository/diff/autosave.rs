@@ -8,6 +8,7 @@ use futures::future::Shared;
 use gitto_git::ApiCode;
 use gpui_kit::{App, Context, Task};
 
+use super::file_editing::{FileVersion, Overwrite, SaveRequest};
 use crate::data::QueryError;
 
 /// Where saving a file that's being edited is at.
@@ -33,10 +34,9 @@ impl SaveState {
     }
 }
 
-/// Saves `text` over the file as it was at `version`, or whatever it is if `overwrite`; resolves
-/// to the version saved.
-pub type SaveFile =
-    Rc<dyn Fn(String, String, bool, &mut App) -> Task<Result<String, QueryError>> + 'static>;
+/// Saves the edits over the file being edited, as the request says; resolves to the version saved.
+pub type SaveEdits =
+    Rc<dyn Fn(SaveRequest, &mut App) -> Task<Result<FileVersion, QueryError>> + 'static>;
 
 /// How long after the last edit it's saved: long enough not to write on every key.
 pub const AUTOSAVE_DELAY: Duration = Duration::from_millis(600);
@@ -47,10 +47,10 @@ pub const AUTOSAVE_DELAY: Duration = Duration::from_millis(600);
 /// ([`start`](Self::start)); [`flush`](Self::flush) saves what's left at once, e.g. before the file
 /// is closed. An entity, which its owner observes for its [`state`](Self::state).
 pub struct Autosave {
-    save: SaveFile,
+    save: SaveEdits,
     delay: Duration,
     state: SaveState,
-    version: Option<String>,
+    version: Option<FileVersion>,
     /// The edits to save; `None` once they're saved.
     unsaved: Option<String>,
     /// The save due once the typing stops, replaced by each edit: dropped, it's cancelled.
@@ -60,7 +60,7 @@ pub struct Autosave {
 }
 
 impl Autosave {
-    pub fn new(save: SaveFile, delay: Duration) -> Self {
+    pub fn new(save: SaveEdits, delay: Duration) -> Self {
         Autosave {
             save,
             delay,
@@ -89,7 +89,7 @@ impl Autosave {
     }
 
     /// Saves over the file as it is at `version` from now on, with nothing to save yet.
-    pub fn start(&mut self, version: String, cx: &mut Context<Self>) {
+    pub fn start(&mut self, version: FileVersion, cx: &mut Context<Self>) {
         self.clear_timer();
         self.version = Some(version);
         self.unsaved = None;
@@ -122,13 +122,18 @@ impl Autosave {
     pub fn flush_now(
         &mut self,
         cx: &mut Context<Self>,
-    ) -> Option<Task<Result<String, QueryError>>> {
+    ) -> Option<Task<Result<FileVersion, QueryError>>> {
         self.clear_timer();
-        let (text, version) = (self.unsaved.clone()?, self.version.clone()?);
+        let (contents, expected) = (self.unsaved.clone()?, self.version.clone()?);
         if matches!(self.state, SaveState::ChangedOnDisk(_)) {
             return None;
         }
-        Some((self.save)(text, version, false, cx))
+        let request = SaveRequest {
+            contents,
+            expected,
+            overwrite: Overwrite::IfUnchanged,
+        };
+        Some((self.save)(request, cx))
     }
 
     /// Saves the edits over the file whatever it is now; resolves to whether they're saved.
@@ -194,18 +199,32 @@ impl Autosave {
         &mut self,
         overwrite: bool,
         cx: &mut Context<Self>,
-    ) -> Option<(String, Task<Result<String, QueryError>>)> {
-        let (text, version) = (self.unsaved.clone()?, self.version.clone()?);
+    ) -> Option<(String, Task<Result<FileVersion, QueryError>>)> {
+        let (text, expected) = (self.unsaved.clone()?, self.version.clone()?);
         if !overwrite && matches!(self.state, SaveState::ChangedOnDisk(_)) {
             return None;
         }
         self.set_state(SaveState::Saving, cx);
-        let saving = (self.save)(text.clone(), version, overwrite, cx);
+        let request = SaveRequest {
+            contents: text.clone(),
+            expected,
+            overwrite: if overwrite {
+                Overwrite::Always
+            } else {
+                Overwrite::IfUnchanged
+            },
+        };
+        let saving = (self.save)(request, cx);
         Some((text, saving))
     }
 
     /// `text` was saved, or not.
-    fn saved(&mut self, text: String, result: Result<String, QueryError>, cx: &mut Context<Self>) {
+    fn saved(
+        &mut self,
+        text: String,
+        result: Result<FileVersion, QueryError>,
+        cx: &mut Context<Self>,
+    ) {
         // Stopped meanwhile: nothing left to save, nor to say about it.
         if self.version.is_none() {
             return;
@@ -265,11 +284,14 @@ mod tests {
     ) -> (Entity<Autosave>, Calls) {
         let calls: Calls = Rc::default();
         let recorded = Rc::clone(&calls);
-        let save: SaveFile = Rc::new(move |text, version, overwrite, cx| {
+        let save: SaveEdits = Rc::new(move |request, cx| {
+            let overwrite = request.overwrite == Overwrite::Always;
+            let (text, version) = (request.contents, request.expected.into_string());
             recorded
                 .borrow_mut()
                 .push((text.clone(), version.clone(), overwrite));
-            respond(&text, &version, overwrite, cx)
+            let responding = respond(&text, &version, overwrite, cx);
+            cx.spawn(async move |_| responding.await.map(FileVersion::from))
         });
         (cx.new(|_| Autosave::new(save, DELAY)), calls)
     }

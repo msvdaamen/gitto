@@ -19,7 +19,7 @@ use gpui_kit::{AnyWindowHandle, App, AppContext as _, Entity, Task, TestAppConte
 
 use super::conflict_resolution::ResolveFileMutation;
 use super::file_diff_view::{FileDiffEvent, FileDiffView};
-use super::file_editing::FileIo;
+use super::file_editing::{FileIo, FileVersion, Overwrite};
 use crate::data::conflicts::FileToResolve;
 use crate::data::file_diff::{FilePatch, file_patch_key};
 use crate::data::{Mutation, Opaque, QueryClient, QueryError, QueryKey, QueryOptions, keys};
@@ -228,15 +228,15 @@ impl FakeTree {
                         .ok_or_else(|| QueryError::msg("No such file.")),
                 )
             }),
-            save: Rc::new(move |_, path, contents, version, overwrite, _| {
+            save: Rc::new(move |_, path, request, _| {
                 let asked = Save {
                     path: path.into(),
-                    contents,
-                    version,
-                    overwrite,
+                    contents: request.contents,
+                    version: request.expected.into_string(),
+                    overwrite: request.overwrite == Overwrite::Always,
                 };
                 saves.borrow_mut().push(asked.clone());
-                Task::ready((reply.borrow_mut())(&asked))
+                Task::ready((reply.borrow_mut())(&asked).map(FileVersion::from))
             }),
             reload: Rc::new(move |key, _| reloads.borrow_mut().push(key)),
         }

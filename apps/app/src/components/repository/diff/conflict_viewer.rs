@@ -31,7 +31,7 @@ use super::conflict_diff::{
 };
 use super::conflict_rows::{ConflictRow, LineRole, actions_row, conflict_rows};
 use super::conflict_whole_file::WholeFile;
-use super::file_editing::EditSession;
+use super::file_editing::{EditSession, FileVersion};
 use super::highlight::DiffHighlights;
 use super::patch_viewer::{
     DrawnLine, FONT_REMS, ROW_REMS, code_char_width, scroll_list_by, widest_line,
@@ -53,7 +53,7 @@ pub struct ConflictProgress {
     /// Whether a conflict is being resolved: written to disk, and shown once it is.
     pub saving: bool,
     /// The version of the file on show on disk; `None` until it's known, e.g. after editing.
-    pub version: Option<String>,
+    pub version: Option<FileVersion>,
     /// Why the file's conflicts aren't shown one by one, as its whole text is instead.
     pub problem: Option<String>,
 }
@@ -62,11 +62,13 @@ pub struct ConflictProgress {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiskFile {
     pub contents: String,
-    pub version: String,
+    pub version: FileVersion,
 }
 
-/// Writes `contents` over the file at `version`; resolves to its new version.
-pub type SaveFile = Rc<dyn Fn(String, String, &mut App) -> Task<Result<String, QueryError>>>;
+/// Writes a resolved conflict's text, `contents`, over the file at the version expected; resolves
+/// to its new version.
+pub type SaveResolved =
+    Rc<dyn Fn(String, FileVersion, &mut App) -> Task<Result<FileVersion, QueryError>>>;
 
 /// What the conflict viewer tells the file's view.
 #[derive(Debug, Clone, PartialEq)]
@@ -89,7 +91,7 @@ struct Shown {
     file_key: String,
     contents: Arc<str>,
     /// Its version on disk; `None` while that isn't known.
-    version: Option<String>,
+    version: Option<FileVersion>,
     /// Its conflicts, if they're shown one by one.
     state: Option<Arc<ConflictState>>,
     problem: Option<String>,
@@ -119,13 +121,13 @@ struct Request {
 pub struct ConflictViewer {
     focus: FocusHandle,
     scroll: UniformListScrollHandle,
-    save: SaveFile,
+    save: SaveResolved,
     path: SharedString,
     /// What the file's view last gave: the file, and the file as it was read from disk.
     given: Option<(String, Option<DiskFile>)>,
     shown: Option<Shown>,
     /// Versions of the file that were written over here: read from disk before that, and stale.
-    superseded: HashSet<String>,
+    superseded: HashSet<FileVersion>,
     /// The conflict the header's buttons and keys are of, by its index.
     current: Option<usize>,
     saving: bool,
@@ -160,7 +162,7 @@ impl Focusable for ConflictViewer {
 }
 
 impl ConflictViewer {
-    pub fn new(save: SaveFile, cx: &mut Context<Self>) -> Self {
+    pub fn new(save: SaveResolved, cx: &mut Context<Self>) -> Self {
         cx.on_release(|this: &mut Self, cx| this.highlights.drop_long(cx))
             .detach();
         ConflictViewer {
@@ -384,7 +386,7 @@ impl ConflictViewer {
         &mut self,
         file_key: String,
         contents: Arc<str>,
-        version: Option<String>,
+        version: Option<FileVersion>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<()> {
@@ -420,7 +422,7 @@ impl ConflictViewer {
         &mut self,
         file_key: String,
         contents: Arc<str>,
-        version: Option<String>,
+        version: Option<FileVersion>,
         read: ReadConflicts,
         widest: usize,
         window: &mut Window,
@@ -1284,7 +1286,10 @@ mod tests {
             let viewer = viewer.read(cx);
             (
                 viewer.shown_text().map(str::to_owned),
-                viewer.reported.as_ref().and_then(|p| p.version.clone()),
+                viewer
+                    .reported
+                    .as_ref()
+                    .and_then(|p| p.version.as_deref().map(str::to_owned)),
             )
         })
     }

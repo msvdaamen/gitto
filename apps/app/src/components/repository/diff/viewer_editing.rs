@@ -112,7 +112,9 @@ impl PatchEditor {
                 match edited {
                     Ok((contents, version)) => {
                         this.open(&diff, &path, &contents, window, cx);
-                        cx.emit(PatchEditorEvent::Editing(Some(EditSession { version })));
+                        cx.emit(PatchEditorEvent::Editing(Some(EditSession {
+                            version: version.into(),
+                        })));
                     }
                     Err(message) => cx.emit(PatchEditorEvent::EditFailed(message)),
                 }

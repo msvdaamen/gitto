@@ -14,9 +14,10 @@ use gpui_kit::{AnyElement, Context, Entity, KeyDownEvent, Task, Window, div};
 
 use super::conflict_sides::ConflictSides;
 use super::conflict_viewer::{
-    ConflictProgress, ConflictViewer, ConflictViewerEvent, DiskFile, Resolution, SaveFile,
+    ConflictProgress, ConflictViewer, ConflictViewerEvent, DiskFile, Resolution, SaveResolved,
 };
 use super::file_diff_view::{FileDiffEvent, FileDiffView};
+use super::file_editing::{FileVersion, Overwrite, SaveRequest};
 use super::markers_dialog::open_markers_dialog;
 use crate::components::ui::{EmptyState, IconButton, IconName, LoadingState, Notice};
 use crate::data::conflicts::{
@@ -156,7 +157,7 @@ impl FileDiffView {
 
     fn make_conflict_viewer(&mut self, cx: &mut Context<Self>) -> Entity<ConflictViewer> {
         let view = cx.entity().downgrade();
-        let save: SaveFile = Rc::new(move |contents, version, cx| {
+        let save: SaveResolved = Rc::new(move |contents, version, cx| {
             view.update(cx, |view, cx| view.save_conflict(contents, version, cx))
                 .unwrap_or_else(|_| Task::ready(Err(QueryError::msg("The file was closed."))))
         });
@@ -201,7 +202,10 @@ impl FileDiffView {
             return None;
         }
         match resolution.kind()? {
-            ConflictKind::Text { contents, version } => Some(DiskFile { contents, version }),
+            ConflictKind::Text { contents, version } => Some(DiskFile {
+                contents,
+                version: version.into(),
+            }),
             _ => None,
         }
     }
@@ -255,7 +259,7 @@ impl FileDiffView {
     /// The version of the file to check before resolving it whole: the latest one written here.
     fn resolution_version(&self) -> Option<String> {
         self.shown_progress()
-            .and_then(|shown| shown.version.clone())
+            .and_then(|shown| shown.version.clone().map(FileVersion::into_string))
             .or_else(|| {
                 self.resolution
                     .conflict()
@@ -364,17 +368,23 @@ impl FileDiffView {
         );
     }
 
-    /// Writes a resolved conflict's text over the file at `version`; resolves to its new version.
+    /// Writes a resolved conflict's text over the file at the version `expected`; resolves to its new
+    /// version.
     fn save_conflict(
         &mut self,
         contents: String,
-        version: String,
+        expected: FileVersion,
         cx: &mut Context<Self>,
-    ) -> Task<Result<String, QueryError>> {
+    ) -> Task<Result<FileVersion, QueryError>> {
         let id = self.view.repository_id().clone();
         let path = self.view.file().path;
         let io = self.editing.io();
-        let saving = (io.save)(&id, &path, contents, version, false, cx);
+        let request = SaveRequest {
+            contents,
+            expected,
+            overwrite: Overwrite::IfUnchanged,
+        };
+        let saving = (io.save)(&id, &path, request, cx);
         cx.spawn(async move |_, cx| {
             let saved = saving.await;
             if saved.is_err() {

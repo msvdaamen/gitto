@@ -14,7 +14,7 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::prelude::*;
 use gpui_kit::{AnyElement, App, Context, Entity, Task, Window, div};
 
-use super::autosave::{AUTOSAVE_DELAY, Autosave, SaveFile, SaveState};
+use super::autosave::{AUTOSAVE_DELAY, Autosave, SaveEdits, SaveState};
 use super::file_diff_view::FileDiffView;
 use super::unsaved_changes_dialog::{UnsavedChoice, open_unsaved_changes_dialog};
 use crate::components::ui::{IconButton, IconName, Notice};
@@ -22,22 +22,74 @@ use crate::data::file_diff::{fetch_working_tree_file, save_working_tree_file};
 use crate::data::{QueryClient, QueryError, QueryKey, keys};
 use crate::theme::PaletteExt as _;
 
+/// A version of a file in the working tree, as git's API names one (see
+/// `read_working_tree_file`): a write over the file is checked against the version it's of, so it
+/// doesn't go over changes made since.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FileVersion(String);
+
+impl FileVersion {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl From<String> for FileVersion {
+    fn from(version: String) -> Self {
+        FileVersion(version)
+    }
+}
+
+impl From<&str> for FileVersion {
+    fn from(version: &str) -> Self {
+        FileVersion(version.to_owned())
+    }
+}
+
+impl std::ops::Deref for FileVersion {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Whether a save goes over the file whatever it is now, or only as it was at the version
+/// expected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Overwrite {
+    IfUnchanged,
+    Always,
+}
+
+/// A file's text to save over it in the working tree: over the version `expected`, unless it's to
+/// [`Overwrite::Always`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SaveRequest {
+    pub contents: String,
+    pub expected: FileVersion,
+    pub overwrite: Overwrite,
+}
+
 /// Editing the file on show: the version of it on disk the edits are of (see
 /// `read_working_tree_file`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditSession {
-    pub version: String,
+    pub version: FileVersion,
 }
 
 /// Reads a file in the working tree, with its version.
 pub type ReadWorkingTreeFile =
     Rc<dyn Fn(&RepositoryId, &str, &mut App) -> Task<Result<WorkingTreeFile, QueryError>>>;
 
-/// Saves a file's text over it in the working tree, if it's still at `version` or to `overwrite`
-/// it; resolves to its new version.
-pub type SaveWorkingTreeFile = Rc<
-    dyn Fn(&RepositoryId, &str, String, String, bool, &mut App) -> Task<Result<String, QueryError>>,
->;
+/// Saves a file's text over it in the working tree, as the request says; resolves to its new
+/// version.
+pub type SaveWorkingTreeFile =
+    Rc<dyn Fn(&RepositoryId, &str, SaveRequest, &mut App) -> Task<Result<FileVersion, QueryError>>>;
 
 /// Loads again what's under a key, as what it's of changed: the file's changes once its edits
 /// are saved, say.
@@ -56,8 +108,16 @@ impl FileIo {
     pub fn git() -> Self {
         FileIo {
             read: Rc::new(fetch_working_tree_file),
-            save: Rc::new(|id, path, contents, version, overwrite, cx| {
-                save_working_tree_file(id, path, contents, version, overwrite, cx)
+            save: Rc::new(|id, path, request, cx| {
+                let saving = save_working_tree_file(
+                    id,
+                    path,
+                    request.contents,
+                    request.expected.into_string(),
+                    request.overwrite == Overwrite::Always,
+                    cx,
+                );
+                cx.spawn(async move |_| saving.await.map(FileVersion::from))
             }),
             reload: Rc::new(|key, cx| drop(QueryClient::invalidate(&key, cx))),
         }
@@ -94,14 +154,14 @@ impl FileEditing {
     pub fn new(cx: &mut Context<FileDiffView>) -> Self {
         let io = Rc::new(RefCell::new(FileIo::git()));
         let target: Rc<RefCell<Option<(RepositoryId, String)>>> = Rc::default();
-        let save: SaveFile = {
+        let save: SaveEdits = {
             let (io, target) = (Rc::clone(&io), Rc::clone(&target));
-            Rc::new(move |text, version, overwrite, cx| {
+            Rc::new(move |request, cx| {
                 let Some((id, path)) = target.borrow().clone() else {
                     return Task::ready(Err(QueryError::msg("Nothing is being edited.")));
                 };
                 let save = Rc::clone(&io.borrow().save);
-                save(&id, &path, text, version, overwrite, cx)
+                save(&id, &path, request, cx)
             })
         };
         let autosave = cx.new(|_| Autosave::new(save, AUTOSAVE_DELAY));
