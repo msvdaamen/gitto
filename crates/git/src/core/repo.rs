@@ -114,7 +114,7 @@ impl GitRepos {
 }
 
 /// A repository on disk, with git commands bound to it. Cheap to clone; clones are the same
-/// repository.
+/// repository. Its commands' futures belong on a background executor (see [`GitCommand`]).
 #[derive(Clone)]
 pub struct Repo {
     inner: Arc<RepoInner>,
@@ -402,6 +402,12 @@ enum Via {
 /// Runs git commands in a repository (TS's `GitCommand`, `(args, options) => Promise<string>`): as
 /// reads (`Repo::git`), writes (`Repo::writer`), fetches (`Repo::fetcher`), or inside
 /// `Repo::exclusive` or `Repo::fetching`, whichever it came from. Cheap to clone.
+///
+/// Its futures, and those of everything that runs git, block while they start it: the first poll
+/// forks and execs git, which takes a while in a large process like the app. Poll them on a
+/// background executor (GPUI's `background_spawn`, say), never the UI thread. What runs in the
+/// background without anyone waiting on it, like refreshing the index, runs on smol's global
+/// executor, whichever executor the caller polls on.
 ///
 /// Each method takes the arguments when it's called and returns a `'static` future; git starts
 /// when it's first polled, and is stopped, with all it started, if it's dropped before git exits.
