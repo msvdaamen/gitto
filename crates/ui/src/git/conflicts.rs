@@ -120,7 +120,7 @@ pub fn operation_title(operation: &Operation) -> String {
 }
 
 /// A cherry-pick's or revert's title: `verb` and the commit it's at, e.g. "Reverting 1a2b3c4 Fix
-/// it"; `None` between the commits of a series, once one was committed by hand.
+/// it"; or `"{verb} commits"` between the commits of a series, once one was committed by hand.
 fn picking(verb: &str, commit: Option<&CommitName>) -> String {
     match commit {
         Some(commit) => format!("{verb} {} {}", commit.sha, commit.subject)
