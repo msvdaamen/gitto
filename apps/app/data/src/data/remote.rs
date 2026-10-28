@@ -1,25 +1,9 @@
-//! Fetching, and why a push was turned down. Ported from
-//! `git/queries/remote.ts`.
+//! Why a push was turned down. Ported from `git/queries/remote.ts`; fetching is a repository's
+//! change (`Repository::fetch`).
 
 use gitto_git::ApiCode;
-use gitto_git::input::RepositoryId;
-use gpui_kit::{App, Entity};
 
-use super::Repositories;
 use super::error::DataError;
-use super::mutation::Mutation;
-
-/// Fetches every remote of the repository whose id it's given (`useFetch`). The id is the
-/// mutation's input (`Mutation::input`), so a fetch still running after switching repositories
-/// reloads the one it fetched, and its state can be told apart from the current repository's.
-pub fn fetch_mutation(cx: &mut App) -> Entity<Mutation<RepositoryId>> {
-    Mutation::new(
-        |id: RepositoryId, cx: &mut App| {
-            Repositories::open(&id, cx).update(cx, |repository, cx| repository.fetch(cx))
-        },
-        cx,
-    )
-}
 
 /// Why the remote branch turned a push down (see [`push_rejection`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

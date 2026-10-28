@@ -16,12 +16,8 @@ use super::push_button::PushButton;
 use super::stash_buttons::StashButtons;
 use super::toolbar_button::{HideBelow, SMALL, ToolbarButton};
 use crate::views::repository::MEDIUM;
-use gitto_app_data::data::changes::{DELETE_BRANCH, MERGE, PULL_BRANCH, REBASE, SWITCH};
-use gitto_app_data::data::remote::fetch_mutation;
 use gitto_app_data::data::repositories::find;
-use gitto_app_data::data::{
-    AppData, AppPart, Changed, DataError, Mutation, Part, Repository, Shown,
-};
+use gitto_app_data::data::{AppData, AppPart, Change, Changed, DataError, Part, Repository, Shown};
 use gitto_app_kit::theme::PaletteExt as _;
 use gitto_app_kit::ui::{Divider, FailurePopover, Icon, IconButton, IconName, TextInput};
 
@@ -68,14 +64,14 @@ impl BranchChangeKind {
         }
     }
 
-    /// The name of its change (see `data::changes`).
-    fn operation(self) -> &'static str {
+    /// The repository's change it is.
+    pub fn change(self) -> Change {
         match self {
-            BranchChangeKind::Merge => MERGE,
-            BranchChangeKind::Rebase => REBASE,
-            BranchChangeKind::Switch => SWITCH,
-            BranchChangeKind::Delete => DELETE_BRANCH,
-            BranchChangeKind::Pull => PULL_BRANCH,
+            BranchChangeKind::Merge => Change::Merge,
+            BranchChangeKind::Rebase => Change::Rebase,
+            BranchChangeKind::Switch => Change::Switch,
+            BranchChangeKind::Delete => Change::DeleteBranch,
+            BranchChangeKind::Pull => Change::PullBranch,
         }
     }
 }
@@ -144,8 +140,6 @@ pub struct RepositoryToolbar {
     details_open: bool,
     /// Takes in the changes of the branches' failures as they change.
     _failures: Subscription,
-    /// Fetching every remote of a repository, whose id is its input.
-    fetch: Entity<Mutation<RepositoryId>>,
     failures: FailureOrder,
     pull: Entity<PullButton>,
     push: Entity<PushButton>,
@@ -158,17 +152,6 @@ impl EventEmitter<ToolbarEvent> for RepositoryToolbar {}
 
 impl RepositoryToolbar {
     pub fn new(repository_id: RepositoryId, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let fetch = fetch_mutation(cx);
-        RepositoryToolbar::with_fetch(repository_id, fetch, window, cx)
-    }
-
-    /// With `fetch` fetching: a test's.
-    pub(crate) fn with_fetch(
-        repository_id: RepositoryId,
-        fetch: Entity<Mutation<RepositoryId>>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search history…"));
         let subscriptions = vec![
             cx.subscribe(&search, |_, search, event, cx| {
@@ -177,7 +160,6 @@ impl RepositoryToolbar {
                     cx.emit(ToolbarEvent::Search(value));
                 }
             }),
-            cx.observe(&fetch, |_, _, cx| cx.notify()),
             cx.subscribe(&AppData::global(cx), |_, _, event, cx| {
                 if event.0 == AppPart::Repositories {
                     cx.notify();
@@ -185,7 +167,7 @@ impl RepositoryToolbar {
             }),
         ];
         AppData::global(cx).update(cx, |data, cx| data.show(AppPart::Repositories, cx));
-        let repository = Shown::new(&repository_id, &[Part::Status, Part::Operations], cx);
+        let repository = Shown::new(&repository_id, &[Part::Status, Part::Changes], cx);
         let id = repository_id.clone();
         let mut toolbar = RepositoryToolbar {
             _failures: Self::follow_failures(repository.entity(), cx),
@@ -197,7 +179,6 @@ impl RepositoryToolbar {
             search,
             sidebar_open: true,
             details_open: true,
-            fetch,
             failures: FailureOrder::default(),
             _subscriptions: subscriptions,
         };
@@ -207,7 +188,7 @@ impl RepositoryToolbar {
 
     fn follow_failures(repository: &Entity<Repository>, cx: &mut Context<Self>) -> Subscription {
         cx.subscribe(repository, |this, _, Changed(part), cx| {
-            if *part == Part::Operations {
+            if *part == Part::Changes {
                 this.update_failures(cx);
             }
         })
@@ -255,7 +236,7 @@ impl RepositoryToolbar {
     fn update_failures(&mut self, cx: &App) {
         let repository = self.repository.read(cx);
         self.failures
-            .update(|kind| repository.operation_state(kind.operation()).error);
+            .update(|kind| repository.change_state(kind.change()).error);
     }
 
     /// Whether the current branch is changing (see the type's doc).
@@ -263,7 +244,7 @@ impl RepositoryToolbar {
         let repository = self.repository.read(cx);
         BranchChangeKind::ALL
             .iter()
-            .any(|kind| repository.operation_state(kind.operation()).running)
+            .any(|kind| repository.change_state(kind.change()).running)
     }
 
     /// The failure the current branch shows, if any.
@@ -271,19 +252,17 @@ impl RepositoryToolbar {
         self.failures.shown()
     }
 
-    /// Fetch, as it is now: spinning while it runs, red with the reason once it failed. The last
-    /// fetch is shown if it was of this repository; one of another stays with that repository.
+    /// Fetch, as it is now: spinning while it runs, red with the reason once it failed. It's the
+    /// repository's: one of another stays with that repository.
     pub fn fetch_button(&self, cx: &App) -> ToolbarButton {
-        let id = self.repository_id(cx).clone();
-        let fetch = self.fetch.read(cx);
-        let current = fetch.input() == Some(&id);
-        let pending = current && fetch.is_pending();
-        let error = fetch.error().filter(|_| current).cloned();
+        let state = self.repository.read(cx).change_state(Change::Fetch);
+        let pending = state.running;
+        let error = state.error;
         let title = match &error {
             Some(error) => format!("Fetch failed: {error}"),
             None => "Fetch all remotes".to_owned(),
         };
-        let mutation = self.fetch.clone();
+        let repository = self.repository.entity().clone();
         ToolbarButton::new("fetch", IconName::RefreshCw, "Fetch")
             .hide_below(HideBelow::Small)
             .title(title)
@@ -291,8 +270,7 @@ impl RepositoryToolbar {
             .danger(error.is_some())
             .busy(pending)
             .on_click(move |_, _, cx| {
-                let id = id.clone();
-                mutation.update(cx, |fetch, cx| drop(fetch.mutate(id, cx)));
+                repository.update(cx, |repository, cx| drop(repository.fetch(cx)));
             })
     }
 
@@ -351,9 +329,7 @@ impl RepositoryToolbar {
         )
         .on_dismiss(move |_, cx| {
             if let Some(kind) = dismiss {
-                dismissed.update(cx, |repository, cx| {
-                    repository.dismiss(kind.operation(), cx)
-                });
+                dismissed.update(cx, |repository, cx| repository.dismiss(kind.change(), cx));
             }
         })
     }
@@ -530,6 +506,21 @@ mod tests {
         settle: RefCell<Option<oneshot::Sender<Result<(), DataError>>>>,
     }
 
+    /// The repository `id`'s git, which fetches when the test says.
+    struct FetchingGit {
+        id: RepositoryId,
+        fetches: Rc<Fetches>,
+    }
+
+    impl RepositoryGit for FetchingGit {
+        fn fetch(&self) -> GitTask<()> {
+            self.fetches.calls.borrow_mut().push(self.id.clone());
+            let (settle, settled) = oneshot::channel();
+            *self.fetches.settle.borrow_mut() = Some(settle);
+            async move { settled.await.unwrap_or(Err(DataError::msg("dropped"))) }.boxed()
+        }
+    }
+
     fn render(
         cx: &mut TestAppContext,
     ) -> (
@@ -551,23 +542,16 @@ mod tests {
         seed(&a, cx);
         seed(&b, cx);
         let fetches = Rc::new(Fetches::default());
+        for id in [&a, &b] {
+            let git = FetchingGit {
+                id: id.clone(),
+                fetches: Rc::clone(&fetches),
+            };
+            fake_git(id, Rc::new(git), cx);
+        }
         let shown = a.clone();
-        let (window, toolbar) = crate::test_support::open(cx, {
-            let fetches = Rc::clone(&fetches);
-            move |window, cx| {
-                let fetch = Mutation::new(
-                    move |id: RepositoryId, cx: &mut App| {
-                        fetches.calls.borrow_mut().push(id);
-                        let (settle, settled) = oneshot::channel();
-                        *fetches.settle.borrow_mut() = Some(settle);
-                        cx.background_spawn(async move {
-                            settled.await.unwrap_or(Err(DataError::msg("dropped")))
-                        })
-                    },
-                    cx,
-                );
-                RepositoryToolbar::with_fetch(shown, fetch, window, cx)
-            }
+        let (window, toolbar) = crate::test_support::open(cx, move |window, cx| {
+            RepositoryToolbar::new(shown, window, cx)
         });
         cx.run_until_parked();
         (dir, a, b, fetches, window, toolbar)
@@ -673,7 +657,9 @@ mod tests {
         assert_eq!(error.to_string(), "Not fully merged.");
 
         // Dismissed, the one before it shows again.
-        repository.update(cx, |repository, cx| repository.dismiss("delete-branch", cx));
+        repository.update(cx, |repository, cx| {
+            repository.dismiss(Change::DeleteBranch, cx)
+        });
         let (kind, _) = toolbar
             .read_with(cx, |toolbar, _| toolbar.branch_failure())
             .unwrap();

@@ -128,7 +128,7 @@ const PARTS: &[Part] = &[
     Part::Stashes,
     Part::Worktrees,
     Part::Status,
-    Part::Operations,
+    Part::Changes,
 ];
 
 /// The dialog open, asking about a stash or a worktree of a repository.

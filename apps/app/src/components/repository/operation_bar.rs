@@ -12,7 +12,7 @@ use gpui_kit::{
 };
 
 use super::BeforeChange;
-use gitto_app_data::data::changes::{ABORT, CONTINUE};
+use gitto_app_data::data::Change;
 use gitto_app_data::data::status::{ConflictedFiles, first_to_resolve, select_conflicted};
 use gitto_app_data::data::{Part, Repository, Shown};
 use gitto_app_kit::theme::PaletteExt as _;
@@ -76,7 +76,7 @@ impl OperationBar {
         OperationBar {
             repository: Shown::new(
                 &repository_id,
-                &[Part::Operation, Part::Status, Part::Operations],
+                &[Part::Operation, Part::Status, Part::Changes],
                 cx,
             ),
             before_change: None,
@@ -138,7 +138,9 @@ impl OperationBar {
     }
 
     fn is_pending(&self, cx: &App) -> bool {
-        self.repository.read(cx).is_running(&[CONTINUE, ABORT])
+        self.repository
+            .read(cx)
+            .is_running(&[Change::Continue, Change::Abort])
     }
 
     /// Whether Continue (or Commit merge) can be clicked: nothing's running, and nothing's
@@ -251,8 +253,8 @@ impl Render for OperationBar {
             let name = operation_name(&operation);
             let kind = operation.kind();
             let repository = self.repository.read(cx);
-            let abort_state = repository.operation_state(ABORT);
-            let proceed_state = repository.operation_state(CONTINUE);
+            let abort_state = repository.change_state(Change::Abort);
+            let proceed_state = repository.change_state(Change::Continue);
             let label = if proceed_state.running {
                 "Continuing…"
             } else {
@@ -275,7 +277,8 @@ impl Render for OperationBar {
                             })),
                     )
                     .on_dismiss(move |_, cx| {
-                        dismiss_abort.update(cx, |repository, cx| repository.dismiss(ABORT, cx))
+                        dismiss_abort
+                            .update(cx, |repository, cx| repository.dismiss(Change::Abort, cx))
                     }),
                 )
                 .child(
@@ -290,8 +293,9 @@ impl Render for OperationBar {
                             .on_click(cx.listener(move |this, _, _, cx| this.go_on(kind, cx))),
                     )
                     .on_dismiss(move |_, cx| {
-                        dismiss_proceed
-                            .update(cx, |repository, cx| repository.dismiss(CONTINUE, cx))
+                        dismiss_proceed.update(cx, |repository, cx| {
+                            repository.dismiss(Change::Continue, cx)
+                        })
                     }),
                 )
         });

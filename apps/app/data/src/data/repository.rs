@@ -37,6 +37,7 @@ use gitto_git::input::{FileInput, FullSha, NonEmpty, RepositoryId, Sha};
 use gitto_git::schema::FileStatus;
 use gpui_kit::{App, AppContext as _, Context, Entity, EventEmitter, Global, Subscription, Task};
 
+use super::changes::{Change, ChangeGroup};
 use super::diff::{ChangedFiles, FilesOf};
 use super::error::DataError;
 use super::file_diff::FilePatch;
@@ -81,8 +82,8 @@ pub enum Part {
     Commits,
     /// Loading more of the log.
     More,
-    /// Whether a change to the repository (a pull, say) is running, and why it last failed.
-    Operations,
+    /// Whether a [`Change`] to the repository (a pull, say) is running, and why it last failed.
+    Changes,
 }
 
 /// What a [`Repository`] says when what it holds of `Part` changed: its data, why it failed, or
@@ -90,10 +91,10 @@ pub enum Part {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Changed(pub Part);
 
-/// Whether one of a repository's operations is running, and why it last failed (see
-/// [`Repository::run`]).
+/// Whether a change is running, and why it last failed: one of a repository's (see
+/// [`Repository::run`]), or a view's own (see `super::mutation`).
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct OperationState {
+pub struct ChangeState {
     pub running: bool,
     pub error: Option<DataError>,
 }
@@ -143,7 +144,7 @@ pub struct Repository {
     files: Keyed<(FilesOf, String), ChangedFiles>,
     messages: Keyed<String, String>,
     more: LoadingMore,
-    operations: HashMap<&'static str, OperationState>,
+    changes: HashMap<Change, ChangeState>,
 }
 
 /// Loading more of the log: whether it's under way, and why it last failed, both of the log as it
@@ -179,7 +180,7 @@ impl Repository {
             files: Keyed::new(KEPT_COMMITS),
             messages: Keyed::new(KEPT_COMMITS),
             more: LoadingMore::default(),
-            operations: HashMap::new(),
+            changes: HashMap::new(),
         }
     }
 
@@ -960,64 +961,72 @@ impl Repository {
 
     // Changes: their state.
 
-    /// The change `name`'s state: idle, without an error, if it's not been run, or went through.
-    pub fn operation_state(&self, name: &str) -> OperationState {
-        self.operations.get(name).cloned().unwrap_or_default()
+    /// The change's state: idle, without an error, if it's not been run, or went through.
+    pub fn change_state(&self, change: Change) -> ChangeState {
+        self.changes.get(&change).cloned().unwrap_or_default()
     }
 
-    /// Whether any of the changes `names` is running.
-    pub fn is_running(&self, names: &[&str]) -> bool {
-        names.iter().any(|name| self.operation_state(name).running)
+    /// Whether any of `changes` is running.
+    pub fn is_running(&self, changes: &[Change]) -> bool {
+        changes
+            .iter()
+            .any(|change| self.change_state(*change).running)
     }
 
-    /// Forgets why the change `name` last failed, unless it's running.
-    pub fn dismiss(&mut self, name: &str, cx: &mut Context<Self>) {
-        if self.operation_state(name).running {
+    /// Whether one of the changes of `group` is running.
+    pub fn is_changing(&self, group: ChangeGroup) -> bool {
+        self.changes
+            .iter()
+            .any(|(change, state)| state.running && change.is_in(group))
+    }
+
+    /// Forgets why `change` last failed, unless it's running.
+    pub fn dismiss(&mut self, change: Change, cx: &mut Context<Self>) {
+        if self.change_state(change).running {
             return;
         }
-        if self.operations.remove(name).is_some() {
-            self.changed(Part::Operations, cx);
+        if self.changes.remove(&change).is_some() {
+            self.changed(Part::Changes, cx);
         }
     }
 
-    /// Runs the change `name`, which `work` does, unless it's running: `None` then. Its state is
-    /// kept (see [`operation_state`](Self::operation_state)) until it's run again, or dismissed;
-    /// the receiver is told what it resolved to, for the view that ran it to act on if it's still
-    /// there.
+    /// Runs `change`, which `work` does, unless it's running: `None` then. Its state is kept (see
+    /// [`change_state`](Self::change_state)) until it's run again, or dismissed; the receiver is
+    /// told what it resolved to, for the view that ran it to act on if it's still there.
     pub fn run<R: 'static>(
         &mut self,
-        name: &'static str,
+        change: Change,
         work: impl FnOnce(&mut Self, &mut Context<Self>) -> Task<Result<R, DataError>>,
         cx: &mut Context<Self>,
     ) -> Option<oneshot::Receiver<Result<R, DataError>>> {
-        if self.operation_state(name).running {
+        if self.change_state(change).running {
             return None;
         }
-        self.operations.insert(
-            name,
-            OperationState {
+        self.changes.insert(
+            change,
+            ChangeState {
                 running: true,
                 error: None,
             },
         );
-        self.changed(Part::Operations, cx);
+        self.changed(Part::Changes, cx);
         let work = work(self, cx);
         let (done, result) = oneshot::channel();
         cx.spawn(async move |this, cx| {
             let outcome = work.await;
-            let _ = this.update(cx, |repo, cx| {
+            let _ = this.update(cx, |repository, cx| {
                 match &outcome {
                     // Nothing to keep for one that went through.
-                    Ok(_) => repo.operations.remove(name),
-                    Err(error) => repo.operations.insert(
-                        name,
-                        OperationState {
+                    Ok(_) => repository.changes.remove(&change),
+                    Err(error) => repository.changes.insert(
+                        change,
+                        ChangeState {
                             running: false,
                             error: Some(error.clone()),
                         },
                     ),
                 };
-                repo.changed(Part::Operations, cx);
+                repository.changed(Part::Changes, cx);
             });
             let _ = done.send(outcome);
         })
@@ -1575,7 +1584,7 @@ mod tests {
         let finished = Cell::new(Some(finished));
         let pull = |repository: &mut Repository, cx: &mut Context<Repository>| {
             repository.run(
-                "pull",
+                Change::Pull,
                 |_, cx| {
                     let finished = finished.take().unwrap();
                     cx.background_spawn(async move { finished.await.unwrap() })
@@ -1589,7 +1598,7 @@ mod tests {
             .unwrap();
         cx.run_until_parked();
         assert!(repository.read_with(cx, |repository, _| {
-            repository.operation_state("pull").running
+            repository.change_state(Change::Pull).running
         }));
         // Not again while it runs.
         assert!(
@@ -1600,15 +1609,15 @@ mod tests {
 
         finish.send(Err(DataError::msg("No upstream."))).unwrap();
         cx.run_until_parked();
-        let state = repository.read_with(cx, |repository, _| repository.operation_state("pull"));
+        let state = repository.read_with(cx, |repository, _| repository.change_state(Change::Pull));
         assert!(!state.running);
         assert_eq!(state.error.unwrap().to_string(), "No upstream.");
         assert!(result.now_or_never().unwrap().unwrap().is_err());
 
-        repository.update(cx, |repository, cx| repository.dismiss("pull", cx));
+        repository.update(cx, |repository, cx| repository.dismiss(Change::Pull, cx));
         assert_eq!(
-            repository.read_with(cx, |repository, _| repository.operation_state("pull")),
-            OperationState::default()
+            repository.read_with(cx, |repository, _| repository.change_state(Change::Pull)),
+            ChangeState::default()
         );
     }
 
@@ -1621,7 +1630,7 @@ mod tests {
         let result = repository
             .update(cx, |repository, cx| {
                 repository.run(
-                    "push",
+                    Change::Push,
                     |repository, cx| repository.reloading(async { Ok(7) }.boxed(), cx),
                     cx,
                 )
@@ -1630,8 +1639,8 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(result.now_or_never().unwrap().unwrap().unwrap(), 7);
         assert_eq!(
-            repository.read_with(cx, |repository, _| repository.operation_state("push")),
-            OperationState::default()
+            repository.read_with(cx, |repository, _| repository.change_state(Change::Push)),
+            ChangeState::default()
         );
         assert_eq!(git.refs.get(), 2);
     }

@@ -9,7 +9,7 @@ use gpui_kit::{Anchor, App, Context, Entity, Focusable as _, Subscription, Windo
 
 use super::branch_form::{BranchForm, NAME_PLACEHOLDER, submitted_name};
 use super::toolbar_button::{HideBelow, ToolbarButton};
-use gitto_app_data::data::changes::CREATE_BRANCH;
+use gitto_app_data::data::Change;
 use gitto_app_data::data::{Part, Shown};
 use gitto_app_kit::ui::IconName;
 
@@ -35,7 +35,7 @@ impl BranchButton {
             }),
         ];
         BranchButton {
-            repository: Shown::new(&repository_id, &[Part::Status, Part::Operations], cx),
+            repository: Shown::new(&repository_id, &[Part::Status, Part::Changes], cx),
             name,
             open: false,
             _subscriptions: subscriptions,
@@ -84,8 +84,9 @@ impl BranchButton {
     /// the name, which is kept after a failure to fix it.
     pub fn toggle(&mut self, open: bool, cx: &mut Context<Self>) {
         if open {
-            self.repository
-                .update(cx, |repository, cx| repository.dismiss(CREATE_BRANCH, cx));
+            self.repository.update(cx, |repository, cx| {
+                repository.dismiss(Change::CreateBranch, cx)
+            });
         }
         self.open = open;
         cx.notify();
@@ -126,7 +127,7 @@ impl BranchButton {
     /// The button as it is now. Until the status has loaded, it's disabled.
     pub fn button(&self, cx: &App) -> ToolbarButton {
         let repository = self.repository.read(cx);
-        let state = repository.operation_state(CREATE_BRANCH);
+        let state = repository.change_state(Change::CreateBranch);
         let status = repository.status().data();
         let source = status.map_or("HEAD", |status| branch_source(&status.head));
         let dismiss = self.repository.entity().clone();
@@ -136,7 +137,9 @@ impl BranchButton {
             .disabled(status.is_none() || repository.branches_changing())
             .busy(state.running)
             .failure("Branch", state.error, move |_, cx| {
-                dismiss.update(cx, |repository, cx| repository.dismiss(CREATE_BRANCH, cx))
+                dismiss.update(cx, |repository, cx| {
+                    repository.dismiss(Change::CreateBranch, cx)
+                })
             })
     }
 }

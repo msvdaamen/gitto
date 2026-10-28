@@ -41,8 +41,8 @@ use super::add_worktree_dialog::AddWorktreeDialog;
 use super::create_branch_dialog::CreateBranchDialog;
 use super::delete_branch_dialog::{BranchDeletion, Unpushed, open_delete_branch_dialog};
 use super::row_menu::RowMenu;
+use gitto_app_data::data::Change;
 use gitto_app_data::data::branch::{Merge, Rebase};
-use gitto_app_data::data::changes::{OPEN_WORKTREE, PULL, PULL_BRANCH};
 use gitto_app_data::data::status::{first_to_resolve, select_conflicted};
 use gitto_app_data::data::{Done, Part, Repository, Shown};
 use gitto_app_kit::ui::{IconName, context_menu_item};
@@ -176,7 +176,7 @@ impl BranchMenuProvider {
     pub fn is_opening_worktree(&self, cx: &App) -> bool {
         self.repository
             .read(cx)
-            .operation_state(OPEN_WORKTREE)
+            .change_state(Change::OpenWorktree)
             .running
     }
 
@@ -252,11 +252,11 @@ impl BranchMenuProvider {
     fn is_pulling(&self, reference: &str, cx: &App) -> bool {
         let shown = self.shown(cx);
         let name = if shown.checked_out_here(reference) {
-            PULL
+            Change::Pull
         } else {
-            PULL_BRANCH
+            Change::PullBranch
         };
-        shown.0.operation_state(name).running
+        shown.0.change_state(name).running
     }
 
     /// Merges the branch `reference`, by its full ref name, into the checked-out one, once the
@@ -458,7 +458,7 @@ const PARTS: &[Part] = &[
     Part::Worktrees,
     Part::Refs,
     Part::Remotes,
-    Part::Operations,
+    Part::Changes,
 ];
 
 /// The repository's data, for what the branch menus work out from it.

@@ -16,7 +16,7 @@ use gpui_kit::{App, Entity, Window};
 
 use super::sidebar_section::SectionFailure;
 use gitto_app_data::data::Repository;
-use gitto_app_data::data::changes::{DROP_STASH, POP_PICKED};
+use gitto_app_data::data::{Change, PopFrom};
 use gitto_app_kit::ui::{IconName, context_menu_item};
 
 /// The menu of what can be done with a stash: popping it puts its changes back and drops it;
@@ -28,19 +28,19 @@ pub struct StashMenu;
 impl StashMenu {
     /// Whether a stash is being popped or deleted from the sidebar on `repository`.
     pub fn is_busy(repository: &Repository) -> bool {
-        repository.is_running(&[POP_PICKED, DROP_STASH])
+        repository.is_running(&[Change::Pop(PopFrom::Picked), Change::DropStash])
     }
 
     /// Why popping or deleting a stash failed on `repository`, if it did. One at a time, the
     /// deletion's first: both can have failed, one after the other.
     pub fn failure(repository: &Entity<Repository>, cx: &App) -> SectionFailure {
         let shown = repository.read(cx);
-        let drop = shown.operation_state(DROP_STASH);
+        let drop = shown.change_state(Change::DropStash);
         let (title, error, name) = if drop.error.is_some() {
-            ("Delete stash", drop.error, DROP_STASH)
+            ("Delete stash", drop.error, Change::DropStash)
         } else {
-            let pop = shown.operation_state(POP_PICKED);
-            ("Pop stash", pop.error, POP_PICKED)
+            let pop = shown.change_state(Change::Pop(PopFrom::Picked));
+            ("Pop stash", pop.error, Change::Pop(PopFrom::Picked))
         };
         let repository = repository.clone();
         SectionFailure {
@@ -73,7 +73,7 @@ impl StashMenu {
             move |_, _, cx| {
                 let sha = sha.clone();
                 pop.update(cx, |repository, cx| {
-                    drop(repository.pop_stash(POP_PICKED, sha, cx))
+                    drop(repository.pop_stash(PopFrom::Picked, sha, cx))
                 });
             },
         ))

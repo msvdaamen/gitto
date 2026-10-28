@@ -1,10 +1,11 @@
 //! A change a view makes, with its state: TanStack Query's `useMutation`, for the changes that
-//! aren't a repository's operations (see `super::changes`), like committing or staging.
+//! aren't a repository's own (see `super::changes`), like committing or staging. Its state is a
+//! [`ChangeState`], as theirs is.
 //!
 //! A [`Mutation`] is an entity a view makes in its constructor and observes
 //! (`cx.observe(&mutation, |_, _, cx| cx.notify())`): whether it's running, why it last failed,
 //! and the input it was last run with (TanStack's `variables`), until it's [`reset`](Mutation::reset).
-//! Unlike an operation, its state is the view's own, and it runs again even while it's running,
+//! Unlike a repository's change, its state is the view's own, and it runs again even while it's running,
 //! as TanStack's does: what it shows is of the last run.
 
 use std::rc::Rc;
@@ -13,6 +14,7 @@ use futures::channel::oneshot;
 use gpui_kit::{App, AppContext as _, Context, Entity, Task};
 
 use super::error::DataError;
+use super::repository::ChangeState;
 
 /// Runs a mutation with its input, on the main thread; its task runs the slow part on the
 /// background executor, and settles once what it reloads is reloaded, if it waits for that.
@@ -21,8 +23,7 @@ pub type RunMutation<I, R> = Rc<dyn Fn(I, &mut App) -> Task<Result<R, DataError>
 /// A change, and the state of its last run (see the module's doc).
 pub struct Mutation<I, R = ()> {
     run: RunMutation<I, R>,
-    pending: bool,
-    error: Option<DataError>,
+    state: ChangeState,
     input: Option<I>,
     /// Counts the runs and resets, so a run that settles after another started, or after a
     /// reset, leaves the state alone.
@@ -37,8 +38,7 @@ impl<I: Clone + 'static, R: 'static> Mutation<I, R> {
     ) -> Entity<Self> {
         cx.new(|_| Mutation {
             run: Rc::new(run),
-            pending: false,
-            error: None,
+            state: ChangeState::default(),
             input: None,
             generation: 0,
         })
@@ -54,8 +54,10 @@ impl<I: Clone + 'static, R: 'static> Mutation<I, R> {
     ) -> oneshot::Receiver<Result<R, DataError>> {
         self.generation += 1;
         let generation = self.generation;
-        self.pending = true;
-        self.error = None;
+        self.state = ChangeState {
+            running: true,
+            error: None,
+        };
         self.input = Some(input.clone());
         cx.notify();
         let work = (self.run)(input, cx);
@@ -66,8 +68,10 @@ impl<I: Clone + 'static, R: 'static> Mutation<I, R> {
                 if this.generation != generation {
                     return;
                 }
-                this.pending = false;
-                this.error = outcome.as_ref().err().cloned();
+                this.state = ChangeState {
+                    running: false,
+                    error: outcome.as_ref().err().cloned(),
+                };
                 cx.notify();
             });
             let _ = done.send(outcome);
@@ -76,14 +80,19 @@ impl<I: Clone + 'static, R: 'static> Mutation<I, R> {
         result
     }
 
+    /// Whether its last run is under way, and why it failed, if it did.
+    pub fn state(&self) -> &ChangeState {
+        &self.state
+    }
+
     /// Whether its last run is under way (TanStack's `isPending`).
     pub fn is_pending(&self) -> bool {
-        self.pending
+        self.state.running
     }
 
     /// Why its last run failed, if it did.
     pub fn error(&self) -> Option<&DataError> {
-        self.error.as_ref()
+        self.state.error.as_ref()
     }
 
     /// The input of its last run (TanStack's `variables`), e.g. to tell whether it's of the
@@ -96,9 +105,8 @@ impl<I: Clone + 'static, R: 'static> Mutation<I, R> {
     /// on, but no longer shows.
     pub fn reset(&mut self, cx: &mut Context<Self>) {
         self.generation += 1;
-        if self.pending || self.error.is_some() || self.input.is_some() {
-            self.pending = false;
-            self.error = None;
+        if self.state != ChangeState::default() || self.input.is_some() {
+            self.state = ChangeState::default();
             self.input = None;
             cx.notify();
         }

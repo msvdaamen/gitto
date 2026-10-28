@@ -7,7 +7,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::{App, Context, Window};
 
 use super::toolbar_button::{HideBelow, ToolbarButton};
-use gitto_app_data::data::changes::{POP, STASH};
+use gitto_app_data::data::{Change, PopFrom};
 use gitto_app_data::data::{Part, Shown};
 use gitto_app_kit::ui::IconName;
 
@@ -24,7 +24,7 @@ impl StashButtons {
         StashButtons {
             repository: Shown::new(
                 &repository_id,
-                &[Part::Status, Part::Stashes, Part::Operations],
+                &[Part::Status, Part::Stashes, Part::Changes],
                 cx,
             ),
         }
@@ -39,7 +39,7 @@ impl StashButtons {
     pub fn stash_button(&self, cx: &App) -> ToolbarButton {
         let repository = self.repository.read(cx);
         let pending = repository.stashes_changing();
-        let state = repository.operation_state(STASH);
+        let state = repository.change_state(Change::Stash);
         let status = repository.status().data();
         let title = status.map_or_else(
             || "Stash".to_owned(),
@@ -55,7 +55,7 @@ impl StashButtons {
             .disabled(blocked || pending)
             .busy(state.running)
             .failure("Stash", state.error, move |_, cx| {
-                dismiss.update(cx, |repository, cx| repository.dismiss(STASH, cx))
+                dismiss.update(cx, |repository, cx| repository.dismiss(Change::Stash, cx))
             })
             .on_click(move |_, _, cx| {
                 stash.update(cx, |repository, cx| drop(repository.stash(cx)));
@@ -66,7 +66,7 @@ impl StashButtons {
     pub fn pop_button(&self, cx: &App) -> ToolbarButton {
         let repository = self.repository.read(cx);
         let pending = repository.stashes_changing();
-        let state = repository.operation_state(POP);
+        let state = repository.change_state(Change::Pop(PopFrom::Toolbar));
         let status = repository.status().data();
         let stashes = repository.stashes().data();
         let title = match (status, stashes, repository.stashes().error()) {
@@ -87,12 +87,14 @@ impl StashButtons {
             .busy(state.running)
             .count(stashes.map(|stashes| stashes.len() as u64))
             .failure("Pop", state.error, move |_, cx| {
-                dismiss.update(cx, |repository, cx| repository.dismiss(POP, cx))
+                dismiss.update(cx, |repository, cx| {
+                    repository.dismiss(Change::Pop(PopFrom::Toolbar), cx)
+                })
             })
             .on_click(move |_, _, cx| {
                 if let Some(newest) = newest.clone() {
                     pop.update(cx, |repository, cx| {
-                        drop(repository.pop_stash(POP, newest, cx))
+                        drop(repository.pop_stash(PopFrom::Toolbar, newest, cx))
                     });
                 }
             })

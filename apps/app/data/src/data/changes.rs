@@ -2,12 +2,12 @@
 //! method of [`Repository`], which runs git's part on the background executor and reloads what it
 //! changed. Ported from `git/queries/`'s mutations.
 //!
-//! The ones the toolbar and the menus start (a pull, say) are the repository's operations: they
+//! The ones the toolbar and the menus start (a pull, say) are the repository's [`Change`]s: they
 //! run one at a time, and the repository keeps whether each is running and why it last failed (see
 //! [`Repository::run`]), so that outlives the view that started it: switching repositories shows
 //! another one's, and the same one's again when switching back. Some run one of a group at a time
-//! too, like the changes of the branches. The rest (committing, staging, fetching) are the view's
-//! own, which keeps their state (see `super::mutation`); they return the task.
+//! too, like the changes of the branches. The rest (committing, staging) are the view's own, which
+//! keeps their state (see `super::mutation`); they return the task.
 
 use std::path::PathBuf;
 
@@ -43,44 +43,80 @@ use gitto_ui_logic::git::status::{branch_name, is_checked_out};
 /// there.
 pub type Done<R = ()> = Option<oneshot::Receiver<Result<R, DataError>>>;
 
-pub const PULL: &str = "pull";
-pub const PULL_BRANCH: &str = "pull-branch";
-pub const PUSH: &str = "push";
+/// A change to a repository that the toolbar or a menu starts. Each runs one at a time, and the
+/// repository keeps whether it's running and why it last failed (see [`Repository::run`]); some
+/// run one of a group at a time too (see [`ChangeGroup`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Change {
+    /// Fetching every remote.
+    Fetch,
+    /// Pulling the checked-out branch.
+    Pull,
+    /// Pulling a local branch that isn't checked out.
+    PullBranch,
+    Push,
+    /// Creating a branch at HEAD.
+    CreateBranch,
+    /// Switching branches, or creating one at another and switching to it.
+    Switch,
+    Merge,
+    Rebase,
+    DeleteBranch,
+    /// Adding a worktree, which checks out a branch there, or makes one.
+    AddWorktree,
+    Stash,
+    /// Popping a stash, from where it was started.
+    Pop(PopFrom),
+    DropStash,
+    RemoveWorktree,
+    OpenWorktree,
+    /// Continuing the merge, rebase, cherry-pick or revert under way.
+    Continue,
+    /// Aborting it.
+    Abort,
+}
 
-/// The changes of the branches, which run one at a time (see [`Repository::branches_changing`]).
-pub const CREATE_BRANCH: &str = "branch";
-pub const SWITCH: &str = "switch";
-pub const MERGE: &str = "merge";
-pub const REBASE: &str = "rebase";
-pub const DELETE_BRANCH: &str = "delete-branch";
-/// Adding a worktree, which checks out a branch there, or makes one.
-pub const ADD_WORKTREE: &str = "add-worktree";
-const BRANCH_CHANGES: &[&str] = &[
-    CREATE_BRANCH,
-    SWITCH,
-    MERGE,
-    REBASE,
-    DELETE_BRANCH,
-    ADD_WORKTREE,
-];
+/// Where a stash was popped from: the toolbar, which pops the newest, or a list, which pops the
+/// one picked. Each shows its own pop, where it was started.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PopFrom {
+    Toolbar,
+    Picked,
+}
 
-/// The stashes' changes, which run one at a time: the toolbar's pop names the stash it pops, which
-/// has to be the newest. A pop of the newest, from the toolbar, and one of the stash picked in a
-/// list are separate, to show each where it was started.
-pub const STASH: &str = "stash";
-pub const POP: &str = "pop";
-pub const POP_PICKED: &str = "pop-picked";
-pub const DROP_STASH: &str = "drop-stash";
-const STASH_CHANGES: &[&str] = &[STASH, POP, POP_PICKED, DROP_STASH];
+/// Changes that run one of them at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangeGroup {
+    /// The changes of the branches (see [`Repository::branches_changing`]).
+    Branches,
+    Stashes,
+    Worktrees,
+}
 
-/// The worktrees' changes, which run one at a time.
-pub const REMOVE_WORKTREE: &str = "remove-worktree";
-pub const OPEN_WORKTREE: &str = "open-worktree";
-const WORKTREE_CHANGES: &[&str] = &[ADD_WORKTREE, REMOVE_WORKTREE, OPEN_WORKTREE];
-
-/// Continuing and aborting the operation under way.
-pub const CONTINUE: &str = "continue";
-pub const ABORT: &str = "abort";
+impl Change {
+    /// Whether it's one of `group`: adding a worktree is one of the branches' and of the
+    /// worktrees'.
+    pub fn is_in(self, group: ChangeGroup) -> bool {
+        match group {
+            ChangeGroup::Branches => matches!(
+                self,
+                Change::CreateBranch
+                    | Change::Switch
+                    | Change::Merge
+                    | Change::Rebase
+                    | Change::DeleteBranch
+                    | Change::AddWorktree
+            ),
+            ChangeGroup::Stashes => {
+                matches!(self, Change::Stash | Change::Pop(_) | Change::DropStash)
+            }
+            ChangeGroup::Worktrees => matches!(
+                self,
+                Change::AddWorktree | Change::RemoveWorktree | Change::OpenWorktree
+            ),
+        }
+    }
+}
 
 impl Repository {
     /// `input`, checked as the UI hands it over (see `RepositoryGit::invalid`), as git's part of a
@@ -122,7 +158,7 @@ impl Repository {
     /// brought in the upstream's commits.
     pub fn pull(&mut self, cx: &mut Context<Self>) -> Done {
         self.run(
-            PULL,
+            Change::Pull,
             |repository, cx| repository.then_reload(repository.git().pull(None), cx),
             cx,
         )
@@ -133,7 +169,7 @@ impl Repository {
     /// the repository has reloaded, also after a failure: its remote was fetched all the same.
     pub fn pull_branch(&mut self, branch: String, cx: &mut Context<Self>) -> Done {
         self.run(
-            PULL_BRANCH,
+            Change::PullBranch,
             |repository, cx| {
                 let git = repository.git().clone();
                 let action =
@@ -150,17 +186,24 @@ impl Repository {
     /// the repository's reloaded after, without waiting for it, as after a pull.
     pub fn push(&mut self, force: bool, cx: &mut Context<Self>) -> Done {
         self.run(
-            PUSH,
+            Change::Push,
             |repository, cx| repository.then_reload(repository.git().push(force), cx),
             cx,
         )
     }
 
-    /// Fetches every remote (`useFetch`), then reloads the repository: the watcher would catch the
-    /// new remote refs too, but reloading right away feels snappier. A view's own change.
-    pub fn fetch(&mut self, cx: &mut Context<Self>) -> Task<Result<(), DataError>> {
-        let fetch = self.git().fetch();
-        self.reloading(fetch, cx)
+    /// Fetches every remote (`useFetch`), unless it's fetching already, then reloads the
+    /// repository: the watcher would catch the new remote refs too, but reloading right away feels
+    /// snappier. It counts as running until the repository has reloaded.
+    pub fn fetch(&mut self, cx: &mut Context<Self>) -> Done {
+        self.run(
+            Change::Fetch,
+            |repository, cx| {
+                let fetch = repository.git().fetch();
+                repository.reloading(fetch, cx)
+            },
+            cx,
+        )
     }
 
     // Changing the branches.
@@ -171,20 +214,20 @@ impl Repository {
     /// merged into before the user saw how the merge went, say, or check out a branch being
     /// deleted, which git then wouldn't delete.
     pub fn branches_changing(&self) -> bool {
-        self.is_running(BRANCH_CHANGES)
+        self.is_changing(ChangeGroup::Branches)
     }
 
-    /// Runs the change of the branches `name`, unless one is running.
+    /// Runs the change of the branches `change`, unless one is running.
     fn change_branches<R: 'static>(
         &mut self,
-        name: &'static str,
+        change: Change,
         work: impl FnOnce(&mut Self, &mut Context<Self>) -> Task<Result<R, DataError>>,
         cx: &mut Context<Self>,
     ) -> Done<R> {
         if self.branches_changing() {
             return None;
         }
-        self.run(name, work, cx)
+        self.run(change, work, cx)
     }
 
     /// Creates a branch, by its name, at HEAD and switches to it, taking the uncommitted changes
@@ -192,7 +235,7 @@ impl Repository {
     /// toolbar names the new branch once it's done.
     pub fn create_branch(&mut self, name: String, cx: &mut Context<Self>) -> Done {
         self.change_branches(
-            CREATE_BRANCH,
+            Change::CreateBranch,
             |repository, cx| {
                 let git = repository.git().clone();
                 let action = repository.checked(BranchName::parse(name), |name| {
@@ -211,7 +254,7 @@ impl Repository {
     /// checked-out branch does nothing, rather than reloading the whole repository.
     pub fn switch_branch(&mut self, reference: String, cx: &mut Context<Self>) -> Done {
         self.change_branches(
-            SWITCH,
+            Change::Switch,
             |repository, cx| {
                 let checked_out = repository
                     .status()
@@ -236,7 +279,7 @@ impl Repository {
     /// [`switch_branch`](Self::switch_branch)'s: it's shown as one.
     pub fn create_branch_from(&mut self, input: NewBranchFrom, cx: &mut Context<Self>) -> Done {
         self.change_branches(
-            SWITCH,
+            Change::Switch,
             |repository, cx| {
                 let git = repository.git().clone();
                 let parsed = BranchName::parse(input.name)
@@ -252,7 +295,7 @@ impl Repository {
     /// Deletes a branch, by its full ref name (`useDeleteBranch`).
     pub fn delete_branch(&mut self, reference: String, cx: &mut Context<Self>) -> Done {
         self.change_branches(
-            DELETE_BRANCH,
+            Change::DeleteBranch,
             |repository, cx| {
                 let git = repository.git().clone();
                 let action = repository.checked(BranchRef::parse(reference), |reference| {
@@ -271,7 +314,7 @@ impl Repository {
     /// failure: it may have stopped partway; it isn't reloaded after one that changed nothing.
     pub fn merge(&mut self, input: Merge, cx: &mut Context<Self>) -> Done<MergeOutcome> {
         self.change_branches(
-            MERGE,
+            Change::Merge,
             |repository, cx| {
                 let up_to_date = up_to_date_message(&input.into, &input.reference);
                 let git = repository.git().clone();
@@ -297,7 +340,7 @@ impl Repository {
     /// continue.
     pub fn rebase(&mut self, input: Rebase, cx: &mut Context<Self>) -> Done<RebaseOutcome> {
         self.change_branches(
-            REBASE,
+            Change::Rebase,
             |repository, cx| {
                 let up_to_date = up_to_date_message(&input.branch, &input.reference);
                 let git = repository.git().clone();
@@ -346,15 +389,15 @@ impl Repository {
 
     /// Whether one of the stashes' changes is running: one runs at a time.
     pub fn stashes_changing(&self) -> bool {
-        self.is_running(STASH_CHANGES)
+        self.is_changing(ChangeGroup::Stashes)
     }
 
-    /// Runs the stashes' change `name`, unless one is running. Each counts as running until the
+    /// Runs the stashes' change `change`, unless one is running. Each counts as running until the
     /// repository has reloaded, also after a failure (a pop can conflict), so the stashes and
     /// changes on show are never ones from before it.
     fn change_stashes(
         &mut self,
-        name: &'static str,
+        change: Change,
         action: impl FnOnce(&Self) -> GitTask<()>,
         cx: &mut Context<Self>,
     ) -> Done {
@@ -362,7 +405,7 @@ impl Repository {
             return None;
         }
         self.run(
-            name,
+            change,
             |repository, cx| {
                 let action = action(repository);
                 repository.reloading(action, cx)
@@ -373,14 +416,17 @@ impl Repository {
 
     /// Stashes every change (`useStashActions`'s `stash`).
     pub fn stash(&mut self, cx: &mut Context<Self>) -> Done {
-        self.change_stashes(STASH, |repository| repository.git().push_stash(), cx)
+        self.change_stashes(
+            Change::Stash,
+            |repository| repository.git().push_stash(),
+            cx,
+        )
     }
 
-    /// Pops a stash, by its SHA: the newest, from the toolbar ([`POP`]), or the one picked in a
-    /// list ([`POP_PICKED`]).
-    pub fn pop_stash(&mut self, name: &'static str, sha: String, cx: &mut Context<Self>) -> Done {
+    /// Pops a stash, by its SHA: the newest, from the toolbar, or the one picked in a list.
+    pub fn pop_stash(&mut self, from: PopFrom, sha: String, cx: &mut Context<Self>) -> Done {
         self.change_stashes(
-            name,
+            Change::Pop(from),
             |repository| {
                 let git = repository.git().clone();
                 repository.checked(FullSha::parse(sha), |sha| git.pop_stash(sha))
@@ -392,7 +438,7 @@ impl Repository {
     /// Drops a stash, by its SHA.
     pub fn drop_stash(&mut self, sha: String, cx: &mut Context<Self>) -> Done {
         self.change_stashes(
-            DROP_STASH,
+            Change::DropStash,
             |repository| {
                 let git = repository.git().clone();
                 repository.checked(FullSha::parse(sha), |sha| git.drop_stash(sha))
@@ -405,7 +451,7 @@ impl Repository {
 
     /// Whether one of the worktrees' changes is running: one runs at a time.
     pub fn worktrees_changing(&self) -> bool {
-        self.is_running(WORKTREE_CHANGES)
+        self.is_changing(ChangeGroup::Worktrees)
     }
 
     /// Whether adding a worktree can't run now: one of the worktrees' changes is running, or a
@@ -421,7 +467,7 @@ impl Repository {
             return None;
         }
         self.run(
-            ADD_WORKTREE,
+            Change::AddWorktree,
             |repository, cx| {
                 let git = repository.git().clone();
                 let parsed = Folder::parse(input.path).and_then(|folder| {
@@ -445,7 +491,7 @@ impl Repository {
             return None;
         }
         self.run(
-            REMOVE_WORKTREE,
+            Change::RemoveWorktree,
             |repository, cx| {
                 let removing = cx.background_spawn(repository.git().remove_worktree(path.clone()));
                 let source = Services::global(cx).repository_source().clone();
@@ -495,7 +541,7 @@ impl Repository {
             return None;
         }
         self.run(
-            OPEN_WORKTREE,
+            Change::OpenWorktree,
             |_, cx| {
                 let adding = Services::global(cx)
                     .repository_source()
@@ -525,7 +571,7 @@ impl Repository {
     /// rebase that goes on stops at the next commit's conflicts, say.
     pub fn continue_operation(&mut self, kind: OperationKind, cx: &mut Context<Self>) -> Done {
         self.run(
-            CONTINUE,
+            Change::Continue,
             |repository, cx| {
                 let action = repository.git().continue_operation(kind);
                 repository.reloading(action, cx)
@@ -537,7 +583,7 @@ impl Repository {
     /// Aborts the merge, rebase, cherry-pick or revert under way, as continuing does.
     pub fn abort_operation(&mut self, kind: OperationKind, cx: &mut Context<Self>) -> Done {
         self.run(
-            ABORT,
+            Change::Abort,
             |repository, cx| {
                 let action = repository.git().abort_operation(kind);
                 repository.reloading(action, cx)
@@ -964,5 +1010,15 @@ mod tests {
         finish.send(()).unwrap();
         cx.run_until_parked();
         assert!(!repository.read_with(cx, |repository, _| repository.branches_changing()));
+    }
+
+    #[test]
+    fn groups_the_changes_that_run_one_at_a_time() {
+        assert!(Change::AddWorktree.is_in(ChangeGroup::Branches));
+        assert!(Change::AddWorktree.is_in(ChangeGroup::Worktrees));
+        assert!(Change::Pop(PopFrom::Picked).is_in(ChangeGroup::Stashes));
+        assert!(!Change::Pull.is_in(ChangeGroup::Branches));
+        // The toolbar's pop and a list's are told apart.
+        assert_ne!(Change::Pop(PopFrom::Toolbar), Change::Pop(PopFrom::Picked));
     }
 }

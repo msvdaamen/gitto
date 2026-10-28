@@ -4,13 +4,13 @@
 //!
 //! - [`Repository`] is an entity per repository opened (in [`Repositories`], a global): each
 //!   thing it loads is a field, a [`Loaded`] (see `repository`'s doc). Its methods change the
-//!   repository (see [`changes`]): the toolbar's and the menus' run one at a time, and keep their
-//!   [`OperationState`] there, so it outlives the view that started them.
+//!   repository (see [`changes`]): the toolbar's and the menus' ([`Change`]s) run one at a time,
+//!   and keep their [`ChangeState`] there, so it outlives the view that started them.
 //! - [`AppData`] (a global) holds what isn't a repository's: the repository list, the installed
 //!   git, and the user's name. Those load again when the window gets focus.
 //! - [`RepositoryWatcher`] reloads a repository's data when it changes on disk
 //!   (`useRepositoryWatcher`); nothing else does.
-//! - [`Mutation`] is a change whose state is the view's own (committing, staging, fetching):
+//! - [`Mutation`] is a change whose state is the view's own (committing, staging):
 //!   TanStack's plain `useMutation`.
 //!
 //! # Showing a repository's data
@@ -21,7 +21,7 @@
 //! ```ignore
 //! struct PullButton { repository: Shown }
 //! // In the constructor:
-//! let repository = Shown::new(&repository_id, &[Part::Status, Part::Operations], cx);
+//! let repository = Shown::new(&repository_id, &[Part::Status, Part::Changes], cx);
 //! // In render:
 //! let repository = self.repository.read(cx);
 //! let behind = repository.status().data().map(|status| status.behind);
@@ -80,13 +80,13 @@ pub mod watch;
 pub mod worktree;
 
 pub use self::app_data::{AppChanged, AppData, AppPart};
-pub use self::changes::Done;
+pub use self::changes::{Change, ChangeGroup, Done, PopFrom};
 pub use self::error::DataError;
 pub use self::loaded::Loaded;
 pub use self::mutation::Mutation;
 pub use self::opaque::Opaque;
 pub use self::repository::{
-    Changed, OperationState, Part, Repositories, Repository, Shown, observe_parts, observe_selected,
+    ChangeState, Changed, Part, Repositories, Repository, Shown, observe_parts, observe_selected,
 };
 pub use self::watch::RepositoryWatcher;
 

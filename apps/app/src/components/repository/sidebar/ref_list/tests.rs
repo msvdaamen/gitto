@@ -19,10 +19,10 @@ use futures::FutureExt as _;
 use futures::future::BoxFuture;
 use gitto_app_data::data::DataError;
 use gitto_app_data::data::branch::{Merge, NewBranchFrom, Rebase};
-use gitto_app_data::data::changes::{POP, POP_PICKED};
 use gitto_app_data::data::git::{GitTask, RepositoryGit};
 use gitto_app_data::data::repositories::RepositorySource;
 use gitto_app_data::data::worktree::AddWorktreeInput;
+use gitto_app_data::data::{Change, PopFrom};
 use gitto_git::features::status::schema::Uncommitted;
 use gitto_git::input::{BranchName, BranchRef, Folder, FullSha, NonEmpty};
 use gitto_repository::Repository;
@@ -1218,7 +1218,11 @@ fn pops_the_stash_right_clicked_an_older_one_too_showing_it_running_on_the_secti
     assert!(f.is_section_busy(STASHES, cx));
     // The toolbar's Pop isn't the one running, but waits for it.
     let repository = f.repository(cx);
-    assert!(repository.read_with(cx, |repository, _| !repository.operation_state(POP).running));
+    assert!(repository.read_with(cx, |repository, _| {
+        !repository
+            .change_state(Change::Pop(PopFrom::Toolbar))
+            .running
+    }));
     assert!(repository.read_with(cx, |repository, _| repository.stashes_changing()));
 
     // Nor another one meanwhile.
@@ -1250,7 +1254,10 @@ fn says_beside_the_section_why_a_stash_couldnt_be_popped(cx: &mut TestAppContext
     // Only there, not under the toolbar's Pop as well.
     let repository = f.repository(cx);
     assert!(repository.read_with(cx, |repository, _| {
-        repository.operation_state(POP).error.is_none()
+        repository
+            .change_state(Change::Pop(PopFrom::Toolbar))
+            .error
+            .is_none()
     }));
 
     f.choose("Dismiss", cx);
@@ -1270,7 +1277,7 @@ fn doesnt_delete_one_while_another_stash_action_runs(cx: &mut TestAppContext) {
     // Begun straight on the actions: the dialog keeps the rest from being used, so this
     // stands for a pop begun some other way.
     f.repository(cx).update(cx, |repository, cx| {
-        drop(repository.pop_stash(POP_PICKED, newer().sha, cx))
+        drop(repository.pop_stash(PopFrom::Picked, newer().sha, cx))
     });
     cx.run_until_parked();
     f.choose("Delete", cx);

@@ -6,7 +6,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::{App, Context, Window};
 
 use super::toolbar_button::ToolbarButton;
-use gitto_app_data::data::changes::PULL;
+use gitto_app_data::data::Change;
 use gitto_app_data::data::{Part, Shown};
 use gitto_app_kit::ui::IconName;
 
@@ -22,7 +22,7 @@ pub struct PullButton {
 impl PullButton {
     pub fn new(repository_id: RepositoryId, _: &mut Window, cx: &mut Context<Self>) -> Self {
         PullButton {
-            repository: Shown::new(&repository_id, &[Part::Status, Part::Operations], cx),
+            repository: Shown::new(&repository_id, &[Part::Status, Part::Changes], cx),
         }
     }
 
@@ -34,7 +34,7 @@ impl PullButton {
     /// The button as it is now. Until the status has loaded, it's disabled.
     pub fn button(&self, cx: &App) -> ToolbarButton {
         let repository = self.repository.read(cx);
-        let state = repository.operation_state(PULL);
+        let state = repository.change_state(Change::Pull);
         let status = repository.status().data();
         let title = status.map_or_else(
             || "Pull".to_owned(),
@@ -52,7 +52,7 @@ impl PullButton {
             .busy(state.running)
             .count(status.map(|status| status.behind))
             .failure("Pull", state.error, move |_, cx| {
-                dismiss.update(cx, |repository, cx| repository.dismiss(PULL, cx))
+                dismiss.update(cx, |repository, cx| repository.dismiss(Change::Pull, cx))
             })
             .on_click(move |_, _, cx| {
                 pull.update(cx, |repository, cx| drop(repository.pull(cx)));

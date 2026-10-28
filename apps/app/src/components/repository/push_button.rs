@@ -12,7 +12,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::{App, Context, Entity, SharedString, Subscription, Window, div};
 
 use super::toolbar_button::ToolbarButton;
-use gitto_app_data::data::changes::PUSH;
+use gitto_app_data::data::Change;
 use gitto_app_data::data::remote::{PushRejection, push_rejection};
 use gitto_app_data::data::{Changed, Part, Repository, Shown};
 use gitto_app_data::state::lingering::Lingering;
@@ -89,7 +89,7 @@ impl PushButton {
     pub fn new(repository_id: RepositoryId, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let repository = Shown::new(
             &repository_id,
-            &[Part::Status, Part::PushTarget, Part::Operations],
+            &[Part::Status, Part::PushTarget, Part::Changes],
             cx,
         );
         let mut button = PushButton {
@@ -108,7 +108,7 @@ impl PushButton {
         cx: &mut Context<Self>,
     ) -> Subscription {
         cx.subscribe_in(repository, window, |this, _, Changed(part), window, cx| {
-            if *part == Part::Operations {
+            if *part == Part::Changes {
                 this.sync_dialog(window, cx);
             }
         })
@@ -130,7 +130,7 @@ impl PushButton {
     /// Why the remote branch turned the last push down, if it did: asked about in the dialog
     /// rather than shown as a failure.
     pub fn rejected(&self, cx: &App) -> Option<Rejection> {
-        let error = self.repository.read(cx).operation_state(PUSH).error?;
+        let error = self.repository.read(cx).change_state(Change::Push).error?;
         let kind = push_rejection(Some(&error))?;
         Some(Rejection {
             kind,
@@ -238,14 +238,14 @@ impl PushButton {
     fn cancel_rejected(&mut self, cx: &mut Context<Self>) {
         self.dialog_open = false;
         self.repository
-            .update(cx, |repository, cx| repository.dismiss(PUSH, cx));
+            .update(cx, |repository, cx| repository.dismiss(Change::Push, cx));
     }
 
     /// Pulls the remote branch's commits instead.
     fn pull_instead(&mut self, cx: &mut Context<Self>) {
         self.dialog_open = false;
         self.repository.update(cx, |repository, cx| {
-            repository.dismiss(PUSH, cx);
+            repository.dismiss(Change::Push, cx);
             drop(repository.pull(cx));
         });
     }
@@ -260,7 +260,7 @@ impl PushButton {
     /// The button as it is now. Until where it pushes has loaded, it's disabled.
     pub fn button(&self, cx: &App) -> ToolbarButton {
         let repository = self.repository.read(cx);
-        let state = repository.operation_state(PUSH);
+        let state = repository.change_state(Change::Push);
         let target = repository.push_target().data();
         let title: SharedString = match (&target, repository.push_target().error()) {
             (Some(target), _) => push_title(target).into(),
@@ -283,7 +283,7 @@ impl PushButton {
             .busy(state.running)
             .count(ahead)
             .failure("Push", failure, move |_, cx| {
-                dismiss.update(cx, |repository, cx| repository.dismiss(PUSH, cx))
+                dismiss.update(cx, |repository, cx| repository.dismiss(Change::Push, cx))
             })
             .on_click(move |_, _, cx| {
                 push.update(cx, |repository, cx| drop(repository.push(false, cx)));

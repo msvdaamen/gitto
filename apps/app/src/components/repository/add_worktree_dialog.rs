@@ -14,7 +14,7 @@ use gpui_kit::{
 };
 
 use super::branch_form::NAME_PLACEHOLDER;
-use gitto_app_data::data::changes::ADD_WORKTREE;
+use gitto_app_data::data::Change;
 use gitto_app_data::data::repositories::find;
 use gitto_app_data::data::worktree::AddWorktreeInput;
 use gitto_app_data::data::{AppData, AppPart, Part, Shown};
@@ -70,7 +70,7 @@ impl AddWorktreeDialog {
         AddWorktreeDialog {
             repository: Shown::new(
                 &repository_id,
-                &[Part::Worktrees, Part::Refs, Part::Operations],
+                &[Part::Worktrees, Part::Refs, Part::Changes],
                 cx,
             ),
             folder,
@@ -187,8 +187,9 @@ impl AddWorktreeDialog {
     /// typed and kept after a failure.
     pub fn open(&mut self, branch: String, window: &mut Window, cx: &mut Context<Self>) {
         // Out of the way of the folder and name, which are kept after a failure to fix them.
-        self.repository
-            .update(cx, |repository, cx| repository.dismiss(ADD_WORKTREE, cx));
+        self.repository.update(cx, |repository, cx| {
+            repository.dismiss(Change::AddWorktree, cx)
+        });
         let folder = Self::typed(&self.folder, cx);
         let id = self.repository.id(cx);
         let repository = AppData::global(cx)

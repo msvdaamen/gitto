@@ -77,7 +77,7 @@ const PARTS: &[Part] = &[
     Part::Status,
     Part::Stashes,
     Part::Worktrees,
-    Part::Operations,
+    Part::Changes,
 ];
 
 /// Picks the files on show of [`ChangedFiles`], counting their lines once per list.

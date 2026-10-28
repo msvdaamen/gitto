@@ -14,8 +14,8 @@ use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::{App, Entity, Window};
 
 use super::sidebar_section::SectionFailure;
+use gitto_app_data::data::Change;
 use gitto_app_data::data::Repository;
-use gitto_app_data::data::changes::{ADD_WORKTREE, OPEN_WORKTREE, REMOVE_WORKTREE};
 use gitto_app_kit::ui::{IconName, context_menu_item};
 
 /// The menu of what can be done with a worktree. Opening it adds it to Gitto's repositories, as a
@@ -37,15 +37,15 @@ impl WorktreeMenu {
     /// time, the removal's first, then the addition's: each can have failed, one after the other.
     pub fn failure(repository: &Entity<Repository>, cx: &App) -> SectionFailure {
         let shown = repository.read(cx);
-        let remove = shown.operation_state(REMOVE_WORKTREE);
-        let add = shown.operation_state(ADD_WORKTREE);
+        let remove = shown.change_state(Change::RemoveWorktree);
+        let add = shown.change_state(Change::AddWorktree);
         let (title, error, name) = if remove.error.is_some() {
-            ("Remove worktree", remove.error, REMOVE_WORKTREE)
+            ("Remove worktree", remove.error, Change::RemoveWorktree)
         } else if add.error.is_some() {
-            ("Add worktree", add.error, ADD_WORKTREE)
+            ("Add worktree", add.error, Change::AddWorktree)
         } else {
-            let open = shown.operation_state(OPEN_WORKTREE);
-            ("Open worktree", open.error, OPEN_WORKTREE)
+            let open = shown.change_state(Change::OpenWorktree);
+            ("Open worktree", open.error, Change::OpenWorktree)
         };
         let repository = repository.clone();
         SectionFailure {

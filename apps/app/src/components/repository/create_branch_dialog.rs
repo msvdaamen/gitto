@@ -9,8 +9,8 @@ use gpui_kit::prelude::*;
 use gpui_kit::{App, Context, Entity, Focusable as _, Subscription, Window, rems};
 
 use super::branch_form::{BranchForm, NAME_PLACEHOLDER, submitted_name};
+use gitto_app_data::data::Change;
 use gitto_app_data::data::branch::NewBranchFrom;
-use gitto_app_data::data::changes::SWITCH;
 use gitto_app_data::data::{Part, Shown};
 use gitto_app_data::state::lingering::Lingering;
 
@@ -43,7 +43,7 @@ impl CreateBranchDialog {
             }),
         ];
         CreateBranchDialog {
-            repository: Shown::new(&repository_id, &[Part::Status, Part::Operations], cx),
+            repository: Shown::new(&repository_id, &[Part::Status, Part::Changes], cx),
             name,
             from: Lingering::default(),
             open: false,
@@ -78,7 +78,7 @@ impl CreateBranchDialog {
     /// is put out of the way of the name, which is kept after a failure to fix it.
     pub fn open(&mut self, from: String, window: &mut Window, cx: &mut Context<Self>) {
         self.repository
-            .update(cx, |repository, cx| repository.dismiss(SWITCH, cx));
+            .update(cx, |repository, cx| repository.dismiss(Change::Switch, cx));
         self.from.update(Some(from));
         if self.open {
             cx.notify();
