@@ -181,7 +181,7 @@ impl PushButton {
                 // Gone with the button (it closes the dialog as it goes, see `new`).
                 let Some(copy) = this
                     .upgrade()
-                    .map(|button| button.read(cx).rejected_copy(cx))
+                    .and_then(|button| button.read(cx).rejected_copy(cx))
                 else {
                     return dialog;
                 };
@@ -205,14 +205,11 @@ impl PushButton {
         }
     }
 
-    /// What the dialog says now, of the rejection it's about.
-    fn rejected_copy(&self, cx: &App) -> RejectedCopy {
-        let rejection = self.rejected(cx).or_else(|| self.shown.get().cloned());
-        let rejection = rejection.unwrap_or(Rejection {
-            kind: PushRejection::Behind,
-            message: String::new(),
-        });
-        RejectedCopy::of(&rejection, self.can_pull())
+    /// What the dialog says now, of the rejection it's about (still, while it closes); none
+    /// without one.
+    fn rejected_copy(&self, cx: &App) -> Option<RejectedCopy> {
+        let rejection = self.rejected(cx).or_else(|| self.shown.get().cloned())?;
+        Some(RejectedCopy::of(&rejection, self.can_pull()))
     }
 
     fn rejected_footer(this: &WeakEntity<Self>, copy: &RejectedCopy) -> DialogFooter {
@@ -417,7 +414,22 @@ mod tests {
     }
 
     fn copy(button: &Entity<PushButton>, cx: &mut TestAppContext) -> RejectedCopy {
-        button.read_with(cx, |button, cx| button.rejected_copy(cx))
+        button
+            .read_with(cx, |button, cx| button.rejected_copy(cx))
+            .unwrap()
+    }
+
+    #[gpui_kit::test]
+    fn says_nothing_of_a_rejection_without_one(cx: &mut TestAppContext) {
+        let (_, push, pull) = operations(|_, _| Ok(()));
+        let (_dir, window, button) = render(cx, target(), push, pull);
+        click(window, "push", cx);
+        assert!(
+            button
+                .read_with(cx, |button, cx| button.rejected_copy(cx))
+                .is_none()
+        );
+        assert!(!has_dialog(window, cx));
     }
 
     #[gpui_kit::test]
