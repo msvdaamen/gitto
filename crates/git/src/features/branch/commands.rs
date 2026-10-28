@@ -83,6 +83,25 @@ pub async fn is_ref(run: &GitCommand, reference: &str) -> Result<bool> {
     succeeds(run, ["show-ref", "--verify", "--quiet", reference]).await
 }
 
+/// What the ref `ref`, by its full name, points at; `None` if there's no such ref. That ref itself,
+/// rather than git reading `ref` as a revision, like `refs/heads/main~3`.
+pub async fn ref_sha(run: &GitCommand, reference: &str) -> Result<Option<String>> {
+    match run.run(["show-ref", "--verify", "--hash", reference]).await {
+        Ok(sha) => Ok(Some(sha.trim().to_owned())),
+        // Without `--quiet`, which would leave the SHA out too, it says so when there's no such
+        // ref.
+        Err(error)
+            if error.is_exit(128)
+                && error
+                    .as_git()
+                    .is_some_and(|git| git.stderr.contains("- not a valid ref")) =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 /// What git says when it won't switch as it'd lose uncommitted changes or untracked files: ones the
 /// branch would overwrite or remove, or that are in a folder it replaces with a file.
 static WOULD_LOSE: LazyLock<Regex> = LazyLock::new(|| {

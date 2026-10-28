@@ -1,15 +1,14 @@
 //! Rebasing the checked-out branch onto another. Ported from `rebase.ts`.
 
-use super::commands::{branch_target, is_ref};
+use super::preflight::{self, Checked, Verb, preflight};
 use super::refusal::{
     RefusalKind, Wording, list, nul_separated, parse_refusal, refusal_message, staged_files,
 };
 use super::schema::RebaseOutcome;
 use crate::core::errors::{Error, GitError, Result};
 use crate::core::git_dirs::git_dirs;
-use crate::core::repo::{GitCommand, Repo, current_branch, has_conflicts, resolve_ref};
+use crate::core::repo::{GitCommand, Repo, has_conflicts, resolve_ref};
 use crate::core::runner::RunOptions;
-use crate::features::operation::commands::operation_under_way;
 use crate::features::operation::commands::rebase_state;
 
 /// Rebases the checked-out branch, `branch`, the one the user saw, onto the branch `ref` (a full
@@ -40,61 +39,12 @@ use crate::features::operation::commands::rebase_state;
 /// `Error::InvalidInput` if `branch` is empty or `ref` isn't a branch, as the UI's input is
 /// checked.
 pub async fn rebase_branch(repo: &Repo, reference: &str, branch: &str) -> Result<RebaseOutcome> {
-    // As the UI's input is checked.
-    if branch.is_empty() {
-        return Err(Error::InvalidInput("The branch name is empty.".to_owned()));
-    }
-    let target = branch_target(reference)?;
+    let target = preflight::target(reference, branch)?;
     let git_dir = git_dirs(repo).await?.git_dir;
     // One write, so nothing else changes the branch, or starts another operation, halfway.
     repo.exclusive(|run| async move {
-        // That ref itself, rather than git reading `ref` as a revision, like `refs/heads/main~3`.
-        let onto = async {
-            if is_ref(&run, reference).await? {
-                resolve_ref(&run, reference).await
-            } else {
-                Ok(None)
-            }
-        };
-        let (operation, conflicted, current, sha, before) = futures::try_join!(
-            async { Ok::<_, Error>(operation_under_way(&git_dir).await) },
-            has_conflicts(&run),
-            current_branch(&run),
-            onto,
-            resolve_ref(&run, "HEAD"),
-        )?;
-        if let Some(operation) = operation {
-            return Err(Error::RebaseBlocked(format!(
-                "A {} is under way. Finish or abort it, then rebase.",
-                operation.name()
-            )));
-        }
-        if conflicted {
-            return Err(Error::RebaseBlocked(
-                "Some files have conflicts. Resolve them, then rebase.".to_owned(),
-            ));
-        }
-        let Some(current) = current else {
-            return Err(Error::RebaseBlocked(
-                "HEAD is detached: check out a branch to rebase it.".to_owned(),
-            ));
-        };
-        if current != branch {
-            return Err(Error::RepositoryChanged(format!(
-                "Switched from {branch} to {current} meanwhile, so nothing was rebased."
-            )));
-        }
-        let Some(sha) = sha else {
-            return Err(Error::RebaseBlocked(format!(
-                "{} no longer exists.",
-                target.name
-            )));
-        };
-        if reference == format!("refs/heads/{branch}") {
-            return Err(Error::RebaseBlocked(format!(
-                "Can't rebase {branch} onto itself."
-            )));
-        }
+        let Checked { sha, head: before } =
+            preflight(&run, &git_dir, reference, &target, branch, Verb::Rebase).await?;
         if before.is_none() {
             return Err(Error::RebaseBlocked(format!(
                 "{branch} has no commits yet, so there's nothing to rebase. Merge {} into it instead.",

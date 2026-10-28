@@ -1,13 +1,12 @@
 //! Merging a branch into the checked-out one. Ported from `merge.ts`.
 
-use super::commands::{branch_target, is_ref};
+use super::preflight::{self, Checked, Verb, preflight};
 use super::refusal::{RefusalKind, Wording, parse_refusal, refusal_message, staged_files};
 use super::schema::MergeOutcome;
 use crate::core::errors::{Error, Result};
 use crate::core::git_dirs::git_dirs;
-use crate::core::repo::{GitCommand, Repo, current_branch, has_conflicts, ref_exists, resolve_ref};
+use crate::core::repo::{GitCommand, Repo, has_conflicts, ref_exists, resolve_ref};
 use crate::core::runner::RunOptions;
-use crate::features::operation::commands::operation_under_way;
 use crate::features::remote::commands::fetched_name;
 
 /// Merges the branch `ref` (a full ref name, local or remote) into the checked-out branch, `into`,
@@ -29,73 +28,20 @@ use crate::features::remote::commands::fetched_name;
 /// which leaves the merge under way, to commit or abort. With `Error::InvalidInput` if `into` is
 /// empty or `ref` isn't a branch, as the UI's input is checked.
 pub async fn merge_branch(repo: &Repo, reference: &str, into: &str) -> Result<MergeOutcome> {
-    // As the UI's input is checked.
-    if into.is_empty() {
-        return Err(Error::InvalidInput("The branch name is empty.".to_owned()));
-    }
-    let target = branch_target(reference)?;
+    let target = preflight::target(reference, into)?;
     let git_dir = git_dirs(repo).await?.git_dir;
     // One write, so nothing else changes the branch, or starts another operation, halfway.
     repo.exclusive(|run| async move {
-        let commit_and_head = async {
-            // That ref itself, rather than git reading `ref` as a revision, like
-            // `refs/heads/main~3`.
-            let commit = async {
-                if is_ref(&run, reference).await? {
-                    resolve_ref(&run, reference).await
-                } else {
-                    Ok(None)
-                }
-            };
-            let (sha, before) = futures::try_join!(commit, resolve_ref(&run, "HEAD"))?;
-            // Read alongside the rest, though only needed once it's checked: it all holds up the
-            // other writes. None for a branch without commits yet, which just moves to it: nor can
-            // git word one.
-            let message = match (&sha, &before) {
-                (Some(sha), Some(_)) => Some(merge_message(&run, sha, reference).await?),
-                _ => None,
-            };
-            Ok::<_, Error>((sha, before, message))
+        let Checked { sha, head: before } =
+            preflight(&run, &git_dir, reference, &target, into, Verb::Merge).await?;
+        // None for a branch without commits yet, which just moves to it: nor can git word one.
+        let message = async {
+            match before {
+                Some(_) => merge_message(&run, &sha, reference).await.map(Some),
+                None => Ok(None),
+            }
         };
-        let (operation, conflicted, current, (sha, before, message), named) = futures::try_join!(
-            async { Ok::<_, Error>(operation_under_way(&git_dir).await) },
-            has_conflicts(&run),
-            current_branch(&run),
-            commit_and_head,
-            resolve_ref(&run, &target.name),
-        )?;
-        if let Some(operation) = operation {
-            return Err(Error::MergeBlocked(format!(
-                "A {} is under way. Finish or abort it, then merge.",
-                operation.name()
-            )));
-        }
-        if conflicted {
-            return Err(Error::MergeBlocked(
-                "Some files have conflicts. Resolve them, then merge.".to_owned(),
-            ));
-        }
-        let Some(current) = current else {
-            return Err(Error::MergeBlocked(
-                "HEAD is detached: check out a branch to merge into it.".to_owned(),
-            ));
-        };
-        if current != into {
-            return Err(Error::RepositoryChanged(format!(
-                "Switched from {into} to {current} meanwhile, so nothing was merged."
-            )));
-        }
-        let Some(sha) = sha else {
-            return Err(Error::MergeBlocked(format!(
-                "{} no longer exists.",
-                target.name
-            )));
-        };
-        if reference == format!("refs/heads/{into}") {
-            return Err(Error::MergeBlocked(format!(
-                "Can't merge {into} into itself."
-            )));
-        }
+        let (message, named) = futures::try_join!(message, resolve_ref(&run, &target.name))?;
 
         let mut args = vec![
             "merge",
