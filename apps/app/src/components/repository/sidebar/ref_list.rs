@@ -15,7 +15,7 @@ use gitto_ui::git::stash::can_pop;
 use gitto_ui::git::status::branch_name;
 use gitto_ui::git::worktree::{can_open_worktree, describe_worktree, worktree_on};
 use gpui_kit::component::menu::PopupMenu;
-use gpui_kit::component::v_flex;
+use gpui_kit::component::{WindowExt as _, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, Context, ScrollStrategy, SharedString, Subscription, UniformListScrollHandle,
@@ -287,7 +287,6 @@ impl RefList {
         self.stash_menu.close(cx);
         self.worktree_menu.close(cx);
         if self.asking.take().is_some() {
-            use gpui_kit::component::WindowExt as _;
             window.close_dialog(cx);
         }
         for scroll in &self.scrolls {
@@ -837,7 +836,6 @@ mod tests {
     use futures::channel::oneshot;
     use gitto_git::features::branch::schema::{MergeOutcome, RebaseOutcome};
     use gitto_git::features::status::schema::{Head, StatusCounts};
-    use gpui_kit::component::WindowExt as _;
     use gpui_kit::test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _};
     use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, MouseButton, TestAppContext, px};
 
