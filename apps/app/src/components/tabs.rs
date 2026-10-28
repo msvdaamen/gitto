@@ -8,11 +8,12 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{Sizable as _, h_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    App, Context, Entity, FocusHandle, FontWeight, KeyDownEvent, SharedString, Subscription,
-    TestSupportExt as _, Window, div, rems,
+    App, Context, Entity, FocusHandle, FontWeight, KeyBinding, SharedString, Subscription,
+    TestSupportExt as _, Window, actions, div, rems,
 };
 
 use super::remove_repository_dialog::open_remove_repository_dialog;
+use crate::components::ui::kbd::aria_keyshortcuts;
 use crate::components::ui::{FailurePopover, GittoIcon, Icon, IconName};
 use crate::data::repositories::{
     OpenRepository, remove_repository, reorder_repositories, repositories_query,
@@ -20,6 +21,28 @@ use crate::data::repositories::{
 use crate::data::{Query, QueryError};
 use crate::state::router::{Route, Router};
 use crate::theme::PaletteExt as _;
+
+actions!(
+    tabs,
+    [
+        /// Moves the focused repository's tab one place left.
+        MoveTabLeft,
+        /// Moves the focused repository's tab one place right.
+        MoveTabRight
+    ]
+);
+
+/// The key context of a focused repository's tab.
+pub const KEY_CONTEXT: &str = "Tab";
+
+/// Binds the tabs' keys: Alt+Shift and an arrow key move the focused tab. Call once, as the app
+/// starts.
+pub fn bind_keys(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("alt-shift-left", MoveTabLeft, Some(KEY_CONTEXT)),
+        KeyBinding::new("alt-shift-right", MoveTabRight, Some(KEY_CONTEXT)),
+    ]);
+}
 
 /// The ids in `list` that are in `other` too, in `list`'s order.
 fn common<'a>(list: &'a [String], other: &[String]) -> Vec<&'a String> {
@@ -80,8 +103,8 @@ impl Render for TabDrag {
 
 /// A tab per repository, after the home tab. The page on show decides which one is selected:
 /// none, on a page of its own like the settings. The repositories' tabs are dragged, or moved with
-/// Alt+Shift and the arrow keys, into another order; their close button removes them, asking
-/// first.
+/// Alt+Shift and the arrow keys ([`MoveTabLeft`], [`MoveTabRight`]), into another order; their
+/// close button removes them, asking first.
 pub struct Tabs {
     repositories: Query<Vec<Repository>>,
     open_repository: Entity<OpenRepository>,
@@ -262,6 +285,7 @@ impl Tabs {
         &mut self,
         repository: &Repository,
         selected: bool,
+        shortcuts: SharedString,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let palette = *cx.palette();
@@ -286,8 +310,9 @@ impl Tabs {
             .border_r_1()
             .border_color(palette.border_soft)
             .track_focus(&focus)
+            .key_context(KEY_CONTEXT)
             .aria_label(name.clone())
-            .aria_keyshortcuts("Alt+Shift+ArrowLeft Alt+Shift+ArrowRight")
+            .aria_keyshortcuts(shortcuts)
             .on_click({
                 let id = id.clone();
                 move |_, _, cx| {
@@ -296,21 +321,13 @@ impl Tabs {
                     }
                 }
             })
-            .on_key_down(cx.listener({
+            .on_action(cx.listener({
                 let id = id.clone();
-                move |tabs, event: &KeyDownEvent, _, cx| {
-                    let modifiers = event.keystroke.modifiers;
-                    if !modifiers.alt || !modifiers.shift {
-                        return;
-                    }
-                    let by = match event.keystroke.key.as_str() {
-                        "left" => -1,
-                        "right" => 1,
-                        _ => return,
-                    };
-                    cx.stop_propagation();
-                    tabs.move_tab(&id, by, cx);
-                }
+                move |tabs, _: &MoveTabLeft, _, cx| tabs.move_tab(&id, -1, cx)
+            }))
+            .on_action(cx.listener({
+                let id = id.clone();
+                move |tabs, _: &MoveTabRight, _, cx| tabs.move_tab(&id, 1, cx)
             }))
             .on_drag(
                 TabDrag {
@@ -420,7 +437,7 @@ fn tab_frame(
 }
 
 impl Render for Tabs {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let route = Router::current(cx);
         let selected = |id: &str| {
             route
@@ -428,11 +445,12 @@ impl Render for Tabs {
                 .is_some_and(|shown| shown.as_str() == id)
         };
         let repositories = self.repositories.data().unwrap_or_default();
+        let shortcuts = aria_keyshortcuts(window, &[&MoveTabLeft, &MoveTabRight], KEY_CONTEXT);
         let mut tabs = Vec::new();
         for id in self.ordered() {
             if let Some(repository) = repositories.iter().find(|repository| repository.id == id) {
                 tabs.push(
-                    self.render_repository_tab(repository, selected(&id), cx)
+                    self.render_repository_tab(repository, selected(&id), shortcuts.clone(), cx)
                         .into_any_element(),
                 );
             }
@@ -626,6 +644,17 @@ mod ui_tests {
             })
             .unwrap();
         assert!(focused);
+    }
+
+    #[gpui_kit::test]
+    fn tells_assistive_technology_the_keys_bound_to_move_a_tab(cx: &mut TestAppContext) {
+        let (_dir, _, _, window, _) = render_tabs(cx);
+        let shortcuts = cx
+            .update_window(window, |_, window, _| {
+                aria_keyshortcuts(window, &[&MoveTabLeft, &MoveTabRight], KEY_CONTEXT)
+            })
+            .unwrap();
+        assert_eq!(shortcuts, "Alt+Shift+ArrowLeft Alt+Shift+ArrowRight");
     }
 
     #[gpui_kit::test]
