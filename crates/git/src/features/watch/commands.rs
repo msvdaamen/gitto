@@ -14,7 +14,7 @@ use super::batches::Batches;
 use super::git_dirs::{classify, inside};
 use super::schema::GitDirChange;
 use super::stream::{Watched, watch_stream};
-use super::watcher::{self, OnEvents, Root, Subscribe, Subscription};
+use super::watcher::{self, Events, OnEvents, Root, Subscribe, Subscription};
 use crate::core::errors::Result;
 use crate::core::git_dirs::{git_dirs, real_path};
 use crate::core::repo::Repo;
@@ -69,13 +69,16 @@ impl GitDir {
                 let ignore = GIT_DIR_IGNORED.iter().map(|name| root.join(name)).collect();
                 let (changes, dirs) = (Arc::clone(&changes), Arc::clone(&dirs));
                 let on_events: OnEvents = Box::new(move |events| match events {
-                    Err(error) => changes.fail(error),
-                    Ok(paths) => changes.add_all(
+                    Events::Changed(paths) => changes.add_all(
                         paths
                             .iter()
                             .filter_map(|path| classify(&dirs, path))
                             .collect(),
                     ),
+                    Events::Rescan => {
+                        changes.add_all(vec![GitDirChange::Index, GitDirChange::Refs])
+                    }
+                    Events::Failed(error) => changes.fail(error),
                 });
                 Root {
                     dir: root,
@@ -150,11 +153,15 @@ async fn has_status(repo: &Repo) -> bool {
     now.is_some() && now == repo.shown_status().await
 }
 
-/// A changed path in the working tree (relative, `/`-separated), or `.git/info/exclude` changing.
+/// What changed in the working tree.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum TreeChange {
+    /// A path, relative and `/`-separated.
     Path(String),
+    /// `.git/info/exclude`, as far as anyone knows.
     Excludes,
+    /// Anything: changes went unreported (see `Events::Rescan`).
+    Rescan,
 }
 
 /// Yields (debounced) whenever a file in the working tree changes, until it's dropped.
@@ -230,11 +237,12 @@ impl Watched for WorkingTree {
                 Err(error) => return Some(Err(error)),
             };
             let has_excludes = batch.contains(&TreeChange::Excludes);
+            let rescan = batch.contains(&TreeChange::Rescan);
             let paths: Vec<String> = unique(batch)
                 .into_iter()
                 .filter_map(|change| match change {
                     TreeChange::Path(path) => Some(path),
-                    TreeChange::Excludes => None,
+                    TreeChange::Excludes | TreeChange::Rescan => None,
                 })
                 .collect();
             if has_excludes || paths.iter().any(|path| basename(path) == ".gitignore") {
@@ -243,6 +251,21 @@ impl Watched for WorkingTree {
                     self.root.display()
                 ));
                 return Some(self.watch_tree(None).await);
+            }
+            if rescan {
+                // The watcher watches the folders again; only a change to the rules it missed
+                // calls for starting over.
+                trace(format_args!(
+                    "changes went unreported in {}",
+                    self.root.display()
+                ));
+                let now_ignored = ignored_paths(&self.repo).await;
+                if now_ignored.len() != self.ignored.len()
+                    || now_ignored.iter().any(|path| !self.ignored.contains(path))
+                {
+                    return Some(self.watch_tree(Some(now_ignored)).await);
+                }
+                return Some(Ok(()));
             }
 
             // Only a snapshot of what git ignores is left out, so a folder it ignores that's new
@@ -306,14 +329,15 @@ impl WorkingTree {
             .collect();
         let (changes, root) = (Arc::clone(&self.changes), self.root.clone());
         let on_events: OnEvents = Box::new(move |events| match events {
-            Err(error) => changes.fail(error),
-            Ok(paths) => changes.add_all(
+            Events::Changed(paths) => changes.add_all(
                 paths
                     .iter()
                     .filter_map(|path| inside(&root, path))
                     .map(TreeChange::Path)
                     .collect(),
             ),
+            Events::Rescan => changes.add(TreeChange::Rescan),
+            Events::Failed(error) => changes.fail(error),
         });
         let mut roots = vec![Root {
             dir: self.root.clone(),
@@ -328,12 +352,13 @@ impl WorkingTree {
             roots.push(Root {
                 dir: info.to_owned(),
                 ignore: Vec::new(),
-                on_events: Box::new(move |events| {
-                    if let Ok(paths) = events
-                        && paths.contains(&exclude_file)
-                    {
+                on_events: Box::new(move |events| match events {
+                    Events::Changed(paths) if paths.contains(&exclude_file) => {
                         changes.add(TreeChange::Excludes);
                     }
+                    // Whether its rules changed is told by what they ignore.
+                    Events::Rescan => changes.add(TreeChange::Rescan),
+                    _ => {}
                 }),
                 optional: true,
             });
@@ -536,6 +561,8 @@ mod tests {
         calls: AtomicUsize,
         subscribed: AtomicUsize,
         seen: Mutex<Vec<PathBuf>>,
+        /// What the roots are told with, of every subscription.
+        roots: Mutex<Vec<Arc<Mutex<OnEvents>>>>,
         hold_from: AtomicUsize,
         gate: (async_channel::Sender<()>, async_channel::Receiver<()>),
     }
@@ -546,6 +573,7 @@ mod tests {
                 calls: AtomicUsize::new(0),
                 subscribed: AtomicUsize::new(0),
                 seen: Mutex::new(Vec::new()),
+                roots: Mutex::new(Vec::new()),
                 hold_from: AtomicUsize::new(usize::MAX),
                 gate: async_channel::unbounded(),
             })
@@ -564,15 +592,17 @@ mod tests {
                         let Root {
                             dir,
                             ignore,
-                            mut on_events,
+                            on_events,
                             optional,
                         } = root;
+                        let told = Arc::new(Mutex::new(on_events));
+                        lock(&probe.roots).push(Arc::clone(&told));
                         let probe = Arc::clone(&probe);
                         let on_events: OnEvents = Box::new(move |events| {
-                            if let Ok(paths) = &events {
+                            if let Events::Changed(paths) = &events {
                                 lock(&probe.seen).extend(paths.iter().cloned());
                             }
-                            on_events(events);
+                            (lock(&told))(events);
                         });
                         Root {
                             dir,
@@ -586,6 +616,13 @@ mod tests {
                     Ok(subscription)
                 })
             })
+        }
+
+        /// Tells every root of every subscription that changes went unreported.
+        fn rescan(&self) {
+            for told in lock(&self.roots).iter() {
+                (lock(told))(Events::Rescan);
+            }
         }
 
         /// Holds subscribing back from the `call`th subscription on (counting from 0).
@@ -794,6 +831,60 @@ mod tests {
             probe.go();
             assert!(is_change(changes.next().await));
             assert!(is_change(changes.next().await));
+        });
+    }
+
+    #[test]
+    fn the_working_tree_reports_a_change_when_changes_went_unreported() {
+        let fx = Fixture::new();
+        let path = fx.create_repo("watched-rescan");
+        let probe = Probe::new();
+        smol::block_on(async {
+            let repo = fx.repos.open("watched-rescan").await.unwrap();
+            let changes = watching(watch_working_tree_with(repo, probe.subscribe()));
+            probe.subscribed(1).await;
+
+            probe.rescan();
+            assert!(is_change(changes.next().await));
+            // With the same rules, it doesn't start over.
+            assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
+
+            fs::create_dir(path.join("dist")).unwrap();
+            write(path.join("dist").join("a.js"), "x");
+            assert!(is_change(changes.next().await));
+            // Rules that change unseen: in a file the watch doesn't follow.
+            let rules = fx.root().join("rules");
+            write(
+                &rules, "dist/
+",
+            );
+            git(
+                &path,
+                [
+                    OsStr::new("config"),
+                    OsStr::new("core.excludesFile"),
+                    rules.as_os_str(),
+                ],
+            );
+            assert!(changes.quiet().await);
+            probe.rescan();
+            assert!(is_change(changes.next().await));
+            assert_eq!(probe.calls.load(Ordering::SeqCst), 2);
+        });
+    }
+
+    #[test]
+    fn the_git_directory_reports_everything_when_changes_went_unreported() {
+        let fx = Fixture::new();
+        fx.create_repo("watched-git-dir-rescan");
+        let probe = Probe::new();
+        smol::block_on(async {
+            let repo = fx.repos.open("watched-git-dir-rescan").await.unwrap();
+            let changes = watching(watch_git_dir_with(repo, probe.subscribe()));
+            probe.subscribed(1).await;
+
+            probe.rescan();
+            assert_eq!(changed(changes.next().await), [Index, Refs]);
         });
     }
 

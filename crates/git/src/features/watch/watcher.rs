@@ -19,9 +19,18 @@ use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use crate::core::errors::{Error, Result};
 use crate::core::runner::{lock, spawn_detached};
 
-/// What a subscription reports of one of its roots: the paths that changed (absolute, under the
-/// root's folder), or the error that stopped it.
-pub(super) type Events = Result<Vec<PathBuf>>;
+/// What a subscription reports of one of its roots.
+#[derive(Debug)]
+pub(super) enum Events {
+    /// The paths that changed: absolute, under the root's folder.
+    Changed(Vec<PathBuf>),
+    /// Changes went unreported, e.g. as the kernel's queue of them overflowed (inotify's
+    /// `IN_Q_OVERFLOW`) while a big checkout or a build wrote thousands of files: anything in the
+    /// root may have changed. The folders in it are watched again, for those created meanwhile.
+    Rescan,
+    /// The error that stopped the watcher.
+    Failed(Error),
+}
 
 /// Told what a subscription reports of one of its roots, from the watcher's thread.
 pub(super) type OnEvents = Box<dyn FnMut(Events) + Send + 'static>;
@@ -203,7 +212,7 @@ impl Tree {
 /// Tells every root `error`, which stops the watcher for all of them.
 fn tell_all(on_events: &Mutex<Vec<OnEvents>>, error: &Error) {
     for on_events in lock(on_events).iter_mut() {
-        on_events(Err(error.clone()));
+        on_events(Events::Failed(error.clone()));
     }
 }
 
@@ -219,6 +228,27 @@ fn handle(
         Ok(event) => event,
         Err(error) => return tell_all(on_events, &watch_error(error)),
     };
+    // For the whole watcher, as notify reports it, without paths: every root's, then.
+    if event.need_rescan() {
+        let mut rescanned: Vec<usize> = event
+            .paths
+            .iter()
+            .filter_map(|path| roots.of(path))
+            .collect();
+        if rescanned.is_empty() {
+            rescanned = (0..roots.ignored.len()).collect();
+        }
+        rescanned.sort_unstable();
+        rescanned.dedup();
+        let mut on_events = lock(on_events);
+        for root in rescanned {
+            if !WATCHES_TREES {
+                let _ = created.send((root, roots.ignored[root].root.clone()));
+            }
+            on_events[root](Events::Rescan);
+        }
+        return;
+    }
     // Files being opened, read and closed, as git does all the time, change nothing.
     if matches!(event.kind, EventKind::Access(_) | EventKind::Other) {
         return;
@@ -246,7 +276,7 @@ fn handle(
     let mut on_events = lock(on_events);
     for (paths, on_events) in changed.into_iter().zip(on_events.iter_mut()) {
         if !paths.is_empty() {
-            on_events(Ok(paths));
+            on_events(Events::Changed(paths));
         }
     }
 }
@@ -310,7 +340,10 @@ mod tests {
         let root = Root {
             dir: dir.to_owned(),
             ignore,
-            on_events: Box::new(move |events| lock(&told).extend(events.unwrap())),
+            on_events: Box::new(move |events| match events {
+                Events::Changed(paths) => lock(&told).extend(paths),
+                events => panic!("{events:?}"),
+            }),
             optional: false,
         };
         (root, seen)
@@ -392,5 +425,45 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (missing, _) = root(&dir.path().join("missing"), Vec::new());
         assert!(smol::block_on(subscribe(vec![missing])).is_err());
+    }
+
+    #[test]
+    fn tells_every_root_to_rescan_when_changes_went_unreported() {
+        let roots = Roots {
+            ignored: ["/a", "/b"]
+                .into_iter()
+                .map(|root| Ignored {
+                    root: PathBuf::from(root),
+                    paths: HashSet::new(),
+                })
+                .collect(),
+        };
+        let told = Arc::new(Mutex::new(Vec::new()));
+        let on_events: Vec<OnEvents> = (0..2)
+            .map(|root| {
+                let told = Arc::clone(&told);
+                let on_events: OnEvents =
+                    Box::new(move |events| lock(&told).push((root, format!("{events:?}"))));
+                on_events
+            })
+            .collect();
+        let on_events = Mutex::new(on_events);
+        let (created, folders) = mpsc::channel();
+        // As inotify reports `IN_Q_OVERFLOW`.
+        let overflow = notify::Event::new(EventKind::Other).set_flag(notify::event::Flag::Rescan);
+        handle(Ok(overflow), &roots, &on_events, &created);
+        assert_eq!(
+            *lock(&told),
+            [(0, "Rescan".to_owned()), (1, "Rescan".to_owned())]
+        );
+        let rewalked: Vec<_> = folders.try_iter().collect();
+        if WATCHES_TREES {
+            assert!(rewalked.is_empty());
+        } else {
+            assert_eq!(
+                rewalked,
+                [(0, PathBuf::from("/a")), (1, PathBuf::from("/b"))]
+            );
+        }
     }
 }
