@@ -44,25 +44,19 @@ pub async fn status_entries(repo: &Repo) -> Vec<StatusFile> {
 }
 
 /// A changed file's path, and how it changed in the index and the working tree.
-pub type Row = (String, Option<&'static str>, Option<&'static str>);
+pub type Row = (String, Option<FileStatus>, Option<FileStatus>);
 
 /// Each changed file, with how it changed in the index and the working tree.
 pub async fn status_files(repo: &Repo) -> Vec<Row> {
     status_entries(repo)
         .await
         .into_iter()
-        .map(|file| {
-            (
-                file.path,
-                file.staged.map(FileStatus::as_str),
-                file.unstaged.map(FileStatus::as_str),
-            )
-        })
+        .map(|file| (file.path, file.staged, file.unstaged))
         .collect()
 }
 
 /// `rows` as `status_files` has them.
-pub fn rows(rows: &[(&str, Option<&'static str>, Option<&'static str>)]) -> Vec<Row> {
+pub fn rows(rows: &[(&str, Option<FileStatus>, Option<FileStatus>)]) -> Vec<Row> {
     rows.iter()
         .map(|(path, staged, unstaged)| (path.to_string(), *staged, *unstaged))
         .collect()
