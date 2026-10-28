@@ -42,8 +42,8 @@ impl RenderOnce for TextInput {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let palette = *cx.palette();
         Input::new(&self.state)
-            .when(self.compact, |input| input.small().w_56())
-            .when(!self.compact, |input| input.w_56())
+            .w_56()
+            .when(self.compact, |input| input.small())
             .when_some(self.icon, |input, icon| {
                 input.prefix(Icon::new(icon).size_4().text_color(palette.muted))
             })

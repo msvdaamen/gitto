@@ -14,12 +14,7 @@ impl<T> Default for Lingering<T> {
     }
 }
 
-impl<T: Clone> Lingering<T> {
-    /// With `initial`, what it is before it's had any value.
-    pub fn new(initial: Option<T>) -> Self {
-        Lingering { last: initial }
-    }
-
+impl<T> Lingering<T> {
     /// `value`, or the last one it had, if it's `None`.
     pub fn update(&mut self, value: Option<T>) -> Option<&T> {
         if value.is_some() {
@@ -40,8 +35,7 @@ mod tests {
 
     #[test]
     fn keeps_the_last_value_while_its_gone() {
-        let mut shown = Lingering::new(Some("nothing"));
-        assert_eq!(shown.update(None), Some(&"nothing"));
+        let mut shown = Lingering::default();
         assert_eq!(shown.update(Some("main")), Some(&"main"));
         assert_eq!(shown.update(None), Some(&"main"));
         assert_eq!(Lingering::<&str>::default().update(None), None);

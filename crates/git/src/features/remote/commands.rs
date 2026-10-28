@@ -1,22 +1,22 @@
 //! Listing remotes, fetching them, and pulling a branch's upstream into it.
 
-use std::future::Future;
+use std::future::{Future, poll_fn};
 use std::path::{Path, PathBuf};
+use std::pin::pin;
 
-use futures::FutureExt;
+use futures::channel::oneshot;
 
-use super::blockers::{Action, no_upstream};
-use super::config::{
-    RemoteConfig, is_false, makes_merge_commit, read_config, rebase_setting, rebases,
-    remotes_to_fetch,
-};
-use super::progress::{in_progress, interruption, progress, why_detached};
-use crate::core::errors::{Error, GitError, GitErrorKind, Result};
-use crate::core::git_dirs::{GitDirs, git_dirs};
+use super::blockers::PullBlocker;
+use super::config::{PullFf, PullRebase, RemoteConfig, read_config};
+use super::progress::{interruption, progress};
+use crate::core::errors::{Error, GitError, GitErrorKind, Integration, Result};
+use crate::core::git_dirs::git_dirs;
 use crate::core::repo::{GitCommand, Repo, current_branch, ref_exists, resolve_ref, succeeds};
 use crate::core::runner::{RunOptions, spawn_detached};
+use crate::core::trace::trace;
 use crate::features::branch::in_use::branches_in_use;
-use crate::input::NonEmpty;
+use crate::features::operation::commands::rebase_state;
+use crate::input::BranchShortName;
 
 /// The remotes, by name, as `run` lists them.
 pub async fn list_remotes(run: &GitCommand) -> Result<Vec<String>> {
@@ -35,25 +35,41 @@ pub async fn fetch_all(repo: &Repo) -> Result<()> {
     git_fetch(&repo.fetcher(), &["--all", "--prune", "--no-progress"], &[]).await
 }
 
-/// Fetches `remotes` and prunes, as `fetch_all` does, once a pull has merged: not waited for, so
-/// a remote that's slow to answer doesn't hold up the pull, and one that can't be reached doesn't
-/// fail it (that's for the Fetch button to explain). The watcher picks up the branches it changes.
-fn fetch_after_pull(repo: &Repo, remotes: Vec<String>) {
+/// Fetches `remotes` and prunes, as `fetch_all` does, once a pull has merged: in the background,
+/// so a remote that's slow to answer doesn't hold up the pull, and one that can't be reached
+/// doesn't fail it (that's for the Fetch button to explain; it's traced). Waits only until the
+/// fetch has its place in line, which it takes as it's first polled, so a fetch started after the
+/// pull returns waits for this one. The watcher picks up the branches it changes.
+async fn fetch_after_pull(repo: &Repo, remotes: Vec<String>) {
     if remotes.is_empty() {
         return;
     }
     let mut args = vec!["--multiple", "--prune", "--no-progress", "--"];
     args.extend(remotes.iter().map(String::as_str));
-    // Queued (as fetches are) before the pull returns, so a fetch started after it waits for this.
     let fetch = git_fetch(&repo.fetcher(), &args, &[]);
+    let (in_line, queued) = oneshot::channel();
     spawn_detached(async move {
-        let _ = fetch.await;
+        let mut fetch = pin!(fetch);
+        let mut in_line = Some(in_line);
+        let fetched = poll_fn(|cx| {
+            let polled = fetch.as_mut().poll(cx);
+            if let Some(in_line) = in_line.take() {
+                let _ = in_line.send(());
+            }
+            polled
+        })
+        .await;
+        if let Err(error) = fetched {
+            trace(format_args!("fetch after pull failed: {error}"));
+        }
     });
+    // Only dropped unsent with the task, as the executor stops.
+    let _ = queued.await;
 }
 
 /// `git fetch` with `args`, through `run` (`repo.fetcher()`, or the command of `repo.fetching`),
-/// with the `-c` settings `settings`. The command is asked for now (taking its place in line, for
-/// `fetcher()`), and run when the future is polled.
+/// with the `-c` settings `settings`. The command is asked for now, and takes its place in line
+/// (for `fetcher()`) and runs when the future is first polled.
 fn git_fetch(
     run: &GitCommand,
     args: &[&str],
@@ -88,21 +104,26 @@ fn git_fetch(
 /// waits for (and holds up) the other writes to the repository: the fetch takes as long as the
 /// network.
 pub async fn pull(repo: &Repo) -> Result<()> {
-    // Where git keeps FETCH_HEAD and the state of a rebase; asked for once, alongside the branch.
-    // Taken only once the branch is read, which can fail first: that's the error to report.
-    let dirs = git_dirs(repo).boxed().shared();
+    // Where git keeps FETCH_HEAD and the state of a rebase, asked for alongside the branch. The
+    // branch is read first, which can fail first: that's the error to report.
     let run = repo.git();
-    let (read, dirs) = futures::join!(read_branch(&run, dirs.clone()), dirs);
-    let (branch, upstream, settings) = read?;
+    let (read, dirs) = futures::join!(read_branch(&run), git_dirs(repo));
+    let read = read?;
     let git_dir = dirs?.git_dir;
+    let Some((branch, upstream, settings)) = read else {
+        let rebasing = rebase_state(&git_dir).await.rebasing;
+        return Err(Error::PullBlocked(PullBlocker::Detached {
+            rebasing: Some(rebasing),
+        }));
+    };
     // Its merge commit is worded unless the pull will rebase, or only fast-forward, which makes
     // none (as the settings say before fetching).
-    let word = makes_merge_commit(&settings, &branch);
+    let word = settings.branch(&branch).makes_merge_commit();
     let fetched = fetch_upstream(repo, &git_dir, &upstream, word).await?;
 
     let integrated = integrate(repo, &git_dir, &branch, &upstream, fetched).await;
     // Also after a merge that stopped at conflicts, say: the remotes are fetched all the same.
-    fetch_after_pull(repo, remotes_to_fetch(&settings, &upstream.remote));
+    fetch_after_pull(repo, settings.remotes_to_fetch(&upstream.remote)).await;
     integrated
 }
 
@@ -113,7 +134,7 @@ pub async fn pull(repo: &Repo) -> Result<()> {
 /// changing nothing, if it has commits its upstream doesn't, which only merging or rebasing it,
 /// checked out, brings together, or if it's checked out in another worktree, or being rebased or
 /// bisected in one (`Error::PullBlocked`). Every remote is fetched too, as `pull` does.
-pub async fn pull_branch(repo: &Repo, branch: &NonEmpty) -> Result<()> {
+pub async fn pull_branch(repo: &Repo, branch: &BranchShortName) -> Result<()> {
     let branch = branch.as_str();
     let run = repo.git();
     let (current, config) = futures::try_join!(current_branch(&run), read_config(&run))?;
@@ -125,8 +146,15 @@ pub async fn pull_branch(repo: &Repo, branch: &NonEmpty) -> Result<()> {
     fetch_upstream(repo, &git_dir, &upstream, false).await?;
 
     let forwarded = fast_forward(repo, branch, &upstream).await;
-    fetch_after_pull(repo, remotes_to_fetch(&config, &upstream.remote));
+    fetch_after_pull(repo, config.remotes_to_fetch(&upstream.remote)).await;
     forwarded
+}
+
+/// Why `branch` can't be pulled: it tracks no branch.
+fn no_upstream(branch: &str) -> Error {
+    Error::PullBlocked(PullBlocker::NoUpstream {
+        branch: branch.to_owned(),
+    })
 }
 
 /// `reference` without its `refs/heads/` or `refs/remotes/` prefix.
@@ -140,8 +168,9 @@ fn short_name(reference: &str) -> &str {
 /// Checks that `config` still has `branch` pull from `upstream`, as it did before fetching; fails
 /// with `Error::RepositoryChanged` if it doesn't.
 fn check_still_tracks(config: &RemoteConfig, branch: &str, upstream: &Upstream) -> Result<()> {
-    if config.get(&format!("branch.{branch}.remote")) == Some(upstream.remote.as_str())
-        && config.get(&format!("branch.{branch}.merge")) == Some(upstream.merge.as_str())
+    let settings = config.branch(branch);
+    if settings.remote() == Some(upstream.remote.as_str())
+        && settings.merge() == Some(upstream.merge.as_str())
     {
         return Ok(());
     }
@@ -164,10 +193,10 @@ async fn fast_forward(repo: &Repo, branch: &str, upstream: &Upstream) -> Result<
             resolve_ref(&run, &reference),
         )?;
         if let Some(using) = in_use.get(&reference) {
-            return Err(Error::PullBlocked(format!(
-                "{branch} {}, so it wasn't pulled. {}",
-                using.state, using.fix
-            )));
+            return Err(Error::PullBlocked(PullBlocker::InUse {
+                branch,
+                using: using.clone(),
+            }));
         }
         let Some(before) = before else {
             return Err(Error::RepositoryChanged(format!(
@@ -181,17 +210,17 @@ async fn fast_forward(repo: &Repo, branch: &str, upstream: &Upstream) -> Result<
             return Err(Error::Bug(format!("{branch} has no tracking branch.")));
         };
         let Some(after) = resolve_ref(&run, tracking).await? else {
-            return Err(Error::NoUpstream(no_upstream(&branch)));
+            return Err(no_upstream(&branch));
         };
         // Up to date, or only ahead: nothing to bring in.
         if succeeds(&run, ["merge-base", "--is-ancestor", &after, &before]).await? {
             return Ok(());
         }
         if !succeeds(&run, ["merge-base", "--is-ancestor", &before, &after]).await? {
-            return Err(Error::PullBlocked(format!(
-                "{branch} and {} have diverged. Switch to {branch} to pull it.",
-                short_name(tracking)
-            )));
+            return Err(Error::PullBlocked(PullBlocker::Diverged {
+                upstream: short_name(tracking).to_owned(),
+                branch,
+            }));
         }
         // Only if it's still where it was, as a write from a terminal could have moved it.
         run.run([
@@ -238,7 +267,7 @@ async fn integrate(
             None => tracking_branch(&run, &branch).await?,
         };
         let Some(tracking) = tracking.filter(|tracking| !tracking.is_empty()) else {
-            return Err(Error::NoUpstream(no_upstream(&branch)));
+            return Err(no_upstream(&branch));
         };
         let args = integrate_args(&config, &branch, &tracking, fetched.as_ref(), has_head);
 
@@ -253,9 +282,22 @@ async fn integrate(
         };
         // Git won't merge or rebase over a merge, rebase or conflicts that were already there,
         // and says so; those aren't the pull's to explain.
-        if !in_progress(&before)
-            && let Some(interrupted) =
-                interruption(&run, &git_dir, args.as_slice(), &tracking, failure.as_ref()).await?
+        let integration = if args.first().is_some_and(|arg| arg == "rebase") {
+            Integration::Rebase
+        } else {
+            Integration::Merge
+        };
+        let merged = args.last().map_or("", String::as_str);
+        if !before.in_progress()
+            && let Some(interrupted) = interruption(
+                &run,
+                &git_dir,
+                integration,
+                merged,
+                &tracking,
+                failure.as_ref(),
+            )
+            .await?
         {
             return Err(interrupted);
         }
@@ -279,21 +321,15 @@ struct Upstream {
     tracking: Option<String>,
 }
 
-/// The checked-out branch, the upstream it pulls from, and the settings; fails if there isn't
-/// one. `dirs` is only waited for with HEAD detached.
-async fn read_branch(
-    run: &GitCommand,
-    dirs: impl Future<Output = Result<GitDirs>>,
-) -> Result<(String, Upstream, RemoteConfig)> {
+/// The checked-out branch, the upstream it pulls from, and the settings; `None` with HEAD
+/// detached. Fails if the branch has no upstream.
+async fn read_branch(run: &GitCommand) -> Result<Option<(String, Upstream, RemoteConfig)>> {
     let (branch, config) = futures::try_join!(current_branch(run), read_config(run))?;
     let Some(branch) = branch else {
-        let git_dir = dirs.await?.git_dir;
-        return Err(Error::NoUpstream(
-            why_detached(&git_dir, Action::Pull).await,
-        ));
+        return Ok(None);
     };
     let upstream = read_upstream(run, &branch, &config).await?;
-    Ok((branch, upstream, config))
+    Ok(Some((branch, upstream, config)))
 }
 
 /// The upstream `branch` pulls from, as `config` has it; fails if there isn't one.
@@ -301,23 +337,20 @@ async fn read_upstream(run: &GitCommand, branch: &str, config: &RemoteConfig) ->
     // From the config: a branch without commits yet has no ref to ask for its upstream. A remote
     // given as a URL, rather than one with a name (and so a URL setting), has no remote-tracking
     // branches.
-    let remote = config
-        .get(&format!("branch.{branch}.remote"))
-        .filter(|remote| !remote.is_empty());
-    let merge = config
-        .get(&format!("branch.{branch}.merge"))
-        .filter(|merge| !merge.is_empty());
+    let settings = config.branch(branch);
+    let remote = settings.remote().filter(|remote| !remote.is_empty());
+    let merge = settings.merge().filter(|merge| !merge.is_empty());
     let (Some(remote), Some(merge)) = (remote, merge) else {
-        return Err(Error::NoUpstream(no_upstream(branch)));
+        return Err(no_upstream(branch));
     };
-    if remote != "." && !config.has(&format!("remote.{remote}.url")) {
-        return Err(Error::NoUpstream(no_upstream(branch)));
+    if remote != "." && !config.remote(remote).has_url() {
+        return Err(no_upstream(branch));
     }
     // `git pull` merges them all at once; only one is merged here.
-    if config.all(&format!("branch.{branch}.merge")).len() > 1 {
-        return Err(Error::NoUpstream(format!(
-            "{branch} tracks several branches, which only git pull, in a terminal, merges at once."
-        )));
+    if settings.merges().len() > 1 {
+        return Err(Error::PullBlocked(PullBlocker::SeveralUpstreams {
+            branch: branch.to_owned(),
+        }));
     }
     // The remote-tracking branch it's fetched into, known (once the branch has a commit to be
     // listed) even before the first fetch. Without one, as for an upstream given as a URL,
@@ -339,7 +372,7 @@ async fn read_upstream(run: &GitCommand, branch: &str, config: &RemoteConfig) ->
         .find_map(|entry| entry.strip_prefix(&prefix))
         .map(str::to_owned);
     if tracking.as_deref() == Some("") {
-        return Err(Error::NoUpstream(no_upstream(branch)));
+        return Err(no_upstream(branch));
     }
     Ok(Upstream {
         remote: remote.to_owned(),
@@ -381,7 +414,10 @@ async fn fetch_upstream(
         };
         let Some(local) = resolve_ref(&repo.git(), tracking).await? else {
             let name = tracking.strip_prefix("refs/heads/").unwrap_or(tracking);
-            return Err(Error::NoUpstream(format!("{name} no longer exists.")));
+            return Err(Error::PullBlocked(PullBlocker::UpstreamGone {
+                upstream: name.to_owned(),
+                remote: None,
+            }));
         };
         // As `git pull` words FETCH_HEAD for a local branch.
         let fetch_head = format!("{local}\t\t{} of .\n", fetched_name(merge));
@@ -415,9 +451,10 @@ async fn fetch_upstream(
         });
         let Some(line) = line else {
             let short = merge.strip_prefix("refs/heads/").unwrap_or(merge);
-            return Err(Error::NoUpstream(format!(
-                "{short} no longer exists on {remote}."
-            )));
+            return Err(Error::PullBlocked(PullBlocker::UpstreamGone {
+                upstream: short.to_owned(),
+                remote: Some(remote.clone()),
+            }));
         };
         let mut fields = line.split('\t');
         let sha = fields.next().unwrap_or("").to_owned();
@@ -498,12 +535,11 @@ fn integrate_args(
     fetched: Option<&Fetched>,
     has_head: bool,
 ) -> Vec<String> {
-    let ff = config.get("pull.ff").map(str::to_lowercase);
+    let settings = config.branch(branch);
     // A branch without commits yet has nothing to rebase: it's merged, which just moves it there.
-    if has_head && rebases(config, branch) {
-        let rebase = rebase_setting(config, branch);
+    if has_head && settings.rebases() {
         let mut args = vec!["rebase".to_owned(), "--quiet".to_owned()];
-        if matches!(rebase.as_deref(), Some("merges" | "m")) {
+        if settings.rebase() == Some(PullRebase::Merges) {
             args.push("--rebase-merges".to_owned());
         }
         // From where the branch forked from its upstream, like `git pull --rebase`.
@@ -511,12 +547,12 @@ fn integrate_args(
         args.push(tracking.to_owned());
         return args;
     }
-    let ff_args: &[&str] = match ff.as_deref() {
+    let ff_args: &[&str] = match config.pull_ff() {
         _ if !has_head => &[],
         None => &[],
-        Some("only") => &["--ff-only"],
-        Some(ff) if is_false(ff) => &["--no-ff"],
-        Some(_) => &["--ff"],
+        Some(PullFf::Only) => &["--ff-only"],
+        Some(PullFf::No) => &["--no-ff"],
+        Some(PullFf::Yes) => &["--ff"],
     };
     let mut args: Vec<String> = ["merge", "--quiet", "--no-edit"].map(str::to_owned).into();
     // Its log, if `merge.log` wants one, is already in the message, and its comments are git's
@@ -550,9 +586,9 @@ mod tests {
 
     use super::*;
     use crate::core::repo::{How, Observed};
-    use crate::features::remote::blockers::{no_branch, rebasing};
+    use crate::features::remote::blockers::PullBlocker;
     use crate::test_support::conflicts::try_git;
-    use crate::test_support::{Fixture, git, valid};
+    use crate::test_support::{Fixture, git, valid, write_script};
 
     /// Writes `content` to `file` in `path` and commits it with `message`.
     fn commit(path: &Path, file: &str, content: &str, message: &str) {
@@ -571,6 +607,28 @@ mod tests {
 
     /// Asserts that `error` is `expected`: the same kind, with the same message.
     #[track_caller]
+    /// Asserts that `error` is a pull that couldn't start for `reason`.
+    fn assert_blocked(error: &Error, reason: PullBlocker) {
+        assert!(
+            matches!(error, Error::PullBlocked(blocker) if *blocker == reason),
+            "{error:?} isn't blocked by {reason:?}"
+        );
+    }
+
+    /// Why `branch` couldn't be pulled: it tracks no branch.
+    fn untracked(branch: &str) -> PullBlocker {
+        PullBlocker::NoUpstream {
+            branch: branch.into(),
+        }
+    }
+
+    /// Why HEAD couldn't be pulled into: it's detached, as a rebase stopped if `rebasing`.
+    fn detached(rebasing: bool) -> PullBlocker {
+        PullBlocker::Detached {
+            rebasing: Some(rebasing),
+        }
+    }
+
     fn assert_error(error: &Error, expected: Error) {
         assert_eq!(
             std::mem::discriminant(error),
@@ -829,9 +887,12 @@ mod tests {
         git(&path, ["fetch", "-q"]);
         git(&path, ["checkout", "-qb", "gone", "--track", "origin/gone"]);
         git(&upstream, ["branch", "-D", "gone"]);
-        assert_error(
+        assert_blocked(
             &failed_pull(&fx, "deleted-upstream"),
-            Error::NoUpstream("gone no longer exists on origin.".into()),
+            PullBlocker::UpstreamGone {
+                upstream: "gone".into(),
+                remote: Some("origin".into()),
+            },
         );
         assert_eq!(git(&path, ["for-each-ref", "refs/remotes/origin/gone"]), "");
     }
@@ -1020,9 +1081,12 @@ mod tests {
         git(&path, ["branch", "other"]);
         git(&path, ["branch", "-q", "--set-upstream-to", "other"]);
         git(&path, ["branch", "-D", "other"]);
-        assert_error(
+        assert_blocked(
             &failed_pull(&fx, "gone-upstream"),
-            Error::NoUpstream("other no longer exists.".into()),
+            PullBlocker::UpstreamGone {
+                upstream: "other".into(),
+                remote: None,
+            },
         );
     }
 
@@ -1034,12 +1098,11 @@ mod tests {
             &path,
             ["config", "--add", "branch.main.merge", "refs/heads/other"],
         );
-        assert_error(
+        assert_blocked(
             &failed_pull(&fx, "octopus"),
-            Error::NoUpstream(
-                "main tracks several branches, which only git pull, in a terminal, merges at once."
-                    .into(),
-            ),
+            PullBlocker::SeveralUpstreams {
+                branch: "main".into(),
+            },
         );
     }
 
@@ -1101,10 +1164,7 @@ mod tests {
             "Pulling origin/main caused conflicts. Resolve them, then continue the rebase."
         );
         // HEAD is detached until the rebase is done; that's what's in the way of pulling again.
-        assert_error(
-            &failed_pull(&fx, "rebase-conflict"),
-            Error::NoUpstream(rebasing()),
-        );
+        assert_blocked(&failed_pull(&fx, "rebase-conflict"), detached(true));
     }
 
     #[test]
@@ -1177,13 +1237,6 @@ mod tests {
             .output()
             .unwrap();
         String::from_utf8_lossy(&output.stdout).trim().to_owned()
-    }
-
-    #[cfg(unix)]
-    fn write_script(file: &Path, script: &str) {
-        use std::os::unix::fs::PermissionsExt;
-        fs::write(file, script).unwrap();
-        fs::set_permissions(file, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
     #[cfg(unix)]
@@ -1309,16 +1362,16 @@ mod tests {
             let real = fx.repos.open("not-fetched").await.unwrap();
             let (repo, fetches) = counting_fetches(&real);
             let error = pull(&repo).await.unwrap_err();
-            assert!(matches!(error, Error::NoUpstream(_)), "{error:?}");
+            assert!(
+                matches!(error, Error::PullBlocked(PullBlocker::NoUpstream { .. })),
+                "{error:?}"
+            );
 
             // Not even from a branch without commits, which has no ref to ask for its upstream.
             git(&path, ["checkout", "-q", "--orphan", "new"]);
             git(&path, ["config", "branch.new.remote", &upstream]);
             git(&path, ["config", "branch.new.merge", "refs/heads/main"]);
-            assert_error(
-                &pull(&repo).await.unwrap_err(),
-                Error::NoUpstream("new doesn't track a remote branch.".into()),
-            );
+            assert_blocked(&pull(&repo).await.unwrap_err(), untracked("new"));
             assert_eq!(fetches.load(Ordering::SeqCst), 0);
             fetches_done(&repo).await;
         });
@@ -1337,7 +1390,7 @@ mod tests {
         )
         .unwrap();
         assert_ne!(try_git(&path, ["am", patch.to_str().unwrap()]), 0);
-        assert_error(&failed_pull(&fx, "am"), Error::NoUpstream(no_branch()));
+        assert_blocked(&failed_pull(&fx, "am"), detached(false));
     }
 
     #[test]
@@ -1450,10 +1503,7 @@ mod tests {
             &path,
             ["config", "branch.main.remote", upstream.to_str().unwrap()],
         );
-        assert_error(
-            &failed_pull(&fx, "by-url"),
-            Error::NoUpstream("main doesn't track a remote branch.".into()),
-        );
+        assert_blocked(&failed_pull(&fx, "by-url"), untracked("main"));
         assert!(!git(&path, ["status", "--porcelain=v2", "--branch"]).contains("branch.upstream"));
     }
 
@@ -1520,13 +1570,10 @@ mod tests {
         let fx = Fixture::new();
         let path = fx.create_repo("local");
         commit(&path, "a.txt", "a\n", "first");
-        assert_error(
-            &failed_pull(&fx, "local"),
-            Error::NoUpstream("main doesn't track a remote branch.".into()),
-        );
+        assert_blocked(&failed_pull(&fx, "local"), untracked("main"));
 
         git(&path, ["checkout", "-q", "--detach"]);
-        assert_error(&failed_pull(&fx, "local"), Error::NoUpstream(no_branch()));
+        assert_blocked(&failed_pull(&fx, "local"), detached(false));
     }
 
     /// A clone with `feature`, tracking the upstream's, checked out on `main`.
@@ -1606,11 +1653,12 @@ mod tests {
         commit(&path, "ours.txt", "ours\n", "ours");
         git(&path, ["checkout", "-q", "main"]);
         let before = git(&path, ["rev-parse", "feature"]);
-        assert_error(
+        assert_blocked(
             &pull_branch_of(&fx, "ff-diverged", "feature").unwrap_err(),
-            Error::PullBlocked(
-                "feature and origin/feature have diverged. Switch to feature to pull it.".into(),
-            ),
+            PullBlocker::Diverged {
+                branch: "feature".into(),
+                upstream: "origin/feature".into(),
+            },
         );
         assert_eq!(git(&path, ["rev-parse", "feature"]), before);
         // Fetched all the same.
@@ -1638,12 +1686,17 @@ mod tests {
             ],
         );
         let before = git(&path, ["rev-parse", "feature"]);
-        assert_error(
-            &pull_branch_of(&fx, "ff-worktree", "feature").unwrap_err(),
-            Error::PullBlocked(format!(
+        let error = pull_branch_of(&fx, "ff-worktree", "feature").unwrap_err();
+        assert!(
+            matches!(&error, Error::PullBlocked(PullBlocker::InUse { branch, .. }) if branch == "feature"),
+            "{error:?}"
+        );
+        assert_eq!(
+            error.to_string(),
+            format!(
                 "feature is checked out in {}, so it wasn't pulled. Switch to another branch there first.",
                 worktree.display()
-            )),
+            )
         );
         assert_eq!(git(&path, ["rev-parse", "feature"]), before);
     }
@@ -1653,9 +1706,9 @@ mod tests {
         let fx = Fixture::new();
         let (_, path) = fx.create_clone("ff-untracked");
         git(&path, ["branch", "lonely"]);
-        assert_error(
+        assert_blocked(
             &pull_branch_of(&fx, "ff-untracked", "lonely").unwrap_err(),
-            Error::NoUpstream("lonely doesn't track a remote branch.".into()),
+            untracked("lonely"),
         );
     }
 
@@ -1674,8 +1727,8 @@ mod tests {
 
     #[test]
     fn pull_branch_needs_a_branchs_name() {
-        // Refused as the input's parsed: `pull_branch` takes a `NonEmpty`.
-        let error = NonEmpty::parse("").unwrap_err();
+        // Refused as the input's parsed: `pull_branch` takes a `BranchShortName`.
+        let error = BranchShortName::parse("").unwrap_err();
         assert!(matches!(error, Error::InvalidInput(_)), "{error:?}");
     }
 }

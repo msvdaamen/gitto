@@ -1,28 +1,37 @@
 //! Ported from `git/rows.ts`: the rows of the history table.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use gitto_git::features::history::schema::Commit;
 use gitto_git::features::stash::schema::Stash;
+use gitto_git::input::RepositoryId;
+use std::collections::HashMap;
 
 use super::graph::{GraphCommit, GraphRow, compute_graph};
 use super::ref_labels::{Checkouts, RefLabel, to_ref_labels};
 use super::short_sha;
 use crate::format::{avatar_color, initials};
 
-/// Row id of the uncommitted changes, shown above the history when there are any.
-pub const WIP_ID: &str = "wip";
-
-/// Row id of the stash `sha`; set apart from commits' ids, which are their SHAs.
-pub fn stash_row_id(sha: &str) -> String {
-    format!("stash:{sha}")
+/// Which row of the history table, e.g. the one selected: the uncommitted changes', a stash's, or
+/// a commit's, each by its full SHA. A stash's and a commit's are told apart by their kind, not
+/// their SHA.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum RowId {
+    Wip,
+    Stash(String),
+    Commit(String),
 }
 
-/// The SHA of the stash whose row id is `id`; `None` if it isn't a stash's.
-pub fn stash_sha(id: &str) -> Option<&str> {
-    id.strip_prefix("stash:")
+impl RowId {
+    /// The stash's or commit's SHA; `None` for the uncommitted changes.
+    pub fn sha(&self) -> Option<&str> {
+        match self {
+            RowId::Wip => None,
+            RowId::Stash(sha) | RowId::Commit(sha) => Some(sha),
+        }
+    }
 }
+
+/// The uncommitted changes' node in the history graph, which nodes are keyed by SHA in.
+const WIP_NODE: &str = "wip";
 
 /// What the uncommitted changes' row says, in place of a commit message.
 pub const WIP_MESSAGE: &str = "Uncommitted changes";
@@ -36,12 +45,22 @@ pub enum HistoryRow {
 }
 
 impl HistoryRow {
-    /// The row's id: [`WIP_ID`], a stash's (see [`stash_row_id`]), or a commit's SHA.
-    pub fn id(&self) -> &str {
+    /// The row's id.
+    pub fn id(&self) -> RowId {
         match self {
-            HistoryRow::Wip(_) => WIP_ID,
-            HistoryRow::Stash(row) => &row.id,
-            HistoryRow::Commit(row) => &row.id,
+            HistoryRow::Wip(_) => RowId::Wip,
+            HistoryRow::Stash(row) => RowId::Stash(row.sha.clone()),
+            HistoryRow::Commit(row) => RowId::Commit(row.id.clone()),
+        }
+    }
+
+    /// Whether it's the row `id` is, without making its id.
+    pub fn is(&self, id: &RowId) -> bool {
+        match (self, id) {
+            (HistoryRow::Wip(_), RowId::Wip) => true,
+            (HistoryRow::Stash(row), RowId::Stash(sha)) => row.sha == *sha,
+            (HistoryRow::Commit(row), RowId::Commit(sha)) => row.id == *sha,
+            _ => false,
         }
     }
 
@@ -55,7 +74,7 @@ impl HistoryRow {
     }
 
     /// The repository it's in.
-    pub fn repository_id(&self) -> &Arc<str> {
+    pub fn repository_id(&self) -> &RepositoryId {
         match self {
             HistoryRow::Wip(row) => &row.repository_id,
             HistoryRow::Stash(row) => &row.repository_id,
@@ -64,11 +83,11 @@ impl HistoryRow {
     }
 }
 
-/// The uncommitted changes in the working directory, above the commits. Its id is [`WIP_ID`].
+/// The uncommitted changes in the working directory, above the commits. Its id is [`RowId::Wip`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WipRow {
     /// The repository the changes are in.
-    pub repository_id: Arc<str>,
+    pub repository_id: RepositoryId,
     /// Its row in the history graph.
     pub graph: Option<GraphRow>,
 }
@@ -76,12 +95,10 @@ pub struct WipRow {
 /// A stash, among the commits: above the one it was made on, with a dashed line to it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StashRow {
-    /// See [`stash_row_id`].
-    pub id: String,
-    /// The stash commit's full SHA.
+    /// The stash commit's full SHA, its id's (see [`RowId::Stash`]).
     pub sha: String,
     /// The repository the stash is in.
-    pub repository_id: Arc<str>,
+    pub repository_id: RepositoryId,
     /// Its row in the history graph.
     pub graph: Option<GraphRow>,
     /// What git named it, e.g. `WIP on main: 1a2b3c4 Fix the header`.
@@ -96,7 +113,7 @@ pub struct CommitRow {
     /// The full SHA.
     pub id: String,
     /// The repository the commit is in, so follow-up requests (like its files) go there.
-    pub repository_id: Arc<str>,
+    pub repository_id: RepositoryId,
     pub short_sha: String,
     /// Its row in the history graph; only rows in the history table have one.
     pub graph: Option<GraphRow>,
@@ -104,7 +121,8 @@ pub struct CommitRow {
     pub description: Option<String>,
     pub author: String,
     pub initials: String,
-    pub avatar_color: &'static str,
+    /// As `0xRRGGBB` (see [`avatar_color`]).
+    pub avatar_color: u32,
     /// The commit date, which the history is sorted by, in milliseconds since the epoch.
     pub committed_at: i64,
     /// The branches and tags pointing at it (see [`to_ref_labels`]).
@@ -165,7 +183,7 @@ pub fn with_stashes<'a>(log: &'a [Commit], stashes: &'a [Stash]) -> Vec<HistoryE
 /// Lays out the history graph: the commits and stashes, below the uncommitted changes when there are
 /// any. Those get a dashed line to the commit they're based on, `head`, and each stash one to the
 /// commit it was made on, if it's in the history.
-pub fn history_graph(
+fn history_graph(
     entries: &[HistoryEntry<'_>],
     has_changes: bool,
     head: Option<&str>,
@@ -186,7 +204,7 @@ pub fn history_graph(
     if has_changes {
         commits.push(GraphCommit {
             dashed: true,
-            ..GraphCommit::new(WIP_ID, &head_parent)
+            ..GraphCommit::new(WIP_NODE, &head_parent)
         });
     }
     commits.extend(entries.iter().map(|entry| match entry {
@@ -206,17 +224,18 @@ pub fn history_graph(
 }
 
 /// Turns a repository's commits and stashes, plus the uncommitted changes if there are any, into
-/// history table rows, with their rows of `graph`: the graph [`history_graph`] laid out for the
-/// same `entries` and `has_changes`. The commits' labels say where the other worktrees are checked
-/// out (`others`).
-pub fn to_history_rows(
-    repository_id: &Arc<str>,
+/// history table rows, each with its row of the history graph, which is laid out for them: the
+/// uncommitted changes are based on `head`. The commits' labels say where the other worktrees are
+/// checked out (`others`), and which of the `remotes` their remote branches are on.
+pub fn to_history_rows<S: AsRef<str>>(
+    repository_id: &RepositoryId,
     entries: &[HistoryEntry<'_>],
     has_changes: bool,
-    graph: Vec<GraphRow>,
+    head: Option<&str>,
     others: &Checkouts,
+    remotes: &[S],
 ) -> Vec<HistoryRow> {
-    let mut graph = graph.into_iter();
+    let mut graph = history_graph(entries, has_changes, head).into_iter();
     let mut rows = Vec::with_capacity(entries.len() + usize::from(has_changes));
     if has_changes {
         rows.push(HistoryRow::Wip(WipRow {
@@ -225,9 +244,13 @@ pub fn to_history_rows(
         }));
     }
     rows.extend(entries.iter().map(|entry| match entry {
-        HistoryEntry::Commit(commit) => {
-            HistoryRow::Commit(to_commit_row(repository_id, commit, graph.next(), others))
-        }
+        HistoryEntry::Commit(commit) => HistoryRow::Commit(to_commit_row(
+            repository_id,
+            commit,
+            graph.next(),
+            others,
+            remotes,
+        )),
         HistoryEntry::Stash(stash) => {
             HistoryRow::Stash(to_stash_row(repository_id, stash, graph.next()))
         }
@@ -235,9 +258,8 @@ pub fn to_history_rows(
     rows
 }
 
-fn to_stash_row(repository_id: &Arc<str>, stash: &Stash, graph: Option<GraphRow>) -> StashRow {
+fn to_stash_row(repository_id: &RepositoryId, stash: &Stash, graph: Option<GraphRow>) -> StashRow {
     StashRow {
-        id: stash_row_id(&stash.sha),
         sha: stash.sha.clone(),
         repository_id: repository_id.clone(),
         graph,
@@ -246,12 +268,14 @@ fn to_stash_row(repository_id: &Arc<str>, stash: &Stash, graph: Option<GraphRow>
     }
 }
 
-/// A commit's row; its labels say where the other worktrees are checked out (`others`).
-pub fn to_commit_row(
-    repository_id: &Arc<str>,
+/// A commit's row; its labels say where the other worktrees are checked out (`others`), and which
+/// of the `remotes` its remote branches are on.
+pub fn to_commit_row<S: AsRef<str>>(
+    repository_id: &RepositoryId,
     commit: &Commit,
     graph: Option<GraphRow>,
     others: &Checkouts,
+    remotes: &[S],
 ) -> CommitRow {
     CommitRow {
         id: commit.sha.clone(),
@@ -264,7 +288,7 @@ pub fn to_commit_row(
         initials: initials(&commit.author_name),
         avatar_color: avatar_color(&commit.author_email),
         committed_at: commit.committed_at,
-        labels: to_ref_labels(&commit.refs, &commit.sha, others),
+        labels: to_ref_labels(&commit.refs, &commit.sha, others, remotes),
     }
 }
 
@@ -396,35 +420,30 @@ mod tests {
             let log = log();
             let stashes = [stash("s", "b", 2500)];
             let entries = with_stashes(&log, &stashes);
-            let repository: Arc<str> = Arc::from("repo");
+            let repository = RepositoryId::generate();
             let rows = to_history_rows(
                 &repository,
                 &entries,
                 true,
-                history_graph(&entries, true, Some("c")),
+                Some("c"),
                 &Checkouts::default(),
+                &["origin"],
             );
-            let kinds: Vec<(&str, &str)> = rows
-                .iter()
-                .map(|row| {
-                    let kind = match row {
-                        HistoryRow::Wip(_) => "wip",
-                        HistoryRow::Stash(_) => "stash",
-                        HistoryRow::Commit(_) => "commit",
-                    };
-                    (kind, row.id())
-                })
-                .collect();
+            let ids: Vec<RowId> = rows.iter().map(HistoryRow::id).collect();
             assert_eq!(
-                kinds,
+                ids,
                 [
-                    ("wip", "wip"),
-                    ("commit", "c"),
-                    ("stash", stash_row_id("s").as_str()),
-                    ("commit", "b"),
-                    ("commit", "a"),
+                    RowId::Wip,
+                    RowId::Commit("c".into()),
+                    RowId::Stash("s".into()),
+                    RowId::Commit("b".into()),
+                    RowId::Commit("a".into()),
                 ]
             );
+            assert!(rows[2].is(&RowId::Stash("s".into())));
+            assert!(!rows[2].is(&RowId::Commit("s".into())));
+            assert_eq!(ids[2].sha(), Some("s"));
+            assert_eq!(ids[0].sha(), None);
             let HistoryRow::Stash(row) = &rows[2] else {
                 panic!("a stash: {:?}", rows[2])
             };
@@ -435,16 +454,20 @@ mod tests {
 
     #[test]
     fn shows_a_commit_with_its_author_and_labels() {
-        let repository: Arc<str> = Arc::from("repo");
+        let repository = RepositoryId::generate();
         let commit = Commit {
             body: "Details".into(),
             ..commit("1a2b3c4d5e", &[], 1000)
         };
-        let row = to_commit_row(&repository, &commit, None, &Checkouts::default());
+        let row = to_commit_row(
+            &repository,
+            &commit,
+            None,
+            &Checkouts::default(),
+            &["origin"],
+        );
         assert_eq!(row.short_sha, "1a2b3c4");
         assert_eq!(row.initials, "AL");
         assert_eq!(row.description.as_deref(), Some("Details"));
-        assert_eq!(stash_sha(&stash_row_id("f00d")), Some("f00d"));
-        assert_eq!(stash_sha("f00d"), None);
     }
 }

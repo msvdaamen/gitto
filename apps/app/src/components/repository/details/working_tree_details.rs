@@ -35,7 +35,7 @@ use crate::data::{Mutation, Opaque, Query, QueryError};
 use crate::git::changes::staging_paths;
 use crate::git::diff_source::DiffSource;
 use crate::state::delayed::{DELAY, Delayed};
-use crate::theme::PaletteExt as _;
+use crate::theme::{PaletteExt as _, base_px};
 
 type Staging = Entity<Mutation<(RepositoryId, StagingTarget)>>;
 
@@ -331,7 +331,7 @@ impl WorkingTreeDetails {
         h_flex()
             .flex_none()
             .items_start()
-            .gap(rems(0.867))
+            .gap(base_px(13.))
             .p_4()
             .border_b_1()
             .border_color(palette.border)
@@ -340,7 +340,7 @@ impl WorkingTreeDetails {
                     .self_center()
                     .rounded_full()
                     .shadow_md()
-                    .child(Mascot::new(rems(3.467))),
+                    .child(Mascot::new(base_px(52.))),
             )
             .child(
                 v_flex()
@@ -350,7 +350,7 @@ impl WorkingTreeDetails {
                     .child(Badge::new("WIP").tone(Tone::Amber))
                     .child(
                         div()
-                            .mt(rems(0.467))
+                            .mt(base_px(7.))
                             .mb_1p5()
                             .text_sm()
                             .font_weight(FontWeight::MEDIUM)
@@ -495,7 +495,7 @@ impl WorkingTreeDetails {
         if side == Side::Unstaged
             && let Some(lists) = lists.as_ref()
         {
-            list = list.marker_free(Opaque::new(lists.marker_free().clone()));
+            list = list.marker_free(lists.marker_free().clone());
         }
 
         let header =
@@ -528,11 +528,11 @@ impl WorkingTreeDetails {
             .id(side.list_id())
             .flex_1()
             .flex_basis(rems(0.))
-            .min_h(rems(8.667))
+            .min_h(base_px(130.))
             .pt_3()
             .border_b_1()
             .border_color(palette.border)
-            .child(div().px(rems(0.933)).pb_2().child(header))
+            .child(div().px(base_px(14.)).pb_2().child(header))
             .child(div().min_h_0().flex_1().px_2p5().pb_3().child(content))
     }
 }

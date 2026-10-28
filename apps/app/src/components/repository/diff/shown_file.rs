@@ -6,8 +6,8 @@
 use std::sync::Arc;
 
 use gitto_git::FileStatus;
+use gitto_git::PatchVersion;
 use gitto_git::features::diff::schema::ChangedFile;
-use gitto_git::features::staging::patch_version::patch_version;
 use gitto_git::input::RepositoryId;
 use gitto_ui::git::changes::{
     LineCounts, counts_of, has_patch, is_known_binary, is_nested_repository, total_lines,
@@ -27,10 +27,10 @@ use crate::state::delayed::{DELAY, Delayed};
 pub const LARGE_DIFF_LINES: u64 = 20_000;
 
 /// Names a file's patch in the highlighting cache. A commit's or a stash's never changes, so its
-/// file's name will do; an uncommitted one's is named by what's in it too (see `patch_version`).
+/// file's name will do; an uncommitted one's is named by what's in it too (see `PatchVersion`).
 pub fn patch_cache_key(source: &DiffSource, data: &FilePatch) -> String {
     if source.is_uncommitted() {
-        format!("{}:{}", data.key, patch_version(&data.patch))
+        format!("{}:{}", data.key, PatchVersion::of(&data.patch))
     } else {
         data.key.clone()
     }

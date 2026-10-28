@@ -63,16 +63,36 @@ pub struct HostedRemote {
 }
 
 /// What the home page shows of a repository, beyond its status.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Overview {
     /// The remote it's shown as hosted on: `origin`, or else the first one; `None` without any.
     pub remote: Option<HostedRemote>,
-    /// When a remote was last fetched from, in milliseconds since the epoch (with a fraction, as
-    /// Node's `mtimeMs`); `None` if never.
-    pub fetched_at: Option<f64>,
+    /// When a remote was last fetched from, in milliseconds since the epoch; `None` if never.
+    pub fetched_at: Option<i64>,
     /// When HEAD's commit was made, in milliseconds since the epoch; `None` before the first one.
     pub committed_at: Option<i64>,
     /// What was last done in the repository, most recent first.
     pub activity: Vec<Activity>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spells_each_kind_as_its_json_does() {
+        use ActivityKind::*;
+        // Doesn't compile once there's another kind, until it's listed here too.
+        let _listed = |kind| match kind {
+            Commit | Amend | Merge | Pull | Rebase | Checkout | Reset | CherryPick | Revert
+            | Clone | Other => (),
+        };
+        let kinds = [
+            Commit, Amend, Merge, Pull, Rebase, Checkout, Reset, CherryPick, Revert, Clone, Other,
+        ];
+        for kind in kinds {
+            assert_eq!(serde_json::to_value(kind).unwrap(), kind.as_str());
+        }
+    }
 }

@@ -3,6 +3,7 @@
 
 use std::rc::Rc;
 
+use gitto_git::ContentVersion;
 use gpui_kit::prelude::*;
 use gpui_kit::{App, Context, EventEmitter, SharedString, Task, Window, div};
 
@@ -27,7 +28,7 @@ pub struct ConflictProgress {
     /// Whether a conflict is being resolved: written to disk, and shown once it is.
     pub saving: bool,
     /// The version of the file on show on disk; `None` until it's known, e.g. after editing.
-    pub version: Option<String>,
+    pub version: Option<ContentVersion>,
     /// Why the file's conflicts aren't shown one by one, as its whole text is instead.
     pub problem: Option<String>,
 }
@@ -36,11 +37,12 @@ pub struct ConflictProgress {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiskFile {
     pub contents: String,
-    pub version: String,
+    pub version: ContentVersion,
 }
 
 /// Writes `contents` over the file at `version`; resolves to its new version.
-pub type SaveFile = Rc<dyn Fn(String, String, &mut App) -> Task<Result<String, QueryError>>>;
+pub type SaveFile =
+    Rc<dyn Fn(String, ContentVersion, &mut App) -> Task<Result<ContentVersion, QueryError>>>;
 
 /// What the conflict viewer tells the page.
 #[derive(Debug, Clone, PartialEq)]

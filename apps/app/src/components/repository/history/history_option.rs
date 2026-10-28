@@ -8,13 +8,13 @@ use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, Background, Context, ElementId, FontWeight, Hsla, Role, SharedString,
-    TestSupportExt as _, Window, div, px, rems,
+    TestSupportExt as _, Window, div, px,
 };
 
 use super::columns::{LABEL_ICON, LABEL_LINE, LABEL_TEXT, ROW_HEIGHT, mixed};
 use crate::components::ui::{Icon, IconName, LineStats, Tone};
 use crate::git::changes::LineCounts;
-use crate::theme::PaletteExt as _;
+use crate::theme::{PaletteExt as _, base_px};
 
 /// A row's place in the list. Only the rows in view are rendered, so assistive tech needs to be
 /// told how long the list is.
@@ -191,8 +191,8 @@ impl RenderOnce for RowKindBadge {
             .rounded_sm()
             .border_1()
             .border_color(mixed(palette.amber, 0.4, palette.border))
-            .px(rems(5. / 15.))
-            .py(rems(3. / 15.))
+            .px(base_px(5.))
+            .py(base_px(3.))
             .bg(background)
             .text_color(foreground)
             .text_size(LABEL_TEXT)
