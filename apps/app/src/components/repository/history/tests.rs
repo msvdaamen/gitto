@@ -631,19 +631,11 @@ fn moves_a_page_at_a_time_with_page_down_and_page_up(cx: &mut TestAppContext) {
         },
     );
     history.focus(cx);
-    // A page is what fits in view, less a row to keep one in sight.
+    // A page is what fits in the list's view, less a row to keep one in sight.
     let table = history.table.clone();
     let (page, view, row) = cx
         .update_window(history.window, |_, window, cx| {
-            let view = table
-                .read(cx)
-                .scroll_handle()
-                .0
-                .borrow()
-                .last_item_size
-                .unwrap()
-                .item
-                .height;
+            let view = window.find("history-list").bounds().size.height;
             let row = super::columns::ROW_HEIGHT.to_pixels(window.rem_size());
             (table.read(cx).page_size(window), view, row)
         })

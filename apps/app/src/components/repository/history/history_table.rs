@@ -5,6 +5,7 @@
 //! (`VirtualList`), so a history of tens of thousands of commits scrolls as one of ten. More of it
 //! loads a page at a time as its end comes near.
 
+use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -23,8 +24,8 @@ use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, KeyBinding,
-    Rems, Role, ScrollStrategy, SharedString, Subscription, Task, TestSupportExt as _,
-    UniformListScrollHandle, WeakEntity, Window, div,
+    Pixels, Rems, Role, ScrollStrategy, SharedString, Subscription, Task, TestSupportExt as _,
+    UniformListScrollHandle, WeakEntity, Window, canvas, div,
 };
 
 use super::columns::{CELL_PADDING, Column, HEADER_HEIGHT, LABEL_TEXT, ROW_HEIGHT, SMALL_TEXT};
@@ -178,6 +179,8 @@ pub struct HistoryTable {
     /// is outlined then, while the list has the focus.
     keyboard: bool,
     scroll: UniformListScrollHandle,
+    /// The height of the list's view, as last laid out: what Page Up and Down move by.
+    viewport: Rc<Cell<Pixels>>,
     _history_subscriptions: Vec<Subscription>,
     _subscriptions: Vec<Subscription>,
 }
@@ -271,6 +274,7 @@ impl HistoryTable {
             focus: cx.focus_handle(),
             keyboard: false,
             scroll: UniformListScrollHandle::new(),
+            viewport: Rc::new(Cell::new(Pixels::ZERO)),
             _history_subscriptions: Vec::new(),
             _subscriptions: subscriptions,
         };
@@ -627,15 +631,10 @@ impl HistoryTable {
         self.move_selection(|_, count, _| count - 1, window, cx);
     }
 
-    /// How many rows Page Up and Down move by: what fits in view, less a row to keep one in
-    /// sight; at least one.
+    /// How many rows Page Up and Down move by: what fits in the list's view, as it was last laid
+    /// out, less a row to keep one in sight; at least one.
     pub fn page_size(&self, window: &Window) -> usize {
-        let view = self
-            .scroll
-            .0
-            .borrow()
-            .last_item_size
-            .map_or(0., |size| f32::from(size.item.height));
+        let view = f32::from(self.viewport.get());
         let row = f32::from(ROW_HEIGHT.to_pixels(window.rem_size()));
         ((view / row).floor() as usize).saturating_sub(1).max(1)
     }
@@ -971,6 +970,7 @@ impl Render for HistoryTable {
             self.render_rows(window, cx)
         };
         let footer = self.render_footer(cx);
+        let viewport = Rc::clone(&self.viewport);
         v_flex()
             .id("history")
             .size_full()
@@ -992,10 +992,20 @@ impl Render for HistoryTable {
                     .on_action(cx.listener(Self::select_page_down))
                     .on_action(cx.listener(Self::select_first))
                     .on_action(cx.listener(Self::select_last))
+                    .relative()
                     .flex_1()
                     .min_h_0()
                     .w_full()
-                    .child(body),
+                    .child(body)
+                    // Measures the view, for Page Up and Down.
+                    .child(
+                        canvas(
+                            move |bounds, _, _| viewport.set(bounds.size.height),
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full(),
+                    ),
             )
             .children(footer)
     }
