@@ -3,8 +3,7 @@
 
 use crate::core::repo::Repo;
 use crate::features::status::parse::{STATUS_ARGS, parse_status};
-use crate::features::status::schema::StatusConflict;
-use crate::features::status::schema::StatusFile;
+use crate::features::status::schema::{ConflictKind, StatusConflict, StatusFile};
 use crate::schema::FileStatus;
 
 impl StatusFile {
@@ -30,9 +29,9 @@ impl StatusFile {
             staged: Some(FileStatus::Conflicted),
             unstaged: Some(FileStatus::Conflicted),
             conflict: Some(StatusConflict {
-                xy: xy.to_owned(),
-                ours: ours.to_owned(),
-                theirs: theirs.to_owned(),
+                kind: ConflictKind::from_xy(xy).expect("a conflict's XY"),
+                ours: ours.parse().unwrap(),
+                theirs: theirs.parse().unwrap(),
             }),
         }
     }

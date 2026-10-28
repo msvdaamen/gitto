@@ -25,8 +25,19 @@ pub fn count_conflicts(text: &str) -> usize {
 }
 
 /// Past this many characters, a line's rest isn't kept while the next piece of it comes: a marker
-/// is told by its start, and a separator line this long isn't one.
+/// is told by its start, and a separator line longer than this isn't one.
 const KEPT_LINE: usize = 4096;
+
+/// What's kept of the start of a line whose end hasn't come yet: all of it, or, past `KEPT_LINE`,
+/// that much and an `x`, so it's still too long to be a separator, as it was.
+fn kept(start: &[u8]) -> Vec<u8> {
+    if start.len() <= KEPT_LINE {
+        return start.to_vec();
+    }
+    let mut kept = start[..KEPT_LINE].to_vec();
+    kept.push(b'x');
+    kept
+}
 
 /// Counts conflicts (see `count_conflicts`) in text given a piece at a time, as a file is read: one
 /// of hundreds of megabytes is never all in memory.
@@ -49,19 +60,11 @@ impl ConflictCounter {
         let mut text = std::mem::take(&mut self.rest);
         text.extend_from_slice(piece);
         let Some(last) = memchr::memrchr(b'\n', &text) else {
-            // Too long to be a marker's line but for its start; and no separator, with this after
-            // it.
-            if text.len() > KEPT_LINE {
-                text.truncate(KEPT_LINE);
-                text.push(b'x');
-            }
-            self.rest = text;
+            self.rest = kept(&text);
             return;
         };
         self.scan(&text, last);
-        let from = last + 1;
-        let to = (from + KEPT_LINE + 1).min(text.len());
-        self.rest = text[from..to].to_vec();
+        self.rest = kept(&text[last + 1..]);
     }
 
     /// The conflicts in all of the text given, which has ended.
@@ -123,7 +126,7 @@ fn marker_kind(text: &[u8], start: usize, end: usize) -> Option<Marker> {
         return None;
     }
     if char == b'=' {
-        return (run == last).then_some(Marker::Separator);
+        return (run == last && last - start <= KEPT_LINE).then_some(Marker::Separator);
     }
     // A label may follow, after a space: `<<<<<<< HEAD`.
     if run != last && !is_space(text[run]) {
@@ -208,6 +211,32 @@ mod tests {
             counter.push(&text.as_bytes()[at..]);
             assert_eq!(counter.end(), 2, "split at {at}");
         }
+    }
+
+    #[test]
+    fn counts_the_same_however_a_line_too_long_to_be_a_separator_comes_in_pieces() {
+        let long = "=".repeat(10_000);
+        let text = format!("<<<<<<< HEAD\nours\n{long}\ntheirs\n>>>>>>> side\n");
+        assert_eq!(count_conflicts(&text), 0);
+        let bytes = text.as_bytes();
+        let near_kept = (KEPT_LINE - 2..KEPT_LINE + 30).chain(5000..5003);
+        for at in (0..=bytes.len()).step_by(37).chain(near_kept) {
+            let mut counter = ConflictCounter::new();
+            counter.push(&bytes[..at]);
+            counter.push(&bytes[at..]);
+            assert_eq!(counter.end(), 0, "split at {at}");
+        }
+        // As long as a separator can be, it's one.
+        let longest = format!(
+            "<<<<<<< HEAD\nours\n{}\ntheirs\n>>>>>>> side\n",
+            &long[..KEPT_LINE]
+        );
+        assert_eq!(count_conflicts(&longest), 1);
+        let mut counter = ConflictCounter::new();
+        let (first, second) = longest.split_at(20 + KEPT_LINE / 2);
+        counter.push(first.as_bytes());
+        counter.push(second.as_bytes());
+        assert_eq!(counter.end(), 1);
     }
 
     #[test]

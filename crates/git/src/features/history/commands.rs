@@ -69,8 +69,12 @@ impl TryFrom<RawPage> for Page {
 }
 
 /// A page of the history over every branch, remote and tag, most recently committed first across
-/// all of them, like GitKraken; a commit still always comes after its children. Sorting by commit date keeps
-/// rebased and amended work at the top, where sorting by author date would bury it.
+/// all of them, like GitKraken; a commit still always comes after its children. Sorting by commit
+/// date keeps rebased and amended work at the top, where sorting by author date would bury it.
+///
+/// Fails with `Error::LogOrderChanged` for a later page when the ones before it turn out to need
+/// sorting, which they weren't when they were read: the log is then for reading again from its
+/// first page.
 pub async fn get_log(repo: &Repo, page: Page) -> Result<Vec<Commit>> {
     let has_head = repo.has_head().await;
     // Only refs a user would recognise; `--all` also picks up tool namespaces (e.g. refs/t3/*).
@@ -79,19 +83,21 @@ pub async fn get_log(repo: &Repo, page: Page) -> Result<Vec<Commit>> {
     if has_head {
         revisions.push("HEAD");
     }
-    let read = |order: &[&str]| {
-        let mut args: Vec<String> = ["log", "-z", LOG_FORMAT]
-            .iter()
-            .chain(order)
-            .map(|arg| (*arg).to_owned())
-            .collect();
+    let log = |format: &str, sorted: bool, count: u32, skip: u32| {
+        let mut args: Vec<String> = vec!["log".to_owned(), "-z".to_owned(), format.to_owned()];
+        if sorted {
+            args.push("--date-order".to_owned());
+        }
         args.push("--decorate=full".to_owned());
-        args.push(format!("--max-count={}", page.limit));
-        args.push(format!("--skip={}", page.skip));
+        args.push(format!("--max-count={count}"));
+        args.push(format!("--skip={skip}"));
         args.extend(revisions.iter().map(|arg| (*arg).to_owned()));
         args.push("--".to_owned());
-        let output = repo.read(args);
-        async move { Ok::<_, Error>(parse_log(&output.await?)) }
+        repo.read(args)
+    };
+    let read = |sorted: bool| {
+        let output = log(LOG_FORMAT, sorted, page.limit, page.skip);
+        async move { parse_log(&output.await?) }
     };
 
     // To sort them with children first, git walks back to the oldest commit a ref points at first:
@@ -101,23 +107,28 @@ pub async fn get_log(repo: &Repo, page: Page) -> Result<Vec<Commit>> {
     // parent. So that's read first, and only sorted by git if a commit did end up below one of its
     // parents. That's remembered, so the unsorted log isn't read in vain every time after.
     //
-    // Only the first page: the ones after it are skipped to in git's order, so they follow on from
-    // each other whichever way the first was read.
-    let mut commits = if page.skip > 0 || repo.sorts_log() {
-        None
+    // Every page is read the same way, so each follows on from the ones before it: a later one
+    // unsorted too, checked against the commits of those, which are read again for it (only their
+    // SHAs). If the order was wrong across them, the pages already shown are too.
+    let commits = if repo.sorts_log() {
+        read(true).await?
+    } else if page.skip == 0 {
+        let commits = read(false).await?;
+        if children_first(&HashSet::new(), &commits) {
+            commits
+        } else {
+            repo.mark_log_needs_sorting();
+            read(true).await?
+        }
     } else {
-        Some(read(&[]).await?)
-    };
-    if commits
-        .as_deref()
-        .is_some_and(|commits| !children_first(commits))
-    {
-        repo.sort_log();
-        commits = None;
-    }
-    let commits = match commits {
-        Some(commits) => commits,
-        None => read(&["--date-order"]).await?,
+        let before = log("--format=%H", false, page.skip, 0);
+        let (before, commits) = futures::try_join!(before, read(false))?;
+        let shown = before.split(['\0', '\n']).map(str::trim).collect();
+        if !children_first(&shown, &commits) {
+            repo.mark_log_needs_sorting();
+            return Err(Error::LogOrderChanged);
+        }
+        commits
     };
     // For when it does need sorting. After the log, not alongside it: the first write can take
     // seconds, and would slow it down.
@@ -126,14 +137,15 @@ pub async fn get_log(repo: &Repo, page: Page) -> Result<Vec<Commit>> {
     Ok(commits)
 }
 
-/// Whether every commit comes before its parents, as the history's graph needs them.
-fn children_first(commits: &[Commit]) -> bool {
+/// Whether every commit comes before its parents, as the history's graph needs them, after the
+/// commits `shown` before them.
+fn children_first(shown: &HashSet<&str>, commits: &[Commit]) -> bool {
     let mut listed = HashSet::new();
     for commit in commits {
         if commit
             .parents
             .iter()
-            .any(|parent| listed.contains(parent.as_str()))
+            .any(|parent| listed.contains(parent.as_str()) || shown.contains(parent.as_str()))
         {
             return false;
         }
@@ -150,10 +162,11 @@ pub async fn get_commit(repo: &Repo, sha: &Sha) -> Result<Commit> {
         LOG_FORMAT,
         "--decorate=full",
         "--max-count=1",
+        "--end-of-options",
         sha.as_str(),
         "--",
     ];
-    let commit = parse_log(&repo.read(args).await?).into_iter().next();
+    let commit = parse_log(&repo.read(args).await?)?.into_iter().next();
     // `sha` names a tree or blob, say, rather than a commit.
     commit.ok_or_else(|| {
         Error::Git(GitError::new(
@@ -244,13 +257,13 @@ mod tests {
                         kind: CommitRefKind::Local,
                         name: "main".into(),
                         full_name: "refs/heads/main".into(),
-                        current: Some(true),
+                        current: true,
                     },
                     CommitRef {
                         kind: CommitRefKind::Tag,
                         name: "v1".into(),
                         full_name: "refs/tags/v1".into(),
-                        current: None,
+                        current: false,
                     },
                 ]
             );
@@ -316,7 +329,8 @@ mod tests {
         let path = fx.create_repo("graph-backdated");
         git(&path, ["commit", "-q", "--allow-empty", "-m", "parent"]);
         git(&path, ["checkout", "-qb", "side"]);
-        // As a rebase with --committer-date-is-author-date leaves them. Unsorted, git lists it last.
+        // As a rebase with --committer-date-is-author-date leaves them. Unsorted, git lists it
+        // last.
         git_dated(
             &path,
             "2001-01-01T00:00:00Z",
@@ -386,7 +400,7 @@ mod tests {
     }
 
     #[test]
-    fn the_commit_graph_skips_to_a_later_page_in_gits_order_as_each_of_them_is() {
+    fn the_commit_graph_reads_a_later_page_as_the_first_was_read() {
         let fx = Fixture::new();
         let path = fx.create_repo("graph-paged");
         for subject in ["first", "second", "third"] {
@@ -398,7 +412,53 @@ mod tests {
 
             let later = get_log(&counted, Page::new(2, 1).unwrap()).await.unwrap();
             assert_eq!(subjects(&later), ["second", "first"]);
-            assert_eq!(sorted(&logs), [true]);
+            // Unsorted, as the first page was: the commits before it, and then it.
+            assert_eq!(sorted(&logs), [false, false]);
+
+            // Sorted, once the log needs it.
+            repo.mark_log_needs_sorting();
+            let later = get_log(&counted, Page::new(2, 1).unwrap()).await.unwrap();
+            assert_eq!(subjects(&later), ["second", "first"]);
+            assert_eq!(sorted(&logs), [false, false, true]);
+        });
+    }
+
+    #[test]
+    fn pages_follow_on_from_each_other_when_a_commit_is_dated_before_its_parent() {
+        let fx = Fixture::new();
+        let path = fx.create_repo("paged-backdated");
+        let commit = |date, subject| {
+            git_dated(
+                &path,
+                date,
+                &["commit", "-q", "--allow-empty", "-m", subject],
+            );
+        };
+        commit("2001-01-01T00:00:02Z", "X");
+        git(&path, ["branch", "b"]);
+        // Dated before its parent, X.
+        commit("2001-01-01T00:00:01Z", "Y");
+        git(&path, ["switch", "-q", "b"]);
+        commit("2001-01-01T00:00:03Z", "Z");
+        smol::block_on(async {
+            let repo = fx.repos.open("paged-backdated").await.unwrap();
+            let page = |skip| Page::new(2, skip).unwrap();
+
+            // Unsorted, X comes before its child Y, which is past the first page.
+            assert_eq!(
+                subjects(&get_log(&repo, page(0)).await.unwrap()),
+                ["Z", "X"]
+            );
+            let error = get_log(&repo, page(2)).await.unwrap_err();
+            assert!(matches!(error, Error::LogOrderChanged), "{error:?}");
+            assert_eq!(error.api().code(), "CONFLICT");
+
+            // Read again from the first page, sorted: no commit repeated or left out.
+            assert_eq!(
+                subjects(&get_log(&repo, page(0)).await.unwrap()),
+                ["Z", "Y"]
+            );
+            assert_eq!(subjects(&get_log(&repo, page(2)).await.unwrap()), ["X"]);
         });
     }
 

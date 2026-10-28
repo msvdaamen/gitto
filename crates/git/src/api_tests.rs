@@ -17,7 +17,7 @@ use crate::features::staging::commands::stage;
 use crate::features::stash::commands::pop_stash;
 use crate::features::status::commands::{get_status, get_status_since};
 use crate::features::status::schema::{Head, StatusReply};
-use crate::input::{BranchRef, FullSha};
+use crate::input::{BranchRef, Sha};
 use crate::test_support::{Fixture, git};
 
 /// `error`'s code, as the renderer knew it, and its message.
@@ -55,7 +55,7 @@ fn reports_git_errors_as_api_errors_the_renderer_can_show() {
             )
         );
 
-        let sha = FullSha::parse(UNKNOWN_SHA).unwrap();
+        let sha = Sha::parse(UNKNOWN_SHA).unwrap();
         let (code, message) = api_error(get_commit_files(&repo, &sha).await.unwrap_err());
         assert_eq!(code, "INTERNAL_SERVER_ERROR");
         assert!(message.contains("bad object"), "{message}");
@@ -132,9 +132,9 @@ fn runs_nothing_with_a_git_gitto_doesnt_support() {
         *output.lock().unwrap() = Some("git version 2.51.0\n".to_owned());
         let status = status().await.unwrap();
         assert!(
-            matches!(&status.head, Head::Branch { name, .. } if name == "main"),
+            matches!(&status.summary.head, Head::Branch { name, .. } if name == "main"),
             "{:?}",
-            status.head
+            status.summary.head
         );
     });
 }

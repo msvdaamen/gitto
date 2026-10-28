@@ -13,7 +13,7 @@ use crate::core::runner::RunOptions;
 use crate::features::diff::commands::{PORCELAIN_DIFF, get_commit_file_patch, read_patch};
 use crate::features::diff::parse::parse_diff;
 use crate::features::diff::schema::ChangedFile;
-use crate::input::FileInput;
+use crate::input::{FileInput, Sha};
 
 /// For the stash commands, which take no paths: with literal pathspecs, `stash push
 /// --include-untracked` leaves the untracked files it stashed behind, as it removes them with a
@@ -80,9 +80,10 @@ pub async fn get_stash_files(repo: &Repo, sha: &str) -> Result<Vec<ChangedFile>>
 /// are in a commit of their own, its third parent, without one.
 pub async fn get_stash_file_patch(repo: &Repo, sha: &str, file: &FileInput) -> Result<String> {
     let run = repo.git();
+    let commit = Sha::parse(sha)?;
     let third = format!("{sha}^3");
     let (tracked, untracked) = futures::try_join!(
-        get_commit_file_patch(repo, sha, file),
+        get_commit_file_patch(repo, &commit, file),
         resolve_ref(&run, &third)
     )?;
     let Some(untracked) = untracked else {
