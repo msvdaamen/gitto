@@ -470,7 +470,7 @@ impl Render for CommitForm {
                         .text_xs()
                         .text_color(palette.coral)
                         .whitespace_normal()
-                        .child(error.message()),
+                        .child(error.to_string()),
                 )
             })
     }

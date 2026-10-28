@@ -181,7 +181,7 @@ mod tests {
         let mut loaded = Loaded::with(1);
         loaded.settle(Err(DataError::msg("No.")));
         assert_eq!(loaded.data(), Some(&1));
-        assert_eq!(loaded.error().unwrap().message(), "No.");
+        assert_eq!(loaded.error().unwrap().to_string(), "No.");
         assert!(!loaded.is_success());
         loaded.settle(Ok(1));
         assert!(loaded.error().is_none());

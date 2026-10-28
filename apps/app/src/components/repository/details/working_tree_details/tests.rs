@@ -405,7 +405,7 @@ fn shows_why_the_latest_action_failed_and_no_longer_once_another_goes_through(
     let error = details
         .details
         .read_with(cx, |details, cx| details.error(cx));
-    assert_eq!(error.unwrap().message(), "Couldn't discard it.");
+    assert_eq!(error.unwrap().to_string(), "Couldn't discard it.");
 
     cx.update_window(details.window, |_, window, cx| {
         window.render_frame(cx);

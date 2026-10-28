@@ -333,7 +333,7 @@ impl FileDiffView {
             return Body::Error(message.clone());
         }
         if let Some(error) = view.patch_error() {
-            return Body::Error(error.message());
+            return Body::Error(error.to_string());
         }
         // Another file's patch is only kept while it's on show: one isn't started with it.
         match view.patch() {

@@ -663,7 +663,7 @@ mod ui_tests {
 
         assert_eq!(order(&host, cx), ids);
         let error = host.read_with(cx, |host, cx| host.tabs.read(cx).move_error.clone());
-        assert_eq!(error.unwrap().message(), "The database is locked.");
+        assert_eq!(error.unwrap().to_string(), "The database is locked.");
         let moved = host.read_with(cx, |host, cx| host.tabs.read(cx).moved.clone());
         assert_eq!(moved.as_deref(), Some(ids[0].as_str()));
     }

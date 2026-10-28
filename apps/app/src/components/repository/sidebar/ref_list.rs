@@ -636,7 +636,7 @@ impl Render for RefList {
                     "Couldn't load branches",
                 )
                 .error()
-                .message(error.message().to_owned())
+                .message(error.to_string())
                 .fill(),
             )
         });

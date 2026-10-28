@@ -71,7 +71,7 @@ impl StashButtons {
         let stashes = repository.stashes().data();
         let title = match (status, stashes, repository.stashes().error()) {
             (Some(status), Some(stashes), _) => pop_title(&status.counts, stashes),
-            (_, None, Some(error)) => format!("Couldn't load the stashes: {}", error.message()),
+            (_, None, Some(error)) => format!("Couldn't load the stashes: {error}"),
             _ => "Pop".to_owned(),
         };
         let poppable = can_pop(status.map(|status| &status.counts), stashes.map(|s| &s[..]));
@@ -230,7 +230,7 @@ mod tests {
             buttons
                 .pop_button(cx)
                 .shown_failure()
-                .map(DataError::message)
+                .map(DataError::to_string)
         });
         assert_eq!(
             failure.as_deref(),

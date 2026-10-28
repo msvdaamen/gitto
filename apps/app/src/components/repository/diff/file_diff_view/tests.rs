@@ -957,7 +957,7 @@ fn says_why_lines_couldnt_be_staged_and_shows_the_changes_as_they_are_now(cx: &m
         .unwrap()
         .as_ref()
         .unwrap_err()
-        .message();
+        .to_string();
     assert_eq!(failed, message);
     assert_eq!(opened.staging_error(cx).as_deref(), Some(message));
     assert_eq!(opened.shown(cx), Some(changed_line("a.txt", "saved")));

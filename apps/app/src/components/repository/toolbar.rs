@@ -280,7 +280,7 @@ impl RepositoryToolbar {
         let pending = current && fetch.is_pending();
         let error = fetch.error().filter(|_| current).cloned();
         let title = match &error {
-            Some(error) => format!("Fetch failed: {}", error.message()),
+            Some(error) => format!("Fetch failed: {error}"),
             None => "Fetch all remotes".to_owned(),
         };
         let mutation = self.fetch.clone();
@@ -670,7 +670,7 @@ mod tests {
         let shown = toolbar.read_with(cx, |toolbar, _| toolbar.branch_failure());
         let (kind, error) = shown.unwrap();
         assert_eq!(kind.title(), "Delete branch");
-        assert_eq!(error.message(), "Not fully merged.");
+        assert_eq!(error.to_string(), "Not fully merged.");
 
         // Dismissed, the one before it shows again.
         repository.update(cx, |repository, cx| repository.dismiss("delete-branch", cx));

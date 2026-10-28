@@ -460,7 +460,7 @@ impl Render for SelectedCommit {
         let mut hasher = DefaultHasher::new();
         (
             commit.as_ref().map(|commit| commit.sha.clone()),
-            error.as_ref().map(|error| error.message()),
+            error.as_ref().map(|error| error.to_string()),
             loading,
             count,
         )

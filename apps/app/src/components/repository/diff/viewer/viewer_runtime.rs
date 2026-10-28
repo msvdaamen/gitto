@@ -337,8 +337,8 @@ pub fn load_files(
     let old_file = load_file(Side::Deletions, &prev, cx);
     let new_file = load_file(Side::Additions, &new, cx);
     cx.spawn(async move |cx| {
-        let old = old_file.await.map_err(|error| error.message())?;
-        let read = new_file.await.map_err(|error| error.message())?;
+        let old = old_file.await.map_err(|error| error.to_string())?;
+        let read = new_file.await.map_err(|error| error.to_string())?;
         let version = read.version().map(str::to_owned);
         let hydrated = cx
             .background_spawn(async move {

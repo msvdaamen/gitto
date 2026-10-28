@@ -371,7 +371,7 @@ fn says_why_the_fields_stay_locked_when_the_last_commits_message_cant_be_loaded(
     form.fakes.messages.once(Err(DataError::msg("log failed")));
     form.click("amend", cx);
     let error = form.form.read_with(cx, |form, cx| form.error(cx));
-    assert_eq!(error.unwrap().message(), "log failed");
+    assert_eq!(error.unwrap().to_string(), "log failed");
     assert!(form.is_readonly(cx));
     assert_eq!(
         form.form.read_with(cx, |form, _| form.placeholder),

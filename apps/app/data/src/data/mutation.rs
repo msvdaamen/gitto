@@ -151,7 +151,7 @@ mod tests {
         cx.run_until_parked();
         mutation.read_with(cx, |mutation, _| {
             assert!(!mutation.is_pending());
-            assert_eq!(mutation.error().unwrap().message(), "Nothing to commit.");
+            assert_eq!(mutation.error().unwrap().to_string(), "Nothing to commit.");
         });
         assert!(result.now_or_never().unwrap().unwrap().is_err());
 

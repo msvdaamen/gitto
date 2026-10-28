@@ -1,4 +1,5 @@
-//! Why loading something, or changing a repository, failed: [`DataError`].
+//! Why loading something, or changing a repository, failed: [`DataError`]. What the user is told
+//! is its `Display`.
 
 use std::sync::Arc;
 
@@ -19,14 +20,18 @@ impl DataError {
         DataError::new(Message(message.into()))
     }
 
-    /// What the user is told.
-    pub fn message(&self) -> String {
-        self.0.to_string()
-    }
-
     /// The error as git's API made it, with its code; `None` for one that isn't.
     pub fn api(&self) -> Option<&ApiError> {
-        self.0.downcast_ref::<ApiError>()
+        self.downcast_ref::<ApiError>()
+    }
+
+    /// The error it is, if it's an `E`: also one an `anyhow::Error` held.
+    pub fn downcast_ref<E: std::error::Error + Send + Sync + 'static>(&self) -> Option<&E> {
+        self.0.downcast_ref::<E>().or_else(|| {
+            self.0
+                .downcast_ref::<WithCauses>()
+                .and_then(|error| error.0.downcast_ref::<E>())
+        })
     }
 
     /// Whether it's the API's error with `code` (`hasCode` in `lib/errors.ts`).
@@ -48,9 +53,17 @@ impl std::fmt::Debug for DataError {
     }
 }
 
+/// What the user is told.
 impl std::fmt::Display for DataError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&*self.0, f)
+    }
+}
+
+/// The error it wraps, as it is: its causes are that one's.
+impl std::error::Error for DataError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.0.source()
     }
 }
 
@@ -80,10 +93,31 @@ impl From<std::io::Error> for DataError {
     }
 }
 
-/// With its causes (`{:#}`), which its `Display` alone leaves out.
+/// Kept as it is (see [`DataError::downcast_ref`]), and told with its causes.
 impl From<anyhow::Error> for DataError {
     fn from(error: anyhow::Error) -> Self {
-        DataError::msg(format!("{error:#}"))
+        DataError::new(WithCauses(error))
+    }
+}
+
+/// An `anyhow::Error`, told with its causes (`{:#}`), which its `Display` alone leaves out.
+struct WithCauses(anyhow::Error);
+
+impl std::fmt::Display for WithCauses {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:#}", self.0)
+    }
+}
+
+impl std::fmt::Debug for WithCauses {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+impl std::error::Error for WithCauses {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.0.source()
     }
 }
 
@@ -97,3 +131,35 @@ impl std::fmt::Display for Message {
 }
 
 impl std::error::Error for Message {}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error as _;
+
+    use super::*;
+
+    #[test]
+    fn keeps_an_anyhow_error_and_tells_its_causes() {
+        let api = ApiError::from(gitto_git::Error::PushRejected {
+            message: "Rejected.".to_owned(),
+            forcible: false,
+        });
+        let message = api.to_string();
+        let error = DataError::from(anyhow::Error::new(api).context("Couldn't push"));
+        assert!(
+            error
+                .to_string()
+                .starts_with(&format!("Couldn't push: {message}"))
+        );
+        assert!(error.api().is_some());
+        assert!(error.source().is_some());
+    }
+
+    #[test]
+    fn goes_through_question_marks_into_anyhow() {
+        fn fails() -> anyhow::Result<()> {
+            Err(DataError::msg("No."))?
+        }
+        assert_eq!(fails().unwrap_err().to_string(), "No.");
+    }
+}

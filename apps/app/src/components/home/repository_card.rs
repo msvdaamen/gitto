@@ -171,7 +171,7 @@ impl RenderOnce for RepositoryCard {
                                         .child(
                                             Icon::new(IconName::TriangleAlert).size_3().flex_none(),
                                         )
-                                        .child(div().min_w_0().truncate().child(error.message()))
+                                        .child(div().min_w_0().truncate().child(error.to_string()))
                                         .into_any_element(),
                                 ],
                                 None => summary

@@ -358,7 +358,7 @@ impl RewordDialog {
             ));
         }
         if let Some(error) = self.error(cx) {
-            notes.push((Note::Error, error.message().to_owned()));
+            notes.push((Note::Error, error.to_string()));
         }
         notes
     }

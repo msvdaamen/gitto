@@ -720,7 +720,7 @@ impl HistoryTable {
         if let Some(error) = self.repository.read(cx).more_error() {
             return Some(
                 footer(true)
-                    .child(format!("Couldn't load more history: {}", error.message()))
+                    .child(format!("Couldn't load more history: {error}"))
                     .into_any_element(),
             );
         }
@@ -894,7 +894,7 @@ impl Render for HistoryTable {
         let error = log
             .error()
             .filter(|_| log.data().is_none())
-            .map(|error| error.message().to_owned());
+            .map(|error| error.to_string());
         // Before the history's loaded, the header's sized for one lane.
         let graph = graph_width(if loading { 1 } else { self.layout.lanes });
         let updating = self.updating.read(cx).is_on();

@@ -68,7 +68,7 @@ impl RenderOnce for DetailsError {
                         div()
                             .text_xs()
                             .text_color(palette.coral)
-                            .child(error.message()),
+                            .child(error.to_string()),
                     ),
             )
         })

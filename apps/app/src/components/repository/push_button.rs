@@ -134,7 +134,7 @@ impl PushButton {
         let kind = push_rejection(Some(&error))?;
         Some(Rejection {
             kind,
-            message: error.message(),
+            message: error.to_string(),
         })
     }
 
@@ -264,9 +264,7 @@ impl PushButton {
         let target = repository.push_target().data();
         let title: SharedString = match (&target, repository.push_target().error()) {
             (Some(target), _) => push_title(target).into(),
-            (None, Some(error)) => {
-                format!("Couldn't tell where to push: {}", error.message()).into()
-            }
+            (None, Some(error)) => format!("Couldn't tell where to push: {error}").into(),
             (None, None) => "Push".into(),
         };
         let (pushable, ahead) = match &target {
@@ -504,7 +502,7 @@ mod tests {
         click(window, "push", cx);
         let shown = button.read_with(cx, |button, cx| button.button(cx));
         assert_eq!(
-            shown.shown_failure().map(DataError::message).as_deref(),
+            shown.shown_failure().map(DataError::to_string).as_deref(),
             Some("Permission denied (publickey).")
         );
         assert!(!has_dialog(window, cx));

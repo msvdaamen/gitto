@@ -316,7 +316,7 @@ mod tests {
             .unwrap();
         cx.run_until_parked();
         let failure = button.read_with(cx, |button, cx| {
-            button.button(cx).shown_failure().map(DataError::message)
+            button.button(cx).shown_failure().map(DataError::to_string)
         });
         assert_eq!(
             failure.as_deref(),
@@ -375,7 +375,7 @@ mod tests {
             .unwrap();
         cx.run_until_parked();
         let failure = button.read_with(cx, |button, cx| {
-            button.button(cx).shown_failure().map(DataError::message)
+            button.button(cx).shown_failure().map(DataError::to_string)
         });
         assert_eq!(
             failure.as_deref(),

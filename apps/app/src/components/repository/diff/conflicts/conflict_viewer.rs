@@ -588,7 +588,7 @@ impl ConflictViewer {
                     Err(error) => {
                         // Not shown after all: its highlighting isn't kept either.
                         this.highlights.forget(&resolved.diff, cx);
-                        cx.emit(ConflictViewerEvent::Error(Some(error.message())));
+                        cx.emit(ConflictViewerEvent::Error(Some(error.to_string())));
                     }
                 }
                 this.saving = false;

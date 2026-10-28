@@ -107,7 +107,7 @@ impl PatchEditor {
             let read = reading.await;
             let _ = this.update_in(cx, |this, window, cx| {
                 let edited = read
-                    .map_err(|error| error.message())
+                    .map_err(|error| error.to_string())
                     .and_then(|read| editable_text(&diff, read));
                 match edited {
                     Ok((contents, version)) => {

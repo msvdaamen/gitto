@@ -1467,7 +1467,7 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(git.overviews.get(), 1);
         let failed = repository.read_with(cx, |repository, _| {
-            repository.overview().error().map(DataError::message)
+            repository.overview().error().map(DataError::to_string)
         });
         assert_eq!(failed.as_deref(), Some("No overview."));
         // Shown again, it's out of date.
@@ -1602,7 +1602,7 @@ mod tests {
         cx.run_until_parked();
         let state = repository.read_with(cx, |repository, _| repository.operation_state("pull"));
         assert!(!state.running);
-        assert_eq!(state.error.unwrap().message(), "No upstream.");
+        assert_eq!(state.error.unwrap().to_string(), "No upstream.");
         assert!(result.now_or_never().unwrap().unwrap().is_err());
 
         repository.update(cx, |repository, cx| repository.dismiss("pull", cx));

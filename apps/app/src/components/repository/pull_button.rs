@@ -153,7 +153,7 @@ mod tests {
         cx.run_until_parked();
         let error = shown(&button, cx).shown_failure().cloned();
         assert_eq!(
-            error.map(|error| error.message()).as_deref(),
+            error.map(|error| error.to_string()).as_deref(),
             Some("Pulling origin/main caused conflicts.")
         );
 

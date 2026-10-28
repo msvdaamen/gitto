@@ -886,7 +886,7 @@ mod tests {
         cx.run_until_parked();
         let error = done.now_or_never().unwrap().unwrap().unwrap_err();
         assert_eq!(
-            error.message(),
+            error.to_string(),
             "Already up to date: main has every commit of feature."
         );
         assert_eq!(git.refs.get(), 1);

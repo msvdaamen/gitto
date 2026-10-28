@@ -215,7 +215,7 @@ impl Autosave {
         }
         match result {
             Err(error) => {
-                let message = error.message();
+                let message = error.to_string();
                 let state = if is_changed_on_disk(&error) {
                     SaveState::ChangedOnDisk(message)
                 } else {

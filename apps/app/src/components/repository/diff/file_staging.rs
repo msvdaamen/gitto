@@ -149,7 +149,7 @@ impl FileDiffView {
             let left = match staged.await {
                 Ok(Ok(left)) => left,
                 Ok(Err(error)) => {
-                    let message = error.message();
+                    let message = error.to_string();
                     let _ = this.update(cx, |this, cx| {
                         this.staging.error = Some((key, message));
                         cx.notify();
@@ -231,7 +231,7 @@ impl FileDiffView {
                 this.staging.staging_whole = false;
                 match result {
                     Ok(Ok(())) => this.move_on(&key, target, cx),
-                    Ok(Err(error)) => this.staging.error = Some((key, error.message())),
+                    Ok(Err(error)) => this.staging.error = Some((key, error.to_string())),
                     Err(_) => {}
                 }
                 cx.notify();

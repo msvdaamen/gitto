@@ -347,7 +347,7 @@ impl FileDiffView {
                         }),
                     },
                     Ok(Ok(())) => {}
-                    Ok(Err(error)) => this.resolution.error = Some((key, error.message())),
+                    Ok(Err(error)) => this.resolution.error = Some((key, error.to_string())),
                     Err(_) => {}
                 }
                 cx.notify();
@@ -660,7 +660,7 @@ impl FileDiffView {
                 IconName::TriangleAlert,
                 "Couldn't load the conflict",
             )
-            .message(error.message())
+            .message(error.to_string())
             .error()
             .fill()
             .into_any_element();

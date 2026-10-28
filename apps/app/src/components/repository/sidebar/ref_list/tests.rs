@@ -498,7 +498,7 @@ impl Fixture {
         toolbar.read_with(cx, |toolbar, _| {
             toolbar
                 .branch_failure()
-                .map(|(kind, error)| (kind.title(), error.message()))
+                .map(|(kind, error)| (kind.title(), error.to_string()))
         })
     }
 
@@ -518,7 +518,7 @@ impl Fixture {
             };
             failure
                 .error
-                .map(|error| (failure.title.to_string(), error.message()))
+                .map(|error| (failure.title.to_string(), error.to_string()))
         })
     }
 

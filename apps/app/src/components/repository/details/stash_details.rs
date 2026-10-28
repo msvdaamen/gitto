@@ -120,7 +120,7 @@ impl Render for StashDetails {
         let mut hasher = DefaultHasher::new();
         (
             shown.as_ref().map(|stash| stash.sha.clone()),
-            error.as_ref().map(|error| error.message()),
+            error.as_ref().map(|error| error.to_string()),
             loading,
         )
             .hash(&mut hasher);
