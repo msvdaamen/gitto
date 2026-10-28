@@ -10,7 +10,9 @@ use std::sync::{Arc, Mutex};
 use futures::future::try_join_all;
 
 use super::markers::{BINARY_CHECK_BYTES, ConflictCounter, is_binary};
-use super::schema::{Conflict, ConflictSide, ConflictSides, ConflictText, Side};
+use super::schema::{
+    Conflict, ConflictFile, ConflictSide, ConflictSides, ConflictText, FileVersion, Side,
+};
 use crate::core::errors::{DiskChange, Error, Result};
 use crate::core::repo::{GitCommand, Repo};
 use crate::core::runner::{RunOptions, lock};
@@ -79,85 +81,37 @@ async fn unmerged_paths(run: &GitCommand) -> Result<Vec<String>> {
 pub async fn get_conflict(repo: &Repo, path: &str) -> Result<Conflict> {
     check_path(path)?;
     let run = repo.git();
-    let (sides, file) = futures::try_join!(read_sides(&run, path), read_text(repo, path))?;
-    Ok(Conflict {
-        sides,
-        text: file.text,
-        version: file.version,
-        binary: file.binary,
-        unreadable: file.unreadable,
-    })
-}
-
-/// What `read_text` has of the file in the working tree: `Conflict`'s fields but its sides.
-struct FileText {
-    text: Option<ConflictText>,
-    version: Option<String>,
-    binary: bool,
-    unreadable: Option<String>,
-}
-
-impl FileText {
-    fn none(version: Option<String>, unreadable: Option<String>) -> Self {
-        FileText {
-            text: None,
-            version,
-            binary: false,
-            unreadable,
-        }
-    }
+    let (sides, file) = futures::try_join!(read_sides(&run, path), read_file(repo, path))?;
+    Ok(Conflict { sides, file })
 }
 
 /// What's in the working tree at `path`, as `get_conflict` has it. Not what a symbolic link leads
-/// to, which is no part of the conflict, and can be outside the repository: a link's conflict is
-/// resolved by keeping a side.
-async fn read_text(repo: &Repo, path: &str) -> Result<FileText> {
+/// to, which is no part of the conflict, and can be outside the repository.
+async fn read_file(repo: &Repo, path: &str) -> Result<ConflictFile> {
     if is_link(repo, path).await {
-        return Ok(FileText::none(None, None));
+        return Ok(ConflictFile::Link);
     }
     let file = match read_working_tree_bytes(repo, path, MAX_BLOB_BYTES).await {
         Ok(file) => file,
         Err(Error::FileTooLarge { .. }) => {
-            // Still with a version, which keeping a side checks first: when it last changed,
-            // rather than its bytes, which this is read again for whenever the working tree
-            // changes.
-            let version = stamp_of(repo, path)
-                .await
-                .map(|stamp| format!("{STAMPED}{stamp}"));
-            return Ok(FileText::none(
-                version,
-                Some("This file is too large to show.".to_owned()),
-            ));
+            return Ok(match stamp_of(repo, path).await {
+                Some(stamp) => ConflictFile::TooLarge { stamp },
+                None => ConflictFile::Missing,
+            });
         }
-        // In a folder that's a link out of the repository, say.
-        Err(error @ Error::OutsideRepository { .. }) => {
-            return Ok(FileText::none(None, Some(error.to_string())));
-        }
+        Err(Error::OutsideRepository { .. }) => return Ok(ConflictFile::Outside),
         Err(error) => return Err(error),
     };
     let Some(file) = file else {
-        return Ok(FileText::none(None, None));
+        return Ok(ConflictFile::Missing);
     };
     let version = file.version;
     if is_binary(&file.bytes) {
-        return Ok(FileText {
-            text: None,
-            version: Some(version),
-            binary: true,
-            unreadable: Some("This file is binary.".to_owned()),
-        });
+        return Ok(ConflictFile::Binary { version });
     }
     match decode_utf8(&file.bytes) {
-        Ok(contents) => Ok(FileText {
-            text: Some(ConflictText {
-                contents,
-                version: version.clone(),
-            }),
-            version: Some(version),
-            binary: false,
-            unreadable: None,
-        }),
-        Err(error @ Error::NotUtf8) => Ok(FileText::none(Some(version), Some(error.to_string()))),
+        Ok(contents) => Ok(ConflictFile::Text(ConflictText { contents, version })),
+        Err(Error::NotUtf8) => Ok(ConflictFile::NotUtf8 { version }),
         Err(error) => Err(error),
     }
 }
@@ -166,8 +120,9 @@ async fn read_text(repo: &Repo, path: &str) -> Result<FileText> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShownConflict {
     pub sides: ConflictSides,
-    /// The version of the file in the working tree, if there was one to check; see `get_conflict`.
-    pub version: Option<String>,
+    /// The version of the file in the working tree, if there was one to check (see
+    /// `ConflictFile::version`).
+    pub version: Option<FileVersion>,
 }
 
 /// Resolves the conflict in the file at `path` by keeping one side whole, `side`, and marks it
@@ -219,20 +174,17 @@ pub async fn keep_side(repo: &Repo, path: &str, side: Side, shown: &ShownConflic
     .await
 }
 
-/// Starts a version that's when a file last changed (see `stamp_of`), not what's in it.
-const STAMPED: &str = "stamp:";
-
 /// Fails with `Error::FileChangedOnDisk` if the file at `path` in the working tree isn't at
 /// `version` any more, or is gone. Read a piece at a time, however large it is.
-async fn check_version(repo: &Repo, path: &str, version: &str) -> Result<()> {
-    let now = if version.starts_with(STAMPED) {
-        stamp_of(repo, path)
-            .await
-            .map(|stamp| format!("{STAMPED}{stamp}"))
-    } else {
-        scan_working_tree_file(repo, path, |_| {}, u64::MAX).await?
+async fn check_version(repo: &Repo, path: &str, version: &FileVersion) -> Result<()> {
+    let (now, version) = match version {
+        FileVersion::Stamp(stamp) => (stamp_of(repo, path).await, stamp),
+        FileVersion::Content(version) => (
+            scan_working_tree_file(repo, path, |_| {}, u64::MAX).await?,
+            version,
+        ),
     };
-    if now.as_deref() != Some(version) {
+    if now.as_ref() != Some(version) {
         return Err(Error::FileChangedOnDisk {
             path: path.to_owned(),
             how: if now.is_some() {
@@ -263,7 +215,7 @@ pub async fn mark_resolved(
             return Ok(());
         }
         if let Some(version) = version {
-            check_version(repo, path, version).await?;
+            check_version(repo, path, &FileVersion::Content(version.to_owned())).await?;
         }
         if !with_markers {
             refuse_conflict_markers(repo, &run, Some(&[path.to_owned()])).await?;
@@ -645,7 +597,7 @@ mod tests {
     fn shown(conflict: &Conflict) -> ShownConflict {
         ShownConflict {
             sides: conflict.sides.clone(),
-            version: conflict.version.clone(),
+            version: conflict.file.version(),
         }
     }
 
@@ -662,6 +614,14 @@ mod tests {
         fs::read_to_string(path).unwrap()
     }
 
+    /// `file`'s text; panics if it isn't text.
+    fn text_of(file: ConflictFile) -> ConflictText {
+        match file {
+            ConflictFile::Text(text) => text,
+            file => panic!("not text: {file:?}"),
+        }
+    }
+
     // A text conflict.
 
     fn is_read_with_its_markers(style: &str, markers: &str) {
@@ -675,7 +635,7 @@ mod tests {
                 markers.replacen("BASE", &git(&path, ["rev-parse", "--short", "HEAD~"]), 1);
 
             let conflict = get_conflict(&repo, "f.txt").await.unwrap();
-            let version = conflict.text.as_ref().unwrap().version.clone();
+            let version = conflict.file.text().unwrap().version.clone();
             assert_eq!(
                 conflict,
                 Conflict {
@@ -684,13 +644,7 @@ mod tests {
                         ours: side(FileMode::Regular, oid(&path, ":2:f.txt")),
                         theirs: side(FileMode::Regular, oid(&path, ":3:f.txt")),
                     },
-                    text: Some(ConflictText {
-                        contents,
-                        version: version.clone(),
-                    }),
-                    version: Some(version),
-                    binary: false,
-                    unreadable: None,
+                    file: ConflictFile::Text(ConflictText { contents, version }),
                 }
             );
             assert_eq!(status_marker_free(&repo).await, Vec::<String>::new());
@@ -727,7 +681,7 @@ mod tests {
         let path = fx.create_merge_conflict("resolve", None, &text_conflict());
         smol::block_on(async {
             let repo = fx.repos.open("resolve").await.unwrap();
-            let text = get_conflict(&repo, "f.txt").await.unwrap().text.unwrap();
+            let text = text_of(get_conflict(&repo, "f.txt").await.unwrap().file);
 
             let error = mark_resolved(&repo, "f.txt", Some(&text.version), false)
                 .await
@@ -769,7 +723,7 @@ mod tests {
         let path = fx.create_merge_conflict("resolve-with-markers", None, &text_conflict());
         smol::block_on(async {
             let repo = fx.repos.open("resolve-with-markers").await.unwrap();
-            let text = get_conflict(&repo, "f.txt").await.unwrap().text.unwrap();
+            let text = text_of(get_conflict(&repo, "f.txt").await.unwrap().file);
 
             mark_resolved(&repo, "f.txt", Some(&text.version), true)
                 .await
@@ -806,7 +760,7 @@ mod tests {
         let path = fx.create_merge_conflict("resolve-changed", None, &text_conflict());
         smol::block_on(async {
             let repo = fx.repos.open("resolve-changed").await.unwrap();
-            let text = get_conflict(&repo, "f.txt").await.unwrap().text.unwrap();
+            let text = text_of(get_conflict(&repo, "f.txt").await.unwrap().file);
             fs::write(path.join("f.txt"), "one\nchanged elsewhere\nthree\n").unwrap();
 
             let error = mark_resolved(&repo, "f.txt", Some(&text.version), false)
@@ -945,7 +899,7 @@ mod tests {
             assert_eq!(conflict.sides.ours.unwrap().oid, oid(&path, ":2:f.txt"));
             assert_eq!(conflict.sides.theirs, None);
             // Git leaves ours in the working tree, without markers.
-            assert_eq!(conflict.text.unwrap().contents, "one\nours\n");
+            assert_eq!(text_of(conflict.file).contents, "one\nours\n");
         });
     }
 
@@ -1022,7 +976,7 @@ mod tests {
             assert_eq!(conflict.sides.ours.unwrap().mode, FileMode::Regular);
             assert_eq!(conflict.sides.theirs.unwrap().mode, FileMode::Regular);
             assert_eq!(
-                conflict.text.unwrap().contents,
+                text_of(conflict.file).contents,
                 "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> side\n"
             );
         });
@@ -1045,10 +999,11 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("binary").await.unwrap();
             let conflict = get_conflict(&repo, "b.bin").await.unwrap();
-            assert_eq!(conflict.text, None);
-            assert!(conflict.version.is_some());
-            assert!(conflict.binary);
-            assert_eq!(conflict.unreadable.as_deref(), Some("This file is binary."));
+            assert!(
+                matches!(conflict.file, ConflictFile::Binary { .. }),
+                "{:?}",
+                conflict.file
+            );
             // Nor is it ready to be marked resolved: git just left ours.
             assert_eq!(status_marker_free(&repo).await, Vec::<String>::new());
         });
@@ -1072,6 +1027,41 @@ mod tests {
         });
     }
 
+    // A file that isn't UTF-8.
+
+    #[test]
+    fn isnt_read_as_text_when_it_isnt_utf8_but_is_resolved_by_keeping_a_side() {
+        let fx = Fixture::new();
+        let sides = Sides {
+            base: Files::new().with("l.txt", b"caf\xe9\n"),
+            ours: Files::new().with("l.txt", b"caf\xe9 ours\n"),
+            theirs: Files::new().with("l.txt", b"caf\xe9 theirs\n"),
+        };
+        let path = fx.create_merge_conflict("latin-1", None, &sides);
+        smol::block_on(async {
+            let repo = fx.repos.open("latin-1").await.unwrap();
+            let conflict = get_conflict(&repo, "l.txt").await.unwrap();
+            assert!(
+                matches!(conflict.file, ConflictFile::NotUtf8 { .. }),
+                "{:?}",
+                conflict.file
+            );
+            fs::write(path.join("l.txt"), b"caf\xe9 edited\n").unwrap();
+            let error = keep_side(&repo, "l.txt", Side::Ours, &shown(&conflict))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(error, Error::FileChangedOnDisk { .. }),
+                "{error:?}"
+            );
+            let conflict = get_conflict(&repo, "l.txt").await.unwrap();
+            keep_side(&repo, "l.txt", Side::Ours, &shown(&conflict))
+                .await
+                .unwrap();
+            assert_eq!(fs::read(path.join("l.txt")).unwrap(), b"caf\xe9 ours\n");
+        });
+    }
+
     // A file too large to show.
 
     #[test]
@@ -1088,15 +1078,10 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("too-large").await.unwrap();
             let conflict = get_conflict(&repo, "f.txt").await.unwrap();
-            assert_eq!(conflict.text, None);
             assert!(
-                conflict.version.as_ref().unwrap().starts_with("stamp:"),
+                matches!(conflict.file, ConflictFile::TooLarge { .. }),
                 "{:?}",
-                conflict.version
-            );
-            assert_eq!(
-                conflict.unreadable.as_deref(),
-                Some("This file is too large to show.")
+                conflict.file
             );
             let error = stage(&repo, &["f.txt"]).await.unwrap_err();
             assert!(matches!(error, Error::ConflictMarkers { .. }), "{error:?}");
@@ -1152,9 +1137,7 @@ mod tests {
                 conflict.sides.theirs.as_ref().unwrap().mode,
                 FileMode::Symlink
             );
-            assert_eq!(conflict.text, None);
-            assert_eq!(conflict.version, None);
-            assert_eq!(conflict.unreadable, None);
+            assert_eq!(conflict.file, ConflictFile::Link);
             keep_side(&repo, "config", Side::Theirs, &shown(&conflict))
                 .await
                 .unwrap();
@@ -1182,7 +1165,7 @@ mod tests {
             assert_eq!(conflict.sides.base, None);
             assert_eq!(conflict.sides.ours, None);
             assert_eq!(conflict.sides.theirs, None);
-            assert_eq!(conflict.text.unwrap().contents, "one\nours\nthree\n");
+            assert_eq!(text_of(conflict.file).contents, "one\nours\nthree\n");
         });
     }
 }
