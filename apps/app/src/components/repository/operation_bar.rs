@@ -114,24 +114,24 @@ impl OperationBar {
         self.operation.data().flatten()
     }
 
-    fn files(&self) -> Vec<ChangedFile> {
-        self.conflicted
-            .data()
-            .map(|conflicted| conflicted.files)
-            .unwrap_or_default()
+    /// Whether there are conflicts.
+    fn has_conflicts(conflicted: Option<&ConflictedFiles>) -> bool {
+        conflicted.is_some_and(|conflicted| !conflicted.files.is_empty())
     }
 
     /// Whether it's shown: there's an operation under way, or conflicts.
     pub fn is_shown(&self) -> bool {
-        self.operation().is_some() || !self.files().is_empty()
+        self.operation().is_some() || Self::has_conflicts(self.conflicted.data().as_ref())
     }
 
     /// What's said of the conflicts, as the bar shows it.
     pub fn summary(&self) -> String {
-        let conflicted = self.conflicted.data();
-        let files = conflicted.as_ref().map_or(0, |c| c.files.len());
-        let ready = conflicted.as_ref().map_or(0, |c| c.marker_free.len());
-        let operation = self.operation().is_some();
+        Self::summary_of(self.operation().is_some(), self.conflicted.data().as_ref())
+    }
+
+    fn summary_of(operation: bool, conflicted: Option<&ConflictedFiles>) -> String {
+        let files = conflicted.map_or(0, |c| c.files.len());
+        let ready = conflicted.map_or(0, |c| c.marker_free.len());
         let summary = conflicts_summary(operation, files, ready);
         if !operation && files > 0 {
             format!("{summary}. Resolve them, then commit.")
@@ -142,9 +142,11 @@ impl OperationBar {
 
     /// The file "Resolve conflicts" opens: one with markers left, if any is.
     pub fn first(&self) -> Option<ChangedFile> {
-        self.conflicted
-            .data()
-            .and_then(|conflicted| first_to_resolve(&conflicted).cloned())
+        Self::first_of(self.conflicted.data().as_ref())
+    }
+
+    fn first_of(conflicted: Option<&ConflictedFiles>) -> Option<ChangedFile> {
+        conflicted.and_then(|conflicted| first_to_resolve(conflicted).cloned())
     }
 
     fn is_pending(&self, cx: &App) -> bool {
@@ -155,7 +157,7 @@ impl OperationBar {
     /// Whether Continue (or Commit merge) can be clicked: nothing's running, and nothing's
     /// conflicted.
     pub fn may_continue(&self, cx: &App) -> bool {
-        !self.is_pending(cx) && self.files().is_empty()
+        !self.is_pending(cx) && !Self::has_conflicts(self.conflicted.data().as_ref())
     }
 
     fn saved(&self, cx: &mut App) -> Task<bool> {
@@ -244,13 +246,17 @@ impl OperationBar {
 
 impl Render for OperationBar {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !self.is_shown() {
+        // Once a render: it's cloned out of the status.
+        let conflicted = self.conflicted.data();
+        let conflicted = conflicted.as_ref();
+        let operation = self.operation();
+        let has_conflicts = Self::has_conflicts(conflicted);
+        if operation.is_none() && !has_conflicts {
             return div().into_any_element();
         }
         let palette = *cx.palette();
-        let operation = self.operation();
-        let files = self.files();
-        let first = self.first();
+        let summary = Self::summary_of(operation.is_some(), conflicted);
+        let first = Self::first_of(conflicted);
         let pending = self.is_pending(cx);
         let title: SharedString = operation.as_ref().map_or_else(
             || "Conflicts".into(),
@@ -298,7 +304,7 @@ impl Render for OperationBar {
                             .primary()
                             .small()
                             .label(label)
-                            .disabled(pending || !files.is_empty())
+                            .disabled(pending || has_conflicts)
                             .on_click(cx.listener(move |this, _, _, cx| this.go_on(kind, cx))),
                     )
                     .on_dismiss(move |_, cx| dismiss_proceed.dismiss(&proceed_id, cx)),
@@ -321,7 +327,7 @@ impl Render for OperationBar {
                 Icon::new(IconName::GitMergeConflict)
                     .size_4()
                     .flex_none()
-                    .text_color(if files.is_empty() {
+                    .text_color(if !has_conflicts {
                         palette.mint
                     } else {
                         palette.coral
@@ -354,7 +360,7 @@ impl Render for OperationBar {
                             .truncate()
                             .text_xs()
                             .text_color(palette.muted)
-                            .child(self.summary()),
+                            .child(summary),
                     ),
             )
             .child(
