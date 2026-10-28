@@ -9,13 +9,12 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use futures::Stream;
-use futures::future::join_all;
 
 use super::batches::Batches;
 use super::git_dirs::{classify, inside};
 use super::schema::GitDirChange;
 use super::stream::{Watched, watch_stream};
-use super::watcher::{self, OnEvents, Subscribe, Subscription};
+use super::watcher::{self, OnEvents, Root, Subscribe, Subscription};
 use crate::core::errors::Result;
 use crate::core::git_dirs::{git_dirs, real_path};
 use crate::core::repo::Repo;
@@ -24,7 +23,8 @@ use crate::core::trace::{trace, tracing};
 use crate::features::status::commands::status_snapshot;
 
 /// Folders in the git directory that are big or churn a lot, but never change what the UI shows.
-/// `info` (with the exclude rules) is `watch_working_tree`'s; the two never watch the same folder.
+/// `info` has the exclude rules, which only change what shows of the working tree: those are
+/// `watch_working_tree`'s to follow.
 const GIT_DIR_IGNORED: &[&str] = &["objects", "logs", "hooks", "lfs", "modules", "info"];
 
 /// Yields what changed in the repository's git directory (debounced), until it's dropped.
@@ -46,7 +46,7 @@ fn watch_git_dir_with(
 struct GitDir {
     repo: Repo,
     changes: Arc<Batches<GitDirChange>>,
-    subscriptions: Vec<Subscription>,
+    subscription: Subscription,
 }
 
 impl GitDir {
@@ -63,43 +63,34 @@ impl GitDir {
         };
 
         let changes = Arc::new(Batches::new());
-        let subscribed = join_all(roots.into_iter().map(|root| {
-            let ignore = GIT_DIR_IGNORED.iter().map(|name| root.join(name)).collect();
-            let (changes, dirs) = (Arc::clone(&changes), Arc::clone(&dirs));
-            let on_events: OnEvents = Box::new(move |events| match events {
-                Err(error) => changes.fail(error),
-                Ok(paths) => changes.add_all(
-                    paths
-                        .iter()
-                        .filter_map(|path| classify(&dirs, path))
-                        .collect(),
-                ),
-            });
-            subscribe(root, ignore, on_events)
-        }))
-        .await;
-        let mut watched = GitDir {
+        let roots = roots
+            .into_iter()
+            .map(|root| {
+                let ignore = GIT_DIR_IGNORED.iter().map(|name| root.join(name)).collect();
+                let (changes, dirs) = (Arc::clone(&changes), Arc::clone(&dirs));
+                let on_events: OnEvents = Box::new(move |events| match events {
+                    Err(error) => changes.fail(error),
+                    Ok(paths) => changes.add_all(
+                        paths
+                            .iter()
+                            .filter_map(|path| classify(&dirs, path))
+                            .collect(),
+                    ),
+                });
+                Root {
+                    dir: root,
+                    ignore,
+                    on_events,
+                    optional: false,
+                }
+            })
+            .collect();
+        let subscription = subscribe(roots).await?;
+        Ok(GitDir {
             repo,
             changes,
-            subscriptions: Vec::new(),
-        };
-        // All the subscriptions that worked are kept (and so unsubscribed), even if one failed.
-        let mut failed = None;
-        for result in subscribed {
-            match result {
-                Ok(subscription) => watched.subscriptions.push(subscription),
-                Err(error) => {
-                    failed.get_or_insert(error);
-                }
-            }
-        }
-        match failed {
-            Some(error) => {
-                watched.stop().await;
-                Err(error)
-            }
-            None => Ok(watched),
-        }
+            subscription,
+        })
     }
 }
 
@@ -134,12 +125,7 @@ impl Watched for GitDir {
 
     async fn stop(self) {
         self.changes.close();
-        join_all(
-            self.subscriptions
-                .into_iter()
-                .map(Subscription::unsubscribe),
-        )
-        .await;
+        self.subscription.unsubscribe().await;
     }
 }
 
@@ -193,10 +179,11 @@ struct WorkingTree {
     /// The repository's folder, symlinks resolved, as the watcher reports paths.
     root: PathBuf,
     git_dir: PathBuf,
+    /// `.git/info/exclude`, symlinks resolved, which has ignore rules too; `None` if its folder
+    /// doesn't exist.
+    exclude_file: Option<PathBuf>,
     changes: Arc<Batches<TreeChange>>,
     subscription: Option<Subscription>,
-    /// The watch of `.git/info`, for changes to `.git/info/exclude`; `None` if it couldn't start.
-    excludes: Option<Subscription>,
     /// What the current subscription leaves out.
     ignored: HashSet<String>,
     /// Ignored paths that changed in the batch last yielded for, to leave out before the next.
@@ -206,36 +193,23 @@ struct WorkingTree {
 impl WorkingTree {
     async fn start(repo: Repo, subscribe: Subscribe) -> Result<WorkingTree> {
         let (root, dirs) = futures::try_join!(real_path(repo.path()), git_dirs(&repo))?;
+        // Fine to miss if `info` doesn't exist.
+        let exclude_file = match (dirs.exclude_file.parent(), dirs.exclude_file.file_name()) {
+            (Some(info), Some(name)) => real_path(info).await.ok().map(|info| info.join(name)),
+            _ => None,
+        };
         let mut tree = WorkingTree {
             repo,
             subscribe,
             root,
-            git_dir: dirs.git_dir.clone(),
+            git_dir: dirs.git_dir,
+            exclude_file,
             changes: Arc::new(Batches::new()),
             subscription: None,
-            excludes: None,
             ignored: HashSet::new(),
             dropped: Vec::new(),
         };
-        if let Err(error) = tree.watch_tree(None).await {
-            tree.stop().await;
-            return Err(error);
-        }
-        // `.git/info/exclude` has ignore rules too. Fine to miss if `info` doesn't exist.
-        if let Some(info) = dirs.exclude_file.parent() {
-            let name = dirs.exclude_file.file_name().map(ToOwned::to_owned);
-            let changes = Arc::clone(&tree.changes);
-            let on_events: OnEvents = Box::new(move |events| {
-                if let Ok(paths) = events
-                    && paths.iter().any(|path| path.file_name() == name.as_deref())
-                {
-                    changes.add(TreeChange::Excludes);
-                }
-            });
-            tree.excludes = (tree.subscribe)(info.to_owned(), Vec::new(), on_events)
-                .await
-                .ok();
-        }
+        tree.watch_tree(None).await?;
         Ok(tree)
     }
 }
@@ -244,16 +218,10 @@ impl Watched for WorkingTree {
     type Item = ();
 
     async fn next(&mut self) -> Option<Result<()>> {
-        // Nothing was watched while it started over (the new subscription can't start before the
-        // old one stops, see `watch_tree`), so what changed meanwhile is refetched, once per new
-        // folder.
-        if !self.dropped.is_empty() {
-            let dropped = std::mem::take(&mut self.dropped);
-            match self.leave_out_new_ignored_folders(&dropped).await {
-                Ok(true) => return Some(Ok(())),
-                Ok(false) => {}
-                Err(error) => return Some(Err(error)),
-            }
+        // Left out after the change before was yielded, not to hold it back.
+        let dropped = std::mem::take(&mut self.dropped);
+        if let Err(error) = self.leave_out_new_ignored_folders(&dropped).await {
+            return Some(Err(error));
         }
 
         while let Some(batch) = self.changes.next().await {
@@ -300,18 +268,13 @@ impl Watched for WorkingTree {
                     first.join(", ")
                 ));
             }
-            let has_shown = !shown.is_empty();
-            self.dropped = dropped.into_iter().collect();
-            if has_shown {
+            let dropped: Vec<String> = dropped.into_iter().collect();
+            if !shown.is_empty() {
+                self.dropped = dropped;
                 return Some(Ok(()));
             }
-            if !self.dropped.is_empty() {
-                let dropped = std::mem::take(&mut self.dropped);
-                match self.leave_out_new_ignored_folders(&dropped).await {
-                    Ok(true) => return Some(Ok(())),
-                    Ok(false) => {}
-                    Err(error) => return Some(Err(error)),
-                }
+            if let Err(error) = self.leave_out_new_ignored_folders(&dropped).await {
+                return Some(Err(error));
             }
         }
         None
@@ -319,16 +282,14 @@ impl Watched for WorkingTree {
 
     async fn stop(mut self) {
         self.changes.close();
-        let unsubscribed = [self.subscription.take(), self.excludes.take()]
-            .into_iter()
-            .flatten()
-            .map(Subscription::unsubscribe);
-        join_all(unsubscribed).await;
+        if let Some(subscription) = self.subscription.take() {
+            subscription.unsubscribe().await;
+        }
     }
 }
 
 impl WorkingTree {
-    /// Watches the tree, starting over if it's being watched.
+    /// Watches the tree, starting over if it's being watched, and `.git/info/exclude`.
     ///
     /// Everything git ignores (e.g. `node_modules`) is left out, so it's never walked or watched,
     /// and so is the git directory: that's `watch_git_dir`'s. The ignored paths are a snapshot,
@@ -340,18 +301,9 @@ impl WorkingTree {
             None => ignored_paths(&self.repo).await,
         };
         let start = Instant::now();
-        // Stopped first: the watcher reuses what an existing subscription on the folder already
-        // walked, which would leave out a folder that's no longer ignored, and on Linux would watch
-        // every folder in one that's newly ignored. Changes in between are reported anyway:
-        // callers yield after.
-        if let Some(tree) = self.subscription.take() {
-            tree.unsubscribe().await;
-        }
         let ignore = std::iter::once(self.git_dir.clone())
             .chain(now_ignored.iter().map(|path| self.root.join(path)))
             .collect();
-        // A new callback each time: the watcher shares subscriptions with the same callback and
-        // folder.
         let (changes, root) = (Arc::clone(&self.changes), self.root.clone());
         let on_events: OnEvents = Box::new(move |events| match events {
             Err(error) => changes.fail(error),
@@ -363,25 +315,55 @@ impl WorkingTree {
                     .collect(),
             ),
         });
-        let next = (self.subscribe)(self.root.clone(), ignore, on_events).await?;
+        let mut roots = vec![Root {
+            dir: self.root.clone(),
+            ignore,
+            on_events,
+            optional: false,
+        }];
+        if let Some(exclude_file) = &self.exclude_file
+            && let Some(info) = exclude_file.parent()
+        {
+            let (changes, exclude_file) = (Arc::clone(&self.changes), exclude_file.clone());
+            roots.push(Root {
+                dir: info.to_owned(),
+                ignore: Vec::new(),
+                on_events: Box::new(move |events| {
+                    if let Ok(paths) = events
+                        && paths.contains(&exclude_file)
+                    {
+                        changes.add(TreeChange::Excludes);
+                    }
+                }),
+                optional: true,
+            });
+        }
+        // Started before the one it replaces is stopped, so nothing goes unwatched while it walks
+        // the tree. Meanwhile both report what changes in what they both watch, which only adds
+        // to the same batch.
+        let next = (self.subscribe)(roots).await?;
         trace(format_args!(
             "watching {} ({} ignored paths, set up in {:.0}ms)",
             self.root.display(),
             now_ignored.len(),
             start.elapsed().as_secs_f64() * 1000.0
         ));
-        self.subscription = Some(next);
+        if let Some(previous) = self.subscription.replace(next) {
+            previous.unsubscribe().await;
+        }
         self.ignored = now_ignored.into_iter().collect();
         Ok(())
     }
 
     /// Starts over without the folders `dropped` (ignored paths that changed) are, or are in, if
     /// they weren't left out yet, so their changes stop coming in. Not for single files, which are
-    /// dropped as they come: they're cheap, and starting over walks the whole tree on Linux.
-    /// Whether it started over. The folder itself counts: on Linux, a file written right after its
-    /// folder was created is often written before the folder is watched, so only the folder is
-    /// reported.
-    async fn leave_out_new_ignored_folders(&mut self, dropped: &[String]) -> Result<bool> {
+    /// dropped as they come: they're cheap, and starting over walks the whole tree on Linux. The
+    /// folder itself counts: on Linux, a file written right after its folder was created is often
+    /// written before the folder is watched, so only the folder is reported.
+    async fn leave_out_new_ignored_folders(&mut self, dropped: &[String]) -> Result<()> {
+        if dropped.is_empty() {
+            return Ok(());
+        }
         let listed = list_ignored(&self.repo).await;
         let new_folders: Vec<&str> = listed
             .iter()
@@ -398,7 +380,7 @@ impl WorkingTree {
             })
             .collect();
         if new_folders.is_empty() {
-            return Ok(false);
+            return Ok(());
         }
         trace(format_args!(
             "leaving out new ignored folders in {}: {}",
@@ -406,8 +388,7 @@ impl WorkingTree {
             new_folders.join(", ")
         ));
         let paths = listed.iter().map(|path| without_slash(path).to_owned());
-        self.watch_tree(Some(paths.collect())).await?;
-        Ok(true)
+        self.watch_tree(Some(paths.collect())).await
     }
 }
 
@@ -484,14 +465,17 @@ mod tests {
     use std::ffi::OsStr;
     use std::fs;
     use std::path::Path;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, SystemTime};
 
     use async_io::Timer;
     use futures::StreamExt;
 
     use super::*;
+    use crate::core::runner::lock;
     use crate::features::status::commands::get_status;
-    use crate::test_support::{Fixture, git};
+    use crate::test_support::{Fixture, git, wait_for};
 
     use GitDirChange::{Index, Refs};
 
@@ -542,6 +526,96 @@ mod tests {
         async fn abort(self) -> bool {
             self.task.cancel().await;
             self.items.recv().await.is_err()
+        }
+    }
+
+    /// The watcher, watched: how many subscriptions were asked for and set up, and everything their
+    /// roots were told. Subscribing can be held back, from the `hold_from`th subscription on, until
+    /// it's let `go`.
+    struct Probe {
+        calls: AtomicUsize,
+        subscribed: AtomicUsize,
+        seen: Mutex<Vec<PathBuf>>,
+        hold_from: AtomicUsize,
+        gate: (async_channel::Sender<()>, async_channel::Receiver<()>),
+    }
+
+    impl Probe {
+        fn new() -> Arc<Probe> {
+            Arc::new(Probe {
+                calls: AtomicUsize::new(0),
+                subscribed: AtomicUsize::new(0),
+                seen: Mutex::new(Vec::new()),
+                hold_from: AtomicUsize::new(usize::MAX),
+                gate: async_channel::unbounded(),
+            })
+        }
+
+        fn subscribe(self: &Arc<Self>) -> Subscribe {
+            let probe = Arc::clone(self);
+            Arc::new(move |roots: Vec<Root>| {
+                let probe = Arc::clone(&probe);
+                Box::pin(async move {
+                    let call = probe.calls.fetch_add(1, Ordering::SeqCst);
+                    if call >= probe.hold_from.load(Ordering::SeqCst) {
+                        let _ = probe.gate.1.recv().await;
+                    }
+                    let roots = roots.into_iter().map(|root| {
+                        let Root {
+                            dir,
+                            ignore,
+                            mut on_events,
+                            optional,
+                        } = root;
+                        let probe = Arc::clone(&probe);
+                        let on_events: OnEvents = Box::new(move |events| {
+                            if let Ok(paths) = &events {
+                                lock(&probe.seen).extend(paths.iter().cloned());
+                            }
+                            on_events(events);
+                        });
+                        Root {
+                            dir,
+                            ignore,
+                            on_events,
+                            optional,
+                        }
+                    });
+                    let subscription = watcher::subscribe(roots.collect()).await?;
+                    probe.subscribed.fetch_add(1, Ordering::SeqCst);
+                    Ok(subscription)
+                })
+            })
+        }
+
+        /// Holds subscribing back from the `call`th subscription on (counting from 0).
+        fn hold_from(&self, call: usize) {
+            self.hold_from.store(call, Ordering::SeqCst);
+        }
+
+        /// Lets one subscription that's held back through.
+        fn go(&self) {
+            self.gate.0.try_send(()).unwrap();
+        }
+
+        /// Waits until `count` subscriptions were asked for.
+        async fn called(&self, count: usize) {
+            let calls = || self.calls.load(Ordering::SeqCst) >= count;
+            wait_for(Duration::from_secs(5), calls).await;
+        }
+
+        /// Waits until `count` subscriptions are set up.
+        async fn subscribed(&self, count: usize) {
+            let subscribed = || self.subscribed.load(Ordering::SeqCst) >= count;
+            wait_for(Duration::from_secs(5), subscribed).await;
+        }
+
+        /// Waits until a root was told `path` changed.
+        async fn saw(&self, path: &Path) {
+            wait_for(Duration::from_secs(5), || {
+                lock(&self.seen).iter().any(|seen| seen == path)
+            })
+            .await;
         }
     }
 
@@ -636,10 +710,10 @@ mod tests {
             assert!(is_change(next));
 
             // Like a build: a new ignored folder, written to repeatedly. Left out once it's seen,
-            // which reports once, for what changed while it started over.
+            // which reports nothing: the tree is watched all the while it starts over.
             fs::create_dir(path.join("dist")).unwrap();
             write(path.join("dist").join("a.js"), "x");
-            assert!(is_change(changes.next().await));
+            assert!(changes.quiet().await);
             write(path.join("dist").join("b.js"), "x");
             write(path.join("debug.log"), "x");
             assert!(changes.quiet().await);
@@ -667,7 +741,7 @@ mod tests {
             // As on Linux, where a file written right after its folder is often missed: only the
             // folder is reported. Left out from then on all the same.
             fs::create_dir(path.join("dist")).unwrap();
-            assert!(is_change(changes.next().await));
+            assert!(changes.quiet().await);
             write(path.join("dist").join("a.js"), "x");
             assert!(changes.quiet().await);
         });
@@ -696,6 +770,29 @@ mod tests {
             write(path.join("notes").join("debug.log"), "x");
             assert!(is_change(changes.next().await));
             write(path.join("notes").join("todo.md"), "x");
+            assert!(is_change(changes.next().await));
+        });
+    }
+
+    #[test]
+    fn the_working_tree_is_watched_while_it_starts_over() {
+        let fx = Fixture::new();
+        let path = dunce::canonicalize(fx.create_repo("watched-restart")).unwrap();
+        let probe = Probe::new();
+        smol::block_on(async {
+            let repo = fx.repos.open("watched-restart").await.unwrap();
+            let changes = watching(watch_working_tree_with(repo, probe.subscribe()));
+            probe.subscribed(1).await;
+
+            // Starts over with the new rules, held back from watching anew until the change below
+            // was seen: by the watch it replaces.
+            probe.hold_from(1);
+            write(path.join(".gitignore"), "build/\n");
+            probe.called(2).await;
+            write(path.join("file.txt"), "x");
+            probe.saw(&path.join("file.txt")).await;
+            probe.go();
+            assert!(is_change(changes.next().await));
             assert!(is_change(changes.next().await));
         });
     }
