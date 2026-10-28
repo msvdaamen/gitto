@@ -1,6 +1,6 @@
 //! Merging a branch into the checked-out one. Ported from `merge.ts`.
 
-use super::commands::{branch_name, is_ref};
+use super::commands::{branch_target, is_ref};
 use super::refusal::{RefusalKind, Wording, parse_refusal, refusal_message, staged_files};
 use super::schema::MergeOutcome;
 use crate::core::errors::{Error, Result};
@@ -26,17 +26,14 @@ use crate::features::remote::commands::fetched_name;
 /// Fails with `Error::MergeBlocked`, having done nothing, while HEAD is detached, an operation (a
 /// merge, a rebase…) or conflicts are under way, `ref` is gone, or git refused over uncommitted
 /// changes or untracked files; with `Error::MergeStopped` if a hook turned the merge commit down,
-/// which leaves the merge under way, to commit or abort.
+/// which leaves the merge under way, to commit or abort. With `Error::InvalidInput` if `into` is
+/// empty or `ref` isn't a branch, as the UI's input is checked.
 pub async fn merge_branch(repo: &Repo, reference: &str, into: &str) -> Result<MergeOutcome> {
     // As the UI's input is checked.
     if into.is_empty() {
-        return Err(Error::InvalidInput(
-            "Too small: expected string to have >=1 characters".to_owned(),
-        ));
+        return Err(Error::InvalidInput("The branch name is empty.".to_owned()));
     }
-    let Some(target) = branch_name(reference) else {
-        return Err(Error::MergeBlocked(format!("{reference} isn't a branch.")));
-    };
+    let target = branch_target(reference)?;
     let git_dir = git_dirs(repo).await?.git_dir;
     // One write, so nothing else changes the branch, or starts another operation, halfway.
     repo.exclusive(|run| async move {
@@ -1110,10 +1107,21 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("merge-not-branch").await.unwrap();
-            let error = merge_branch(&repo, "refs/tags/v1", "main")
-                .await
-                .unwrap_err();
-            assert_blocked(&error, "refs/tags/v1 isn't a branch.");
+            // As the UI's input is checked: a tag, a link to the remote's default branch, or no
+            // branch to merge into.
+            for (reference, into, message) in [
+                ("refs/tags/v1", "main", "refs/tags/v1 isn't a branch."),
+                (
+                    "refs/remotes/origin/HEAD",
+                    "main",
+                    "refs/remotes/origin/HEAD isn't a branch.",
+                ),
+                ("refs/heads/side", "", "The branch name is empty."),
+            ] {
+                let error = merge_branch(&repo, reference, into).await.unwrap_err();
+                assert!(matches!(error, Error::InvalidInput(_)), "{error:?}");
+                assert_eq!(error.to_string(), message);
+            }
         });
     }
 

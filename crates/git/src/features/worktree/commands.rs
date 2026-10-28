@@ -9,7 +9,8 @@ use crate::core::errors::{Error, Result};
 use crate::core::git_dirs::real_path;
 use crate::core::repo::{GitCommand, Repo};
 use crate::features::branch::commands::{
-    Tracking, branch_name, has_non_space, is_ref, no_ref_syntax_advice, tracking_branch,
+    Tracking, branch_target, has_non_space, is_ref, no_ref_syntax_advice, not_a_branch,
+    tracking_branch,
 };
 use crate::features::refs::schema::RefKind;
 
@@ -27,8 +28,8 @@ pub async fn list_worktrees(repo: &Repo) -> Result<Vec<Worktree>> {
 /// a branch that's checked out in a worktree already, the main one included, and a folder that's
 /// in use, saying so.
 ///
-/// Fails with `Error::InvalidInput` if `folder`, or `new_branch`, is only whitespace, as the UI's
-/// input is checked.
+/// Fails with `Error::InvalidInput` if `folder`, or `new_branch`, is only whitespace, or `branch`
+/// isn't a branch that's there, as the UI's input is checked.
 pub async fn add_worktree(
     repo: &Repo,
     folder: &str,
@@ -41,16 +42,14 @@ pub async fn add_worktree(
     if new_branch.is_some_and(|name| !has_non_space(name)) {
         return Err(Error::InvalidInput("The name is empty.".to_owned()));
     }
-    let Some(target) = branch_name(branch) else {
-        return Err(Error::Bug(format!("{branch} isn't a branch.")));
-    };
+    let target = branch_target(branch)?;
     let path = resolve(repo.path(), folder);
     // One write, so nothing else changes the branches halfway.
     repo.exclusive(|run| async move {
         // That ref itself, rather than git reading `branch` as a revision, like
         // `refs/heads/main~3`.
         if !is_ref(&run, branch).await? {
-            return Err(Error::Bug(format!("{branch} isn't a branch.")));
+            return Err(not_a_branch(branch));
         }
         let add = |args: Vec<OsString>| {
             let mut all: Vec<OsString> = ["worktree", "add", "--quiet"]
@@ -485,12 +484,8 @@ mod tests {
             let error = add_worktree(&repo, s(&x), "refs/heads/gone", None)
                 .await
                 .unwrap_err();
-            assert!(
-                error
-                    .to_string()
-                    .contains("refs/heads/gone isn't a branch."),
-                "{error}"
-            );
+            assert!(matches!(error, Error::InvalidInput(_)), "{error:?}");
+            assert_eq!(error.to_string(), "refs/heads/gone isn't a branch.");
             let error = add_worktree(&repo, s(&x), "refs/heads/feature", Some("a..b"))
                 .await
                 .unwrap_err();

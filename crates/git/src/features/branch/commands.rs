@@ -26,10 +26,18 @@ pub(crate) fn no_ref_syntax_advice() -> RunOptions {
     RunOptions::default().config("advice.refSyntax=false")
 }
 
-/// `ref`'s kind and short name, if it's a branch, local or remote; `None` for a tag or anything
-/// else.
-pub(crate) fn branch_name(reference: &str) -> Option<RefName> {
-    parse_ref_name(reference).filter(|target| target.kind != RefKind::Tag)
+/// `ref`'s kind and short name, if it's a branch, local or remote; fails with
+/// `Error::InvalidInput` for a tag or anything else (see `not_a_branch`).
+pub(crate) fn branch_target(reference: &str) -> Result<RefName> {
+    parse_ref_name(reference)
+        .filter(|target| target.kind != RefKind::Tag)
+        .ok_or_else(|| not_a_branch(reference))
+}
+
+/// That `ref` isn't the full name of a local or remote branch that's there: input that isn't
+/// valid, as what the UI asks about is a branch it listed.
+pub(crate) fn not_a_branch(reference: &str) -> Error {
+    Error::InvalidInput(format!("{reference} isn't a branch."))
 }
 
 /// Creates the branch `name` and switches to it: at HEAD, or at the branch `from` (a full ref name),
@@ -41,7 +49,8 @@ pub(crate) fn branch_name(reference: &str) -> Option<RefName> {
 /// pulling it doesn't pull that one's commits into it. Git refuses a name that's taken or not a
 /// valid branch name, and to switch in the middle of a merge or rebase, saying so.
 ///
-/// Fails with `Error::InvalidInput` if `name` is only whitespace, as the UI's input is checked.
+/// Fails with `Error::InvalidInput` if `name` is only whitespace, or `from` isn't a branch that's
+/// there, as the UI's input is checked.
 pub async fn create_branch(repo: &Repo, name: &str, from: Option<&str>) -> Result<()> {
     if !has_non_space(name) {
         return Err(Error::InvalidInput("The name is empty.".to_owned()));
@@ -53,15 +62,13 @@ pub async fn create_branch(repo: &Repo, name: &str, from: Option<&str>) -> Resul
         repo.write_with(args, no_ref_syntax_advice()).await?;
         return Ok(());
     };
-    if branch_name(from).is_none() {
-        return Err(Error::Bug(format!("{from} isn't a branch.")));
-    }
+    branch_target(from)?;
     let root = repo.path().to_owned();
     // One write, so nothing else changes the branches, the stashes or the working tree halfway.
     repo.exclusive(|run| async move {
         // That ref itself, rather than git reading `from` as a revision, like `refs/heads/main~3`.
         if !is_ref(&run, from).await? {
-            return Err(Error::Bug(format!("{from} isn't a branch.")));
+            return Err(not_a_branch(from));
         }
         let mut args = args;
         args.extend(["--".to_owned(), from.to_owned()]);
@@ -93,10 +100,10 @@ static WOULD_LOSE: LazyLock<Regex> = LazyLock::new(|| {
 /// stashed, the branch switched to, and the stash popped there; if it wouldn't pop without
 /// conflicts, it's kept, and that's returned as an `Error::ChangesStashed`. Git refuses to switch in
 /// the middle of a merge or rebase, saying so.
+///
+/// Fails with `Error::InvalidInput` if `ref` isn't a branch, as the UI's input is checked.
 pub async fn switch_branch(repo: &Repo, reference: &str) -> Result<()> {
-    let Some(target) = branch_name(reference) else {
-        return Err(Error::Bug(format!("{reference} isn't a branch.")));
-    };
+    let target = branch_target(reference)?;
     let root = repo.path().to_owned();
     // One write, so nothing else changes the branches, the stashes or the working tree halfway.
     repo.exclusive(|run| async move {
@@ -983,10 +990,8 @@ mod tests {
 
             for from in ["refs/heads/other~1", "refs/heads/missing", "refs/tags/v1"] {
                 let error = create_branch(&repo, "topic", Some(from)).await.unwrap_err();
-                assert!(
-                    message(&error).contains(&format!("{from} isn't a branch.")),
-                    "{error}"
-                );
+                assert!(matches!(error, Error::InvalidInput(_)), "{error:?}");
+                assert_eq!(error.to_string(), format!("{from} isn't a branch."));
             }
         });
         assert_eq!(git(&path, ["symbolic-ref", "--short", "HEAD"]), "main");

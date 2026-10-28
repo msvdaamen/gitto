@@ -1,6 +1,6 @@
 //! Rebasing the checked-out branch onto another. Ported from `rebase.ts`.
 
-use super::commands::{branch_name, is_ref};
+use super::commands::{branch_target, is_ref};
 use super::refusal::{
     RefusalKind, Wording, list, nul_separated, parse_refusal, refusal_message, staged_files,
 };
@@ -36,17 +36,15 @@ use crate::features::operation::commands::rebase_state;
 /// without conflicts, as a commit couldn't be signed say, is undone, and fails with
 /// `Error::RebaseUndone` saying why: git leaves such a commit's changes staged, for the user to
 /// commit by hand before it goes on, which Gitto can't do for them. With `Error::RebaseStopped` if
-/// it couldn't be undone either, which leaves it under way, to finish in a terminal or abort.
+/// it couldn't be undone either, which leaves it under way, to finish in a terminal or abort. With
+/// `Error::InvalidInput` if `branch` is empty or `ref` isn't a branch, as the UI's input is
+/// checked.
 pub async fn rebase_branch(repo: &Repo, reference: &str, branch: &str) -> Result<RebaseOutcome> {
     // As the UI's input is checked.
     if branch.is_empty() {
-        return Err(Error::InvalidInput(
-            "Too small: expected string to have >=1 characters".to_owned(),
-        ));
+        return Err(Error::InvalidInput("The branch name is empty.".to_owned()));
     }
-    let Some(target) = branch_name(reference) else {
-        return Err(Error::RebaseBlocked(format!("{reference} isn't a branch.")));
-    };
+    let target = branch_target(reference)?;
     let git_dir = git_dirs(repo).await?.git_dir;
     // One write, so nothing else changes the branch, or starts another operation, halfway.
     repo.exclusive(|run| async move {
@@ -875,15 +873,20 @@ mod tests {
     }
 
     #[test]
-    fn refuses_onto_a_tag() {
+    fn refuses_onto_what_isnt_a_branch() {
         let fx = Fixture::new();
         create_side_repo(&fx, "rebase-onto-tag", &clean(), None);
         smol::block_on(async {
             let repo = fx.repos.open("rebase-onto-tag").await.unwrap();
-            let error = rebase_branch(&repo, "refs/tags/v1", "side")
-                .await
-                .unwrap_err();
-            assert_blocked(&error, "refs/tags/v1 isn't a branch.");
+            // As the UI's input is checked, as is a missing branch to rebase.
+            for (reference, branch, message) in [
+                ("refs/tags/v1", "side", "refs/tags/v1 isn't a branch."),
+                ("refs/heads/main", "", "The branch name is empty."),
+            ] {
+                let error = rebase_branch(&repo, reference, branch).await.unwrap_err();
+                assert!(matches!(error, Error::InvalidInput(_)), "{error:?}");
+                assert_eq!(error.to_string(), message);
+            }
         });
     }
 
