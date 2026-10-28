@@ -251,7 +251,7 @@ impl FileDiffView {
         if let Some(conflict) = self.resolution.read(cx).viewer().cloned() {
             conflict.update(cx, |conflict, cx| conflict.discard(window, cx));
         }
-        self.patch_editor = None;
+        self.close_patch_editor();
         self.editing
             .autosave
             .update(cx, |autosave, cx| autosave.stop(cx));
@@ -405,7 +405,7 @@ impl FileDiffView {
 
     /// Editing couldn't start, for `message`.
     pub(super) fn on_edit_failed(&mut self, message: String, cx: &mut Context<Self>) {
-        self.patch_editor = None;
+        self.close_patch_editor();
         self.stop_edit_mode(cx);
         self.editing.start_error = Some(message);
     }
@@ -801,7 +801,9 @@ mod tests {
         // Discard, the first of the dialog's answers after Cancel.
         opened.click(("action", 0usize), cx);
         assert_eq!(*leaving.borrow(), Some(true));
-        assert!(opened.read(cx, |view, _| view.patch_editor.is_none()));
+        // The editor's gone, and what it told the view with it.
+        assert!(opened.read(cx, |view, _| view.patch_editor.is_none()
+            && view.patch_editor_events.is_none()));
         // Typed in meanwhile: the file's changes are read again.
         assert_eq!(opened.tree.reloads(), [keys::uncommitted(&id())]);
         assert!(!is_editing(&opened, cx));

@@ -161,6 +161,8 @@ pub struct FileDiffView {
     pub(super) editing: FileEditing,
     /// The file being edited in the diff's place, while it is.
     pub(super) patch_editor: Option<Entity<PatchEditor>>,
+    /// What the editor tells the view, for as long as it's kept (see `close_patch_editor`).
+    pub(super) patch_editor_events: Option<Subscription>,
     /// Resolving a conflicted file: its conflicts, while it's the file on show.
     pub(super) resolution: Entity<ConflictResolutionView>,
     /// The file on show whose neighbours were loaded ahead.
@@ -256,6 +258,7 @@ impl FileDiffView {
             viewer_error: None,
             editing,
             patch_editor: None,
+            patch_editor_events: None,
             resolution,
             prefetched_for: None,
             opener,
@@ -442,7 +445,7 @@ impl FileDiffView {
     ) {
         let editing = self.editing.is_editing() && shows_patch && !self.view.conflicted();
         if !editing {
-            let Some(editor) = self.patch_editor.take() else {
+            let Some(editor) = self.close_patch_editor() else {
                 return;
             };
             // The keyboard stays with the view, for Escape to close it, say.
@@ -473,13 +476,18 @@ impl FileDiffView {
         let load_file = self.load_file(&prepared.data);
         let path = prepared.data.file.path.clone();
         let editor = cx.new(|cx| PatchEditor::new(diff, path, load_file, window, cx));
-        self._subscriptions
-            .push(cx.subscribe(&editor, |this, _, event, cx| match event {
-                PatchEditorEvent::Editing(session) => this.on_editing(session.clone(), cx),
-                PatchEditorEvent::Edit => this.on_edit(cx),
-                PatchEditorEvent::EditFailed(message) => this.on_edit_failed(message.clone(), cx),
-            }));
+        self.patch_editor_events = Some(cx.subscribe(&editor, |this, _, event, cx| match event {
+            PatchEditorEvent::Editing(session) => this.on_editing(session.clone(), cx),
+            PatchEditorEvent::Edit => this.on_edit(cx),
+            PatchEditorEvent::EditFailed(message) => this.on_edit_failed(message.clone(), cx),
+        }));
         self.patch_editor = Some(editor);
+    }
+
+    /// Takes the patch's editor off the page, and what it tells the view with it.
+    pub(super) fn close_patch_editor(&mut self) -> Option<Entity<PatchEditor>> {
+        self.patch_editor_events = None;
+        self.patch_editor.take()
     }
 
     /// Reads one side of the file `data` is of in full: an unstaged file's new side is on disk.
