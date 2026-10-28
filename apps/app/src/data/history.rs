@@ -27,6 +27,7 @@ use super::keys;
 use super::mutation::Mutation;
 use super::opaque::Opaque;
 use super::query::Query;
+use super::remote::remotes_query;
 use super::stash::stashes_query;
 use super::status::{head_sha, status_query};
 use super::worktree::worktrees_query;
@@ -51,7 +52,7 @@ pub const RELOAD_LIMIT: usize = 10_000;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Log {
     /// The repository it's of, so every row knows where its commit lives.
-    pub repository_id: String,
+    pub repository_id: RepositoryId,
     pub commits: Arc<[Commit]>,
     /// Whether that's all of the history: the last page loaded was short of its limit.
     pub complete: bool,
@@ -99,7 +100,7 @@ pub fn log_options(id: &RepositoryId, get: GetLog) -> QueryOptions<Log> {
         let loaded = previous.map_or(0, |log| log.commits.len());
         let limit = reload_limit(loaded);
         let page = get(repository.clone(), 0, limit);
-        let repository_id = repository.to_string();
+        let repository_id = repository.clone();
         async move {
             let commits = page.await?;
             Ok(Log {
@@ -215,7 +216,7 @@ impl LogQuery {
         if self.has_more() && !self.query.is_fetching() && !self.more.read(cx).is_pending() {
             let id = self.id.clone();
             self.more.update(cx, |more, cx| {
-                drop(more.mutate(id, cx));
+                more.run(id, cx);
             });
         }
     }
@@ -223,13 +224,14 @@ impl LogQuery {
 
 /// What the history table shows (`useHistory`): the log, and what's shown among it. The rows are
 /// laid out from these (see the module's doc): the log's commits with the stashes among them, a
-/// row of the uncommitted changes if there are any, and the other worktrees' checkouts on their
-/// labels.
+/// row of the uncommitted changes if there are any, and on their labels the other worktrees'
+/// checkouts and the remotes their remote branches are on.
 pub struct History {
     log: LogQuery,
     status: Query<Opaque<Uncommitted>, StatusSummary>,
     stashes: Query<Arc<[Stash]>>,
     worktrees: Query<Arc<[Worktree]>>,
+    remotes: Query<Vec<String>>,
 }
 
 impl History {
@@ -244,6 +246,7 @@ impl History {
             status: status_query(id, cx),
             stashes: stashes_query(id, cx),
             worktrees: worktrees_query(id, cx),
+            remotes: remotes_query(id, cx),
         }
     }
 
@@ -268,11 +271,19 @@ impl History {
         &self.worktrees
     }
 
+    /// The remotes, which the labels' remote branches are on.
+    pub fn remotes(&self) -> &Query<Vec<String>> {
+        &self.remotes
+    }
+
     /// Whether there are uncommitted changes, for their row. The layout only depends on the log,
     /// the stashes, this and HEAD; not on the rest of the status, which reloads whenever a file
     /// changes.
     pub fn has_changes(&self) -> bool {
-        has_uncommitted_changes(self.status.data().as_ref())
+        self.status
+            .data()
+            .as_ref()
+            .is_some_and(has_uncommitted_changes)
     }
 
     /// The commit HEAD points at; `None` before the first commit, or until the status loads.
@@ -292,6 +303,16 @@ impl History {
     /// couldn't be, as with the stashes.
     pub fn shown_worktrees(&self) -> Arc<[Worktree]> {
         loaded(&self.worktrees)
+    }
+
+    /// The remotes the labels' remote branches are put on: none until they've loaded, and none
+    /// if they couldn't be, a remote branch then being taken to be on the part of its name before
+    /// its first slash.
+    pub fn shown_remotes(&self) -> Vec<String> {
+        match self.remotes.data() {
+            Some(remotes) if self.remotes.is_success() => remotes,
+            _ => Vec::new(),
+        }
     }
 
     /// Whether there's more of the log to load, once it's loaded.
@@ -443,7 +464,9 @@ mod tests {
         for message in ["one", "two", "three"] {
             git(&path, &["commit", "-q", "--allow-empty", "-m", message]);
         }
-        let get = git_log_from(gitto_git::GitApi::new(move |_: &str| Some(path.clone())));
+        let get = git_log_from(gitto_git::GitApi::new(move |_: &RepositoryId| {
+            Some(path.clone())
+        }));
         let page = smol::block_on(get(repository_id(), 1, 1)).unwrap();
         assert_eq!(page.len(), 1);
         assert_eq!(page[0].subject, "two");
@@ -522,7 +545,7 @@ mod tests {
         let id = repository_id();
         let sha = format!("{:040x}", 1);
         let log = Log {
-            repository_id: id.to_string(),
+            repository_id: id.clone(),
             commits: commits(0..3).into(),
             complete: true,
         };

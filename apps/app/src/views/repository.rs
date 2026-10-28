@@ -4,6 +4,7 @@ use std::rc::Rc;
 
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::input::RepositoryId;
+use gitto_ui::git::rows::RowId;
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -29,8 +30,7 @@ use crate::state::panel_width::{PanelBounds, PanelWidth};
 use crate::state::router::Router;
 use crate::state::settled::{SETTLE_AFTER, Settled};
 use crate::theme::PaletteExt as _;
-use gitto_ui::git::diff_source::{DiffSource, is_same_source};
-use gitto_ui::git::rows::WIP_ID;
+use gitto_ui::git::diff_source::DiffSource;
 
 /// The sidebar's widths. The panels can't take more than a share of the window either (see
 /// [`SIDEBAR_SHARE`]), so the history keeps room on small screens.
@@ -42,24 +42,65 @@ pub const DETAILS_SHARE: f32 = 0.4;
 /// The window widths the layout changes at (`index.css`'s breakpoints): below `MEDIUM` the open
 /// sidebar is a rail of icons; below `LARGE` the details slide over the history instead of
 /// taking a column.
-pub const MEDIUM: f32 = 900.;
-pub const LARGE: f32 = 1100.;
+pub use crate::theme::breakpoints::{LARGE, MEDIUM};
 /// The sidebar as a rail (52px), and the details over the history (340px), in rems.
 pub const RAIL_WIDTH: f32 = 3.47;
 pub const DETAILS_OVERLAY_WIDTH: f32 = 22.67;
+
+/// The page's resizable panels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Panel {
+    Sidebar,
+    Details,
+}
+
+impl Panel {
+    /// Its widths, as [`SIDEBAR_BOUNDS`] and [`DETAILS_BOUNDS`] say.
+    pub fn bounds(self) -> PanelBounds {
+        match self {
+            Panel::Sidebar => SIDEBAR_BOUNDS,
+            Panel::Details => DETAILS_BOUNDS,
+        }
+    }
+
+    /// Which side of its edge it's on: the sidebar's left of it, the details right.
+    pub fn side(self) -> HandleSide {
+        match self {
+            Panel::Sidebar => HandleSide::Start,
+            Panel::Details => HandleSide::End,
+        }
+    }
+
+    /// What its handle's called, to assistive technology.
+    pub fn label(self) -> &'static str {
+        match self {
+            Panel::Sidebar => "Resize sidebar",
+            Panel::Details => "Resize details",
+        }
+    }
+
+    /// Its name: its width's saved under it (see `PanelWidth`), and its handle's id is made of
+    /// it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Panel::Sidebar => "sidebar",
+            Panel::Details => "details",
+        }
+    }
+}
 
 /// A row of a repository: tagged with its repository, as the page is kept when switching
 /// repositories, and the new one starts without a selection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RowOf {
     repository_id: RepositoryId,
-    id: String,
+    id: RowId,
 }
 
 /// The file whose changes are shown in place of the history, with the row and the list it's from.
 struct OpenFile {
     repository_id: RepositoryId,
-    row_id: String,
+    row_id: RowId,
     source: DiffSource,
     file: ChangedFile,
     view: Entity<FileDiffView>,
@@ -94,8 +135,15 @@ pub struct RepositoryView {
     details_open: bool,
     sidebar: PanelWidth,
     details: PanelWidth,
+    /// The repository's toolbar and operation bar: made again for another repository (see
+    /// [`set_repository`](Self::set_repository)).
     toolbar: Entity<RepositoryToolbar>,
+    _toolbar_events: Subscription,
     operation_bar: Entity<OperationBar>,
+    _operation_bar_events: Subscription,
+    /// What changing the working tree waits for (see [`before_change`](Self::before_change)),
+    /// and leaving the page (see `Router::set_blocker`): kept for as long as the page is.
+    before_change: BeforeChange,
     /// What the branch menus in the sidebar and the history share (TS's `BranchMenuProvider`
     /// around them).
     branch_menu: Entity<BranchMenuProvider>,
@@ -122,11 +170,14 @@ impl RepositoryView {
     ) -> Self {
         let storage = Rc::clone(Services::global(cx).storage());
         let id = repository_id.clone();
-        let toolbar = cx.new(|cx| RepositoryToolbar::new(id.clone(), window, cx));
-        let operation_bar = cx.new(|cx| OperationBar::new(id.clone(), window, cx));
+        let before_change = Self::before_change(cx.entity().downgrade());
+        let (toolbar, toolbar_events) = Self::toolbar(&id, window, cx);
+        let (operation_bar, operation_bar_events) =
+            Self::operation_bar(&id, before_change.clone(), window, cx);
         let branch_menu = cx.new(|cx| BranchMenuProvider::new(id.clone(), window, cx));
-        let refs_sidebar = cx.new(|cx| RefsSidebar::new(id.clone(), window, cx));
-        let history = cx.new(|cx| HistoryTable::new(id.clone(), window, cx));
+        let refs_sidebar =
+            cx.new(|cx| RefsSidebar::new(id.clone(), branch_menu.clone(), window, cx));
+        let history = cx.new(|cx| HistoryTable::new(id.clone(), branch_menu.clone(), window, cx));
         let commit_details = cx.new(|cx| CommitDetails::new(id.clone(), window, cx));
         let settled = cx.new(|_| Settled::new(None, SETTLE_AFTER));
         let watcher = Self::watch(&repository_id, &streams, window, cx);
@@ -134,9 +185,6 @@ impl RepositoryView {
         let subscriptions = vec![
             cx.observe_in(&settled, window, |this, _, window, cx| {
                 this.reconcile(window, cx)
-            }),
-            cx.subscribe_in(&toolbar, window, |this, _, event, _, cx| {
-                this.on_toolbar(event, cx)
             }),
             cx.subscribe_in(&history, window, |this, _, event, window, cx| match event {
                 HistoryEvent::Select(id) => this.select(id.clone(), window, cx),
@@ -158,15 +206,6 @@ impl RepositoryView {
                 },
             ),
             cx.subscribe_in(
-                &operation_bar,
-                window,
-                |this, _, event, window, cx| match event {
-                    OperationBarEvent::Resolve(file) => {
-                        this.resolve_conflicts(file.clone(), window, cx)
-                    }
-                },
-            ),
-            cx.subscribe_in(
                 &branch_menu,
                 window,
                 |this, _, event, window, cx| match event {
@@ -182,14 +221,13 @@ impl RepositoryView {
             }),
         ];
 
-        let before_change = Self::before_change(cx.entity().downgrade());
-        operation_bar.update(cx, |bar, _| bar.set_before_change(before_change.clone()));
         branch_menu.update(cx, |menu, _| menu.set_before_change(before_change.clone()));
-        // Nor is another repository opened, or the home page, before the file's edits are saved.
-        Router::set_blocker(Some(before_change), cx);
+        // Nor is another repository opened, or the home page, before the file's edits are saved:
+        // for as long as the page keeps it.
+        Router::set_blocker(&before_change, cx);
         // A repository loaded before has its rows at once: the one the history falls back to is
         // read now, as it's picked before anything listens. Its events are of what it picks later.
-        let selected = history.read(cx).selected().map(|row| row.id().to_owned());
+        let selected = history.read(cx).selected().map(|row| row.id());
 
         let mut view = RepositoryView {
             repository_id,
@@ -202,10 +240,17 @@ impl RepositoryView {
             resolving: None,
             sidebar_open: true,
             details_open: true,
-            sidebar: PanelWidth::new("sidebar", SIDEBAR_BOUNDS, Rc::clone(&storage)),
-            details: PanelWidth::new("details", DETAILS_BOUNDS, storage),
+            sidebar: PanelWidth::new(
+                Panel::Sidebar.name(),
+                Panel::Sidebar.bounds(),
+                Rc::clone(&storage),
+            ),
+            details: PanelWidth::new(Panel::Details.name(), Panel::Details.bounds(), storage),
             toolbar,
+            _toolbar_events: toolbar_events,
             operation_bar,
+            _operation_bar_events: operation_bar_events,
+            before_change,
             branch_menu,
             refs_sidebar,
             history,
@@ -217,6 +262,38 @@ impl RepositoryView {
             view.select(id, window, cx);
         }
         view
+    }
+
+    /// The toolbar of the repository `id`, and the page's subscription to its events.
+    fn toolbar(
+        id: &RepositoryId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> (Entity<RepositoryToolbar>, Subscription) {
+        let toolbar = cx.new(|cx| RepositoryToolbar::new(id.clone(), window, cx));
+        let events = cx.subscribe_in(&toolbar, window, |this, _, event, _, cx| {
+            this.on_toolbar(event, cx)
+        });
+        (toolbar, events)
+    }
+
+    /// The operation bar of the repository `id`, continuing and aborting once `before_change`
+    /// lets them, and the page's subscription to its events.
+    fn operation_bar(
+        id: &RepositoryId,
+        before_change: BeforeChange,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> (Entity<OperationBar>, Subscription) {
+        let bar = cx.new(|cx| {
+            let mut bar = OperationBar::new(id.clone(), window, cx);
+            bar.set_before_change(before_change);
+            bar
+        });
+        let events = cx.subscribe_in(&bar, window, |this, _, event, window, cx| match event {
+            OperationBarEvent::Resolve(file) => this.resolve_conflicts(file.clone(), window, cx),
+        });
+        (bar, events)
     }
 
     /// Starts watching the repository `id`, which comes on show now.
@@ -246,7 +323,9 @@ impl RepositoryView {
         &self.repository_id
     }
 
-    /// Shows the repository `id` instead: its own selection (none), the panels as they are.
+    /// Shows the repository `id` instead: its own selection (none), the panels and the history's
+    /// search as they are. Its toolbar and operation bar are new: nothing of the other
+    /// repository's (a branch being named, the failures' order, a dialog) is left in them.
     pub fn set_repository(
         &mut self,
         id: RepositoryId,
@@ -258,11 +337,19 @@ impl RepositoryView {
         }
         self.repository_id = id.clone();
         self.watcher = Self::watch(&id, &self.streams, window, cx);
-        self.toolbar.update(cx, |toolbar, cx| {
-            toolbar.set_repository(id.clone(), window, cx)
+        let (toolbar, toolbar_events) = Self::toolbar(&id, window, cx);
+        let (sidebar, details) = (self.sidebar_open, self.details_open);
+        let search = self.search.clone();
+        toolbar.update(cx, |toolbar, cx| {
+            toolbar.set_panels(sidebar, details, cx);
+            toolbar.set_search(&search, window, cx);
         });
-        self.operation_bar
-            .update(cx, |bar, cx| bar.set_repository(id.clone(), cx));
+        self.toolbar = toolbar;
+        self._toolbar_events = toolbar_events;
+        let (operation_bar, operation_bar_events) =
+            Self::operation_bar(&id, self.before_change.clone(), window, cx);
+        self.operation_bar = operation_bar;
+        self._operation_bar_events = operation_bar_events;
         self.branch_menu
             .update(cx, |menu, cx| menu.set_repository(id.clone(), window, cx));
         self.refs_sidebar.update(cx, |sidebar, cx| {
@@ -277,7 +364,7 @@ impl RepositoryView {
     }
 
     /// The selected row, if it's of the repository on show.
-    pub fn selected_id(&self) -> Option<String> {
+    pub fn selected_id(&self) -> Option<RowId> {
         self.selection
             .as_ref()
             .filter(|row| row.repository_id == self.repository_id)
@@ -285,7 +372,7 @@ impl RepositoryView {
     }
 
     /// The row the details show, if it's of the repository on show.
-    pub fn details_id(&self, cx: &gpui_kit::App) -> Option<String> {
+    pub fn details_id(&self, cx: &gpui_kit::App) -> Option<RowId> {
         self.settled
             .read(cx)
             .value()
@@ -301,7 +388,7 @@ impl RepositoryView {
         })
     }
 
-    fn select(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+    fn select(&mut self, id: RowId, window: &mut Window, cx: &mut Context<Self>) {
         let row = RowOf {
             repository_id: self.repository_id.clone(),
             id,
@@ -337,11 +424,11 @@ impl RepositoryView {
         if let Some((repository_id, file)) = self.resolving.clone() {
             // Not once another row, or another repository, was picked meanwhile: it was asked for
             // there.
-            if repository_id != self.repository_id || selected.as_deref() != Some(WIP_ID) {
+            if repository_id != self.repository_id || selected != Some(RowId::Wip) {
                 self.resolving = None;
-            } else if details.as_deref() == Some(WIP_ID) {
+            } else if details == Some(RowId::Wip) {
                 self.resolving = None;
-                self.open_file_of(WIP_ID.to_owned(), DiffSource::Unstaged, file, window, cx);
+                self.open_file_of(RowId::Wip, DiffSource::Unstaged, file, window, cx);
             }
         }
         cx.notify();
@@ -359,16 +446,14 @@ impl RepositoryView {
     /// the file on show lets go.
     fn open_file_of(
         &mut self,
-        row_id: String,
+        row_id: RowId,
         source: DiffSource,
         file: ChangedFile,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let same = self.shown_file(cx).is_some_and(|open| {
-            open.row_id == row_id
-                && is_same_source(&open.source, &source)
-                && open.file.path == file.path
+            open.row_id == row_id && open.source == source && open.file.path == file.path
         });
         if same {
             return;
@@ -455,7 +540,7 @@ impl RepositoryView {
             }
             let _ = this.update_in(cx, |this, window, cx| {
                 this.resolving = Some((this.repository_id.clone(), file));
-                this.select(WIP_ID.to_owned(), window, cx);
+                this.select(RowId::Wip, window, cx);
             });
         }));
     }
@@ -478,46 +563,52 @@ impl RepositoryView {
         cx.notify();
     }
 
-    fn on_drag_panel(&mut self, event: &DragMoveEvent<PanelDrag>, cx: &mut Context<Self>) {
-        if let Some(width) = dragged_width(event, "sidebar", HandleSide::Start, cx) {
-            self.sidebar.set_width(width, false);
-        } else if let Some(width) = dragged_width(event, "details", HandleSide::End, cx) {
-            self.details.set_width(width, false);
+    /// The width of `panel`.
+    fn width_of(&self, panel: Panel) -> &PanelWidth {
+        match panel {
+            Panel::Sidebar => &self.sidebar,
+            Panel::Details => &self.details,
         }
+    }
+
+    fn width_of_mut(&mut self, panel: Panel) -> &mut PanelWidth {
+        match panel {
+            Panel::Sidebar => &mut self.sidebar,
+            Panel::Details => &mut self.details,
+        }
+    }
+
+    fn on_drag_panel(&mut self, event: &DragMoveEvent<PanelDrag<Panel>>, cx: &mut Context<Self>) {
+        let panel = event.drag(cx).panel;
+        self.width_of_mut(panel)
+            .set_width(dragged_width(event, panel.side()), false);
         cx.notify();
     }
 
-    fn resize_handle(&self, panel: &'static str, cx: &mut Context<Self>) -> ResizeHandle {
-        let (side, label, width) = match panel {
-            "sidebar" => (HandleSide::Start, "Resize sidebar", self.sidebar.width()),
-            _ => (HandleSide::End, "Resize details", self.details.width()),
-        };
-        let bounds = if panel == "sidebar" {
-            SIDEBAR_BOUNDS
-        } else {
-            DETAILS_BOUNDS
-        };
+    fn resize_handle(&self, panel: Panel, cx: &mut Context<Self>) -> ResizeHandle<Panel> {
+        let width = self.width_of(panel).width();
         let this = cx.entity().downgrade();
         let reset = this.clone();
-        ResizeHandle::new(panel, side, label, width, bounds)
-            .on_resize(move |width, save, _, cx| {
-                let _ = this.update(cx, |this, cx| {
-                    match panel {
-                        "sidebar" => this.sidebar.set_width(width, save),
-                        _ => this.details.set_width(width, save),
-                    }
-                    cx.notify();
-                });
-            })
-            .on_reset(move |_, cx| {
-                let _ = reset.update(cx, |this, cx| {
-                    match panel {
-                        "sidebar" => this.sidebar.reset(),
-                        _ => this.details.reset(),
-                    }
-                    cx.notify();
-                });
-            })
+        ResizeHandle::new(
+            SharedString::from(format!("resize-{}", panel.name())),
+            panel,
+            panel.side(),
+            panel.label(),
+            width,
+            panel.bounds(),
+        )
+        .on_resize(move |width, save, _, cx| {
+            let _ = this.update(cx, |this, cx| {
+                this.width_of_mut(panel).set_width(width, save);
+                cx.notify();
+            });
+        })
+        .on_reset(move |_, cx| {
+            let _ = reset.update(cx, |this, cx| {
+                this.width_of_mut(panel).reset();
+                cx.notify();
+            });
+        })
     }
 }
 
@@ -566,9 +657,9 @@ impl Render for RepositoryView {
             );
 
         let sidebar_handle =
-            (self.sidebar_open && medium).then(|| self.resize_handle("sidebar", cx));
+            (self.sidebar_open && medium).then(|| self.resize_handle(Panel::Sidebar, cx));
         let details_handle =
-            (self.details_open && large).then(|| self.resize_handle("details", cx));
+            (self.details_open && large).then(|| self.resize_handle(Panel::Details, cx));
         let details = self.details_open.then(|| {
             div()
                 .h_full()
@@ -596,11 +687,11 @@ impl Render for RepositoryView {
                     .min_w_0()
                     .items_stretch()
                     .overflow_hidden()
-                    .on_drag_move(
-                        cx.listener(|this, event: &DragMoveEvent<PanelDrag>, _, cx| {
+                    .on_drag_move(cx.listener(
+                        |this, event: &DragMoveEvent<PanelDrag<Panel>>, _, cx| {
                             this.on_drag_panel(event, cx)
-                        }),
-                    )
+                        },
+                    ))
                     .when(self.sidebar_open, |this| {
                         this.child(
                             div()
@@ -657,6 +748,7 @@ mod tests {
     use gitto_git::features::history::schema::Commit;
     use gitto_git::features::status::schema::Head;
     use gitto_git::schema::FileStatus;
+    use gitto_ui::git::diff_source::DiffFileKey;
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{AnyWindowHandle, Entity, TestAppContext};
 
@@ -725,6 +817,10 @@ mod tests {
 
     /// A repository on main at `b1` ("Second", made on "First", `a1`), each commit adding a file,
     /// without changes, loaded before: its history, and its commits' files and patches.
+    fn commit_id(sha: &str) -> RowId {
+        RowId::Commit(sha.to_owned())
+    }
+
     fn loaded(cx: &mut TestAppContext) -> (tempfile::TempDir, RepositoryId) {
         let id = repository_id();
         let repositories = Rc::new(Repositories::default());
@@ -749,12 +845,12 @@ mod tests {
         set_push_target(
             &id,
             gitto_git::features::remote::schema::PushTarget::Blocked {
-                reason: "There's no remote to push to.".into(),
+                reason: gitto_git::PushBlocker::NoRemote,
             },
             cx,
         );
         let log = Log {
-            repository_id: id.to_string(),
+            repository_id: id.clone(),
             commits: Arc::from(vec![
                 commit("b1", "Second", &["a1"], 2000),
                 commit("a1", "First", &[], 1000),
@@ -770,7 +866,7 @@ mod tests {
             cx.update(|cx| QueryClient::set_data(&keys::commit_files(&id, sha), files, cx));
             let source = DiffSource::Commit { sha: sha.into() };
             let patch = FilePatch {
-                key: gitto_ui::git::diff_source::diff_file_key(&source, path),
+                key: DiffFileKey::new(&source, path),
                 file: added(path),
                 patch: format!(
                     "diff --git a/{path} b/{path}\nnew file mode 100644\nindex 0000000..1111111\n--- /dev/null\n+++ b/{path}\n@@ -0,0 +1 @@\n+{sha}\n"
@@ -817,11 +913,11 @@ mod tests {
             settle(cx);
         }
 
-        fn selected(&self, cx: &mut TestAppContext) -> Option<String> {
+        fn selected(&self, cx: &mut TestAppContext) -> Option<RowId> {
             self.view.read_with(cx, |view, _| view.selected_id())
         }
 
-        fn details(&self, cx: &mut TestAppContext) -> Option<String> {
+        fn details(&self, cx: &mut TestAppContext) -> Option<RowId> {
             self.view.read_with(cx, |view, cx| view.details_id(cx))
         }
 
@@ -842,7 +938,7 @@ mod tests {
         crate::test_support::open(cx, |window, cx| {
             let view = RepositoryView::with_streams(id, Rc::new(Unchanged), window, cx);
             // Nothing's put off until later: the history's row is read as the page is made.
-            assert_eq!(view.selected_id().as_deref(), Some("b1"));
+            assert_eq!(view.selected_id(), Some(commit_id("b1")));
             view
         });
     }
@@ -851,12 +947,12 @@ mod tests {
     fn shows_the_details_of_the_commit_selected_in_the_history(cx: &mut TestAppContext) {
         let page = render(cx);
         // The history selects its first row, and the details show it.
-        assert_eq!(page.selected(cx).as_deref(), Some("b1"));
-        assert_eq!(page.details(cx).as_deref(), Some("b1"));
+        assert_eq!(page.selected(cx), Some(commit_id("b1")));
+        assert_eq!(page.details(cx), Some(commit_id("b1")));
 
         page.click(keyed("commit", "a1"), cx);
-        assert_eq!(page.selected(cx).as_deref(), Some("a1"));
-        assert_eq!(page.details(cx).as_deref(), Some("a1"));
+        assert_eq!(page.selected(cx), Some(commit_id("a1")));
+        assert_eq!(page.details(cx), Some(commit_id("a1")));
     }
 
     #[gpui_kit::test]
@@ -872,7 +968,7 @@ mod tests {
 
         // Where the other commit's row is, under the file: the file's, not the row's.
         page.click(keyed("commit", "b1"), cx);
-        assert_eq!(page.selected(cx).as_deref(), Some("a1"));
+        assert_eq!(page.selected(cx), Some(commit_id("a1")));
         assert_eq!(page.shown_file(cx), Some((first, "first.txt".into())));
 
         // Once it's closed, the history takes them again, and the details show the other commit.
@@ -884,6 +980,6 @@ mod tests {
         settle(cx);
         assert_eq!(page.shown_file(cx), None);
         page.click(keyed("commit", "b1"), cx);
-        assert_eq!(page.details(cx).as_deref(), Some("b1"));
+        assert_eq!(page.details(cx), Some(commit_id("b1")));
     }
 }

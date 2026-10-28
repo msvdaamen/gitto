@@ -129,16 +129,13 @@ impl Fixture {
 
 /// Resolves `f.txt`'s text conflict as `contents`, and marks it resolved, as the resolver does.
 pub async fn resolve_text(repo: &Repo, contents: &str) {
-    let text = get_conflict(repo, &valid("f.txt"))
-        .await
-        .unwrap()
-        .text
-        .unwrap();
+    let conflict = get_conflict(repo, &valid("f.txt")).await.unwrap();
+    let text = conflict.file.text().expect("a text conflict");
     let expected = SaveExpectation {
-        version: text.version,
+        version: text.version.clone(),
         overwrite: false,
     };
-    let version = save_working_tree_file(repo, "f.txt", contents, &expected)
+    let version = save_working_tree_file(repo, &valid("f.txt"), contents, &expected)
         .await
         .unwrap();
     mark_resolved(repo, &valid("f.txt"), Some(&version), false)

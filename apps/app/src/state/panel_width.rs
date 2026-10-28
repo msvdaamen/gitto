@@ -125,9 +125,7 @@ mod tests {
     #[test]
     fn ignores_unreadable_saved_widths() {
         let storage = Rc::new(LocalStorage::in_memory());
-        storage
-            .set_item("gitto-panel-width:sidebar", "wide")
-            .unwrap();
+        storage.set_item("gitto-panel-width:sidebar", "wide");
         assert_eq!(mount(&storage).width(), 220.);
     }
 }

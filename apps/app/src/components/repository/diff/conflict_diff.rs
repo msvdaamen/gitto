@@ -8,8 +8,12 @@
 use std::ops::Range;
 use std::sync::Arc;
 
+use gitto_git::ContentVersion;
 use gitto_git::features::conflicts::markers::classify_marker;
 use gitto_ui::diff::diff_metadata::{ChangeType, FileDiff, Lines};
+use gitto_ui::git::diff_source::DiffFileKey;
+
+use super::shown_file::cache_name;
 
 /// Unchanged lines shown around each conflict, as many as git shows around a change.
 pub const CONTEXT_LINES: usize = 3;
@@ -507,7 +511,12 @@ pub fn whole_sides(contents: &str) -> Result<(String, String), String> {
 
 /// Names a conflicted file's text in the highlighting cache: by its version on disk, which names
 /// its bytes, or else by what's in it.
-pub fn conflicts_cache_key(file_key: &str, contents: &str, version: Option<&str>) -> String {
+pub fn conflicts_cache_key(
+    file_key: &DiffFileKey,
+    contents: &str,
+    version: Option<&ContentVersion>,
+) -> String {
+    let file_key = cache_name(file_key);
     match version {
         Some(version) => format!("{file_key}:conflicts:{version}"),
         None => format!(
@@ -576,6 +585,7 @@ pub fn marker_label(marker: &str) -> String {
 mod tests {
     use gitto_ui::diff::diff_metadata::Side;
     use gitto_ui::diff::patch_files::Expanded;
+    use gitto_ui::git::diff_source::DiffSource;
 
     use super::super::conflict_rows::{ConflictRow, conflict_rows};
     use super::*;
@@ -774,12 +784,13 @@ mod tests {
     fn names_edits_by_their_length_and_hash_as_the_ts_app_did() {
         // `(Math.imul(31, v) + code) | 0`, then `>>> 0` in base 36: "abc" is 96354.
         assert_eq!(hash("abc"), "22ci");
+        let a_txt = DiffFileKey::new(&DiffSource::Unstaged, "a.txt");
         assert_eq!(
-            conflicts_cache_key("unstaged::a.txt", "abc", None),
+            conflicts_cache_key(&a_txt, "abc", None),
             "unstaged::a.txt:conflicts:edited:3:22ci"
         );
         assert_eq!(
-            conflicts_cache_key("unstaged::a.txt", "abc", Some("v1")),
+            conflicts_cache_key(&a_txt, "abc", Some(&"v1".into())),
             "unstaged::a.txt:conflicts:v1"
         );
     }

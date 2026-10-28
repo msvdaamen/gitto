@@ -16,6 +16,7 @@ use gitto_ui::diff::viewer_rows::{
     ExpandDirection, Layout, LayoutOptions, LineAt, LineKind, Row, SeparatorButtons, Separators,
     expand, gap_size, layout,
 };
+use gitto_ui::git::diff_source::DiffFileKey;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex};
@@ -251,14 +252,17 @@ fn scroll_list_by(
 #[derive(Debug, Clone, PartialEq)]
 pub enum PatchViewerEvent {
     /// The last patch given is on show (`onShown`), with the key of the file it's of.
-    Shown { file_key: String },
+    Shown { file_key: DiffFileKey },
     /// Whether the whole file is being loaded, to show more of it (`onLoadingFiles`).
     LoadingFiles(bool),
     /// Why the whole file couldn't be loaded, e.g. it's too large; `None` if it could
     /// (`onFilesError`).
     FilesError(Option<String>),
     /// Why the last patch given can't be shown: it couldn't be parsed.
-    Failed { file_key: String, message: String },
+    Failed {
+        file_key: DiffFileKey,
+        message: String,
+    },
     /// Stages (or unstages, as `LineStaging::action` says) `lines` of `patch`, the patch on show
     /// they were picked from. The owner says if they couldn't be
     /// ([`stage_failed`](PatchViewer::stage_failed)).
@@ -274,7 +278,7 @@ pub struct PatchProps {
     /// The patch, as git gave it.
     pub patch: Arc<str>,
     /// Names the file the patch is of: a new patch with the same name is of the same file.
-    pub file_key: String,
+    pub file_key: DiffFileKey,
     /// Names the patch in the highlighting cache, e.g. by its commit and path: another patch,
     /// even of the same file, needs another name, or it's shown with the last one's highlighting.
     pub cache_key: String,
@@ -287,7 +291,7 @@ pub struct PatchProps {
 #[derive(Clone)]
 struct NextPatch {
     patch: Arc<str>,
-    file_key: String,
+    file_key: DiffFileKey,
     cache_key: String,
 }
 
@@ -1630,6 +1634,7 @@ fn line_text(
 
 #[cfg(test)]
 mod tests {
+    use gitto_ui::git::diff_source::DiffSource;
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{AppContext as _, TestAppContext, size};
 
@@ -1651,7 +1656,7 @@ mod tests {
                 viewer.set_props(
                     PatchProps {
                         patch: PATCH.into(),
-                        file_key: "f.txt".into(),
+                        file_key: DiffFileKey::new(&DiffSource::Unstaged, "f.txt"),
                         cache_key: "test:f.txt".into(),
                         style: DiffStyle::Unified,
                         staging,
@@ -1728,7 +1733,7 @@ mod tests {
                 viewer.set_props(
                     PatchProps {
                         patch: "diff --git a/f.txt b/f.txt\nindex 1111111..2222222 100644\n--- a/f.txt\n+++ b/f.txt\n@@ -5,2 +5,2 @@\n five\n-six\n+SIX\n".into(),
-                        file_key: "f.txt".into(),
+                        file_key: DiffFileKey::new(&DiffSource::Unstaged, "f.txt"),
                         cache_key: "test:wide".into(),
                         style: DiffStyle::Unified,
                         staging: None,
@@ -1773,7 +1778,7 @@ mod tests {
                 viewer.set_props(
                     PatchProps {
                         patch: "diff --git a/f.txt b/f.txt\nindex 1111111..2222222 100644\n--- a/f.txt\n+++ b/f.txt\n@@ -5,2 +5,2 @@\n five\n-six\n+SIX\n".into(),
-                        file_key: "f.txt".into(),
+                        file_key: DiffFileKey::new(&DiffSource::Unstaged, "f.txt"),
                         cache_key: "test:resized".into(),
                         style: DiffStyle::Unified,
                         staging: Some(LineStaging {

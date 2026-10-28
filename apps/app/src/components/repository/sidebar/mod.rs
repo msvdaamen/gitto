@@ -11,6 +11,3 @@ pub mod sidebar_row;
 pub mod sidebar_section;
 pub mod stash_menu;
 pub mod worktree_menu;
-
-/// The sidebar's measures are TS's pixels, kept as rems so they follow the app's zoom.
-pub(crate) use crate::theme::base_px;

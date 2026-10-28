@@ -42,7 +42,7 @@ use crate::data::file_diff::{FilePatch, fetch_file_patch};
 use crate::data::staging::StageAction;
 use crate::state::diff_style::{DiffStyle, DiffStyleSetting};
 use crate::theme::PaletteExt as _;
-use gitto_ui::git::diff_source::{DiffSource, diff_file_key};
+use gitto_ui::git::diff_source::{DiffFileKey, DiffSource};
 
 /// What a file's changes ask of the page.
 #[derive(Debug, Clone, PartialEq)]
@@ -78,15 +78,15 @@ pub fn prefetch_file_diff(
         // Its conflicts, highlighted as the viewer names them, so they show at once.
         let options = conflict_options(repository_id, &file.path, cx);
         let fetching = QueryClient::fetch_query(options, cx);
-        let file_key = diff_file_key(source, &file.path);
+        let file_key = DiffFileKey::new(source, &file.path);
         let path = file.path.clone();
         cx.spawn(async move |cx| {
             // Only ahead of time: opening it says what went wrong.
             if let Ok(conflict) = fetching.await
-                && let Some(text) = conflict.text
+                && let Some(text) = conflict.file.text()
             {
                 cx.update(|cx| {
-                    prepare_conflicts(&file_key, &path, text.contents, &text.version, cx)
+                    prepare_conflicts(&file_key, &path, text.contents.clone(), &text.version, cx)
                 });
             }
         })
@@ -161,7 +161,7 @@ pub struct FileDiffView {
     /// The patch last given to the viewer, which it says is on show.
     viewer_patch: Option<PreparedPatch>,
     /// Why a file's patch couldn't be shown, and its key: another file is tried afresh.
-    viewer_error: Option<(String, String)>,
+    viewer_error: Option<(DiffFileKey, String)>,
     /// Editing the file by hand, in its diff or its conflicts.
     pub(super) editing: FileEditing,
     /// The file being edited in the diff's place, while it is.
@@ -171,7 +171,7 @@ pub struct FileDiffView {
     /// Resolving a conflicted file: its conflicts, while it's the file on show.
     pub(super) resolution: Entity<ConflictResolutionView>,
     /// The file on show whose neighbours were loaded ahead.
-    prefetched_for: Option<String>,
+    prefetched_for: Option<DiffFileKey>,
     /// What had the focus when the changes opened, to give it back once they close.
     opener: Option<FocusHandle>,
     pub(super) window: AnyWindowHandle,
@@ -986,15 +986,18 @@ mod tests {
 
     use futures::FutureExt as _;
     use futures::channel::oneshot;
-    use gitto_git::features::staging::patch_version::patch_version;
+    use gitto_git::PatchVersion;
     use gitto_git::features::staging::schema::{LineRange, LineSelection};
-    use gitto_git::features::status::schema::{Head, StatusCounts, Uncommitted, WorkingTreeFiles};
+    use gitto_git::features::status::schema::{
+        Head, StatusCounts, StatusSummary, Uncommitted, WorkingTreeFiles,
+    };
     use gitto_ui::git::changes::staging_paths;
     use gpui_kit::component::WindowExt as _;
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{AppContext as _, TestAppContext};
 
     use super::super::line_picker::LineStaging;
+    use super::super::shown_file::cache_name;
     use super::super::viewer_runtime::ViewerRuntime;
     use super::*;
     use crate::data::diff::ChangedFiles;
@@ -1050,7 +1053,7 @@ mod tests {
         QueryClient::set_data(
             &file_patch_key(&id(), source, &file.path),
             FilePatch {
-                key: diff_file_key(source, &file.path),
+                key: DiffFileKey::new(source, &file.path),
                 file: file.clone(),
                 patch: patch.into(),
             },
@@ -1110,18 +1113,20 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let status = Uncommitted {
-            head: Head::Branch {
-                name: "main".into(),
-                sha: "a1".into(),
-            },
-            upstream: None,
-            ahead: 0,
-            behind: 0,
-            counts: StatusCounts {
-                files: 0,
-                staged: 0,
-                unstaged: 0,
-                conflicted: 0,
+            summary: StatusSummary {
+                head: Head::Branch {
+                    name: "main".into(),
+                    sha: "a1".into(),
+                },
+                upstream: None,
+                ahead: 0,
+                behind: 0,
+                counts: StatusCounts {
+                    files: 0,
+                    staged: 0,
+                    unstaged: 0,
+                    conflicted: 0,
+                },
             },
             changes: WorkingTreeFiles {
                 staged,
@@ -1129,7 +1134,7 @@ mod tests {
                 uncounted,
                 marker_free: Vec::new(),
             },
-            version: uuid::Uuid::new_v4().to_string(),
+            version: uuid::Uuid::new_v4().to_string().into(),
         };
         cx.update(|cx| QueryClient::set_data(&keys::status(&id()), Opaque::new(status), cx));
     }
@@ -1378,7 +1383,7 @@ mod tests {
         assert_eq!(opened.header(cx), "a.txt");
 
         next.send(FilePatch {
-            key: diff_file_key(&commit(), "b.txt"),
+            key: DiffFileKey::new(&commit(), "b.txt"),
             file: counted("b.txt"),
             patch: changed_line("b.txt", "later").into(),
         })
@@ -1397,7 +1402,7 @@ mod tests {
         // Parsed and highlighted, named as they'll be when they're opened.
         cx.update(|cx| {
             for path in ["a.txt", "c.txt"] {
-                let key = format!("{}:0", diff_file_key(&commit(), path));
+                let key = format!("{}:0", cache_name(&DiffFileKey::new(&commit(), path)));
                 assert!(ViewerRuntime::has_highlights(&key, cx), "{path}");
             }
         });
@@ -1739,8 +1744,8 @@ mod tests {
                 let patch = changed_line(path, &format!("new {path}"));
                 format!(
                     "{}:{}:0",
-                    diff_file_key(&DiffSource::Unstaged, path),
-                    patch_version(&patch)
+                    cache_name(&DiffFileKey::new(&DiffSource::Unstaged, path)),
+                    PatchVersion::of(&patch)
                 )
             };
             assert!(ViewerRuntime::has_highlights(&key("a.txt"), cx));
@@ -1788,7 +1793,7 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].file, counted("a.txt"));
         assert_eq!(calls[0].action, StageAction::Stage);
-        assert_eq!(calls[0].version, patch_version(&from));
+        assert_eq!(calls[0].version, PatchVersion::of(&from));
         assert_eq!(calls[0].lines, lines());
         assert_eq!(opened.shown(cx), Some(changed_line("a.txt", "left")));
     }
@@ -1868,7 +1873,7 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(
             calls[0].version,
-            patch_version(&changed_line("a.txt", "new a.txt"))
+            PatchVersion::of(&changed_line("a.txt", "new a.txt"))
         );
         assert_eq!(
             calls[0].lines,
@@ -1922,7 +1927,7 @@ mod tests {
         opened.stage("the patch", lines(), cx);
         let calls = opened.lines.calls();
         assert_eq!(calls[0].action, StageAction::Unstage);
-        assert_eq!(calls[0].version, patch_version("the patch"));
+        assert_eq!(calls[0].version, PatchVersion::of("the patch"));
         assert_eq!(
             opened.shown(cx),
             Some(changed_line("a.txt", "still staged"))

@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use gitto_git::ContentVersion;
 use gitto_git::features::diff::commands::{
     get_commit_file_patch, get_staged_file_patch, get_unstaged_file_patch,
 };
@@ -12,7 +13,7 @@ use gitto_git::features::diff::working_tree::{
 };
 use gitto_git::features::stash::commands::get_stash_file_patch;
 use gitto_git::features::status::schema::Uncommitted;
-use gitto_git::input::{FileInput, FullSha, RepositoryId, Sha};
+use gitto_git::input::{FileInput, FullSha, RepoPath, RepositoryId, Sha};
 use gitto_git::schema::FileStatus;
 use gpui_kit::{App, AppContext as _, Context, Task};
 
@@ -23,7 +24,7 @@ use super::diff::{select_shown_files, working_tree_lists_query};
 use super::keys::{self, UncommittedSide};
 use super::opaque::Opaque;
 use super::query::Query;
-use gitto_ui::git::diff_source::{DiffSource, diff_file_key, is_uncommitted};
+use gitto_ui::git::diff_source::{DiffFileKey, DiffSource, is_uncommitted};
 
 /// The files whose changes a [`DiffSource`] has, to step through, kept up to date for uncommitted
 /// ones (`useDiffSourceFiles`). A view keeps one, made in its constructor, and tells it when the
@@ -150,11 +151,10 @@ fn source_files_options(
     changed_files_options(id, sha, of, enabled, cx)
 }
 
-/// One file's patch in a source, with the file and its `DiffSource::file_key`, so what's shown can
-/// match.
+/// One file's patch in a source, with the file and its key, so what's shown can match.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FilePatch {
-    pub key: String,
+    pub key: DiffFileKey,
     pub file: ChangedFile,
     /// Shared: a patch can be megabytes, and it's read every time it's rendered.
     pub patch: Arc<str>,
@@ -193,8 +193,8 @@ pub fn file_patch_options(
             let file = file.clone();
             async move {
                 let input = FileInput {
-                    path: file.path.clone(),
-                    orig_path: file.orig_path.clone(),
+                    path: parse::<RepoPath>(file.path.clone())?,
+                    orig_path: file.orig_path.clone().map(parse::<RepoPath>).transpose()?,
                 };
                 let patch = match &source {
                     DiffSource::Commit { sha } => {
@@ -210,7 +210,7 @@ pub fn file_patch_options(
                     DiffSource::Staged => get_staged_file_patch(&repo, &input).await?,
                 };
                 Ok(FilePatch {
-                    key: diff_file_key(&source, &file.path),
+                    key: DiffFileKey::new(&source, &file.path),
                     file,
                     patch: patch.into(),
                 })
@@ -271,7 +271,7 @@ pub fn fetch_working_tree_file(
 ) -> Task<Result<WorkingTreeFile, QueryError>> {
     let path = path.to_owned();
     let reading = call(cx, "diff.workingTreeFile", id, move |repo| async move {
-        read_working_tree_file(&repo, &path).await
+        read_working_tree_file(&repo, &parse::<RepoPath>(path)?).await
     });
     cx.background_spawn(async move { reading.await.map_err(Into::into) })
 }
@@ -283,14 +283,14 @@ pub fn save_working_tree_file(
     id: &RepositoryId,
     path: &str,
     contents: String,
-    version: String,
+    version: ContentVersion,
     overwrite: bool,
     cx: &mut App,
-) -> Task<Result<String, QueryError>> {
+) -> Task<Result<ContentVersion, QueryError>> {
     let path = path.to_owned();
     let saving = call(cx, "diff.saveWorkingTreeFile", id, move |repo| async move {
         let expected = SaveExpectation { version, overwrite };
-        save_file(&repo, &path, &contents, &expected).await
+        save_file(&repo, &parse::<RepoPath>(path)?, &contents, &expected).await
     });
     cx.background_spawn(async move { saving.await.map_err(Into::into) })
 }

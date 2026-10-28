@@ -4,8 +4,8 @@
 
 use std::sync::Arc;
 
+use gitto_git::PatchVersion;
 use gitto_git::features::diff::schema::ChangedFile;
-use gitto_git::features::staging::patch_version::patch_version;
 use gitto_git::features::staging::schema::LineSelection;
 use gitto_ui::git::changes::is_nested_repository;
 use gitto_ui::git::patch::has_hunks;
@@ -17,7 +17,7 @@ use crate::data::staging::{
     FileToStage, LinesToStage, StageAction, stage_file_mutation, stage_lines_mutation,
 };
 use crate::data::{Mutation, QueryError};
-use gitto_ui::git::diff_source::{DiffSource, is_uncommitted};
+use gitto_ui::git::diff_source::{DiffFileKey, DiffSource, is_uncommitted};
 
 /// Stages, or unstages, a file's lines; resolves to the patch they leave.
 pub type StageLinesMutation = Entity<Mutation<LinesToStage, String>>;
@@ -34,7 +34,7 @@ pub struct FileStaging {
     /// in.
     staged_from: Option<Arc<str>>,
     /// Why the last lines, or the whole file, couldn't be staged, and of which file (its key).
-    error: Option<(String, String)>,
+    error: Option<(DiffFileKey, String)>,
     _subscriptions: [Subscription; 2],
 }
 
@@ -72,7 +72,7 @@ impl FileStaging {
     }
 
     /// Why the last lines, or the whole file, couldn't be staged, if it was the file `key`.
-    pub fn error_for(&self, key: &str) -> Option<&str> {
+    pub fn error_for(&self, key: &DiffFileKey) -> Option<&str> {
         self.error
             .as_ref()
             .filter(|(failed, _)| failed == key)
@@ -128,7 +128,7 @@ impl FileDiffView {
             repository_id: self.view.repository_id().clone(),
             action: self.staging_action(),
             file: self.view.file(),
-            version: patch_version(&from),
+            version: PatchVersion::of(&from),
             lines,
         };
         let staged = self
@@ -233,9 +233,9 @@ impl FileDiffView {
 
     /// Once the file `key` names has no changes left on its side, on to `target`. Not if another
     /// file was opened meanwhile.
-    fn move_on(&mut self, key: &str, target: Option<ChangedFile>, cx: &mut Context<Self>) {
+    fn move_on(&mut self, key: &DiffFileKey, target: Option<ChangedFile>, cx: &mut Context<Self>) {
         if let Some(file) = target
-            && key == self.view.file_key()
+            && *key == self.view.file_key()
         {
             cx.emit(FileDiffEvent::Open {
                 source: self.view.source().clone(),

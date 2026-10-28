@@ -10,7 +10,7 @@ use gitto_git::features::branch::merge::merge_branch;
 use gitto_git::features::branch::rebase::rebase_branch;
 use gitto_git::features::branch::schema::{MergeOutcome, RebaseOutcome};
 use gitto_git::features::status::schema::Uncommitted;
-use gitto_git::input::{BranchName, BranchRef, NonEmpty, RepositoryId};
+use gitto_git::input::{BranchName, BranchRef, BranchShortName, RepositoryId};
 use gpui_kit::{App, AppContext as _, AsyncApp, Task};
 
 use super::call::{call, parse};
@@ -35,7 +35,7 @@ pub const ADD_WORKTREE: &str = "add-worktree";
 /// creating one at HEAD, a switch of branches ([`switch_branch_operation`],
 /// [`create_branch_from_operation`]), a merge, a rebase, deleting one, or adding a worktree, which
 /// checks one out (`useBranchesChanging`).
-pub fn branches_changing(id: &str, cx: &App) -> bool {
+pub fn branches_changing(id: &RepositoryId, cx: &App) -> bool {
     [CREATE, SWITCH, MERGE, REBASE, DELETE, ADD_WORKTREE]
         .iter()
         .any(|name| Operations::state(name, id, cx).running)
@@ -77,17 +77,17 @@ impl<T: 'static, R: 'static> BranchChange<T, R> {
     }
 
     /// Whether it's running on the repository `id`, and why it last failed.
-    pub fn state(&self, id: &str, cx: &App) -> OperationState {
+    pub fn state(&self, id: &RepositoryId, cx: &App) -> OperationState {
         self.operation.state(id, cx)
     }
 
     /// Forgets why it last failed on the repository `id`.
-    pub fn dismiss(&self, id: &str, cx: &mut App) {
+    pub fn dismiss(&self, id: &RepositoryId, cx: &mut App) {
         self.operation.dismiss(id, cx)
     }
 
     /// Whether it can't run on the repository `id` now, as a change of the branches is running.
-    pub fn is_blocked(&self, id: &str, cx: &App) -> bool {
+    pub fn is_blocked(&self, id: &RepositoryId, cx: &App) -> bool {
         branches_changing(id, cx)
     }
 }
@@ -124,7 +124,7 @@ pub fn switch_branch_operation() -> BranchChange<String> {
         SWITCH,
         |id, reference: String, cx: &mut App| -> Task<Result<(), QueryError>> {
             let status = QueryClient::get_data::<Opaque<Uncommitted>>(&keys::status(&id), cx);
-            if status.is_some_and(|status| is_checked_out(&status.head, &reference)) {
+            if status.is_some_and(|status| is_checked_out(&status.summary.head, &reference)) {
                 return Task::ready(Ok(()));
             }
             let action = call(cx, "branch.switch", &id, move |repo| async move {
@@ -163,7 +163,7 @@ pub fn create_branch_from_operation() -> BranchChange<NewBranchFrom> {
 
 /// Whether a switch of branches (see [`switch_branch_operation`] and
 /// [`create_branch_from_operation`]) is running, and why it last failed (`useSwitchBranchState`).
-pub fn switch_branch_state(id: &str, cx: &App) -> OperationState {
+pub fn switch_branch_state(id: &RepositoryId, cx: &App) -> OperationState {
     Operations::state(SWITCH, id, cx)
 }
 
@@ -186,7 +186,7 @@ pub fn delete_branch_operation() -> BranchChange<String> {
 
 /// Whether a branch is being deleted (see [`delete_branch_operation`]), and why that last failed
 /// (`useDeleteBranchState`).
-pub fn delete_branch_state(id: &str, cx: &App) -> OperationState {
+pub fn delete_branch_state(id: &RepositoryId, cx: &App) -> OperationState {
     Operations::state(DELETE, id, cx)
 }
 
@@ -211,7 +211,7 @@ pub fn merge_branch_operation() -> BranchChange<Merge, MergeOutcome> {
             let up_to_date = up_to_date_message(&input.into, &input.reference);
             let action = call(cx, "branch.merge", &id, move |repo| async move {
                 let reference = parse::<BranchRef>(input.reference)?;
-                let into = parse::<NonEmpty>(input.into)?;
+                let into = parse::<BranchShortName>(input.into)?;
                 merge_branch(&repo, &reference, &into).await
             });
             cx.spawn(async move |cx| {
@@ -242,7 +242,7 @@ fn up_to_date_message(branch: &str, reference: &str) -> String {
 /// (`is_up_to_date`), which fails instead, saying `up_to_date`: the branch had every commit
 /// already.
 pub(crate) async fn integrating<T: Send + 'static>(
-    id: &str,
+    id: &RepositoryId,
     action: impl Future<Output = Result<T, ApiError>> + Send + 'static,
     is_up_to_date: impl Fn(&T) -> bool,
     up_to_date: String,
@@ -266,7 +266,7 @@ pub(crate) async fn integrating<T: Send + 'static>(
 
 /// Whether a merge (see [`merge_branch_operation`]) is running, and why it last failed
 /// (`useMergeBranchState`).
-pub fn merge_branch_state(id: &str, cx: &App) -> OperationState {
+pub fn merge_branch_state(id: &RepositoryId, cx: &App) -> OperationState {
     Operations::state(MERGE, id, cx)
 }
 
@@ -291,7 +291,7 @@ pub fn rebase_branch_operation() -> BranchChange<Rebase, RebaseOutcome> {
             let up_to_date = up_to_date_message(&input.branch, &input.reference);
             let action = call(cx, "branch.rebase", &id, move |repo| async move {
                 let reference = parse::<BranchRef>(input.reference)?;
-                let branch = parse::<NonEmpty>(input.branch)?;
+                let branch = parse::<BranchShortName>(input.branch)?;
                 rebase_branch(&repo, &reference, &branch).await
             });
             cx.spawn(async move |cx| {
@@ -310,14 +310,16 @@ pub fn rebase_branch_operation() -> BranchChange<Rebase, RebaseOutcome> {
 
 /// Whether a rebase (see [`rebase_branch_operation`]) is running, and why it last failed
 /// (`useRebaseBranchState`).
-pub fn rebase_branch_state(id: &str, cx: &App) -> OperationState {
+pub fn rebase_branch_state(id: &RepositoryId, cx: &App) -> OperationState {
     Operations::state(REBASE, id, cx)
 }
 
 #[cfg(test)]
 mod tests {
     use futures::FutureExt as _;
-    use gitto_git::features::status::schema::{Head, StatusCounts, WorkingTreeFiles};
+    use gitto_git::features::status::schema::{
+        Head, StatusCounts, StatusSummary, WorkingTreeFiles,
+    };
     use gpui_kit::TestAppContext;
 
     use super::*;
@@ -340,7 +342,7 @@ mod tests {
         let result = cx.update(|cx| {
             cx.spawn(async move |cx| {
                 integrating(
-                    "repo",
+                    &repository_id(),
                     async { Ok::<_, ApiError>(MergeOutcome::UpToDate) },
                     |outcome| *outcome == MergeOutcome::UpToDate,
                     "Already up to date: main has every commit of feature.".to_owned(),
@@ -364,7 +366,7 @@ mod tests {
         let result = cx.update(|cx| {
             cx.spawn(async move |cx| {
                 integrating(
-                    "repo",
+                    &repository_id(),
                     async { Ok::<_, ApiError>(MergeOutcome::Conflicts) },
                     |outcome| *outcome == MergeOutcome::UpToDate,
                     String::new(),
@@ -378,7 +380,7 @@ mod tests {
             result.now_or_never().unwrap().unwrap(),
             MergeOutcome::Conflicts
         );
-        assert_eq!(invalidated(cx), [keys::repository("repo")]);
+        assert_eq!(invalidated(cx), [keys::repository(&repository_id())]);
     }
 
     #[gpui_kit::test]
@@ -386,18 +388,20 @@ mod tests {
         init(cx);
         let id = repository_id();
         let status = Uncommitted {
-            head: Head::Branch {
-                name: "main".into(),
-                sha: "abc".into(),
-            },
-            upstream: None,
-            ahead: 0,
-            behind: 0,
-            counts: StatusCounts {
-                files: 0,
-                staged: 0,
-                unstaged: 0,
-                conflicted: 0,
+            summary: StatusSummary {
+                head: Head::Branch {
+                    name: "main".into(),
+                    sha: "abc".into(),
+                },
+                upstream: None,
+                ahead: 0,
+                behind: 0,
+                counts: StatusCounts {
+                    files: 0,
+                    staged: 0,
+                    unstaged: 0,
+                    conflicted: 0,
+                },
             },
             changes: WorkingTreeFiles {
                 staged: vec![],

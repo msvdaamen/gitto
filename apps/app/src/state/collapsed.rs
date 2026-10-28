@@ -3,6 +3,7 @@
 
 use std::rc::Rc;
 
+use gitto_git::input::RepositoryId;
 use gitto_ui::hooks::collapsed;
 
 use crate::services::LocalStorage;
@@ -18,7 +19,7 @@ pub struct Collapsed {
 
 impl Collapsed {
     pub fn new(
-        repository_id: impl Into<String>,
+        repository_id: &RepositoryId,
         defaults: impl IntoIterator<Item = (&'static str, bool)>,
         storage: Rc<LocalStorage>,
     ) -> Self {
@@ -27,12 +28,12 @@ impl Collapsed {
             .map(|(id, collapsed)| (id.to_owned(), collapsed))
             .collect();
         Collapsed {
-            state: collapsed::Collapsed::load(&repository_id.into(), defaults, &&*storage),
+            state: collapsed::Collapsed::load(repository_id, defaults, &&*storage),
             storage,
         }
     }
 
-    pub fn repository_id(&self) -> &str {
+    pub fn repository_id(&self) -> &RepositoryId {
         self.state.repository_id()
     }
 
@@ -49,14 +50,19 @@ impl Collapsed {
 mod tests {
     use super::*;
 
-    fn mount(storage: &Rc<LocalStorage>, repository_id: &str) -> Collapsed {
+    /// The repository with the id `n` (1 or 2, say).
+    fn repo(n: u8) -> RepositoryId {
+        RepositoryId::parse(format!("01890a5d-ac96-774b-bcce-b302099a805{n}")).unwrap()
+    }
+
+    fn mount(storage: &Rc<LocalStorage>, repository_id: &RepositoryId) -> Collapsed {
         Collapsed::new(repository_id, [("tags", true)], Rc::clone(storage))
     }
 
     #[test]
     fn falls_back_to_the_defaults_then_to_expanded() {
         let storage = Rc::new(LocalStorage::in_memory());
-        let collapsed = mount(&storage, "repo");
+        let collapsed = mount(&storage, &repo(1));
         assert!(collapsed.is_collapsed("tags"));
         assert!(!collapsed.is_collapsed("refs/heads/feature"));
     }
@@ -64,11 +70,11 @@ mod tests {
     #[test]
     fn keeps_toggled_state_across_remounts() {
         let storage = Rc::new(LocalStorage::in_memory());
-        let mut first = mount(&storage, "repo");
+        let mut first = mount(&storage, &repo(1));
         first.toggle("tags");
         first.toggle("refs/heads/feature");
 
-        let second = mount(&storage, "repo");
+        let second = mount(&storage, &repo(1));
         assert!(!second.is_collapsed("tags"));
         assert!(second.is_collapsed("refs/heads/feature"));
     }
@@ -76,18 +82,16 @@ mod tests {
     #[test]
     fn keeps_a_separate_state_per_repository() {
         let storage = Rc::new(LocalStorage::in_memory());
-        let mut a = Collapsed::new("a", [], Rc::clone(&storage));
+        let mut a = Collapsed::new(&repo(1), [], Rc::clone(&storage));
         a.toggle("remotes");
-        assert!(!Collapsed::new("b", [], Rc::clone(&storage)).is_collapsed("remotes"));
-        assert!(Collapsed::new("a", [], Rc::clone(&storage)).is_collapsed("remotes"));
+        assert!(!Collapsed::new(&repo(2), [], Rc::clone(&storage)).is_collapsed("remotes"));
+        assert!(Collapsed::new(&repo(1), [], Rc::clone(&storage)).is_collapsed("remotes"));
     }
 
     #[test]
     fn ignores_unreadable_saved_state() {
         let storage = Rc::new(LocalStorage::in_memory());
-        storage
-            .set_item("gitto-sidebar-collapsed:repo", "not json")
-            .unwrap();
-        assert!(!Collapsed::new("repo", [], storage).is_collapsed("remotes"));
+        storage.set_item(&collapsed::storage_key(&repo(1)), "not json");
+        assert!(!Collapsed::new(&repo(1), [], storage).is_collapsed("remotes"));
     }
 }

@@ -15,7 +15,7 @@ use gitto_git::features::history::schema::Commit;
 use gitto_git::features::operation::schema::Operation;
 use gitto_git::features::stash::schema::Stash;
 use gitto_git::features::status::schema::{
-    Head, StatusCounts, StatusReply, Uncommitted, WorkingTreeFiles,
+    Head, StatusCounts, StatusReply, StatusSummary, Uncommitted, WorkingTreeFiles,
 };
 use gitto_git::input::RepositoryId;
 use gitto_git::schema::FileStatus;
@@ -320,18 +320,20 @@ pub fn uncommitted(unstaged: Vec<ChangedFile>, staged: Vec<ChangedFile>) -> Unco
         .filter(|change| change.status == FileStatus::Conflicted)
         .count() as u64;
     Uncommitted {
-        head: Head::Branch {
-            name: "main".into(),
-            sha: "a1".into(),
-        },
-        upstream: None,
-        ahead: 0,
-        behind: 0,
-        counts: StatusCounts {
-            files: (unstaged.len() + staged.len()) as u64,
-            staged: staged.len() as u64,
-            unstaged: unstaged.len() as u64 - conflicted,
-            conflicted,
+        summary: StatusSummary {
+            head: Head::Branch {
+                name: "main".into(),
+                sha: "a1".into(),
+            },
+            upstream: None,
+            ahead: 0,
+            behind: 0,
+            counts: StatusCounts {
+                files: (unstaged.len() + staged.len()) as u64,
+                staged: staged.len() as u64,
+                unstaged: unstaged.len() as u64 - conflicted,
+                conflicted,
+            },
         },
         changes: WorkingTreeFiles {
             staged,
@@ -339,7 +341,7 @@ pub fn uncommitted(unstaged: Vec<ChangedFile>, staged: Vec<ChangedFile>) -> Unco
             uncounted: false,
             marker_free: vec![],
         },
-        version: uuid::Uuid::new_v4().to_string(),
+        version: uuid::Uuid::new_v4().to_string().into(),
     }
 }
 

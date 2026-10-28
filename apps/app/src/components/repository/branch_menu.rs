@@ -2,15 +2,17 @@
 //! `components/repository/branch-menu.tsx`.
 //!
 //! TS's `BranchMenuProvider` was a context around the sidebar and the history; here it's an
-//! entity, [`BranchMenuProvider`], which the repository page makes and keeps, and which is also
-//! the window's current one (see [`BranchMenuProvider::current`]), so the sidebar and the history
-//! find it as TS's `useContext` did. An element with a branch's menu (a row in the sidebar, a
-//! label in the history) builds it with [`branch_menu`]:
+//! entity, [`BranchMenuProvider`], which the repository page makes and keeps, and hands to the
+//! sidebar and the history as they're made. An element with a branch's menu (a row in the
+//! sidebar, a label in the history) builds it with [`branch_menu`], from that provider:
 //!
 //! ```ignore
+//! let provider = self.branch_menu.clone();
 //! div()
 //!     .id(("branch", full_name.clone()))
-//!     .context_menu(move |menu, window, cx| branch_menu(menu, full_name.clone(), window, cx))
+//!     .context_menu(move |menu, window, cx| {
+//!         branch_menu(menu, full_name.clone(), &provider, window, cx)
+//!     })
 //! ```
 //!
 //! and shows which branch's menu is open with [`BranchMenuProvider::open_for`] (TS's
@@ -34,8 +36,7 @@ use gitto_ui::git::status::{branch_name, head_label, is_checked_out};
 use gitto_ui::git::worktree::{can_open_worktree, tracking_branches, worktree_on};
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, EventEmitter, Global, SharedString, Subscription, Task,
-    WeakEntity, Window,
+    App, AppContext as _, Context, Entity, EventEmitter, SharedString, Subscription, Task, Window,
 };
 
 use super::BeforeChange;
@@ -95,11 +96,6 @@ impl Default for BranchActions {
     }
 }
 
-/// The window's current provider, for the menus in the sidebar and the history to find.
-struct CurrentBranchMenu(WeakEntity<BranchMenuProvider>);
-
-impl Global for CurrentBranchMenu {}
-
 /// What the branch menus share (see the module's doc): the dialog naming a branch to create, so a
 /// name kept to fix after a failure is there whichever menu it's opened from again, the dialog
 /// placing a worktree, likewise, merging, rebasing, pulling, the dialog asking before deleting a
@@ -130,8 +126,7 @@ pub struct BranchMenuProvider {
 impl EventEmitter<BranchMenuEvent> for BranchMenuProvider {}
 
 impl BranchMenuProvider {
-    /// The provider for the repository `repository_id`, which is the window's current one from
-    /// now on (see [`current`](Self::current)).
+    /// The provider for the repository `repository_id`.
     pub fn new(repository_id: RepositoryId, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let create = cx.new(|cx| CreateBranchDialog::new(repository_id.clone(), window, cx));
         let add_worktree = cx.new(|cx| AddWorktreeDialog::new(repository_id.clone(), window, cx));
@@ -152,8 +147,6 @@ impl BranchMenuProvider {
         add_worktree: Entity<AddWorktreeDialog>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let current = cx.entity().downgrade();
-        cx.set_global(CurrentBranchMenu(current));
         BranchMenuProvider {
             status: status_query(&repository_id, cx),
             operation: operation_in_progress_query(&repository_id, cx),
@@ -169,12 +162,6 @@ impl BranchMenuProvider {
             asking_delete: Rc::default(),
             _subscriptions: vec![cx.observe_global::<Operations>(|_, cx| cx.notify())],
         }
-    }
-
-    /// The window's current provider, if there's one: the repository page's.
-    pub fn current(cx: &App) -> Option<Entity<BranchMenuProvider>> {
-        cx.try_global::<CurrentBranchMenu>()
-            .and_then(|current| current.0.upgrade())
     }
 
     pub fn repository_id(&self) -> &RepositoryId {
@@ -290,19 +277,20 @@ impl BranchMenuProvider {
         let worktrees = self.worktrees.data();
         tracks
             && (self.checked_out_here(reference)
-                || worktree_on(worktrees.as_deref(), reference).is_none())
+                || worktree_on(worktrees.as_deref().unwrap_or_default(), reference).is_none())
     }
 
     /// Whether the local branch `reference` is checked out, here or in another worktree.
     fn is_checked_out(&self, reference: &str) -> bool {
         let worktrees = self.worktrees.data();
-        self.checked_out_here(reference) || worktree_on(worktrees.as_deref(), reference).is_some()
+        self.checked_out_here(reference)
+            || worktree_on(worktrees.as_deref().unwrap_or_default(), reference).is_some()
     }
 
     /// The other worktree the branch is checked out in, if one that can be opened is.
     fn worktree_of(&self, branch: &str) -> Option<Worktree> {
         let worktrees = self.worktrees.data();
-        worktree_on(worktrees.as_deref(), branch)
+        worktree_on(worktrees.as_deref().unwrap_or_default(), branch)
             .filter(|worktree| can_open_worktree(worktree))
             .cloned()
     }
@@ -525,11 +513,11 @@ impl BranchMenuProvider {
             "Create branch…",
             busy,
             {
-                let this = this.clone();
+                let this = this.downgrade();
                 let branch = branch.to_string();
                 move |_, window, cx| {
                     let branch = branch.clone();
-                    this.update(cx, |this, cx| this.create_from(branch, window, cx));
+                    let _ = this.update(cx, |this, cx| this.create_from(branch, window, cx));
                 }
             },
         ));
@@ -544,11 +532,11 @@ impl BranchMenuProvider {
                     format!("Merge {short} into {head}"),
                     !may_integrate,
                     {
-                        let this = this.clone();
+                        let this = this.downgrade();
                         let branch = branch.to_string();
                         move |_, _, cx| {
                             let branch = branch.clone();
-                            this.update(cx, |this, cx| this.merge(branch, cx));
+                            let _ = this.update(cx, |this, cx| this.merge(branch, cx));
                         }
                     },
                 ))
@@ -557,11 +545,11 @@ impl BranchMenuProvider {
                     format!("Rebase {head} onto {short}"),
                     !may_integrate,
                     {
-                        let this = this.clone();
+                        let this = this.downgrade();
                         let branch = branch.to_string();
                         move |_, _, cx| {
                             let branch = branch.clone();
-                            this.update(cx, |this, cx| this.rebase(branch, cx));
+                            let _ = this.update(cx, |this, cx| this.rebase(branch, cx));
                         }
                     },
                 ));
@@ -572,9 +560,11 @@ impl BranchMenuProvider {
                 format!("Pull {short}"),
                 provider.is_pulling(&branch, cx),
                 {
-                    let this = this.clone();
+                    let this = this.downgrade();
                     let branch = branch.clone();
-                    move |_, _, cx| this.update(cx, |this, cx| this.pull(&branch, cx))
+                    move |_, _, cx| {
+                        let _ = this.update(cx, |this, cx| this.pull(&branch, cx));
+                    }
                 },
             ));
         }
@@ -584,11 +574,11 @@ impl BranchMenuProvider {
                 format!("Open worktree {}", worktree.name),
                 provider.is_opening_worktree(cx),
                 {
-                    let this = this.clone();
+                    let this = this.downgrade();
                     let path = worktree.path.clone();
                     move |_, _, cx| {
                         let path = path.clone();
-                        this.update(cx, |this, cx| this.open_worktree(path, cx));
+                        let _ = this.update(cx, |this, cx| this.open_worktree(path, cx));
                     }
                 },
             )),
@@ -597,11 +587,12 @@ impl BranchMenuProvider {
                 "Add worktree…",
                 busy,
                 {
-                    let this = this.clone();
+                    let this = this.downgrade();
                     let branch = branch.to_string();
                     move |_, window, cx| {
                         let branch = branch.clone();
-                        this.update(cx, |this, cx| this.add_worktree_for(branch, window, cx));
+                        let _ =
+                            this.update(cx, |this, cx| this.add_worktree_for(branch, window, cx));
                     }
                 },
             )),
@@ -612,10 +603,11 @@ impl BranchMenuProvider {
             format!("Delete {short}…"),
             busy || deletion.is_none(),
             {
-                let this = this.clone();
+                let this = this.downgrade();
                 move |_, window, cx| {
                     if let Some(deletion) = deletion.clone() {
-                        this.update(cx, |this, cx| this.delete_branch(deletion, window, cx));
+                        let _ =
+                            this.update(cx, |this, cx| this.delete_branch(deletion, window, cx));
                     }
                 }
             },
@@ -623,8 +615,8 @@ impl BranchMenuProvider {
     }
 }
 
-/// The menu of what can be done with the branch `branch`, by its full ref name, from the
-/// window's current [`BranchMenuProvider`]: creating a branch from it, merging it into the
+/// The menu of what can be done with the branch `branch`, by its full ref name, from
+/// `provider`: creating a branch from it, merging it into the
 /// checked-out one, or rebasing the checked-out one onto it, neither of which is offered for that
 /// one itself, pulling a local one that tracks another, unless it's checked out in another
 /// worktree (where it's pulled), checking it out in a new worktree, or opening the one it's
@@ -640,17 +632,15 @@ impl BranchMenuProvider {
 /// or in another worktree, as git would refuse. (Nor will it delete one being rebased or bisected,
 /// which only it tells.)
 ///
-/// For an element's `.context_menu(…)`. Empty, so nothing opens, without a provider.
+/// For an element's `.context_menu(…)`.
 pub fn branch_menu(
     menu: PopupMenu,
     branch: impl Into<SharedString>,
+    provider: &Entity<BranchMenuProvider>,
     _: &mut Window,
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
-    match BranchMenuProvider::current(cx) {
-        Some(provider) => BranchMenuProvider::build_menu(&provider, branch.into(), menu, cx),
-        None => menu,
-    }
+    BranchMenuProvider::build_menu(provider, branch.into(), menu, cx)
 }
 
 #[cfg(test)]
@@ -687,6 +677,7 @@ mod tests {
                 .flex_col()
                 .children(self.branches.iter().map(|branch| {
                     let full_name = SharedString::from(*branch);
+                    let provider = self.provider.clone();
                     div()
                         .id(SharedString::from(format!("row-{branch}")))
                         .test_support()
@@ -694,7 +685,7 @@ mod tests {
                         .w_40()
                         .child(full_name.clone())
                         .context_menu(move |menu, window, cx| {
-                            branch_menu(menu, full_name.clone(), window, cx)
+                            branch_menu(menu, full_name.clone(), &provider, window, cx)
                         })
                 }))
         }
@@ -925,6 +916,43 @@ mod tests {
             provider.read_with(cx, |provider, _| provider.open_for().cloned()),
             None
         );
+    }
+
+    #[gpui_kit::test]
+    fn forgets_its_menu_and_closes_its_dialogs_for_another_repository(cx: &mut TestAppContext) {
+        let calls = Rc::new(Calls::default());
+        let (_dir, id, window, host) = render(cx, &calls);
+        let provider = host.read_with(cx, |host, _| host.provider.clone());
+        let other = repository_id();
+        set_status(&other, status(), cx);
+        set_operation(&other, None, cx);
+        set_refs(&other, Vec::new(), cx);
+        set_worktrees(&other, Vec::new(), cx);
+        set_remotes(&other, &[], cx);
+        let switch = |to: RepositoryId, cx: &mut TestAppContext| {
+            cx.update_window(window, |_, window, cx| {
+                provider.update(cx, |provider, cx| provider.set_repository(to, window, cx))
+            })
+            .unwrap();
+            cx.run_until_parked();
+        };
+
+        open_menu(window, "row-refs/heads/topic", cx);
+        switch(other.clone(), cx);
+        assert_eq!(
+            provider.read_with(cx, |provider, _| provider.open_for().cloned()),
+            None
+        );
+
+        switch(id, cx);
+        open_menu(window, "row-refs/heads/topic", cx);
+        choose(window, "Create branch…", cx);
+        assert!(has_dialog(window, cx));
+        switch(other, cx);
+        assert!(!has_dialog(window, cx));
+        assert!(!provider.read_with(cx, |provider, cx| {
+            provider.create_dialog().read(cx).is_open()
+        }));
     }
 
     #[gpui_kit::test]

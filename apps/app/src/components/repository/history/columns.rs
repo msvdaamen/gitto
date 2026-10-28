@@ -7,12 +7,17 @@
 
 use std::sync::Arc;
 
-use crate::theme::base_px;
 use gpui_kit::prelude::*;
 use gpui_kit::{Div, ElementId, Hsla, Rems, SharedString, rems};
 
+use crate::theme::base_px;
+
+/// Height of a history row in pixels of the 15px base, including its 1px bottom border: the
+/// graph's rows are drawn to it.
+pub const ROW_PX: f32 = 38.;
+
 /// Height of a history row, including its 1px bottom border (38px).
-pub const ROW_HEIGHT: Rems = base_px(38.);
+pub const ROW_HEIGHT: Rems = base_px(ROW_PX);
 
 /// Height of the column headings (31px).
 pub const HEADER_HEIGHT: Rems = base_px(31.);

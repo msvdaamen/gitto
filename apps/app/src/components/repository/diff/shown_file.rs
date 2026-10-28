@@ -6,8 +6,8 @@
 use std::sync::Arc;
 
 use gitto_git::FileStatus;
+use gitto_git::PatchVersion;
 use gitto_git::features::diff::schema::ChangedFile;
-use gitto_git::features::staging::patch_version::patch_version;
 use gitto_git::input::RepositoryId;
 use gitto_ui::git::changes::{
     LineCounts, counts_of, has_patch, is_known_binary, is_nested_repository, total_lines,
@@ -20,19 +20,36 @@ use crate::data::file_diff::{
 };
 use crate::data::{Opaque, Query, QueryError};
 use crate::state::delayed::{DELAY, Delayed};
-use gitto_ui::git::diff_source::{DiffSource, diff_file_key, is_same_source, is_uncommitted};
+use gitto_ui::git::diff_source::{DiffFileKey, DiffSource, is_uncommitted};
 
 /// Changed lines above which a file's changes are only shown when asked: reading and parsing them
 /// takes a noticeable moment, and such a change is rarely read line by line (a lockfile, say).
 pub const LARGE_DIFF_LINES: u64 = 20_000;
 
+/// Names the file `key` in the highlighting cache, whose names are strings (see
+/// `FileDiff::cache_key`), as TS's `diffFileKey` did: `<kind>:<sha>:<path>`, the SHA empty for the
+/// uncommitted changes. The path comes last, so no two files' names are the same.
+pub fn cache_name(key: &DiffFileKey) -> String {
+    let (kind, sha) = match &key.source {
+        DiffSource::Commit { sha } => ("commit", sha.as_str()),
+        DiffSource::Stash { sha } => ("stash", sha.as_str()),
+        DiffSource::Unstaged => ("unstaged", ""),
+        DiffSource::Staged => ("staged", ""),
+    };
+    format!("{kind}:{sha}:{}", key.path)
+}
+
 /// Names a file's patch in the highlighting cache. A commit's or a stash's never changes, so its
-/// file's name will do; an uncommitted one's is named by what's in it too (see `patch_version`).
+/// file's name will do; an uncommitted one's is named by what's in it too (see `PatchVersion`).
 pub fn patch_cache_key(source: &DiffSource, data: &FilePatch) -> String {
     if is_uncommitted(source) {
-        format!("{}:{}", data.key, patch_version(&data.patch))
+        format!(
+            "{}:{}",
+            cache_name(&data.key),
+            PatchVersion::of(&data.patch)
+        )
     } else {
-        data.key.clone()
+        cache_name(&data.key)
     }
 }
 
@@ -76,7 +93,7 @@ impl PreparedPatch {
 /// The patch on show, and the file it's of.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShownPatch {
-    pub key: String,
+    pub key: DiffFileKey,
     pub file: ChangedFile,
     pub patch: Arc<str>,
     pub counts: Option<LineCounts>,
@@ -85,7 +102,7 @@ pub struct ShownPatch {
 /// The file in the header: the one asked for, or the last one, while its patch is on its way.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HeaderFile {
-    pub key: String,
+    pub key: DiffFileKey,
     pub file: ChangedFile,
     pub counts: Option<LineCounts>,
 }
@@ -107,9 +124,9 @@ pub struct ShownFile {
     lists: DiffSourceFiles,
     /// Where the file was in its list, after it's gone from it: the files around it stay a step
     /// away. Only this file's place: another one opened that isn't in its list has none.
-    last_place: (String, Option<usize>),
+    last_place: (DiffFileKey, Option<usize>),
     /// The large file the user asked to see anyway.
-    shown_large: Option<String>,
+    shown_large: Option<DiffFileKey>,
     /// What the patch's query is of, changing only when that does: an uncommitted file's list is
     /// replaced whenever anything in the working tree changes.
     patch_file: ChangedFile,
@@ -140,13 +157,14 @@ impl ShownFile {
         let lists = DiffSourceFiles::new(&repository_id, source.clone(), cx);
         let patch_query = file_patch_query(&repository_id, &source, &file, false, cx);
         let busy = cx.new(|cx| Delayed::new(false, DELAY, cx));
+        let last_place = (DiffFileKey::new(&source, &file.path), None);
         let mut shown = ShownFile {
             repository_id,
             source,
             patch_file: file.clone(),
             file,
             lists,
-            last_place: (String::new(), None),
+            last_place,
             shown_large: None,
             patch_enabled: false,
             patch_query,
@@ -172,7 +190,7 @@ impl ShownFile {
         if repository_id != self.repository_id {
             self.lists = DiffSourceFiles::new(&repository_id, source.clone(), cx);
             self.repository_id = repository_id;
-        } else if !is_same_source(&self.source, &source) {
+        } else if self.source != source {
             self.lists
                 .set_source(&self.repository_id, source.clone(), cx);
         }
@@ -237,9 +255,9 @@ impl ShownFile {
         &self.lists
     }
 
-    /// Names the file in its source (see `DiffSource::file_key`).
-    pub fn file_key(&self) -> String {
-        diff_file_key(&self.source, &self.file.path)
+    /// The file on show, by its path in its source.
+    pub fn file_key(&self) -> DiffFileKey {
+        DiffFileKey::new(&self.source, &self.file.path)
     }
 
     /// Where the file is in its list, if it is.
@@ -339,7 +357,7 @@ impl ShownFile {
             None => true,
             Some(counts) => {
                 total_lines(counts) <= LARGE_DIFF_LINES
-                    || self.shown_large.as_deref() == Some(self.file_key().as_str())
+                    || self.shown_large.as_ref() == Some(&self.file_key())
             }
         }
     }
@@ -403,7 +421,7 @@ impl ShownFile {
     /// Whether the change is large, and the user hasn't asked to see it anyway.
     pub fn large(&self) -> bool {
         self.lines().unwrap_or(0) > LARGE_DIFF_LINES
-            && self.shown_large.as_deref() != Some(self.file_key().as_str())
+            && self.shown_large.as_ref() != Some(&self.file_key())
     }
 
     /// Shows the large change anyway.

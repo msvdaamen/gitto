@@ -5,6 +5,8 @@
 //! (`VirtualList`), so a history of tens of thousands of commits scrolls as one of ten. More of it
 //! loads a page at a time as its end comes near.
 
+use std::cell::Cell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -13,16 +15,19 @@ use gitto_git::features::stash::schema::Stash;
 use gitto_git::features::worktree::schema::Worktree;
 use gitto_git::input::RepositoryId;
 use gitto_ui::git::ref_labels::checkouts;
-use gitto_ui::git::rows::{HistoryRow, history_graph, stash_sha, to_history_rows, with_stashes};
+use gitto_ui::git::rows::{HistoryRow, RowId, to_history_rows, with_stashes};
 use gitto_ui::git::search::{matches_search, search_needle};
 use gitto_ui::git::status::head_label;
+use gpui_kit::base::actions::{
+    SelectDown, SelectFirst, SelectLast, SelectPageDown, SelectPageUp, SelectUp,
+};
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
-    KeyDownEvent, Rems, Role, ScrollHandle, ScrollStrategy, SharedString, Subscription, Task,
-    TestSupportExt as _, UniformListScrollHandle, WeakEntity, Window, div, rems,
+    AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, KeyBinding,
+    Pixels, Rems, Role, ScrollHandle, ScrollStrategy, SharedString, Subscription, Task,
+    TestSupportExt as _, UniformListScrollHandle, WeakEntity, Window, canvas, div, rems,
 };
 
 use super::columns::{
@@ -59,12 +64,27 @@ pub const LOAD_AHEAD: usize = 100;
 const MORE_OPEN_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
 const MORE_CLOSE_DELAY: std::time::Duration = std::time::Duration::from_millis(200);
 
+/// The key context the history's keys are bound in (see [`bind_keys`]).
+const KEY_CONTEXT: &str = "HistoryList";
+
+/// Binds the history's keys: the arrows move the selection a row, Page Up and Down a page, Home
+/// and End to the first row and the last.
+pub fn bind_keys(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("up", SelectUp, Some(KEY_CONTEXT)),
+        KeyBinding::new("down", SelectDown, Some(KEY_CONTEXT)),
+        KeyBinding::new("pageup", SelectPageUp, Some(KEY_CONTEXT)),
+        KeyBinding::new("pagedown", SelectPageDown, Some(KEY_CONTEXT)),
+        KeyBinding::new("home", SelectFirst, Some(KEY_CONTEXT)),
+        KeyBinding::new("end", SelectLast, Some(KEY_CONTEXT)),
+    ]);
+}
+
 /// What the history asks of the page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HistoryEvent {
-    /// A row was selected, by its id: the uncommitted changes' (`gitto_ui::git::rows::WIP_ID`),
-    /// a stash's or a commit's.
-    Select(String),
+    /// A row was selected, by its id: the uncommitted changes', a stash's or a commit's.
+    Select(RowId),
 }
 
 /// What the history runs: git, or a test's.
@@ -97,9 +117,15 @@ struct Layout {
     worktrees: Arc<[Worktree]>,
     has_changes: bool,
     head: Option<String>,
+    remotes: Vec<String>,
     rows: Rc<[HistoryRow]>,
+    /// Each row's place among them, by its id.
+    places: HashMap<RowId, usize>,
     /// The most lanes a row's graph uses, which the graph's column is sized to.
     lanes: usize,
+    /// Whether more of the log was asked for since the rows were laid out (see
+    /// `RowsContext::ask_for_more`).
+    asked_for_more: Rc<Cell<bool>>,
 }
 
 /// Whether two shared lists are the same: the same list, or both empty (what's shown of one
@@ -112,14 +138,14 @@ fn same<T>(a: &Arc<[T]>, b: &Arc<[T]>) -> bool {
 struct Filtered {
     needle: String,
     rows: Rc<[HistoryRow]>,
-    /// `None`: all of them.
+    /// Their places among the rows, in order; `None`: all of them.
     shown: Option<Rc<[usize]>>,
 }
 
 /// Whether the rest of a row's labels are listed (see `ref_labels::MoreLabels`).
 #[derive(Default)]
 struct MoreLabelsState {
-    /// The row whose count is hovered, or whose labels are listed.
+    /// The commit whose count is hovered, or whose labels are listed, by its SHA.
     row: Option<String>,
     open: bool,
     /// How many of the count and the list the pointer is on. Not a flag: moving from one onto
@@ -140,23 +166,26 @@ pub struct HistoryTable {
     history: History,
     search: SharedString,
     needle: String,
-    selected_id: Option<String>,
+    selected_id: Option<RowId>,
     /// The row the details show: the selected one, once the selection stops moving quickly.
-    details_id: Option<String>,
+    details_id: Option<RowId>,
     /// The selected row the table last fell back from, as it was gone, and the one it fell back
     /// to.
-    fell_back: Option<(Option<String>, String)>,
+    fell_back: Option<(Option<RowId>, RowId)>,
     layout: Layout,
     filtered: Filtered,
     /// The files of the row the details show, for its line totals.
-    totals: Option<(String, Query<ChangedFiles, ShownFiles>)>,
+    totals: Option<(RowId, Query<ChangedFiles, ShownFiles>)>,
     /// The log is reloaded whenever a branch or tag changes, which takes a while in a big
     /// repository; and more of it loads as its end comes near.
     updating: Entity<Delayed>,
     loading_more: Entity<Delayed>,
     commit_menu: Entity<CommitMenu>,
-    branch_menu: Option<Entity<BranchMenuProvider>>,
+    branch_menu: Entity<BranchMenuProvider>,
     more_labels: MoreLabelsState,
+    /// How many times the rows asked for more of the log (see `RowsContext::ask_for_more`).
+    #[cfg(test)]
+    asked_for_more: usize,
     focus: FocusHandle,
     /// Whether the keyboard moved the selection last, rather than the pointer: the selected row
     /// is outlined then, while the list has the focus.
@@ -164,6 +193,8 @@ pub struct HistoryTable {
     scroll: UniformListScrollHandle,
     /// Scrolls the table sideways when its pane is narrower than the table's least width.
     sideways: ScrollHandle,
+    /// The height of the list's view, as last laid out: what Page Up and Down move by.
+    viewport: Rc<Cell<Pixels>>,
     _history_subscriptions: Vec<Subscription>,
     _subscriptions: Vec<Subscription>,
 }
@@ -177,14 +208,22 @@ impl Focusable for HistoryTable {
 }
 
 impl HistoryTable {
-    pub fn new(repository_id: RepositoryId, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    /// The history of the repository `repository_id`, whose branches' labels have
+    /// `branch_menu`'s menus.
+    pub fn new(
+        repository_id: RepositoryId,
+        branch_menu: Entity<BranchMenuProvider>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let sources = HistorySources::new(cx);
-        HistoryTable::with(repository_id, sources, window, cx)
+        HistoryTable::with(repository_id, branch_menu, sources, window, cx)
     }
 
     /// Running what `sources` runs: e.g. a test's.
     pub fn with(
         repository_id: RepositoryId,
+        branch_menu: Entity<BranchMenuProvider>,
         sources: HistorySources,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -198,9 +237,8 @@ impl HistoryTable {
         });
         let updating = cx.new(|cx| Delayed::new(false, DELAY, cx));
         let loading_more = cx.new(|cx| Delayed::new(false, DELAY, cx));
-        let branch_menu = BranchMenuProvider::current(cx);
         let clock = Clock::global(cx);
-        let mut subscriptions = vec![
+        let subscriptions = vec![
             cx.observe(&updating, |_, _, cx| cx.notify()),
             cx.observe(&loading_more, |_, _, cx| cx.notify()),
             cx.observe(&clock, |_, _, cx| cx.notify()),
@@ -210,13 +248,11 @@ impl HistoryTable {
             }),
             // A switch shows in the toolbar; a label double-clicked meanwhile does nothing.
             cx.observe_global::<Operations>(|_, cx| cx.notify()),
-        ];
-        if let Some(provider) = &branch_menu {
-            subscriptions.push(cx.observe(provider, |this, _, cx| {
+            cx.observe(&branch_menu, |this, _, cx| {
                 this.recheck_more_labels(cx);
                 cx.notify();
-            }));
-        }
+            }),
+        ];
         let layout = Layout {
             repository_id: repository_id.clone(),
             commits: None,
@@ -224,8 +260,11 @@ impl HistoryTable {
             worktrees: Arc::from(Vec::new()),
             has_changes: false,
             head: None,
+            remotes: Vec::new(),
             rows: Rc::from(Vec::new()),
+            places: HashMap::new(),
             lanes: 1,
+            asked_for_more: Rc::default(),
         };
         let rows = Rc::clone(&layout.rows);
         let mut table = HistoryTable {
@@ -249,10 +288,13 @@ impl HistoryTable {
             commit_menu,
             branch_menu,
             more_labels: MoreLabelsState::default(),
+            #[cfg(test)]
+            asked_for_more: 0,
             focus: cx.focus_handle(),
             keyboard: false,
             scroll: UniformListScrollHandle::new(),
             sideways: ScrollHandle::new(),
+            viewport: Rc::new(Cell::new(Pixels::ZERO)),
             _history_subscriptions: Vec::new(),
             _subscriptions: subscriptions,
         };
@@ -272,6 +314,7 @@ impl HistoryTable {
             cx.observe(history.status().entry(), |this, _, cx| this.sync(cx)),
             cx.observe(history.stashes().entry(), |this, _, cx| this.sync(cx)),
             cx.observe(history.worktrees().entry(), |this, _, cx| this.sync(cx)),
+            cx.observe(history.remotes().entry(), |this, _, cx| this.sync(cx)),
         ];
     }
 
@@ -315,8 +358,8 @@ impl HistoryTable {
 
     pub fn set_selection(
         &mut self,
-        selected_id: Option<String>,
-        details_id: Option<String>,
+        selected_id: Option<RowId>,
+        details_id: Option<RowId>,
         cx: &mut Context<Self>,
     ) {
         if (&self.selected_id, &self.details_id) != (&selected_id, &details_id) {
@@ -356,30 +399,40 @@ impl HistoryTable {
 
     /// The selected row: the one selected, or the first if it's not there.
     pub fn selected(&self) -> Option<&HistoryRow> {
-        let rows = &self.layout.rows;
+        self.selected_row_ix().map(|ix| &self.layout.rows[ix])
+    }
+
+    /// The selected row's place among all the rows (see [`selected`](Self::selected)).
+    fn selected_row_ix(&self) -> Option<usize> {
         self.selected_id
-            .as_deref()
-            .and_then(|id| rows.iter().find(|row| row.id() == id))
-            .or_else(|| rows.first())
+            .as_ref()
+            .and_then(|id| self.layout.places.get(id).copied())
+            .or_else(|| (!self.layout.rows.is_empty()).then_some(0))
     }
 
     /// The selected row's place among the rows on show; `None` when the search hides it.
     fn selected_ix(&self) -> Option<usize> {
-        let id = self.selected()?.id();
+        let ix = self.selected_row_ix()?;
         match &self.filtered.shown {
-            None => self.layout.rows.iter().position(|row| row.id() == id),
-            Some(shown) => shown.iter().position(|&ix| self.layout.rows[ix].id() == id),
+            None => Some(ix),
+            Some(shown) => shown.binary_search(&ix).ok(),
         }
     }
 
     /// Whose files the line totals are of, if any: the selected row's, once the details show it.
-    pub fn totals_of(&self) -> Option<&str> {
-        self.totals.as_ref().map(|(id, _)| id.as_str())
+    pub fn totals_of(&self) -> Option<&RowId> {
+        self.totals.as_ref().map(|(id, _)| id)
     }
 
     /// The commit menu, and its dialog.
     pub fn commit_menu(&self) -> &Entity<CommitMenu> {
         &self.commit_menu
+    }
+
+    /// How many times the rows asked for more of the log.
+    #[cfg(test)]
+    pub(crate) fn asked_for_more(&self) -> usize {
+        self.asked_for_more
     }
 
     pub fn scroll_handle(&self) -> &UniformListScrollHandle {
@@ -399,17 +452,17 @@ impl HistoryTable {
     /// shows, falling back to the first row, the line totals' files, and what says the history
     /// is loading. The row it fell back to, if it did: nothing was selected yet, or the selected
     /// row is gone.
-    fn bring_up_to_date(&mut self, cx: &mut Context<Self>) -> Option<String> {
+    fn bring_up_to_date(&mut self, cx: &mut Context<Self>) -> Option<RowId> {
         self.lay_out();
         self.filter();
 
         let fallback = self
             .selected()
             .filter(|row| {
-                row.repository_id().as_ref() == self.repository_id.as_str()
-                    && Some(row.id()) != self.selected_id.as_deref()
+                *row.repository_id() == self.repository_id
+                    && !self.selected_id.as_ref().is_some_and(|id| row.is(id))
             })
-            .map(|row| row.id().to_owned());
+            .map(HistoryRow::id);
         if let Some(to) = &fallback {
             self.fell_back = Some((self.selected_id.clone(), to.clone()));
             self.selected_id = Some(to.clone());
@@ -435,6 +488,7 @@ impl HistoryTable {
         let worktrees = self.history.shown_worktrees();
         let has_changes = self.history.has_changes();
         let head = self.history.head();
+        let remotes = self.history.shown_remotes();
         let layout = &self.layout;
         let unchanged = layout.repository_id == self.repository_id
             && match (&layout.commits, &commits) {
@@ -445,17 +499,23 @@ impl HistoryTable {
             && same(&layout.stashes, &stashes)
             && same(&layout.worktrees, &worktrees)
             && layout.has_changes == has_changes
-            && layout.head == head;
+            && layout.head == head
+            && layout.remotes == remotes;
         if unchanged {
             return;
         }
         let rows: Vec<HistoryRow> = match &log {
             Some(log) => {
                 let entries = with_stashes(&log.commits, &stashes);
-                let graph = history_graph(&entries, has_changes, head.as_deref());
                 let others = checkouts(&worktrees);
-                let repository_id: Arc<str> = log.repository_id.as_str().into();
-                to_history_rows(&repository_id, &entries, has_changes, graph, &others)
+                to_history_rows(
+                    &log.repository_id,
+                    &entries,
+                    has_changes,
+                    head.as_deref(),
+                    &others,
+                    &remotes,
+                )
             }
             None => Vec::new(),
         };
@@ -465,6 +525,11 @@ impl HistoryTable {
             .max()
             .unwrap_or(1)
             .max(1);
+        let places = rows
+            .iter()
+            .enumerate()
+            .map(|(ix, row)| (row.id(), ix))
+            .collect();
         self.layout = Layout {
             repository_id: self.repository_id.clone(),
             commits,
@@ -472,8 +537,11 @@ impl HistoryTable {
             worktrees,
             has_changes,
             head,
+            remotes,
             rows: rows.into(),
+            places,
             lanes,
+            asked_for_more: Rc::default(),
         };
     }
 
@@ -504,17 +572,19 @@ impl HistoryTable {
     fn sync_totals(&mut self, cx: &mut Context<Self>) {
         let wanted = self
             .selected()
-            .filter(|row| self.details_id.as_deref() == Some(row.id()))
+            .filter(|row| self.details_id.as_ref().is_some_and(|id| row.is(id)))
             .and_then(|row| match row {
-                HistoryRow::Commit(commit) => Some((commit.id.clone(), FilesOf::Commit)),
-                HistoryRow::Stash(stash) => Some((stash.id.clone(), FilesOf::Stash)),
+                HistoryRow::Commit(commit) => {
+                    Some((RowId::Commit(commit.id.clone()), FilesOf::Commit))
+                }
+                HistoryRow::Stash(stash) => Some((RowId::Stash(stash.sha.clone()), FilesOf::Stash)),
                 HistoryRow::Wip(_) => None,
             });
         match wanted {
             None => self.totals = None,
             Some((id, of)) => {
-                if self.totals_of() != Some(id.as_str()) {
-                    let sha = stash_sha(&id).unwrap_or(&id).to_owned();
+                if self.totals_of() != Some(&id) {
+                    let sha = id.sha().unwrap_or_default().to_owned();
                     let query = changed_files_query(&self.repository_id, &sha, of, cx);
                     self.totals = Some((id, query));
                 }
@@ -523,28 +593,29 @@ impl HistoryTable {
     }
 
     /// The selected row's line totals, once its files have loaded.
-    fn totals(&self) -> Option<(String, LineCounts)> {
+    fn totals(&self) -> Option<(RowId, LineCounts)> {
         let (id, query) = self.totals.as_ref()?;
         let shown = query.data()?;
-        let sha = stash_sha(id).unwrap_or(id);
-        (shown.shown_sha == sha).then(|| (id.clone(), shown.totals))
+        (Some(shown.shown_sha.as_str()) == id.sha()).then(|| (id.clone(), shown.totals))
     }
 
     /// Selects the commit `to` in place of `from` if that one's selected: it was rewritten as
     /// `to`, e.g. reworded. Also once the table has fallen back from `from` to another row, which
     /// it does as soon as the history reloads without it, before it's told of `to`.
     fn replace_selected(&mut self, from: &str, to: &str, cx: &mut Context<Self>) {
-        let selected = self.selected_id.as_deref();
-        let fell_back_from = self.fell_back.as_ref().is_some_and(|(was, now)| {
-            was.as_deref() == Some(from) && Some(now.as_str()) == selected
-        });
-        if selected == Some(from) || fell_back_from {
-            self.select(to.to_owned(), cx);
+        let from = RowId::Commit(from.to_owned());
+        let selected = self.selected_id.as_ref();
+        let fell_back_from = self
+            .fell_back
+            .as_ref()
+            .is_some_and(|(was, now)| was.as_ref() == Some(&from) && Some(now) == selected);
+        if selected == Some(&from) || fell_back_from {
+            self.select(RowId::Commit(to.to_owned()), cx);
         }
     }
 
     /// Selects the row `id`, telling the page.
-    fn select(&mut self, id: String, cx: &mut Context<Self>) {
+    fn select(&mut self, id: RowId, cx: &mut Context<Self>) {
         self.selected_id = Some(id.clone());
         cx.emit(HistoryEvent::Select(id));
         self.sync(cx);
@@ -553,41 +624,36 @@ impl HistoryTable {
     /// A row was clicked: it's selected, and the list takes the focus, which is what the keyboard
     /// moves through. The rows come and go as the list scrolls, and would take the focus with
     /// them.
-    fn click_row(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+    fn click_row(&mut self, id: RowId, window: &mut Window, cx: &mut Context<Self>) {
         self.keyboard = false;
         self.focus.focus(window, cx);
-        if self.selected().map(HistoryRow::id) != Some(id.as_str()) {
+        if !self.selected().is_some_and(|row| row.is(&id)) {
             self.select(id, cx);
         }
         cx.notify();
     }
 
-    /// Moves the selection with the arrow keys, Page Up and Down, Home and End.
-    fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let keystroke = &event.keystroke;
-        if keystroke.modifiers.modified() {
+    /// Moves the selection to the row on show `to` picks, from the selected one's place (-1 when
+    /// the search hides it), among `count` rows, a page being `page` of them (see
+    /// [`bind_keys`]).
+    fn move_selection(
+        &mut self,
+        to: impl FnOnce(isize, isize, isize) -> isize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let count = self.shown_count();
+        if count == 0 {
+            cx.propagate();
             return;
         }
-        let count = self.shown_count();
         let current = self.selected_ix().map_or(-1, |ix| ix as isize);
         let page = self.page_size(window) as isize;
-        let target = match keystroke.key.as_str() {
-            "down" => current + 1,
-            "up" => current - 1,
-            "pagedown" => current + page,
-            "pageup" => current - page,
-            "home" => 0,
-            "end" => count as isize - 1,
-            _ => return,
-        };
-        if count == 0 {
-            return;
-        }
-        cx.stop_propagation();
+        let target = to(current, count as isize, page);
         let ix = target.clamp(0, count as isize - 1) as usize;
         self.keyboard = true;
         if Some(ix) != self.selected_ix()
-            && let Some(id) = self.shown_row(ix).map(|row| row.id().to_owned())
+            && let Some(id) = self.shown_row(ix).map(HistoryRow::id)
         {
             self.select(id, cx);
         }
@@ -595,23 +661,52 @@ impl HistoryTable {
         cx.notify();
     }
 
-    /// How many rows Page Up and Down move by: what fits in view, less a row to keep one in
-    /// sight; at least one.
+    fn select_up(&mut self, _: &SelectUp, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_selection(|current, _, _| current - 1, window, cx);
+    }
+
+    fn select_down(&mut self, _: &SelectDown, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_selection(|current, _, _| current + 1, window, cx);
+    }
+
+    fn select_page_up(&mut self, _: &SelectPageUp, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_selection(|current, _, page| current - page, window, cx);
+    }
+
+    fn select_page_down(
+        &mut self,
+        _: &SelectPageDown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_selection(|current, _, page| current + page, window, cx);
+    }
+
+    fn select_first(&mut self, _: &SelectFirst, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_selection(|_, _, _| 0, window, cx);
+    }
+
+    fn select_last(&mut self, _: &SelectLast, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_selection(|_, count, _| count - 1, window, cx);
+    }
+
+    /// How many rows Page Up and Down move by: what fits in the list's view, as it was last laid
+    /// out, less a row to keep one in sight; at least one.
     pub fn page_size(&self, window: &Window) -> usize {
-        let view = self
-            .scroll
-            .0
-            .borrow()
-            .last_item_size
-            .map_or(0., |size| f32::from(size.item.height));
+        let view = f32::from(self.viewport.get());
         let row = f32::from(ROW_HEIGHT.to_pixels(window.rem_size()));
         ((view / row).floor() as usize).saturating_sub(1).max(1)
     }
 
     /// Loads more of the log as its end comes near; not while searching, which only goes through
-    /// what's loaded: a search that finds little would have it load page after page. A page that
-    /// couldn't be loaded isn't tried again until the history is reloaded.
+    /// what's loaded: a search that finds little would have it load page after page (nor is it
+    /// asked to, see `RowsContext::ask_for_more`). A page that couldn't be loaded isn't tried
+    /// again until the history is reloaded.
     fn load_more_near_end(&mut self, cx: &mut Context<Self>) {
+        #[cfg(test)]
+        {
+            self.asked_for_more += 1;
+        }
         if self.needle.is_empty() && self.history.log().more().read(cx).error().is_none() {
             self.history.load_more(cx);
         }
@@ -671,9 +766,7 @@ impl HistoryTable {
     }
 
     fn is_branch_menu_open(&self, cx: &App) -> bool {
-        self.branch_menu
-            .as_ref()
-            .is_some_and(|provider| provider.read(cx).open_for().is_some())
+        self.branch_menu.read(cx).open_for().is_some()
     }
 
     /// A branch's menu closed: the list of other labels it was opened from closes too, once the
@@ -765,7 +858,7 @@ impl HistoryTable {
     fn render_rows(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let count = self.shown_count();
         let graph = graph_width(self.layout.lanes);
-        let selected = self.selected().map(|row| row.id().to_owned());
+        let selected = self.selected().map(HistoryRow::id);
         let focused = self.focus.is_focused(window);
         let table = cx.entity().downgrade();
         let switch = self.sources.switch.clone();
@@ -782,15 +875,11 @@ impl HistoryTable {
             open_worktree: Rc::new({
                 let provider = self.branch_menu.clone();
                 move |path, _, cx| {
-                    if let Some(provider) = &provider {
-                        provider.update(cx, |provider, cx| provider.open_worktree(path, cx));
-                    }
+                    provider.update(cx, |provider, cx| provider.open_worktree(path, cx));
                 }
             }),
-            menu_open_for: self
-                .branch_menu
-                .as_ref()
-                .and_then(|provider| provider.read(cx).open_for().cloned()),
+            branch_menu: self.branch_menu.clone(),
+            menu_open_for: self.branch_menu.read(cx).open_for().cloned(),
         };
         let context = Rc::new(RowsContext {
             table: table.clone(),
@@ -811,13 +900,11 @@ impl HistoryTable {
                 .clone()
                 .map(|row| (row, self.more_labels.open)),
             searching: !self.needle.is_empty(),
+            asked_for_more: Rc::clone(&self.layout.asked_for_more),
         });
         VirtualList::new("history-rows", count, ROW_HEIGHT, move |range, _, cx| {
-            if !context.searching && is_near_end(&range, count, LOAD_AHEAD) {
-                let table = context.table.clone();
-                cx.defer(move |cx| {
-                    let _ = table.update(cx, |table, cx| table.load_more_near_end(cx));
-                });
+            if is_near_end(&range, count, LOAD_AHEAD) {
+                context.ask_for_more(cx);
             }
             range
                 .filter_map(|ix| context.render_row(ix, count))
@@ -833,27 +920,43 @@ struct RowsContext {
     table: WeakEntity<HistoryTable>,
     rows: Rc<[HistoryRow]>,
     shown: Option<Rc<[usize]>>,
-    selected: Option<String>,
+    selected: Option<RowId>,
     outlined: bool,
     graph: Rems,
     needle: SharedString,
-    totals: Option<(String, LineCounts)>,
+    totals: Option<(RowId, LineCounts)>,
     wip: WipSummary,
     labels: LabelActions,
     commit_menu: Entity<CommitMenu>,
     commit_menu_open: Option<SharedString>,
     more: Option<(String, bool)>,
     searching: bool,
+    /// Whether more of the log was asked for since the rows were laid out.
+    asked_for_more: Rc<Cell<bool>>,
 }
 
 impl RowsContext {
+    /// The rows in view came near the end of the log loaded so far: asks the table for more,
+    /// once per layout of the rows, rather than on every frame they're drawn, as the list's
+    /// renderer is otherwise side-effect-free. Laid out again with another page, the rows ask
+    /// again if they're still near the end. Not while searching.
+    fn ask_for_more(&self, cx: &mut App) {
+        if self.searching || self.asked_for_more.replace(true) {
+            return;
+        }
+        let table = self.table.clone();
+        cx.defer(move |cx| {
+            let _ = table.update(cx, |table, cx| table.load_more_near_end(cx));
+        });
+    }
+
     fn render_row(&self, ix: usize, count: usize) -> Option<AnyElement> {
         let row = match &self.shown {
             None => self.rows.get(ix)?,
             Some(shown) => &self.rows[*shown.get(ix)?],
         };
-        let id = row.id().to_owned();
-        let selected = self.selected.as_deref() == Some(id.as_str());
+        let id = row.id();
+        let selected = self.selected.as_ref() == Some(&id);
         let table = self.table.clone();
         let select_id = id.clone();
         let props = RowProps {
@@ -881,10 +984,10 @@ impl RowsContext {
             }
             HistoryRow::Commit(commit) => {
                 let has_more = commit.labels.len() > 1;
-                let more = has_more.then(|| self.more_labels(&id));
-                let menu_open = self.commit_menu_open.as_deref() == Some(id.as_str());
+                let more = has_more.then(|| self.more_labels(&commit.id));
+                let menu_open = self.commit_menu_open.as_deref() == Some(commit.id.as_str());
                 let commit_menu = self.commit_menu.clone();
-                let sha: SharedString = id.clone().into();
+                let sha: SharedString = commit.id.clone().into();
                 // The menu's built when the row's right-clicked: it says then whether the commit
                 // has one.
                 let menu: MenuBuilder = Rc::new(move |menu, _, cx| {
@@ -945,6 +1048,7 @@ impl Render for HistoryTable {
             self.render_rows(window, cx)
         };
         let footer = self.render_footer(cx);
+        let viewport = Rc::clone(&self.viewport);
         // The table's least width: its other columns', plus the graph's. A narrower pane scrolls
         // it sideways, header and all.
         let min_width = rems(MIN_WIDTH.0 + graph.0);
@@ -981,12 +1085,29 @@ impl Render for HistoryTable {
                                             .test_support()
                                             .aria_label("Commit history")
                                             .track_focus(&self.focus)
-                                            .key_context("HistoryList")
-                                            .on_key_down(cx.listener(Self::on_key_down))
+                                            .key_context(KEY_CONTEXT)
+                                            .on_action(cx.listener(Self::select_up))
+                                            .on_action(cx.listener(Self::select_down))
+                                            .on_action(cx.listener(Self::select_page_up))
+                                            .on_action(cx.listener(Self::select_page_down))
+                                            .on_action(cx.listener(Self::select_first))
+                                            .on_action(cx.listener(Self::select_last))
+                                            .relative()
                                             .flex_1()
                                             .min_h_0()
                                             .w_full()
-                                            .child(body),
+                                            .child(body)
+                                            // Measures the view, for Page Up and Down.
+                                            .child(
+                                                canvas(
+                                                    move |bounds, _, _| {
+                                                        viewport.set(bounds.size.height)
+                                                    },
+                                                    |_, _, _, _| {},
+                                                )
+                                                .absolute()
+                                                .size_full(),
+                                            ),
                                     ),
                             ),
                     )

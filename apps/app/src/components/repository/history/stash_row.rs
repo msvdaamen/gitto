@@ -54,7 +54,7 @@ impl RenderOnce for HistoryStashRow {
         let palette = *cx.palette();
         let stash = self.stash;
         let props = self.props;
-        let id: SharedString = stash.id.clone().into();
+        let id: SharedString = stash.sha.clone().into();
         let on_select = Rc::clone(&props.on_select);
         let graph = stash.graph.map(|row| {
             HistoryGraph::new(keyed("graph", id.clone()), row, GraphNode::Stash)

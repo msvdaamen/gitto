@@ -10,9 +10,11 @@ use std::sync::Arc;
 
 use futures::FutureExt as _;
 use futures::future::Shared;
+use gitto_git::ContentVersion;
 use gitto_ui::diff::diff_metadata::Side;
 use gitto_ui::diff::patch_files::Expanded;
 use gitto_ui::diff::viewer_rows::{ExpandDirection, SeparatorButtons, expand};
+use gitto_ui::git::diff_source::DiffFileKey;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex};
@@ -30,7 +32,7 @@ use super::conflict_diff::{
 };
 use super::conflict_rows::{ConflictRow, LineRole, actions_row, conflict_rows};
 use super::conflict_whole_file::WholeFile;
-use super::file_editing::{EditSession, FileVersion};
+use super::file_editing::EditSession;
 use super::highlight::DiffHighlights;
 use super::patch_viewer::{
     DrawnLine, FONT_REMS, ROW_REMS, Scroll, code_char_width, scroll_list, scroll_list_to,
@@ -49,7 +51,7 @@ use crate::theme::{Palette, PaletteExt as _};
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ConflictProgress {
     /// Names the file on show (see `file_key`): another one's, until this one's is on show.
-    pub file_key: Option<String>,
+    pub file_key: Option<DiffFileKey>,
     /// How many conflicts are left.
     pub left: usize,
     /// Where the current one is among them, from 1; `None` without one.
@@ -57,7 +59,7 @@ pub struct ConflictProgress {
     /// Whether a conflict is being resolved: written to disk, and shown once it is.
     pub saving: bool,
     /// The version of the file on show on disk; `None` until it's known, e.g. after editing.
-    pub version: Option<FileVersion>,
+    pub version: Option<ContentVersion>,
     /// Why the file's conflicts aren't shown one by one, as its whole text is instead.
     pub problem: Option<String>,
 }
@@ -65,14 +67,14 @@ pub struct ConflictProgress {
 /// The file on disk, as last read: its text shared, so it's given and compared without copying.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiskFile {
-    pub version: FileVersion,
+    pub version: ContentVersion,
     pub contents: Arc<str>,
 }
 
 /// Writes a resolved conflict's text, `contents`, over the file at the version expected; resolves
 /// to its new version.
 pub type SaveResolved =
-    Rc<dyn Fn(String, FileVersion, &mut App) -> Task<Result<FileVersion, QueryError>>>;
+    Rc<dyn Fn(String, ContentVersion, &mut App) -> Task<Result<ContentVersion, QueryError>>>;
 
 /// What the conflict viewer tells the file's view.
 #[derive(Debug, Clone, PartialEq)]
@@ -92,10 +94,10 @@ pub enum ConflictViewerEvent {
 
 /// The file's text and what's shown of it: its conflicts, or the whole of it without.
 struct Shown {
-    file_key: String,
+    file_key: DiffFileKey,
     contents: Arc<str>,
     /// Its version on disk; `None` while that isn't known.
-    version: Option<FileVersion>,
+    version: Option<ContentVersion>,
     /// Its conflicts, if they're shown one by one.
     state: Option<Arc<ConflictState>>,
     problem: Option<String>,
@@ -105,10 +107,10 @@ struct Shown {
 
 /// A file's text as `show_text` read it, to put on show: its conflicts, or why they can't be read.
 struct ReadResult {
-    file_key: String,
+    file_key: DiffFileKey,
     contents: Arc<str>,
     /// Its version on disk; `None` while that isn't known.
-    version: Option<FileVersion>,
+    version: Option<ContentVersion>,
     read: ReadConflicts,
     /// The widest line of its conflicts' sides, in characters as drawn.
     widest: usize,
@@ -139,10 +141,10 @@ pub struct ConflictViewer {
     save: SaveResolved,
     path: SharedString,
     /// What the file's view last gave: the file, and the file as it was read from disk.
-    pub(super) given: Option<(String, Option<DiskFile>)>,
+    pub(super) given: Option<(DiffFileKey, Option<DiskFile>)>,
     shown: Option<Shown>,
     /// Versions of the file that were written over here: read from disk before that, and stale.
-    superseded: HashSet<FileVersion>,
+    superseded: HashSet<ContentVersion>,
     /// The conflict the header's buttons and keys are of, by its index.
     current: Option<usize>,
     saving: bool,
@@ -150,8 +152,8 @@ pub struct ConflictViewer {
     /// What's to be done, one thing at a time: the text editing left, once it stops; the file as
     /// it was read again, and the conflicts the user resolved, in turn. Editing holds the rest
     /// until it stops.
-    edited: Option<(String, Arc<str>)>,
-    wanted: Option<(String, DiskFile)>,
+    edited: Option<(DiffFileKey, Arc<str>)>,
+    wanted: Option<(DiffFileKey, DiskFile)>,
     requests: VecDeque<Request>,
     running: bool,
     /// The work under way, which editing waits for.
@@ -214,13 +216,13 @@ impl ConflictViewer {
     /// read. Another key is another file, which starts at its top.
     pub fn set_disk(
         &mut self,
-        file_key: &str,
+        file_key: &DiffFileKey,
         path: &str,
         disk: Option<DiskFile>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let given = (file_key.to_owned(), disk);
+        let given = (file_key.clone(), disk);
         if self.given.as_ref() == Some(&given) {
             return;
         }
@@ -352,7 +354,7 @@ impl ConflictViewer {
     /// Shows the file as it was read from disk, if that's news.
     fn sync(
         &mut self,
-        file_key: String,
+        file_key: DiffFileKey,
         disk: DiskFile,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -387,14 +389,14 @@ impl ConflictViewer {
     /// its top; the same one changed elsewhere stays where it's scrolled to.
     fn show_text(
         &mut self,
-        file_key: String,
+        file_key: DiffFileKey,
         contents: Arc<str>,
-        version: Option<FileVersion>,
+        version: Option<ContentVersion>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<()> {
         // Named by what's in it: a file that's back to what it was is shown as it was then.
-        let cache_key = conflicts_cache_key(&file_key, &contents, version.as_deref());
+        let cache_key = conflicts_cache_key(&file_key, &contents, version.as_ref());
         let path = self.path.to_string();
         cx.spawn_in(window, async move |this, cx| {
             let text = Arc::clone(&contents);
@@ -824,10 +826,10 @@ impl ConflictViewer {
 /// them, so they show at once (`prepareConflicts`). Nothing for one without conflicts, or whose
 /// markers can't be read.
 pub fn prepare_conflicts(
-    file_key: &str,
+    file_key: &DiffFileKey,
     path: &str,
     contents: String,
-    version: &str,
+    version: &ContentVersion,
     cx: &mut App,
 ) {
     let key = conflicts_cache_key(file_key, &contents, Some(version));

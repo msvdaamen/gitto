@@ -18,11 +18,9 @@ struct GlobalUpdateStatus(Entity<UpdateStatus>);
 impl Global for GlobalUpdateStatus {}
 
 impl UpdateStatus {
-    /// The app's, watching the updater from the first time it's asked for.
-    pub fn global(cx: &mut App) -> Entity<UpdateStatus> {
-        if let Some(status) = cx.try_global::<GlobalUpdateStatus>() {
-            return status.0.clone();
-        }
+    /// Sets up the app's, watching the updater (see `state::init`): call once the services are
+    /// set up.
+    pub fn init(cx: &mut App) {
         let mut states = Services::global(cx).system().updates.watch();
         let status = cx.new(|cx: &mut Context<UpdateStatus>| UpdateStatus {
             state: None,
@@ -38,8 +36,12 @@ impl UpdateStatus {
                 }
             }),
         });
-        cx.set_global(GlobalUpdateStatus(status.clone()));
-        status
+        cx.set_global(GlobalUpdateStatus(status));
+    }
+
+    /// The app's.
+    pub fn global(cx: &App) -> Entity<UpdateStatus> {
+        cx.global::<GlobalUpdateStatus>().0.clone()
     }
 
     /// The version and the update; `None` until the updater says.

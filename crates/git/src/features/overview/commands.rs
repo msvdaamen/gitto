@@ -4,8 +4,9 @@ use std::time::UNIX_EPOCH;
 
 use super::parse::{REFLOG_FORMAT, parse_reflog, pick_remote};
 use super::schema::{Activity, HostedRemote, Overview};
-use crate::core::errors::{Error, Result};
+use crate::core::errors::Result;
 use crate::core::repo::Repo;
+use crate::features::history::parse::millis;
 
 /// How many of the latest entries of HEAD's reflog are read, of which some aren't shown.
 const REFLOG_ENTRIES: usize = 50;
@@ -60,7 +61,7 @@ async fn read_remote(repo: &Repo) -> Result<Option<HostedRemote>> {
 
 /// When FETCH_HEAD, which every fetch writes, was last written, in milliseconds since the epoch;
 /// `None` if it never was.
-async fn read_fetched_at(repo: &Repo) -> Result<Option<f64>> {
+async fn read_fetched_at(repo: &Repo) -> Result<Option<i64>> {
     // In the worktree's own git directory.
     let path = repo
         .read([
@@ -76,22 +77,19 @@ async fn read_fetched_at(repo: &Repo) -> Result<Option<f64>> {
     else {
         return Ok(None);
     };
-    // Node's `mtimeMs`, which is before the epoch for a time before it.
-    let millis = match modified.duration_since(UNIX_EPOCH) {
-        Ok(since) => since.as_secs_f64() * 1000.0,
-        Err(before) => -before.duration().as_secs_f64() * 1000.0,
-    };
-    Ok(Some(millis))
+    // Before the epoch for a time before it, as Node's `mtimeMs`.
+    let in_millis =
+        |duration: std::time::Duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX);
+    Ok(Some(match modified.duration_since(UNIX_EPOCH) {
+        Ok(since) => in_millis(since),
+        Err(before) => -in_millis(before.duration()),
+    }))
 }
 
 /// When HEAD's commit was made, in milliseconds since the epoch.
 async fn read_committed_at(repo: &Repo) -> Result<i64> {
     let output = repo.read(["log", "-1", "--format=%ct", "HEAD"]).await?;
-    let seconds: i64 = output
-        .trim()
-        .parse()
-        .map_err(|_| Error::Bug(format!("Not a commit date: {output:?}")))?;
-    Ok(seconds.saturating_mul(1000))
+    millis(&output)
 }
 
 /// HEAD's latest activity, from its reflog: at most `MAX_ACTIVITY` entries.
@@ -107,7 +105,7 @@ async fn read_activity(repo: &Repo) -> Result<Vec<Activity>> {
             "HEAD",
         ])
         .await?;
-    let mut activity = parse_reflog(&output);
+    let mut activity = parse_reflog(&output)?;
     activity.truncate(MAX_ACTIVITY);
     Ok(activity)
 }
@@ -165,10 +163,12 @@ mod tests {
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
-                .as_secs_f64()
-                * 1000.0;
+                .as_millis() as i64;
             let fetched_at = overview.fetched_at.unwrap();
-            assert!(fetched_at > now - 60_000.0, "{fetched_at} {now}");
+            assert!(
+                (now - 60_000..=now).contains(&fetched_at),
+                "{fetched_at} {now}"
+            );
             let committed: i64 = git(&path, ["log", "-1", "--format=%ct"]).parse().unwrap();
             assert_eq!(overview.committed_at, Some(committed * 1000));
             let activity: Vec<_> = overview

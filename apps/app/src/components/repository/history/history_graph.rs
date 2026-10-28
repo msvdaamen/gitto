@@ -13,15 +13,15 @@ use gpui_kit::{
 };
 
 use super::author_tooltip::{GraphAuthor, author_tooltip};
-use super::columns::{ROW_HEIGHT, part};
-use crate::theme::{Palette, PaletteExt as _};
+use super::columns::{ROW_HEIGHT, ROW_PX, part};
+use crate::theme::{FONT_SIZE, Palette, PaletteExt as _, base_px};
 
 /// Width of a lane, and the space left and right of the lanes.
 const LANE: f32 = 20.;
 const PADDING: f32 = 6.;
 /// Height of a row's graph: the row, without the bottom border its other cells have, so a node
 /// is in line with their text.
-const HEIGHT: f32 = 38. - 1.;
+const HEIGHT: f32 = ROW_PX - 1.;
 const MIDDLE: f32 = HEIGHT / 2.;
 const NODE_RADIUS: f32 = 8.;
 /// Radius of the rounded corner where a line turns from one lane towards another.
@@ -29,8 +29,6 @@ const CORNER: f32 = 8.;
 /// How thick the lines are, and a stash's box.
 const STROKE: f32 = 2.;
 const BOX_STROKE: f32 = 1.5;
-/// The pixels of the 15px base the geometry is in.
-const BASE: f32 = 15.;
 
 /// The colour of a lane, shared by its line, its nodes and the labels of branches on it.
 pub fn lane_color(lane: usize, palette: &Palette) -> Hsla {
@@ -47,7 +45,7 @@ pub fn lane_color(lane: usize, palette: &Palette) -> Hsla {
 /// Width of the graph column for rows that use at most `lanes` lanes.
 pub fn graph_width(lanes: usize) -> Rems {
     let pixels = (lanes as f32 * LANE + PADDING * 2.).clamp(64., 260.);
-    Rems(pixels / BASE)
+    base_px(pixels)
 }
 
 fn x(lane: usize) -> f32 {
@@ -198,7 +196,7 @@ impl RenderOnce for HistoryGraph {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let palette = *cx.palette();
         // Pixels per pixel of the 15px base.
-        let scale = f32::from(window.rem_size()) / BASE;
+        let scale = f32::from(window.rem_size()) / FONT_SIZE;
         let column = self.row.column;
         let is_merge = self.row.bottom.len() > 1;
         let amber = palette.amber;

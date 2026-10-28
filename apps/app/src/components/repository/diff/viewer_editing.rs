@@ -7,6 +7,7 @@
 use std::ops::Range;
 use std::sync::Arc;
 
+use gitto_git::ContentVersion;
 use gitto_ui::diff::diff_metadata::{ChangeType, FileDiff, HunkContent, Side};
 use gitto_ui::diff::patch_files::fit_to_patch;
 use gpui_kit::component::input::{
@@ -68,7 +69,10 @@ fn line_ranges(text: &str, lines: &[Range<usize>]) -> Vec<Range<usize>> {
 
 /// The working tree's file to edit: read whole, and checked against the patch on show (`diff`),
 /// so what's edited is what was shown. Fails with why it can't be edited.
-pub fn editable_text(diff: &FileDiff, read: LoadedFile) -> Result<(String, String), String> {
+pub fn editable_text(
+    diff: &FileDiff,
+    read: LoadedFile,
+) -> Result<(String, ContentVersion), String> {
     let LoadedFile::WorkingTree { contents, version } = read else {
         return Err("This file can't be edited.".to_owned());
     };
@@ -113,7 +117,7 @@ impl PatchEditor {
                     Ok((contents, version)) => {
                         let editor = this.open(&diff, &path, &contents, window, cx);
                         cx.emit(PatchEditorEvent::Editing(Some(EditSession {
-                            version: version.into(),
+                            version,
                             editor,
                         })));
                     }

@@ -3,8 +3,8 @@
 pub use gitto_ui::hooks::relative_time::TICK;
 use gpui_kit::{App, AppContext as _, Context, Entity, Global, Task};
 
-/// One clock for the whole app, started when a relative time is first shown and never stopped: a
-/// timer per row would be set up again for every row that scrolls into view. Views showing a
+/// One clock for the whole app, started with it and never stopped: a timer per row would be set
+/// up again for every row that scrolls into view. Views showing a
 /// relative time observe it (`cx.observe(&Clock::global(cx), |_, _, cx| cx.notify())`), so a
 /// commit made "Just now" doesn't stay that until the history is reloaded.
 pub struct Clock {
@@ -17,10 +17,8 @@ struct GlobalClock(Entity<Clock>);
 impl Global for GlobalClock {}
 
 impl Clock {
-    pub fn global(cx: &mut App) -> Entity<Clock> {
-        if let Some(clock) = cx.try_global::<GlobalClock>() {
-            return clock.0.clone();
-        }
+    /// Starts the app's clock (see `state::init`).
+    pub fn init(cx: &mut App) {
         let clock = cx.new(|cx: &mut Context<Clock>| Clock {
             ticks: 0,
             _timer: cx.spawn(async move |this, cx| {
@@ -38,8 +36,11 @@ impl Clock {
                 }
             }),
         });
-        cx.set_global(GlobalClock(clock.clone()));
-        clock
+        cx.set_global(GlobalClock(clock));
+    }
+
+    pub fn global(cx: &App) -> Entity<Clock> {
+        cx.global::<GlobalClock>().0.clone()
     }
 
     pub fn ticks(&self) -> u64 {
@@ -65,7 +66,8 @@ mod tests {
     // `gitto_ui::format::relative_time`'s, tested there).
     #[gpui_kit::test]
     fn ticks_every_minute(cx: &mut TestAppContext) {
-        let clock = cx.update(Clock::global);
+        cx.update(Clock::init);
+        let clock = cx.update(|cx| Clock::global(cx));
         assert_eq!(clock.read_with(cx, |clock, _| clock.ticks()), 0);
         cx.executor().advance_clock(TICK);
         cx.run_until_parked();

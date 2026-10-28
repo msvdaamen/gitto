@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use futures::FutureExt as _;
 use futures::future::Shared;
+use gitto_git::ContentVersion;
 use gpui_kit::{App, AppContext as _, Global, Task};
 
 use gitto_ui::diff::diff_metadata::{
@@ -47,7 +48,10 @@ const KEPT_LINES: usize = 1000;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoadedFile {
     Blob(String),
-    WorkingTree { contents: String, version: String },
+    WorkingTree {
+        contents: String,
+        version: ContentVersion,
+    },
 }
 
 impl LoadedFile {
@@ -57,7 +61,7 @@ impl LoadedFile {
         }
     }
 
-    pub fn version(&self) -> Option<&str> {
+    pub fn version(&self) -> Option<&ContentVersion> {
         match self {
             LoadedFile::Blob(_) => None,
             LoadedFile::WorkingTree { version, .. } => Some(version),
@@ -363,7 +367,7 @@ impl ViewHighlights {
 pub struct LoadedFiles {
     pub hydrated: Arc<FileDiff>,
     /// The working tree's version of the new side, if it's the working tree's.
-    pub version: Option<String>,
+    pub version: Option<ContentVersion>,
 }
 
 /// Both sides of `diff` in full, read by the object names on its `index` line, and a copy of
@@ -382,7 +386,7 @@ pub fn load_files(
     cx.spawn(async move |cx| {
         let old = old_file.await.map_err(LoadFilesError::Read)?;
         let read = new_file.await.map_err(LoadFilesError::Read)?;
-        let version = read.version().map(str::to_owned);
+        let version = read.version().cloned();
         let hydrated = cx
             .background_spawn(async move {
                 let before = fit_to_patch(&diff, Side::Deletions, old.contents())?;

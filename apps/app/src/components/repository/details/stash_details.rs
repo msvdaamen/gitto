@@ -18,7 +18,7 @@ use crate::components::ui::{Icon, IconName, LoadingState, Tone};
 use crate::data::diff::{ChangedFiles, FilesOf, ShownFiles, select_shown_files};
 use crate::data::{Opaque, Query};
 use crate::state::clock::{Clock, relative_time};
-use crate::theme::PaletteExt as _;
+use crate::theme::{PaletteExt as _, base_px};
 use gitto_ui::git::changes::LineCounts;
 use gitto_ui::git::diff_source::DiffSource;
 
@@ -204,9 +204,9 @@ impl RenderOnce for StashSummary {
             .child(
                 div()
                     .mt_3()
-                    .px(rems(0.467))
+                    .px(base_px(7.))
                     .py_1()
-                    .rounded(rems(0.333))
+                    .rounded(base_px(5.))
                     .border_1()
                     .border_color(palette.border_soft)
                     .bg(palette.bg)
