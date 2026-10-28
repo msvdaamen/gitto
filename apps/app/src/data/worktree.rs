@@ -141,7 +141,7 @@ pub fn worktree_actions() -> WorktreeActions {
                     else {
                         return Ok(());
                     };
-                    source.remove(opened.id).await?;
+                    source.remove(parse(opened.id)?).await?;
                     cx.update(|cx| QueryClient::invalidate(&keys::repositories(), cx))
                         .await;
                     Ok::<_, QueryError>(())

@@ -8,11 +8,12 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{Sizable as _, h_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    App, Context, Entity, FocusHandle, FontWeight, KeyDownEvent, SharedString, Subscription,
-    TestSupportExt as _, Window, div, rems,
+    App, Context, Entity, FocusHandle, FontWeight, KeyBinding, SharedString, Subscription,
+    TestSupportExt as _, Window, actions, div, rems,
 };
 
 use super::remove_repository_dialog::open_remove_repository_dialog;
+use crate::components::ui::kbd::aria_keyshortcuts;
 use crate::components::ui::{FailurePopover, GittoIcon, Icon, IconName};
 use crate::data::repositories::{
     OpenRepository, remove_repository, reorder_repositories, repositories_query,
@@ -20,6 +21,28 @@ use crate::data::repositories::{
 use crate::data::{Query, QueryError};
 use crate::state::router::{Route, Router};
 use crate::theme::PaletteExt as _;
+
+actions!(
+    tabs,
+    [
+        /// Moves the focused repository's tab one place left.
+        MoveTabLeft,
+        /// Moves the focused repository's tab one place right.
+        MoveTabRight
+    ]
+);
+
+/// The key context of a focused repository's tab.
+pub const KEY_CONTEXT: &str = "Tab";
+
+/// Binds the tabs' keys: Alt+Shift and an arrow key move the focused tab. Call once, as the app
+/// starts.
+pub fn bind_keys(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("alt-shift-left", MoveTabLeft, Some(KEY_CONTEXT)),
+        KeyBinding::new("alt-shift-right", MoveTabRight, Some(KEY_CONTEXT)),
+    ]);
+}
 
 /// The ids in `list` that are in `other` too, in `list`'s order.
 fn common<'a>(list: &'a [String], other: &[String]) -> Vec<&'a String> {
@@ -80,8 +103,8 @@ impl Render for TabDrag {
 
 /// A tab per repository, after the home tab. The page on show decides which one is selected:
 /// none, on a page of its own like the settings. The repositories' tabs are dragged, or moved with
-/// Alt+Shift and the arrow keys, into another order; their close button removes them, asking
-/// first.
+/// Alt+Shift and the arrow keys ([`MoveTabLeft`], [`MoveTabRight`]), into another order; their
+/// close button removes them, asking first.
 pub struct Tabs {
     repositories: Query<Vec<Repository>>,
     open_repository: Entity<OpenRepository>,
@@ -93,6 +116,7 @@ pub struct Tabs {
     /// The repository last tried to be removed, and why that failed.
     removing: Option<String>,
     remove_error: Option<QueryError>,
+    /// Each repository's tab's, made and dropped as the list of repositories changes.
     focus: HashMap<String, FocusHandle>,
     _subscriptions: Vec<Subscription>,
 }
@@ -105,10 +129,11 @@ impl Tabs {
             cx.observe(&Router::global(cx), |_, _, cx| cx.notify()),
             cx.observe(&open_repository, |_, _, cx| cx.notify()),
             cx.observe(repositories.entry(), |tabs, _, cx| {
-                tabs.forget_saved_order(cx)
+                tabs.forget_saved_order(cx);
+                tabs.sync_focus(cx);
             }),
         ];
-        Tabs {
+        let mut tabs = Tabs {
             repositories,
             open_repository,
             moved_order: None,
@@ -118,6 +143,20 @@ impl Tabs {
             remove_error: None,
             focus: HashMap::new(),
             _subscriptions: subscriptions,
+        };
+        tabs.sync_focus(cx);
+        tabs
+    }
+
+    /// Gives each repository listed its tab's focus handle, and forgets those of the
+    /// repositories removed.
+    fn sync_focus(&mut self, cx: &mut Context<Self>) {
+        let listed = self.saved_order();
+        self.focus.retain(|id, _| listed.contains(id));
+        for id in listed {
+            self.focus
+                .entry(id)
+                .or_insert_with(|| cx.focus_handle().tab_stop(true));
         }
     }
 
@@ -162,7 +201,11 @@ impl Tabs {
         }
         self.moved = Some(id.to_owned());
         self.move_error = None;
-        let saving = reorder_repositories(order, cx);
+        let ids = order
+            .iter()
+            .filter_map(|id| RepositoryId::parse(id.as_str()).ok())
+            .collect();
+        let saving = reorder_repositories(ids, cx);
         cx.spawn(async move |this, cx| {
             let result = saving.await;
             let _ = this.update(cx, |tabs, cx| {
@@ -201,9 +244,12 @@ impl Tabs {
     }
 
     fn remove(&mut self, id: String, cx: &mut Context<Self>) {
+        let Ok(repository_id) = RepositoryId::parse(id.as_str()) else {
+            return;
+        };
         self.removing = Some(id.clone());
         self.remove_error = None;
-        let removing = remove_repository(id.clone(), cx);
+        let removing = remove_repository(repository_id, cx);
         cx.spawn(async move |this, cx| {
             let result = removing.await;
             let _ = this.update(cx, |tabs, cx| {
@@ -255,15 +301,12 @@ impl Tabs {
         &mut self,
         repository: &Repository,
         selected: bool,
+        shortcuts: SharedString,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let palette = *cx.palette();
         let id = repository.id.clone();
-        let focus = self
-            .focus
-            .entry(id.clone())
-            .or_insert_with(|| cx.focus_handle().tab_stop(true))
-            .clone();
+        let focus = self.focus.get(&id).cloned();
         let error = if self.moved.as_deref() == Some(id.as_str()) && self.move_error.is_some() {
             Some(("Move", self.move_error.clone()))
         } else if self.removing.as_deref() == Some(id.as_str()) {
@@ -272,15 +315,17 @@ impl Tabs {
             None
         };
         let (action, error) = error.unwrap_or(("Remove", None));
+        let error = error.map(|error| SharedString::from(error.message()));
         let name: SharedString = repository.name.clone().into();
         tab_frame(SharedString::from(format!("tab-{id}")), selected, cx)
             .min_w(rems(8.))
             .max_w(rems(12.))
             .border_r_1()
             .border_color(palette.border_soft)
-            .track_focus(&focus)
+            .when_some(focus, |this, focus| this.track_focus(&focus))
+            .key_context(KEY_CONTEXT)
             .aria_label(name.clone())
-            .aria_keyshortcuts("Alt+Shift+ArrowLeft Alt+Shift+ArrowRight")
+            .aria_keyshortcuts(shortcuts)
             .on_click({
                 let id = id.clone();
                 move |_, _, cx| {
@@ -289,21 +334,13 @@ impl Tabs {
                     }
                 }
             })
-            .on_key_down(cx.listener({
+            .on_action(cx.listener({
                 let id = id.clone();
-                move |tabs, event: &KeyDownEvent, _, cx| {
-                    let modifiers = event.keystroke.modifiers;
-                    if !modifiers.alt || !modifiers.shift {
-                        return;
-                    }
-                    let by = match event.keystroke.key.as_str() {
-                        "left" => -1,
-                        "right" => 1,
-                        _ => return,
-                    };
-                    cx.stop_propagation();
-                    tabs.move_tab(&id, by, cx);
-                }
+                move |tabs, _: &MoveTabLeft, _, cx| tabs.move_tab(&id, -1, cx)
+            }))
+            .on_action(cx.listener({
+                let id = id.clone();
+                move |tabs, _: &MoveTabRight, _, cx| tabs.move_tab(&id, 1, cx)
             }))
             .on_drag(
                 TabDrag {
@@ -413,7 +450,7 @@ fn tab_frame(
 }
 
 impl Render for Tabs {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let route = Router::current(cx);
         let selected = |id: &str| {
             route
@@ -421,16 +458,21 @@ impl Render for Tabs {
                 .is_some_and(|shown| shown.as_str() == id)
         };
         let repositories = self.repositories.data().unwrap_or_default();
+        let shortcuts = aria_keyshortcuts(window, &[&MoveTabLeft, &MoveTabRight], KEY_CONTEXT);
         let mut tabs = Vec::new();
         for id in self.ordered() {
             if let Some(repository) = repositories.iter().find(|repository| repository.id == id) {
                 tabs.push(
-                    self.render_repository_tab(repository, selected(&id), cx)
+                    self.render_repository_tab(repository, selected(&id), shortcuts.clone(), cx)
                         .into_any_element(),
                 );
             }
         }
-        let open_error = self.open_repository.read(cx).error().cloned();
+        let open_error = self
+            .open_repository
+            .read(cx)
+            .error()
+            .map(|error| SharedString::from(error.message()));
         let open_repository = self.open_repository.clone();
         h_flex()
             .h_full()
@@ -501,6 +543,7 @@ mod ui_tests {
 
     use super::*;
     use crate::data::repositories::RepositorySource;
+    use crate::data::{QueryClient, keys};
     use crate::test_support;
 
     /// The repositories as saved, which `reorder` changes, unless it's told to fail (TS's mocked
@@ -522,11 +565,12 @@ mod ui_tests {
             async { Err(QueryError::msg("Not in this test.")) }.boxed()
         }
 
-        fn remove(&self, _: String) -> BoxFuture<'static, Result<(), QueryError>> {
+        fn remove(&self, _: RepositoryId) -> BoxFuture<'static, Result<(), QueryError>> {
             async { Err(QueryError::msg("Not in this test.")) }.boxed()
         }
 
-        fn reorder(&self, ids: Vec<String>) -> BoxFuture<'static, Result<(), QueryError>> {
+        fn reorder(&self, ids: Vec<RepositoryId>) -> BoxFuture<'static, Result<(), QueryError>> {
+            let ids: Vec<String> = ids.into_iter().map(String::from).collect();
             self.reorders.borrow_mut().push(ids.clone());
             if self.fail.get() {
                 return async { Err(QueryError::msg("The database is locked.")) }.boxed();
@@ -618,6 +662,33 @@ mod ui_tests {
             })
             .unwrap();
         assert!(focused);
+    }
+
+    #[gpui_kit::test]
+    fn forgets_the_focus_of_a_removed_repositorys_tab(cx: &mut TestAppContext) {
+        let (_dir, saved, ids, _, host) = render_tabs(cx);
+        saved.repositories.borrow_mut().remove(0);
+        drop(cx.update(|cx| QueryClient::invalidate(&keys::repositories(), cx)));
+        cx.run_until_parked();
+
+        let mut focused: Vec<String> = host.read_with(cx, |host, cx| {
+            host.tabs.read(cx).focus.keys().cloned().collect()
+        });
+        focused.sort();
+        let mut listed = ids[1..].to_vec();
+        listed.sort();
+        assert_eq!(focused, listed);
+    }
+
+    #[gpui_kit::test]
+    fn tells_assistive_technology_the_keys_bound_to_move_a_tab(cx: &mut TestAppContext) {
+        let (_dir, _, _, window, _) = render_tabs(cx);
+        let shortcuts = cx
+            .update_window(window, |_, window, _| {
+                aria_keyshortcuts(window, &[&MoveTabLeft, &MoveTabRight], KEY_CONTEXT)
+            })
+            .unwrap();
+        assert_eq!(shortcuts, "Alt+Shift+ArrowLeft Alt+Shift+ArrowRight");
     }
 
     #[gpui_kit::test]

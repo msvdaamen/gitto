@@ -84,12 +84,8 @@ impl AppShell {
                 view.update(cx, |view, cx| view.set_repository(id, window, cx));
             }
             (Page::Home(_), Route::Home) | (Page::Settings(_), Route::Settings) => {}
-            _ => {
-                if matches!(self.page, Page::Repository(_)) {
-                    Router::set_blocker(None, cx);
-                }
-                self.page = Self::page_for(&route, window, cx);
-            }
+            // The page's blocker goes with it.
+            _ => self.page = Self::page_for(&route, window, cx),
         }
         cx.notify();
     }

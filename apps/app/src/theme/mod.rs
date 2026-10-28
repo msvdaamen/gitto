@@ -19,7 +19,7 @@ pub mod palette;
 
 use std::rc::Rc;
 
-use gpui_kit::component::{Colorize as _, Theme, ThemeConfig, ThemeMode};
+use gpui_kit::component::{Colorize as _, Theme, ThemeConfig, ThemeConfigColors, ThemeMode};
 use gpui_kit::{App, Global, Hsla};
 
 pub use self::palette::Palette;
@@ -75,10 +75,11 @@ impl AppTheme {
     }
 }
 
-/// The active theme and its palette (a GPUI global).
+/// The two themes' palettes, and where the theme's saved (a GPUI global). Which one's active is
+/// GPUI Kit's theme mode: anything that changes it (`Theme::change`) changes Gitto's palette too.
 struct ActiveTheme {
-    theme: AppTheme,
-    palette: Palette,
+    dark: Palette,
+    light: Palette,
     /// Where it's saved, if anywhere.
     storage: Option<Rc<LocalStorage>>,
 }
@@ -95,11 +96,18 @@ pub trait PaletteExt {
 
 impl PaletteExt for App {
     fn palette(&self) -> &Palette {
-        &self.global::<ActiveTheme>().palette
+        let active = self.global::<ActiveTheme>();
+        match self.app_theme() {
+            AppTheme::Dark => &active.dark,
+            AppTheme::Light => &active.light,
+        }
     }
 
     fn app_theme(&self) -> AppTheme {
-        self.global::<ActiveTheme>().theme
+        match Theme::global(self).mode {
+            ThemeMode::Dark => AppTheme::Dark,
+            ThemeMode::Light => AppTheme::Light,
+        }
     }
 }
 
@@ -117,23 +125,20 @@ pub fn init(storage: Option<Rc<LocalStorage>>, cx: &mut App) {
         gpui_theme.dark_theme = Rc::new(theme_config(AppTheme::Dark, inter));
     });
     cx.set_global(ActiveTheme {
-        theme,
-        palette: Palette::of(theme),
+        dark: Palette::dark(),
+        light: Palette::light(),
         storage,
     });
-    apply(theme, cx);
+    Theme::change(theme.mode(), None, cx);
 }
 
 /// Switches to `theme`, and saves it; it still applies if it can't be saved, until the app closes
 /// (`applyTheme` in `hooks/theme.ts`).
 pub fn set(theme: AppTheme, cx: &mut App) {
-    let active = cx.global_mut::<ActiveTheme>();
-    active.theme = theme;
-    active.palette = Palette::of(theme);
-    if let Some(storage) = &active.storage {
-        let _ = storage.set_item(STORAGE_KEY, theme.as_str());
+    Theme::change(theme.mode(), None, cx);
+    if let Some(storage) = &cx.global::<ActiveTheme>().storage {
+        storage.set_item(STORAGE_KEY, theme.as_str());
     }
-    apply(theme, cx);
 }
 
 /// Switches between the dark and the light theme (`toggleTheme`).
@@ -141,19 +146,40 @@ pub fn toggle(cx: &mut App) {
     set(cx.app_theme().toggled(), cx);
 }
 
-fn apply(theme: AppTheme, cx: &mut App) {
-    Theme::change(theme.mode(), None, cx);
+/// Sets each color role named (a field of GPUI Kit's `ThemeConfigColors`, so one misspelled
+/// doesn't compile) to its color.
+macro_rules! set_roles {
+    ($colors:ident { $($role:ident: $color:expr),* $(,)? }) => {
+        $( $colors.$role = Some($color.to_hex().into()); )*
+    };
 }
 
-/// How many of GPUI Kit's color roles Gitto sets.
-const COLOR_COUNT: usize = 107;
+/// One of a palette's colors.
+type PaletteColor = fn(&Palette) -> Hsla;
+
+/// GPUI Kit's base colors, which its components fall back on, by the names its theme files give
+/// them: their fields are private, so only a theme file's names set them. With the palette's
+/// color each is.
+const BASE_COLORS: [(&str, PaletteColor); 12] = [
+    ("base.red", |p| p.coral),
+    ("base.red.light", |p| p.coral_soft),
+    ("base.green", |p| p.mint),
+    ("base.green.light", |p| p.mint_soft),
+    ("base.yellow", |p| p.amber),
+    ("base.yellow.light", |p| p.amber_soft),
+    ("base.blue", |p| p.blue),
+    ("base.blue.light", |p| p.blue_soft),
+    ("base.magenta", |p| p.primary),
+    ("base.magenta.light", |p| p.primary_soft),
+    ("base.cyan", |p| p.blue),
+    ("base.cyan.light", |p| p.blue_soft),
+];
 
 /// Gitto's colors (see [`Palette`]) as GPUI Kit's theme roles, for `theme`; with Inter as the
 /// font where it's installed (`--font-sans`), the system's otherwise.
 pub fn theme_config(theme: AppTheme, inter: bool) -> ThemeConfig {
     let p = Palette::of(theme);
-    let hex = |color: Hsla| color.to_hex();
-    let transparent = Hsla::default().to_hex();
+    let transparent = Hsla::default();
     let primary_foreground = match theme {
         AppTheme::Dark => p.primary_button_text,
         AppTheme::Light => p.avatar_text,
@@ -162,142 +188,125 @@ pub fn theme_config(theme: AppTheme, inter: bool) -> ThemeConfig {
     scrollbar_thumb.a = 0.65;
     let mut selection = p.primary;
     selection.a = 0.35;
-    let colors: [(&str, String); COLOR_COUNT] = [
-        ("background", hex(p.bg)),
-        ("foreground", hex(p.text)),
-        ("border", hex(p.border)),
-        ("input.border", hex(p.border)),
-        ("ring", hex(p.primary)),
-        ("caret", hex(p.text)),
-        ("selection.background", hex(selection)),
-        ("overlay", hex(p.overlay)),
-        ("window.border", hex(p.border)),
-        ("muted.background", hex(p.panel_raised)),
-        ("muted.foreground", hex(p.muted)),
-        ("accent.background", hex(p.panel_hover)),
-        ("accent.foreground", hex(p.text)),
-        ("popover.background", hex(p.panel_raised)),
-        ("popover.foreground", hex(p.text)),
-        ("group_box.background", hex(p.panel)),
-        ("group_box.foreground", hex(p.text)),
-        ("accordion.background", hex(p.panel)),
-        ("skeleton.background", hex(p.panel_raised)),
-        ("primary.background", hex(p.primary)),
-        ("primary.hover.background", hex(p.primary_strong)),
-        ("primary.active.background", hex(p.primary_strong)),
-        ("primary.foreground", hex(primary_foreground)),
-        ("secondary.background", hex(p.panel_raised)),
-        ("secondary.hover.background", hex(p.panel_hover)),
-        ("secondary.active.background", hex(p.panel_active)),
-        ("secondary.foreground", hex(p.text)),
-        ("button.background", hex(p.panel_raised)),
-        ("button.hover.background", hex(p.panel_hover)),
-        ("button.active.background", hex(p.panel_active)),
-        ("button.foreground", hex(p.text)),
-        ("button.primary.background", hex(p.primary_button_end)),
-        (
-            "button.primary.hover.background",
-            hex(p.primary_button_start),
-        ),
-        (
-            "button.primary.active.background",
-            hex(p.primary_button_end),
-        ),
-        ("button.primary.foreground", hex(p.primary_button_text)),
-        ("danger.background", hex(p.coral)),
-        ("danger.hover.background", hex(p.coral)),
-        ("danger.active.background", hex(p.coral)),
-        ("danger.foreground", hex(p.bg)),
-        ("warning.background", hex(p.amber)),
-        ("warning.hover.background", hex(p.amber)),
-        ("warning.active.background", hex(p.amber)),
-        ("warning.foreground", hex(p.bg)),
-        ("success.background", hex(p.mint)),
-        ("success.hover.background", hex(p.mint)),
-        ("success.active.background", hex(p.mint)),
-        ("success.foreground", hex(p.bg)),
-        ("info.background", hex(p.blue)),
-        ("info.hover.background", hex(p.blue)),
-        ("info.active.background", hex(p.blue)),
-        ("info.foreground", hex(p.bg)),
-        ("link", hex(p.primary_strong)),
-        ("link.hover", hex(p.primary)),
-        ("link.active", hex(p.primary_strong)),
-        ("list.background", hex(p.panel)),
-        ("list.even.background", hex(p.panel)),
-        ("list.head.background", hex(p.panel)),
-        ("list.hover.background", hex(p.panel_hover)),
-        ("list.active.background", hex(p.primary_soft)),
-        ("list.active.border", hex(p.primary)),
-        ("table.background", hex(p.bg)),
-        ("table.even.background", hex(p.bg)),
-        ("table.head.background", hex(p.bg_soft)),
-        ("table.head.foreground", hex(p.muted)),
-        ("table.hover.background", hex(p.panel_hover)),
-        ("table.active.background", hex(p.primary_soft)),
-        ("table.active.border", hex(p.primary)),
-        ("table.row.border", hex(p.border_soft)),
-        ("sidebar.background", hex(p.panel)),
-        ("sidebar.foreground", hex(p.text)),
-        ("sidebar.border", hex(p.border)),
-        ("sidebar.accent.background", hex(p.panel_hover)),
-        ("sidebar.accent.foreground", hex(p.text)),
-        ("sidebar.primary.background", hex(p.primary_soft)),
-        ("sidebar.primary.foreground", hex(p.primary_strong)),
-        ("tab_bar.background", hex(p.header)),
-        ("tab_bar.segmented.background", hex(p.bg)),
-        ("tab.background", transparent.clone()),
-        ("tab.foreground", hex(p.muted)),
-        ("tab.active.background", hex(p.bg)),
-        ("tab.active.foreground", hex(p.text)),
-        ("title_bar.background", hex(p.header)),
-        ("title_bar.border", hex(p.border)),
-        ("status_bar.background", hex(p.footer)),
-        ("status_bar.border", hex(p.border)),
-        ("switch.background", hex(p.border)),
-        ("switch.thumb.background", hex(p.avatar_text)),
-        ("slider.background", hex(p.primary)),
-        ("slider.thumb.background", hex(p.avatar_text)),
-        ("progress.bar.background", hex(p.primary)),
-        ("scrollbar.background", transparent),
-        ("scrollbar.thumb.background", hex(scrollbar_thumb)),
-        ("scrollbar.thumb.hover.background", hex(p.faint)),
-        ("drag.border", hex(p.primary)),
-        ("drop_target.background", hex(p.primary_soft)),
-        ("base.red", hex(p.coral)),
-        ("base.red.light", hex(p.coral_soft)),
-        ("base.green", hex(p.mint)),
-        ("base.green.light", hex(p.mint_soft)),
-        ("base.yellow", hex(p.amber)),
-        ("base.yellow.light", hex(p.amber_soft)),
-        ("base.blue", hex(p.blue)),
-        ("base.blue.light", hex(p.blue_soft)),
-        ("base.magenta", hex(p.primary)),
-        ("base.magenta.light", hex(p.primary_soft)),
-        ("base.cyan", hex(p.blue)),
-        ("base.cyan.light", hex(p.blue_soft)),
-    ];
-    let colors: serde_json::Map<String, serde_json::Value> = colors
-        .into_iter()
-        .map(|(role, color)| (role.to_owned(), color.into()))
+    let base: serde_json::Map<String, serde_json::Value> = BASE_COLORS
+        .iter()
+        .map(|(name, color)| ((*name).to_owned(), color(&p).to_hex().into()))
         .collect();
-    let mut config = serde_json::json!({
-        "name": match theme {
+    let mut colors: ThemeConfigColors =
+        serde_json::from_value(base.into()).expect("GPUI Kit's base colors are strings by name");
+    set_roles!(colors {
+        background: p.bg,
+        foreground: p.text,
+        border: p.border,
+        input: p.border,
+        ring: p.primary,
+        caret: p.text,
+        selection: selection,
+        overlay: p.overlay,
+        window_border: p.border,
+        muted: p.panel_raised,
+        muted_foreground: p.muted,
+        accent: p.panel_hover,
+        accent_foreground: p.text,
+        popover: p.panel_raised,
+        popover_foreground: p.text,
+        group_box: p.panel,
+        group_box_foreground: p.text,
+        accordion: p.panel,
+        skeleton: p.panel_raised,
+        primary: p.primary,
+        primary_hover: p.primary_strong,
+        primary_active: p.primary_strong,
+        primary_foreground: primary_foreground,
+        secondary: p.panel_raised,
+        secondary_hover: p.panel_hover,
+        secondary_active: p.panel_active,
+        secondary_foreground: p.text,
+        button: p.panel_raised,
+        button_hover: p.panel_hover,
+        button_active: p.panel_active,
+        button_foreground: p.text,
+        button_primary: p.primary_button_end,
+        button_primary_hover: p.primary_button_start,
+        button_primary_active: p.primary_button_end,
+        button_primary_foreground: p.primary_button_text,
+        danger: p.coral,
+        danger_hover: p.coral,
+        danger_active: p.coral,
+        danger_foreground: p.bg,
+        warning: p.amber,
+        warning_hover: p.amber,
+        warning_active: p.amber,
+        warning_foreground: p.bg,
+        success: p.mint,
+        success_hover: p.mint,
+        success_active: p.mint,
+        success_foreground: p.bg,
+        info: p.blue,
+        info_hover: p.blue,
+        info_active: p.blue,
+        info_foreground: p.bg,
+        link: p.primary_strong,
+        link_hover: p.primary,
+        link_active: p.primary_strong,
+        list: p.panel,
+        list_even: p.panel,
+        list_head: p.panel,
+        list_hover: p.panel_hover,
+        list_active: p.primary_soft,
+        list_active_border: p.primary,
+        table: p.bg,
+        table_even: p.bg,
+        table_head: p.bg_soft,
+        table_head_foreground: p.muted,
+        table_hover: p.panel_hover,
+        table_active: p.primary_soft,
+        table_active_border: p.primary,
+        table_row_border: p.border_soft,
+        sidebar: p.panel,
+        sidebar_foreground: p.text,
+        sidebar_border: p.border,
+        sidebar_accent: p.panel_hover,
+        sidebar_accent_foreground: p.text,
+        sidebar_primary: p.primary_soft,
+        sidebar_primary_foreground: p.primary_strong,
+        tab_bar: p.header,
+        tab_bar_segmented: p.bg,
+        tab: transparent,
+        tab_foreground: p.muted,
+        tab_active: p.bg,
+        tab_active_foreground: p.text,
+        title_bar: p.header,
+        title_bar_border: p.border,
+        status_bar: p.footer,
+        status_bar_border: p.border,
+        switch: p.border,
+        switch_thumb: p.avatar_text,
+        slider_bar: p.primary,
+        slider_thumb: p.avatar_text,
+        progress_bar: p.primary,
+        scrollbar: transparent,
+        scrollbar_thumb: scrollbar_thumb,
+        scrollbar_thumb_hover: p.faint,
+        drag_border: p.primary,
+        drop_target: p.primary_soft,
+    });
+    ThemeConfig {
+        name: match theme {
             AppTheme::Dark => "Gitto Dark",
             AppTheme::Light => "Gitto Light",
-        },
-        "mode": theme.as_str(),
-        "font.size": FONT_SIZE,
-        "mono_font.size": MONO_FONT_SIZE,
-        "radius": RADIUS,
-        "radius.lg": RADIUS_LG,
-        "shadow": true,
-        "colors": colors,
-    });
-    if inter {
-        config["font.family"] = "Inter".into();
+        }
+        .into(),
+        mode: theme.mode(),
+        font_size: Some(FONT_SIZE),
+        font_family: inter.then(|| "Inter".into()),
+        mono_font_size: Some(MONO_FONT_SIZE),
+        radius: Some(RADIUS),
+        radius_lg: Some(RADIUS_LG),
+        shadow: Some(true),
+        colors,
+        ..ThemeConfig::default()
     }
-    serde_json::from_value(config).expect("Gitto's theme is a GPUI Kit theme")
 }
 
 #[cfg(test)]
@@ -309,12 +318,12 @@ mod tests {
     #[test]
     fn starts_from_the_saved_theme_and_saves_a_toggle() {
         let storage = LocalStorage::in_memory();
-        storage.set_item(STORAGE_KEY, "light").unwrap();
+        storage.set_item(STORAGE_KEY, "light");
 
         let theme = AppTheme::load(&storage);
         assert_eq!(theme, AppTheme::Light);
         let toggled = theme.toggled();
-        storage.set_item(STORAGE_KEY, toggled.as_str()).unwrap();
+        storage.set_item(STORAGE_KEY, toggled.as_str());
         assert_eq!(toggled, AppTheme::Dark);
         assert_eq!(storage.get_item(STORAGE_KEY).as_deref(), Some("dark"));
     }
@@ -323,7 +332,7 @@ mod tests {
     fn falls_back_to_dark() {
         assert_eq!(AppTheme::load(&LocalStorage::in_memory()), AppTheme::Dark);
         let storage = LocalStorage::in_memory();
-        storage.set_item(STORAGE_KEY, "sepia").unwrap();
+        storage.set_item(STORAGE_KEY, "sepia");
         assert_eq!(AppTheme::load(&storage), AppTheme::Dark);
     }
 
@@ -340,6 +349,19 @@ mod tests {
             light.colors.background.as_deref(),
             Some(Palette::light().bg.to_hex().as_str())
         );
+        assert_eq!(
+            light.colors.tab_bar_segmented.as_deref(),
+            Some(Palette::light().bg.to_hex().as_str())
+        );
+    }
+
+    #[test]
+    fn sets_every_base_color() {
+        let colors = serde_json::to_value(theme_config(AppTheme::Dark, false).colors).unwrap();
+        let dark = Palette::dark();
+        for (name, color) in BASE_COLORS {
+            assert_eq!(colors[name], color(&dark).to_hex(), "{name}");
+        }
     }
 }
 
@@ -363,9 +385,22 @@ mod ui_tests {
     }
 
     #[gpui_kit::test]
+    fn follows_gpui_kits_theme_mode(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(|cx| init(None, cx));
+
+        // As GPUI Kit's own theme switcher changes it.
+        cx.update(|cx| Theme::change(ThemeMode::Light, None, cx));
+        assert_eq!(cx.update(|cx| cx.app_theme()), AppTheme::Light);
+        assert_eq!(cx.update(|cx| *cx.palette()), Palette::light());
+        cx.update(toggle);
+        assert_eq!(cx.update(|cx| *cx.palette()), Palette::dark());
+    }
+
+    #[gpui_kit::test]
     fn starts_from_the_saved_theme(cx: &mut TestAppContext) {
         let storage = Rc::new(LocalStorage::in_memory());
-        storage.set_item(STORAGE_KEY, "light").unwrap();
+        storage.set_item(STORAGE_KEY, "light");
         cx.update(gpui_kit::init);
         cx.update(|cx| init(Some(Rc::clone(&storage)), cx));
         assert_eq!(cx.update(|cx| cx.app_theme()), AppTheme::Light);
