@@ -145,6 +145,12 @@ impl DetailsList {
         }
     }
 
+    /// Its state: where it's scrolled to.
+    #[cfg(test)]
+    pub fn state(&self) -> &ListState {
+        &self.state
+    }
+
     /// The list `id`, of `top` (whose look `top_key` tells), and `files`.
     pub fn render(
         &mut self,

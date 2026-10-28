@@ -743,6 +743,57 @@ mod tests {
         );
     }
 
+    #[gpui_kit::test]
+    fn keeps_where_the_files_are_scrolled_to_until_another_commits_are_shown(
+        cx: &mut TestAppContext,
+    ) {
+        let fakes = Fakes::new();
+        let many = (0..200)
+            .map(|ix| file(&format!("{ix}.txt"), FileStatus::Modified, None))
+            .collect();
+        fakes.files.once(Ok(many));
+        let details = render_details(cx, fakes);
+        details.select(Some("a1"), cx);
+        let commit = details
+            .details
+            .read_with(cx, |details, _| match &details.body {
+                Some((_, Body::Commit(commit))) => commit.clone(),
+                _ => panic!("no commit on show"),
+            });
+        let state = commit.read_with(cx, |commit, _| commit.list.state().clone());
+        let render = |cx: &mut TestAppContext| {
+            cx.update_window(details.window, |_, window, cx| window.render_frame(cx))
+                .unwrap();
+        };
+        render(cx);
+        state.scroll_to(gpui_kit::ListOffset {
+            item_ix: 50,
+            offset_in_item: gpui_kit::px(0.),
+        });
+        render(cx);
+        assert_eq!(state.logical_scroll_top().item_ix, 50);
+
+        // Rendered again (a clock tick, a hover): still there.
+        commit.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        render(cx);
+        assert_eq!(state.logical_scroll_top().item_ix, 50);
+
+        // Another commit's files still loading: its files aren't on show yet.
+        let files = details.fakes.files.later();
+        details.select(Some("b2"), cx);
+        render(cx);
+        assert_eq!(state.logical_scroll_top().item_ix, 50);
+
+        // They are now, from the top.
+        files
+            .send(Ok(vec![file("b2.txt", FileStatus::Added, None)]))
+            .unwrap();
+        cx.run_until_parked();
+        render(cx);
+        assert_eq!(state.logical_scroll_top().item_ix, 0);
+    }
+
     /// Holds a view without rendering it.
     struct Unrendered<V: 'static> {
         view: Entity<V>,
