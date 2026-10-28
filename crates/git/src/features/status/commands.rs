@@ -510,6 +510,39 @@ mod tests {
     }
 
     #[test]
+    fn the_changed_files_are_the_same_as_full_diffs_with_names_of_newlines_tabs_and_accents() {
+        let fx = Fixture::new();
+        let path = fx.create_repo("odd-names");
+        // Windows takes no newline or tab in a name.
+        let names: &[&str] = if cfg!(windows) {
+            &["café.txt", "a b.txt"]
+        } else {
+            &["café.txt", "a b.txt", "two\nlines.txt", "tab\there.txt"]
+        };
+        for name in names {
+            fs::write(path.join(name), "one\n").unwrap();
+        }
+        git(&path, ["add", "."]);
+        git(&path, ["commit", "-q", "-m", "first"]);
+        for name in names {
+            fs::write(path.join(name), "two\n").unwrap();
+            fs::write(path.join(format!("new {name}")), "new\n").unwrap();
+        }
+        smol::block_on(async {
+            let repo = fx.repos.open("odd-names").await.unwrap();
+
+            let changes = get_status(&repo).await.unwrap().changes;
+            assert_eq!(changes, full_diffs(&repo).await);
+            let unstaged = paths(&changes.unstaged);
+            for name in names {
+                assert!(unstaged.contains(name), "{name:?} in {unstaged:?}");
+                let new = format!("new {name}");
+                assert!(unstaged.contains(&new.as_str()), "{new:?} in {unstaged:?}");
+            }
+        });
+    }
+
+    #[test]
     fn the_changed_files_are_the_same_as_full_diffs_with_a_merge_conflict() {
         let fx = Fixture::new();
         let path = fx.create_repo("conflict");
