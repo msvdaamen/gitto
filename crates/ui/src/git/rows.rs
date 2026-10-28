@@ -182,7 +182,7 @@ pub fn with_stashes<'a>(log: &'a [Commit], stashes: &'a [Stash]) -> Vec<HistoryE
 /// Lays out the history graph: the commits and stashes, below the uncommitted changes when there are
 /// any. Those get a dashed line to the commit they're based on, `head`, and each stash one to the
 /// commit it was made on, if it's in the history.
-pub fn history_graph(
+fn history_graph(
     entries: &[HistoryEntry<'_>],
     has_changes: bool,
     head: Option<&str>,
@@ -223,17 +223,17 @@ pub fn history_graph(
 }
 
 /// Turns a repository's commits and stashes, plus the uncommitted changes if there are any, into
-/// history table rows, with their rows of `graph`: the graph [`history_graph`] laid out for the
-/// same `entries` and `has_changes`. The commits' labels say where the other worktrees are checked
-/// out (`others`).
+/// history table rows, each with its row of the history graph, which is laid out for them: the
+/// uncommitted changes are based on `head`. The commits' labels say where the other worktrees are
+/// checked out (`others`).
 pub fn to_history_rows(
     repository_id: &RepositoryId,
     entries: &[HistoryEntry<'_>],
     has_changes: bool,
-    graph: Vec<GraphRow>,
+    head: Option<&str>,
     others: &Checkouts,
 ) -> Vec<HistoryRow> {
-    let mut graph = graph.into_iter();
+    let mut graph = history_graph(entries, has_changes, head).into_iter();
     let mut rows = Vec::with_capacity(entries.len() + usize::from(has_changes));
     if has_changes {
         rows.push(HistoryRow::Wip(WipRow {
@@ -417,7 +417,7 @@ mod tests {
                 &repository,
                 &entries,
                 true,
-                history_graph(&entries, true, Some("c")),
+                Some("c"),
                 &Checkouts::default(),
             );
             let ids: Vec<RowId> = rows.iter().map(HistoryRow::id).collect();
