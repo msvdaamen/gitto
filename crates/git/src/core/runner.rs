@@ -129,6 +129,20 @@ pub const ENV: &[(&str, &str)] = &[
     ("GIT_PAGER", "cat"),
 ];
 
+/// The variables that tell git which repository to use, or where its index or objects are, rather
+/// than the folder it runs in: left out of the environment git runs with, as Gitto may have been
+/// started from a shell that sets them (a hook's, or `git rebase -x`'s), which would point every
+/// command, in every repository, at that one.
+pub(crate) const REPOSITORY_ENV: &[&str] = &[
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_NAMESPACE",
+];
+
 /// Locks `mutex`, whether or not a thread panicked holding it: what's kept behind these stays
 /// consistent between statements.
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -265,22 +279,18 @@ where
     Box::pin(run(cwd.as_ref().to_owned(), os_args(args), options))
 }
 
-async fn run(cwd: PathBuf, args: Vec<OsString>, options: RunOptions) -> Result<Vec<u8>> {
-    let start = tracing().then(Instant::now);
-    let shown_args: Vec<String> = args
-        .iter()
-        .map(|arg| arg.to_string_lossy().into_owned())
-        .collect();
-
+/// `git` with `args`, to run in `cwd` with `options`, in a session of its own (see `run_git_bytes`).
+fn git_command(cwd: &Path, args: &[OsString], options: &RunOptions) -> std::process::Command {
     let mut command = std::process::Command::new("git");
     command.args(CONFIG);
     for setting in &options.config {
         command.arg("-c").arg(setting);
     }
-    command
-        .args(&args)
-        .current_dir(&cwd)
-        .envs(ENV.iter().copied());
+    command.args(args).current_dir(cwd);
+    for key in REPOSITORY_ENV {
+        command.env_remove(key);
+    }
+    command.envs(ENV.iter().copied());
     if options.glob_pathspecs {
         command.env("GIT_LITERAL_PATHSPECS", "0");
     }
@@ -298,7 +308,17 @@ async fn run(cwd: PathBuf, args: Vec<OsString>, options: RunOptions) -> Result<V
             });
         }
     }
-    let mut command = async_process::Command::from(command);
+    command
+}
+
+async fn run(cwd: PathBuf, args: Vec<OsString>, options: RunOptions) -> Result<Vec<u8>> {
+    let start = tracing().then(Instant::now);
+    let shown_args: Vec<String> = args
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+
+    let mut command = async_process::Command::from(git_command(&cwd, &args, &options));
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -479,6 +499,26 @@ mod tests {
             ident.starts_with("Someone Else <test@example.com>"),
             "{ident}"
         );
+    }
+
+    #[test]
+    fn leaves_out_the_variables_that_point_git_at_another_repository() {
+        let options = RunOptions::default().env("GIT_INDEX_FILE", "/elsewhere/index");
+        let command = git_command(Path::new("/repo"), &os_args(["status"]), &options);
+        let envs: Vec<_> = command.get_envs().collect();
+        for key in REPOSITORY_ENV {
+            let key = OsStr::new(key);
+            let value = envs
+                .iter()
+                .find(|(set, _)| *set == key)
+                .map(|(_, value)| *value);
+            if key == "GIT_INDEX_FILE" {
+                // Unless a command sets one itself.
+                assert_eq!(value, Some(Some(OsStr::new("/elsewhere/index"))));
+            } else {
+                assert_eq!(value, Some(None), "{key:?}");
+            }
+        }
     }
 
     #[test]
