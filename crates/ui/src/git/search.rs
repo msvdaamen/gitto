@@ -31,7 +31,7 @@ pub fn matches_search(row: &HistoryRow, needle: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use gitto_git::input::RepositoryId;
 
     use super::*;
     use crate::git::ref_labels::{BranchLabel, RefLabel};
@@ -40,7 +40,7 @@ mod tests {
     fn commit() -> HistoryRow {
         HistoryRow::Commit(CommitRow {
             id: "a1b2c3d4e5".into(),
-            repository_id: Arc::from("repo"),
+            repository_id: RepositoryId::generate(),
             short_sha: "a1b2c3d".into(),
             graph: None,
             message: "Fix the parser".into(),
@@ -64,7 +64,7 @@ mod tests {
         HistoryRow::Stash(StashRow {
             id: "stash:f00dfeed".into(),
             sha: "f00dfeed".into(),
-            repository_id: Arc::from("repo"),
+            repository_id: RepositoryId::generate(),
             graph: None,
             message: "WIP on main: a1b2c3d Fix the parser".into(),
             created_at: 0,
@@ -73,7 +73,7 @@ mod tests {
 
     fn wip() -> HistoryRow {
         HistoryRow::Wip(WipRow {
-            repository_id: Arc::from("repo"),
+            repository_id: RepositoryId::generate(),
             graph: None,
         })
     }

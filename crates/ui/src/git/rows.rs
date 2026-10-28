@@ -1,10 +1,9 @@
 //! Ported from `git/rows.ts`: the rows of the history table.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use gitto_git::features::history::schema::Commit;
 use gitto_git::features::stash::schema::Stash;
+use gitto_git::input::RepositoryId;
+use std::collections::HashMap;
 
 use super::graph::{GraphCommit, GraphRow, compute_graph};
 use super::ref_labels::{Checkouts, RefLabel, to_ref_labels};
@@ -55,7 +54,7 @@ impl HistoryRow {
     }
 
     /// The repository it's in.
-    pub fn repository_id(&self) -> &Arc<str> {
+    pub fn repository_id(&self) -> &RepositoryId {
         match self {
             HistoryRow::Wip(row) => &row.repository_id,
             HistoryRow::Stash(row) => &row.repository_id,
@@ -68,7 +67,7 @@ impl HistoryRow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WipRow {
     /// The repository the changes are in.
-    pub repository_id: Arc<str>,
+    pub repository_id: RepositoryId,
     /// Its row in the history graph.
     pub graph: Option<GraphRow>,
 }
@@ -81,7 +80,7 @@ pub struct StashRow {
     /// The stash commit's full SHA.
     pub sha: String,
     /// The repository the stash is in.
-    pub repository_id: Arc<str>,
+    pub repository_id: RepositoryId,
     /// Its row in the history graph.
     pub graph: Option<GraphRow>,
     /// What git named it, e.g. `WIP on main: 1a2b3c4 Fix the header`.
@@ -96,7 +95,7 @@ pub struct CommitRow {
     /// The full SHA.
     pub id: String,
     /// The repository the commit is in, so follow-up requests (like its files) go there.
-    pub repository_id: Arc<str>,
+    pub repository_id: RepositoryId,
     pub short_sha: String,
     /// Its row in the history graph; only rows in the history table have one.
     pub graph: Option<GraphRow>,
@@ -210,7 +209,7 @@ pub fn history_graph(
 /// same `entries` and `has_changes`. The commits' labels say where the other worktrees are checked
 /// out (`others`).
 pub fn to_history_rows(
-    repository_id: &Arc<str>,
+    repository_id: &RepositoryId,
     entries: &[HistoryEntry<'_>],
     has_changes: bool,
     graph: Vec<GraphRow>,
@@ -235,7 +234,7 @@ pub fn to_history_rows(
     rows
 }
 
-fn to_stash_row(repository_id: &Arc<str>, stash: &Stash, graph: Option<GraphRow>) -> StashRow {
+fn to_stash_row(repository_id: &RepositoryId, stash: &Stash, graph: Option<GraphRow>) -> StashRow {
     StashRow {
         id: stash_row_id(&stash.sha),
         sha: stash.sha.clone(),
@@ -248,7 +247,7 @@ fn to_stash_row(repository_id: &Arc<str>, stash: &Stash, graph: Option<GraphRow>
 
 /// A commit's row; its labels say where the other worktrees are checked out (`others`).
 pub fn to_commit_row(
-    repository_id: &Arc<str>,
+    repository_id: &RepositoryId,
     commit: &Commit,
     graph: Option<GraphRow>,
     others: &Checkouts,
@@ -396,7 +395,7 @@ mod tests {
             let log = log();
             let stashes = [stash("s", "b", 2500)];
             let entries = with_stashes(&log, &stashes);
-            let repository: Arc<str> = Arc::from("repo");
+            let repository = RepositoryId::generate();
             let rows = to_history_rows(
                 &repository,
                 &entries,
@@ -435,7 +434,7 @@ mod tests {
 
     #[test]
     fn shows_a_commit_with_its_author_and_labels() {
-        let repository: Arc<str> = Arc::from("repo");
+        let repository = RepositoryId::generate();
         let commit = Commit {
             body: "Details".into(),
             ..commit("1a2b3c4d5e", &[], 1000)
