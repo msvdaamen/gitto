@@ -12,7 +12,7 @@ use gpui_kit::{
 };
 
 use super::base_px;
-use crate::components::ui::{Icon, IconName, Tone};
+use crate::components::ui::{Icon, IconName};
 use crate::theme::PaletteExt as _;
 
 /// Space below every row in a section.
@@ -146,9 +146,10 @@ pub struct RowTag {
 }
 
 /// An item in a section: a ref, a stash or a worktree. Its icon, its label, then whichever of a
-/// tag, a meta (a branch's ahead count, say) and a count it has: the label takes the space left,
-/// and the meta what it needs, up to half the row, as a worktree's branch can be long. Its tooltip is its `title`, or its label. Active, it stands out; highlighted (its menu
-/// open), it shows as if hovered; faded (a worktree whose folder is gone), it's dimmed.
+/// tag and a meta (a branch's ahead count, say) it has: the label takes the space left, and the
+/// meta what it needs, up to half the row, as a worktree's branch can be long. Its tooltip is its
+/// `title`, or its label. Active, it stands out; highlighted (its menu open), it shows as if
+/// hovered; faded (a worktree whose folder is gone), it's dimmed.
 #[derive(IntoElement)]
 pub struct SidebarRow {
     id: ElementId,
@@ -159,7 +160,6 @@ pub struct SidebarRow {
     active: bool,
     highlighted: bool,
     tag: Option<RowTag>,
-    count: Option<u64>,
     meta: Option<SharedString>,
     faded: bool,
     on_double_click: Option<RowAction>,
@@ -177,7 +177,6 @@ impl SidebarRow {
             active: false,
             highlighted: false,
             tag: None,
-            count: None,
             meta: None,
             faded: false,
             on_double_click: None,
@@ -214,11 +213,6 @@ impl SidebarRow {
         self
     }
 
-    pub fn count(mut self, count: Option<u64>) -> Self {
-        self.count = count;
-        self
-    }
-
     pub fn meta(mut self, meta: Option<SharedString>) -> Self {
         self.meta = meta;
         self
@@ -243,19 +237,13 @@ impl SidebarRow {
         self.menu = Some(Rc::new(builder));
         self
     }
-
-    /// What its tooltip says.
-    pub fn tooltip(&self) -> &SharedString {
-        self.title.as_ref().unwrap_or(&self.label)
-    }
 }
 
 impl RenderOnce for SidebarRow {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let palette = *cx.palette();
-        let tooltip = self.tooltip().clone();
+        let tooltip = self.title.clone().unwrap_or_else(|| self.label.clone());
         let padding = base_px(25. + self.depth as f32 * DEPTH_INDENT);
-        let (count_bg, count_text) = Tone::Neutral.colors(&palette);
         let icon = Icon::new(self.icon)
             .size(base_px(13.))
             .flex_none()
@@ -313,21 +301,6 @@ impl RenderOnce for SidebarRow {
                         .text_size(base_px(10.5))
                         .text_color(palette.blue)
                         .child(meta),
-                )
-            })
-            .when_some(self.count, |row, count| {
-                row.child(
-                    div()
-                        .flex_none()
-                        .min_w(base_px(17.))
-                        .px_1()
-                        .py_0p5()
-                        .rounded_lg()
-                        .bg(count_bg)
-                        .text_color(count_text)
-                        .text_center()
-                        .text_size(base_px(10.5))
-                        .child(count.to_string()),
                 )
             });
         match self.menu {
