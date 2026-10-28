@@ -556,7 +556,7 @@ mod tests {
     use crate::core::repo::{How, Observed};
     use crate::features::remote::blockers::{no_branch, rebasing};
     use crate::test_support::conflicts::try_git;
-    use crate::test_support::{Fixture, git};
+    use crate::test_support::{Fixture, git, write_script};
 
     /// Writes `content` to `file` in `path` and commits it with `message`.
     fn commit(path: &Path, file: &str, content: &str, message: &str) {
@@ -1181,13 +1181,6 @@ mod tests {
             .output()
             .unwrap();
         String::from_utf8_lossy(&output.stdout).trim().to_owned()
-    }
-
-    #[cfg(unix)]
-    fn write_script(file: &Path, script: &str) {
-        use std::os::unix::fs::PermissionsExt;
-        fs::write(file, script).unwrap();
-        fs::set_permissions(file, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
     #[cfg(unix)]
