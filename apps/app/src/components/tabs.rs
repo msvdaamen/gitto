@@ -19,7 +19,7 @@ use crate::data::repositories::{
 };
 use crate::data::{Query, QueryError};
 use crate::state::router::{Route, Router};
-use crate::theme::PaletteExt as _;
+use crate::theme::{PaletteExt as _, base_px};
 
 /// Below these window widths the home tab shows its icon alone (`md`), and the repositories' tabs
 /// can be narrower (`sm`).
@@ -245,11 +245,7 @@ impl Tabs {
     ) -> impl IntoElement + use<> {
         let palette = *cx.palette();
         tab_frame("home-tab", selected, cx)
-            .w(if narrow {
-                rems(53. / 15.)
-            } else {
-                rems(116. / 15.)
-            })
+            .w(if narrow { base_px(53.) } else { base_px(116.) })
             .flex_none()
             .aria_label("Home")
             .when(narrow, |this| this.justify_center())

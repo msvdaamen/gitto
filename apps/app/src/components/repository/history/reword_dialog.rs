@@ -18,10 +18,10 @@ use super::columns::SMALL_TEXT;
 use crate::components::ui::{FormField, Icon, IconName};
 use crate::data::commit::{Reword, commit_message_query, pushed_to_query, reword_commit_mutation};
 use crate::data::{Mutation, Query, QueryError};
-use crate::theme::PaletteExt as _;
+use crate::theme::{PaletteExt as _, base_px};
 
 /// How wide the dialog is (`max-w-[440px]`), in rems of the 15px base.
-const WIDTH: Rems = Rems(440. / 15.);
+const WIDTH: Rems = base_px(440.);
 
 /// Rewording a commit: the repository and the commit's SHA, and the message to give it.
 pub type RewordMutation = Mutation<(RepositoryId, Reword), String>;
@@ -381,7 +381,7 @@ impl Render for RewordDialog {
             }))
             .child(
                 div()
-                    .text_size(Rems(12.5 / 15.))
+                    .text_size(base_px(12.5))
                     .font_weight(FontWeight(680.))
                     .text_color(palette.text)
                     .child("Edit commit message"),

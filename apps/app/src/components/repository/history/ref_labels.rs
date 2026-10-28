@@ -10,13 +10,13 @@ use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, ElementId, FontWeight, Hsla, Role, SharedString, TestSupportExt as _, Window,
-    anchored, deferred, div, px, rems,
+    anchored, deferred, div, px,
 };
 
 use super::columns::{LABEL_ICON, LABEL_LINE, LABEL_TEXT, part, tinted};
 use crate::components::repository::branch_menu::branch_menu;
 use crate::components::ui::{Icon, IconName, menu_frame};
-use crate::theme::{Palette, PaletteExt as _, mixed};
+use crate::theme::{Palette, PaletteExt as _, base_px, mixed};
 
 /// Switches to a branch, by its full ref name; or opens a worktree, by its path.
 pub type OnRef = Rc<dyn Fn(String, &mut Window, &mut App)>;
@@ -171,7 +171,7 @@ fn pill(color: Hsla, palette: &Palette) -> gpui_kit::Div {
         .rounded_sm()
         .border_1()
         .border_color(mixed(color, 0.45, palette.border))
-        .py(rems(3. / 15.))
+        .py(base_px(3.))
         .text_size(LABEL_TEXT)
         .line_height(LABEL_LINE)
         .text_color(palette.text_soft)
@@ -208,8 +208,8 @@ fn ref_pill(
         .aria_label(name.clone())
         .test_support()
         .min_w_0()
-        .gap(rems(3. / 15.))
-        .px(rems(5. / 15.))
+        .gap(base_px(3.))
+        .px(base_px(5.))
         .bg(tinted(color, if menu_open { 0.34 } else { 0.16 }))
         .when(current, |this| {
             this.font_weight(FontWeight(720.)).text_color(palette.text)
@@ -301,7 +301,7 @@ fn more_labels(
                         .test_support()
                         .occlude()
                         .mt_1()
-                        .max_w(rems(320. / 15.))
+                        .max_w(base_px(320.))
                         .items_start()
                         .gap_1()
                         .p_1p5()
@@ -350,8 +350,8 @@ impl RenderOnce for MoreCount {
             .rounded_sm()
             .border_1()
             .border_color(mixed(self.color, 0.45, self.border))
-            .py(rems(3. / 15.))
-            .px(rems(4. / 15.))
+            .py(base_px(3.))
+            .px(base_px(4.))
             .text_size(LABEL_TEXT)
             .line_height(LABEL_LINE)
             .text_color(self.text)

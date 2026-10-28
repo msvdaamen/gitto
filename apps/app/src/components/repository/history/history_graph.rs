@@ -396,6 +396,7 @@ fn commit_node(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theme::base_px;
 
     /// A path as the TS's SVG `d` attribute spelled it.
     fn svg(path: &[PathStep]) -> String {
@@ -460,8 +461,8 @@ mod tests {
 
     #[test]
     fn sizes_the_graph_to_its_lanes_within_bounds() {
-        assert_eq!(graph_width(1), Rems(64. / 15.));
-        assert_eq!(graph_width(4), Rems(92. / 15.));
-        assert_eq!(graph_width(40), Rems(260. / 15.));
+        assert_eq!(graph_width(1), base_px(64.));
+        assert_eq!(graph_width(4), base_px(92.));
+        assert_eq!(graph_width(40), base_px(260.));
     }
 }

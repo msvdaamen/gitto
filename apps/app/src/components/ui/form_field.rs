@@ -3,9 +3,9 @@
 use gpui_kit::component::input::{Input, InputState, Textarea, TextareaState};
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, App, Entity, SharedString, Window, div, rems};
+use gpui_kit::{AnyElement, App, Entity, SharedString, Window, div};
 
-use crate::theme::PaletteExt as _;
+use crate::theme::{PaletteExt as _, base_px};
 
 enum Control {
     Input(Entity<InputState>),
@@ -81,7 +81,7 @@ impl RenderOnce for FormField {
                         // A `<small>` in TS: smaller than the label.
                         this.child(
                             div()
-                                .text_size(rems(10. / 15.))
+                                .text_size(base_px(10.))
                                 .text_color(palette.faint)
                                 .child(hint),
                         )

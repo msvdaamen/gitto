@@ -12,10 +12,5 @@ pub mod sidebar_section;
 pub mod stash_menu;
 pub mod worktree_menu;
 
-use gpui_kit::{Rems, rems};
-
-/// `px` pixels of the 15px base font, in rems: the sidebar's measures are TS's pixels, kept as
-/// rems so they follow the app's zoom.
-pub(crate) const fn base_px(px: f32) -> Rems {
-    rems(px / 15.)
-}
+/// The sidebar's measures are TS's pixels, kept as rems so they follow the app's zoom.
+pub(crate) use crate::theme::base_px;

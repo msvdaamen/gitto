@@ -20,7 +20,7 @@ pub mod palette;
 use std::rc::Rc;
 
 use gpui_kit::component::{Colorize as _, Theme, ThemeConfig, ThemeMode};
-use gpui_kit::{App, Global, Hsla, Rgba};
+use gpui_kit::{App, Global, Hsla, Rems, Rgba};
 
 pub use self::palette::Palette;
 use crate::services::LocalStorage;
@@ -30,6 +30,12 @@ pub const STORAGE_KEY: &str = "gitto-theme";
 
 /// The base font size: the rem every size is relative to (see the module's doc).
 pub const FONT_SIZE: f32 = 15.;
+
+/// `px` pixels of the base font ([`FONT_SIZE`]), in rems: a TS size in pixels, kept as rems so it
+/// follows the app's zoom, and the base font if that changes.
+pub const fn base_px(px: f32) -> Rems {
+    Rems(px / FONT_SIZE)
+}
 pub const MONO_FONT_SIZE: f32 = 13.;
 /// Controls' corners (`rounded-[7px]`), and large surfaces' (`rounded-[11px]`).
 pub const RADIUS: usize = 7;
@@ -331,6 +337,13 @@ pub fn mixed(color: Hsla, share: f32, other: Hsla) -> Hsla {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sizes_a_ts_pixel_measure_by_the_base_font() {
+        const ROW: Rems = base_px(30.);
+        assert_eq!(ROW, Rems(2.));
+        assert_eq!(base_px(FONT_SIZE), Rems(1.));
+    }
 
     #[test]
     fn mixes_colors_channel_by_channel() {

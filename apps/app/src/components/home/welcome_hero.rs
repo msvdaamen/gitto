@@ -15,7 +15,7 @@ use super::summaries::RepositorySummary;
 use crate::components::ui::{FailurePopover, Icon, IconName};
 use crate::data::QueryError;
 use crate::state::clock::relative_time;
-use crate::theme::{AppTheme, PaletteExt as _};
+use crate::theme::{AppTheme, PaletteExt as _, base_px};
 
 type Handler = Rc<dyn Fn(&mut Window, &mut App) + 'static>;
 
@@ -217,16 +217,16 @@ impl RenderOnce for HeroDecoration {
                 })
                 .object_fit(ObjectFit::Contain)
                 .absolute()
-                .top(rems(-60.05 / 15.))
+                .top(base_px(-60.05))
                 .map(|this| {
                     if self.narrow {
-                        this.right(rems(-3.85 / 15.))
+                        this.right(base_px(-3.85))
                     } else {
-                        this.right(rems(96.15 / 15.))
+                        this.right(base_px(96.15))
                     }
                 })
-                .w(rems(207.7 / 15.))
-                .h(rems(186.1 / 15.))
+                .w(base_px(207.7))
+                .h(base_px(186.1))
                 .opacity(0.3),
             )
             .child(
