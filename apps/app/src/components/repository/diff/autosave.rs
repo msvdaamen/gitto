@@ -53,8 +53,8 @@ pub struct Autosave {
     version: Option<String>,
     /// The edits to save; `None` once they're saved.
     unsaved: Option<String>,
-    /// Counts the timers set: one that fires after another was set, or cleared, does nothing.
-    timer: u64,
+    /// The save due once the typing stops, replaced by each edit: dropped, it's cancelled.
+    pending: Option<Task<()>>,
     /// The saves asked for, one after the other: the last one.
     saves: Shared<Task<()>>,
 }
@@ -67,7 +67,7 @@ impl Autosave {
             state: SaveState::Saved,
             version: None,
             unsaved: None,
-            timer: 0,
+            pending: None,
             saves: Task::ready(()).shared(),
         }
     }
@@ -157,22 +157,16 @@ impl Autosave {
     }
 
     fn clear_timer(&mut self) {
-        self.timer += 1;
+        self.pending = None;
     }
 
     fn schedule(&mut self, cx: &mut Context<Self>) {
-        self.clear_timer();
-        let timer = self.timer;
         let delay = self.delay;
-        cx.spawn(async move |this, cx| {
+        self.pending = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(delay).await;
-            let _ = this.update(cx, |this, cx| {
-                if this.timer == timer {
-                    drop(this.run(false, cx));
-                }
-            });
-        })
-        .detach();
+            // Running the save drops this timer (see `run`), as it's done.
+            let _ = this.update(cx, |this, cx| drop(this.run(false, cx)));
+        }));
     }
 
     /// Saves the latest edits, after any save under way.
@@ -330,6 +324,27 @@ mod tests {
         autosave.update(cx, |autosave, cx| autosave.change("abc".into(), cx));
         wait(cx, DELAY);
         assert_eq!(calls.borrow().last(), Some(&call("abc", "v-ab", false)));
+    }
+
+    #[gpui_kit::test]
+    fn keeps_one_timer_for_the_last_edit_however_many_there_were(cx: &mut TestAppContext) {
+        let (autosave, calls) = autosave(cx, |_, _, _, _| Task::ready(Ok("v1".into())));
+        autosave.update(cx, |autosave, cx| autosave.start("v0".into(), cx));
+
+        for text in ["a", "ab", "abc"] {
+            autosave.update(cx, |autosave, cx| autosave.change(text.into(), cx));
+            wait(cx, DELAY / 2);
+        }
+        assert_eq!(*calls.borrow(), []);
+        wait(cx, DELAY / 2);
+        assert_eq!(*calls.borrow(), [call("abc", "v0", false)]);
+        // Flushed, the timer's dropped, and saves nothing more once it would have fired.
+        autosave.update(cx, |autosave, cx| autosave.change("abcd".into(), cx));
+        let flushed = autosave.update(cx, |autosave, cx| autosave.flush(cx));
+        assert!(resolved(flushed, cx));
+        assert!(autosave.read_with(cx, |autosave, _| autosave.pending.is_none()));
+        wait(cx, DELAY);
+        assert_eq!(calls.borrow().len(), 2);
     }
 
     #[gpui_kit::test]
