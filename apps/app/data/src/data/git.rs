@@ -3,6 +3,9 @@
 //! test with what it makes up. GPUI tests can't run git (see `crate::data`), so this is where they
 //! step in: a test's implements what its view asks for, and the rest fail.
 
+use std::future::Future;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+
 use futures::FutureExt as _;
 use futures::future::BoxFuture;
 use gitto_git::features::branch::schema::{MergeOutcome, RebaseOutcome};
@@ -24,7 +27,7 @@ use gitto_git::features::worktree::schema::Worktree;
 use gitto_git::input::{
     BranchName, BranchRef, FileInput, Folder, FullSha, Message, NonEmpty, Paths, RepositoryId, Sha,
 };
-use gitto_git::{ApiError, GitApi};
+use gitto_git::{ApiError, GitApi, GitRepo};
 
 use super::error::DataError;
 
@@ -59,8 +62,16 @@ macro_rules! repository_git {
         impl RepositoryGit for GitRepository {
             $(
                 fn $name(&self $(, $arg: $ty)*) -> GitTask<$out> {
-                    let open = self.api.repo(&self.id);
-                    async move { Ok(open.await?.$name($($arg),*).await?) }.boxed()
+                    let open = self.open();
+                    let again = self.clone();
+                    async move {
+                        let (repo, kept) = open.await?;
+                        match repo.$name($($arg),*).await {
+                            Ok(out) => Ok(out),
+                            Err(error) => Err(again.failed(kept, error).await),
+                        }
+                    }
+                    .boxed()
                 }
             )*
 
@@ -77,17 +88,54 @@ fn not_in_this_test<T>(name: &str) -> GitTask<T> {
     async move { Err(error) }.boxed()
 }
 
-/// The repository `id`, as gitto-git runs it: each method opens it (see `GitApi::repo`).
+/// The repository `id`, as gitto-git runs it: opened once (see `GitApi::repo`), and again after
+/// a method failed, in case that's why. Cheap to clone; the clones share what's opened.
 #[derive(Clone)]
 pub struct GitRepository {
     api: GitApi,
     id: RepositoryId,
+    opened: Arc<Mutex<Option<GitRepo>>>,
 }
 
 impl GitRepository {
     pub fn new(api: GitApi, id: RepositoryId) -> Self {
-        GitRepository { api, id }
+        GitRepository {
+            api,
+            id,
+            opened: Arc::default(),
+        }
     }
+
+    /// The repository, as it was opened, or opened now: whether it was kept, with it.
+    fn open(&self) -> impl Future<Output = Result<(GitRepo, bool), ApiError>> + Send + 'static {
+        let kept = lock(&self.opened).clone();
+        let opening = self.api.repo(&self.id);
+        let opened = Arc::clone(&self.opened);
+        async move {
+            if let Some(repo) = kept {
+                return Ok((repo, true));
+            }
+            let repo = opening.await?;
+            *lock(&opened) = Some(repo.clone());
+            Ok((repo, false))
+        }
+    }
+
+    /// Why a method failed, `error`, with what was opened forgotten: the next opens it again. If
+    /// it ran with what was kept, and it can't be opened now (its folder was deleted, say), that's
+    /// why, as it would have said had it been opened for it: not the git that failed to start in
+    /// a folder that's gone.
+    async fn failed(self, kept: bool, error: ApiError) -> DataError {
+        lock(&self.opened).take();
+        if kept && let Err(open) = self.api.repo(&self.id).await {
+            return open.into();
+        }
+        error.into()
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 gitto_git::for_each_repo_method!(repository_git);
@@ -96,3 +144,56 @@ gitto_git::for_each_repo_method!(repository_git);
 pub struct NoGit;
 
 impl RepositoryGit for NoGit {}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use gitto_git::ApiCode;
+
+    use super::*;
+
+    /// A repository in a folder of its own, and its git, counting how often it's looked up.
+    fn repository() -> (tempfile::TempDir, GitRepository, Arc<AtomicUsize>) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("repo");
+        std::fs::create_dir(&path).unwrap();
+        let init = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&path)
+            .output()
+            .expect("git runs");
+        assert!(init.status.success(), "{init:?}");
+        let lookups = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&lookups);
+        let api = GitApi::new(move |_: &str| -> Option<PathBuf> {
+            counted.fetch_add(1, Ordering::SeqCst);
+            Some(path.clone())
+        });
+        let id = RepositoryId::parse("01890a5d-ac96-774b-bcce-b302099a8057").unwrap();
+        (dir, GitRepository::new(api, id), lookups)
+    }
+
+    #[test]
+    fn opens_the_repository_once_for_what_it_runs() {
+        let (_dir, git, lookups) = repository();
+        smol::block_on(git.remotes()).unwrap();
+        smol::block_on(git.clone().remotes()).unwrap();
+        assert_eq!(lookups.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn says_the_folder_is_gone_once_its_deleted_and_opens_it_again_after() {
+        let (dir, git, lookups) = repository();
+        smol::block_on(git.remotes()).unwrap();
+        std::fs::remove_dir_all(dir.path().join("repo")).unwrap();
+
+        let error = smol::block_on(git.remotes()).unwrap_err();
+        assert!(error.has_code(ApiCode::NotFound), "{error}");
+        assert!(error.to_string().ends_with("no longer exists."), "{error}");
+        // Opened again for the next: it's not kept as it was.
+        assert!(smol::block_on(git.remotes()).is_err());
+        assert_eq!(lookups.load(Ordering::SeqCst), 3);
+    }
+}
