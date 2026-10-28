@@ -8,7 +8,6 @@ use crate::core::errors::{Error, Result};
 use crate::core::git_dirs::git_dirs;
 use crate::core::repo::{GitCommand, Repo, current_branch, has_conflicts, resolve_ref, succeeds};
 use crate::core::runner::RunOptions;
-use crate::features::remote::progress::rebase_state;
 
 /// The contents of `file`, trimmed; `None` if it isn't there, or has nothing in it.
 async fn read_state(file: PathBuf) -> Option<String> {
@@ -16,6 +15,33 @@ async fn read_state(file: PathBuf) -> Option<String> {
     let text = String::from_utf8_lossy(&bytes);
     let text = text.trim();
     (!text.is_empty()).then(|| text.to_owned())
+}
+
+/// Whether `file` is there; a folder counts.
+async fn file_exists(file: PathBuf) -> bool {
+    async_fs::metadata(file).await.is_ok()
+}
+
+/// Whether a rebase, or `git am`, is stopped in a worktree (see `rebase_state`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RebaseState {
+    pub rebasing: bool,
+    pub applying: bool,
+}
+
+/// Whether a rebase, or `git am`, is stopped in the worktree whose git directory is `git_dir`:
+/// they keep their state there meanwhile, `am` where some rebases do, with a file saying it's
+/// `am`'s.
+pub async fn rebase_state(git_dir: &Path) -> RebaseState {
+    let (rebase_merge, rebase_apply, applying) = futures::join!(
+        file_exists(git_dir.join("rebase-merge")),
+        file_exists(git_dir.join("rebase-apply")),
+        file_exists(git_dir.join("rebase-apply").join("applying")),
+    );
+    RebaseState {
+        rebasing: rebase_merge || (rebase_apply && !applying),
+        applying,
+    }
 }
 
 /// What `operation_state` reads: the operation under way, and the files it's told by.
@@ -915,6 +941,32 @@ mod tests {
         assert_eq!(steps(None, Some("2")), None);
         assert_eq!(steps(Some(""), Some("2")), None);
         assert_eq!(steps(Some("1"), None), None);
+    }
+
+    #[test]
+    fn rebase_state_tells_a_rebase_from_git_am() {
+        let fx = Fixture::new();
+        let path = fx.create_repo("rebase-state");
+        let git_dir = path.join(".git");
+        smol::block_on(async {
+            assert_eq!(rebase_state(&git_dir).await, RebaseState::default());
+            fs::create_dir(git_dir.join("rebase-apply")).unwrap();
+            assert_eq!(
+                rebase_state(&git_dir).await,
+                RebaseState {
+                    rebasing: true,
+                    applying: false
+                }
+            );
+            fs::write(git_dir.join("rebase-apply").join("applying"), "").unwrap();
+            assert_eq!(
+                rebase_state(&git_dir).await,
+                RebaseState {
+                    rebasing: false,
+                    applying: true
+                }
+            );
+        });
     }
 
     #[test]
