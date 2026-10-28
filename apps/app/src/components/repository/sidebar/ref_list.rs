@@ -41,7 +41,6 @@ use crate::services::Services;
 use crate::state::clock::Clock;
 use crate::state::collapsed::Collapsed;
 use crate::theme::base_px;
-use crate::views::repository::MEDIUM;
 
 /// The sidebar's sections, in the order they're shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -268,6 +267,8 @@ pub struct RefList {
     scrolls: [UniformListScrollHandle; 5],
     trees: Trees,
     other_worktrees: OtherWorktrees,
+    /// Shown as a rail of icons, which the sidebar decides (see `RefsSidebar`).
+    rail: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -319,6 +320,7 @@ impl RefList {
             scrolls: Default::default(),
             trees: Trees::default(),
             other_worktrees: OtherWorktrees::default(),
+            rail: false,
             _subscriptions: subscriptions,
         }
     }
@@ -364,6 +366,14 @@ impl RefList {
             scroll.scroll_to_item(0, ScrollStrategy::Top);
         }
         cx.notify();
+    }
+
+    /// Shows the sections as a rail of icons, each opening its section in a popover, or not.
+    pub fn set_rail(&mut self, rail: bool, cx: &mut Context<Self>) {
+        if self.rail != rail {
+            self.rail = rail;
+            cx.notify();
+        }
     }
 
     pub fn is_section_collapsed(&self, section: Section) -> bool {
@@ -753,8 +763,8 @@ fn branch_row(branch: &Ref, label: &SharedString, depth: usize, rows: &RowContex
 }
 
 impl Render for RefList {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let rail = f32::from(window.viewport_size().width) < MEDIUM;
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let rail = self.rail;
         self.refresh_trees();
         let rows = self.row_context(cx);
         let id = self.repository_id.clone();
