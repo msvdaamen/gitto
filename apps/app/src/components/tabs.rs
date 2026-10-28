@@ -291,6 +291,8 @@ impl Tabs {
             None
         };
         let (action, error) = error.unwrap_or(("Remove", None));
+        // Whether its remove button's shown, rather than only as the pointer's over it.
+        let shown = selected || error.is_some();
         let name: SharedString = repository.name.clone().into();
         let group = SharedString::from(format!("tab-group-{id}"));
         tab_frame(SharedString::from(format!("tab-{id}")), selected, cx)
@@ -366,11 +368,12 @@ impl Tabs {
                     .child(name.clone()),
             )
             .child(
-                // Shown on the selected tab, and on another while it's hovered.
+                // Shown on the selected tab, and on another while it's hovered: only the pointer
+                // finds it there, so it's no Tab stop while it's hidden, to land on unseen.
                 div()
                     .mr_2()
                     .ml_1()
-                    .when(!selected && error.is_none(), |this| this.opacity(0.))
+                    .when(!shown, |this| this.opacity(0.))
                     .group_hover(group, |style| style.opacity(1.))
                     .child(
                         FailurePopover::new(
@@ -383,6 +386,7 @@ impl Tabs {
                                 .icon(Icon::new(IconName::X))
                                 .tooltip(format!("Remove {name}"))
                                 .accessibility_label(format!("Remove {name}"))
+                                .tab_stop(shown)
                                 .on_click(cx.listener({
                                     let repository = repository.clone();
                                     move |_, _, window, cx| {
@@ -625,6 +629,24 @@ mod ui_tests {
             window.press("alt-shift-right", cx);
         })
         .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn tabs_past_the_remove_button_of_a_tab_that_hides_it(cx: &mut TestAppContext) {
+        let (_dir, _saved, ids, window, host) = render_tabs(cx);
+        // None's selected: their remove buttons only show as the pointer's over them.
+        let next = |from: &str, cx: &mut TestAppContext| {
+            cx.update_window(window, |_, window, cx| {
+                window.render_frame(cx);
+                let focus = host.read(cx).tabs.read(cx).focus.clone();
+                window.focus(&focus[from], cx);
+                window.focus_next(cx);
+                ids.iter().find(|id| focus[*id].is_focused(window)).cloned()
+            })
+            .unwrap()
+        };
+        assert_eq!(next(&ids[0], cx).as_ref(), Some(&ids[1]));
+        assert_eq!(next(&ids[1], cx).as_ref(), Some(&ids[2]));
     }
 
     #[gpui_kit::test]
