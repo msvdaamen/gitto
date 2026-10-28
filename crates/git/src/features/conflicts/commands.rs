@@ -254,8 +254,8 @@ pub async fn refuse_conflict_markers(
         None => unmerged,
     };
     // However large it is: only one that's left out could be staged with its markers.
-    let marked: Vec<bool> = stream::iter(&staged)
-        .map(|path| has_markers(repo, path))
+    let reads: Vec<_> = staged.iter().map(|path| has_markers(repo, path)).collect();
+    let marked: Vec<bool> = stream::iter(reads)
         .buffered(READ_AT_ONCE)
         .try_collect()
         .await?;
@@ -448,6 +448,17 @@ mod tests {
     use crate::test_support::conflicts::{Files, Sides, files, text_conflict, try_git};
     use crate::test_support::status::{rows, status_files};
     use crate::test_support::{Fixture, git, valid};
+
+    /// The app runs staging on a thread of its own, so refusing markers, which staging awaits, has
+    /// to be `Send`: checked when this compiles.
+    #[allow(dead_code)]
+    fn refusing_markers_is_send(
+        repo: &Repo,
+        run: &GitCommand,
+        paths: Option<&[String]>,
+    ) -> impl Send {
+        refuse_conflict_markers(repo, run, paths)
+    }
 
     /// `getStatus(repo).changes.markerFree`.
     async fn status_marker_free(repo: &Repo) -> Vec<String> {
