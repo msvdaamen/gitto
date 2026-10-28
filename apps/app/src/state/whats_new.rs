@@ -26,13 +26,14 @@ struct GlobalWhatsNew(Entity<WhatsNew>);
 impl Global for GlobalWhatsNew {}
 
 impl WhatsNew {
-    pub fn global(cx: &mut App) -> Entity<WhatsNew> {
-        if let Some(whats_new) = cx.try_global::<GlobalWhatsNew>() {
-            return whats_new.0.clone();
-        }
+    /// Sets up the app's (see `state::init`).
+    pub fn init(cx: &mut App) {
         let whats_new = cx.new(|_| WhatsNew::default());
-        cx.set_global(GlobalWhatsNew(whats_new.clone()));
-        whats_new
+        cx.set_global(GlobalWhatsNew(whats_new));
+    }
+
+    pub fn global(cx: &App) -> Entity<WhatsNew> {
+        cx.global::<GlobalWhatsNew>().0.clone()
     }
 
     /// What it shows; `None` while it's closed.
