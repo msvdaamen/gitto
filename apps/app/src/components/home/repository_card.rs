@@ -1,14 +1,16 @@
 //! A repository in the home page's list. Ported from `components/home/repository-card.tsx`.
 
+use std::rc::Rc;
+
 use gitto_git::features::status::schema::StatusSummary;
-use gitto_ui::git::remote::remote_provider;
+use gitto_ui::git::remote::{Provider, remote_provider};
 use gitto_ui::git::status::{head_label, sync_label};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, ElementId, FontWeight, SharedString, Window, div, linear_color_stop,
-    linear_gradient, px,
+    AnyElement, App, ElementId, FontWeight, SharedString, TestSupportExt as _, Window, div,
+    linear_color_stop, linear_gradient, px,
 };
 
 use super::repository_link::repository_link;
@@ -16,53 +18,54 @@ use super::summaries::RepositorySummary;
 use crate::components::ui::{Badge, Icon, IconName, Tone};
 use crate::state::clock::relative_time;
 use crate::theme::PaletteExt as _;
-
-/// Below this window width the card leaves out when it was last committed to (TS's `max-sm`).
-const SMALL: f32 = 640.;
+use crate::theme::breakpoints::SMALL;
 
 /// How a remote's host is marked: the two best known in their colors, the rest neutral.
-fn provider_tone(provider: &str) -> Tone {
+fn provider_tone(provider: &Provider) -> Tone {
     match provider {
-        "GitHub" => Tone::Purple,
-        "GitLab" => Tone::Blue,
+        Provider::GitHub => Tone::Purple,
+        Provider::GitLab => Tone::Blue,
         _ => Tone::Neutral,
     }
 }
 
-/// Where a repository is hosted, by its remote's URL: "Local" without one.
-pub fn provider_of(summary: &RepositorySummary) -> String {
+/// Where a repository is hosted, by its remote's URL: [`Provider::Local`] without one.
+pub fn provider_of(summary: &RepositorySummary) -> Provider {
     match summary
         .overview
         .as_ref()
         .and_then(|overview| overview.remote.as_ref())
     {
         Some(remote) => remote_provider(&remote.url),
-        None => "Local".to_owned(),
+        None => Provider::Local,
     }
 }
 
 /// A repository in the home page's list: where it's hosted, its branch, and what's changed.
-/// Opens it when clicked, or on Enter.
+/// Opens it when clicked, or on Enter. It's the `ix`th of the page's summaries, which the page's
+/// sections share, so drawing it copies none of it.
 #[derive(IntoElement)]
 pub struct RepositoryCard {
-    summary: RepositorySummary,
+    summaries: Rc<[RepositorySummary]>,
+    ix: usize,
 }
 
 impl RepositoryCard {
-    pub fn new(summary: RepositorySummary) -> Self {
-        RepositoryCard { summary }
+    pub fn new(summaries: Rc<[RepositorySummary]>, ix: usize) -> Self {
+        RepositoryCard { summaries, ix }
     }
 }
 
 impl RenderOnce for RepositoryCard {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let palette = *cx.palette();
-        let summary = self.summary;
-        let repository = summary.repository.clone();
+        let summary = &self.summaries[self.ix];
+        let repository = &summary.repository;
         let id = ElementId::from(SharedString::from(format!(
             "repository-card-{}",
             repository.id
         )));
+        // Below `sm` the card leaves out when it was last committed to.
         let small = window.viewport_size().width < px(SMALL);
         let group = SharedString::from(format!("repository-card-group-{}", repository.id));
         let name: SharedString = repository.name.clone().into();
@@ -88,7 +91,7 @@ impl RenderOnce for RepositoryCard {
             .child(Icon::new(IconName::FolderGit2).size_5());
 
         let provider = summary.overview.as_ref().map(|overview| {
-            let provider = provider_of(&summary);
+            let provider = provider_of(summary);
             let url = overview.remote.as_ref().map(|remote| remote.url.clone());
             div()
                 .id("provider")
@@ -96,7 +99,7 @@ impl RenderOnce for RepositoryCard {
                 .when_some(url, |this, url| {
                     this.tooltip(move |window, cx| Tooltip::new(url.clone()).build(window, cx))
                 })
-                .child(Badge::new(provider.clone()).tone(provider_tone(&provider)))
+                .child(Badge::new(provider.to_string()).tone(provider_tone(&provider)))
         });
 
         let committed_at = summary
@@ -104,23 +107,10 @@ impl RenderOnce for RepositoryCard {
             .as_ref()
             .and_then(|overview| overview.committed_at);
 
-        repository_link(id, &repository.id, window, cx)
-            .group(group.clone())
-            .aria_label(name.clone())
-            .flex()
-            .flex_row()
-            .items_center()
+        let content = h_flex()
+            .flex_1()
+            .min_w_0()
             .gap_3()
-            .w_full()
-            .min_h_20()
-            .py_2p5()
-            .pl_3()
-            .pr_2p5()
-            .rounded(cx.theme().radius_lg)
-            .border_1()
-            .border_color(gpui_kit::transparent_black())
-            .hover(|style| style.border_color(palette.border).bg(palette.panel_hover))
-            .focus_visible(|style| style.border_color(palette.primary))
             .child(tile)
             .child(
                 v_flex()
@@ -138,7 +128,7 @@ impl RenderOnce for RepositoryCard {
                                     .text_base()
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(palette.text)
-                                    .child(name),
+                                    .child(name.clone()),
                             )
                             // Once it's known whether there's a remote.
                             .children(provider),
@@ -186,6 +176,7 @@ impl RenderOnce for RepositoryCard {
                 this.child(
                     div()
                         .id("last-commit")
+                        .test_support()
                         .flex_none()
                         .self_start()
                         .pt_1()
@@ -204,8 +195,29 @@ impl RenderOnce for RepositoryCard {
                     .justify_center()
                     .text_color(palette.faint)
                     .opacity(0.)
-                    .group_hover(group, |style| style.opacity(1.))
+                    .group_hover(group.clone(), |style| style.opacity(1.))
                     .child(Icon::new(IconName::ChevronRight).size_4()),
+            );
+
+        // The border shows while hovered: the button's own hover style takes the place of its
+        // border's color, so the border is a frame's around it.
+        div()
+            .group(group.clone())
+            .w_full()
+            .rounded(cx.theme().radius_lg)
+            .border_1()
+            .border_color(gpui_kit::transparent_black())
+            .group_hover(group, |style| style.border_color(palette.border))
+            .child(
+                repository_link(id, &repository.id)
+                    .accessibility_label(name)
+                    .w_full()
+                    .min_h_20()
+                    .py_2p5()
+                    .pl_3()
+                    .pr_2p5()
+                    .rounded(cx.theme().radius_lg)
+                    .child(content),
             )
     }
 }

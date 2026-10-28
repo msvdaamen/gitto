@@ -15,6 +15,7 @@
 //! `index.css` declares `color-scheme: dark` at the root, and the renderer never read the
 //! system's.
 
+pub mod breakpoints;
 pub mod palette;
 
 use std::rc::Rc;

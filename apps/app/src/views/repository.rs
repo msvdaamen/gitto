@@ -39,8 +39,7 @@ pub const DETAILS_SHARE: f32 = 0.4;
 /// The window widths the layout changes at (`index.css`'s breakpoints): below `MEDIUM` the open
 /// sidebar is a rail of icons; below `LARGE` the details slide over the history instead of
 /// taking a column.
-pub const MEDIUM: f32 = 900.;
-pub const LARGE: f32 = 1100.;
+pub use crate::theme::breakpoints::{LARGE, MEDIUM};
 /// The sidebar as a rail (52px), and the details over the history (340px), in rems.
 pub const RAIL_WIDTH: f32 = 3.47;
 pub const DETAILS_OVERLAY_WIDTH: f32 = 22.67;
