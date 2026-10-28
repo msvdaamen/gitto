@@ -12,8 +12,10 @@ use crate::core::errors::{ApiCode, Error};
 /// other way to make one, so none goes unreported.
 ///
 /// The message is the error's own, but for errors the Electron app never told the renderer about:
-/// - `Error::Bug` and `Error::Io` (TS's plain errors, and Node's), which say "Internal server
-///   error", as oRPC put it.
+/// - `Error::Bug` (TS's plain errors), which says only that something went wrong: what it says is
+///   for the logs, not the user.
+/// - `Error::Io` (Node's), which says what kind of failure it was, e.g. "permission denied", which
+///   the user may be able to do something about.
 /// - `Error::InvalidInput` (zod refusing input), which says "Input validation failed", as oRPC
 ///   put it. The UI checks input as it parses it (see `crate::input`), and can show that error's
 ///   own message there.
@@ -32,9 +34,13 @@ impl ApiError {
     pub(crate) fn new(error: Error) -> Self {
         let (code, message) = match &error {
             // Not TS's `ApiFailure`s: oRPC made them an INTERNAL_SERVER_ERROR without their message.
-            Error::Bug(_) | Error::Io(_) => (
+            Error::Bug(_) => (
                 ApiCode::InternalServerError,
-                "Internal server error".to_owned(),
+                "Something went wrong in Gitto.".to_owned(),
+            ),
+            Error::Io(io) => (
+                ApiCode::InternalServerError,
+                format!("Gitto couldn't read or write a file: {}.", io.kind()),
             ),
             // Refused by zod, before the procedure: oRPC's BAD_REQUEST.
             Error::InvalidInput(_) => (ApiCode::BadRequest, "Input validation failed".to_owned()),
@@ -234,18 +240,32 @@ mod tests {
         let bug = ApiError::new(Error::Bug("Unexpected output: x".into()));
         assert_eq!(
             (bug.code().code(), bug.message(), bug.is_bug(), bug.status()),
-            ("INTERNAL_SERVER_ERROR", "Internal server error", true, 500)
+            (
+                "INTERNAL_SERVER_ERROR",
+                "Something went wrong in Gitto.",
+                true,
+                500
+            )
         );
         // Kept for the logs.
         assert_eq!(bug.error().to_string(), "Unexpected output: x");
-        let io = Error::Io(Arc::new(io::Error::other("EACCES")));
+    }
+
+    #[test]
+    fn says_what_kind_of_failure_the_file_system_had() {
+        let denied = io::Error::from(io::ErrorKind::PermissionDenied);
         assert_eq!(
-            shown(io),
+            shown(Error::Io(Arc::new(denied))),
             (
                 "INTERNAL_SERVER_ERROR",
-                "Internal server error".into(),
+                "Gitto couldn't read or write a file: permission denied.".into(),
                 true
             )
+        );
+        let full = io::Error::from(io::ErrorKind::StorageFull);
+        assert_eq!(
+            ApiError::new(Error::Io(Arc::new(full))).message(),
+            "Gitto couldn't read or write a file: no storage space."
         );
     }
 

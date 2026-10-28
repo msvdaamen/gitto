@@ -376,7 +376,10 @@ fn reports_bugs_with_the_procedure_they_failed_and_only_bugs() {
         });
         assert_eq!(
             api_error(bug.await.unwrap_err()),
-            ("INTERNAL_SERVER_ERROR", "Internal server error".to_owned())
+            (
+                "INTERNAL_SERVER_ERROR",
+                "Something went wrong in Gitto.".to_owned()
+            )
         );
         let input = api.fail("branch.merge", BranchRef::parse("v1").unwrap_err());
         assert_eq!(input.message(), "Input validation failed");
