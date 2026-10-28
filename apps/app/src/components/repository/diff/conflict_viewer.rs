@@ -147,8 +147,10 @@ pub struct ConflictViewer {
     current: Option<usize>,
     saving: bool,
     editing: bool,
-    /// What's to be done, one thing at a time: the file as it was read again, and the conflicts
-    /// the user resolved, in turn. Editing holds the rest until it stops.
+    /// What's to be done, one thing at a time: the text editing left, once it stops; the file as
+    /// it was read again, and the conflicts the user resolved, in turn. Editing holds the rest
+    /// until it stops.
+    edited: Option<(String, Arc<str>)>,
     wanted: Option<(String, DiskFile)>,
     requests: VecDeque<Request>,
     running: bool,
@@ -192,6 +194,7 @@ impl ConflictViewer {
             current: None,
             saving: false,
             editing: false,
+            edited: None,
             wanted: None,
             requests: VecDeque::new(),
             running: false,
@@ -328,10 +331,13 @@ impl ConflictViewer {
         active
     }
 
-    /// What's to be done next: the file as it was read again, then the conflicts asked to be
-    /// resolved. Nothing while it's edited.
+    /// What's to be done next: the text editing left, the file as it was read again, then the
+    /// conflicts asked to be resolved. Nothing while it's edited.
     fn next_step(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<Task<()>> {
         if !self.editing {
+            if let Some((file_key, contents)) = self.edited.take() {
+                return Some(self.show_text(file_key, contents, None, window, cx));
+            }
             if let Some((file_key, disk)) = self.wanted.take() {
                 return Some(self.sync(file_key, disk, window, cx));
             }
@@ -726,22 +732,15 @@ impl ConflictViewer {
         if text.is_some() {
             cx.emit(ConflictViewerEvent::Editing(None));
         }
-        let Some(shown) = &self.shown else {
-            drop(self.run(window, cx));
-            return;
-        };
-        let contents = match text {
-            Some(text) if !discard => Arc::from(text),
-            _ => Arc::clone(&shown.contents),
-        };
-        let showing = self.show_text(shown.file_key.clone(), contents, None, window, cx);
-        cx.spawn_in(window, async move |this, cx| {
-            showing.await;
-            let _ = this.update_in(cx, |this, window, cx| {
-                drop(this.run(window, cx));
-            });
-        })
-        .detach();
+        // Shown before what's read from disk meanwhile, which is news after it: in turn.
+        if let Some(shown) = &self.shown {
+            let contents = match text {
+                Some(text) if !discard => Arc::from(text),
+                _ => Arc::clone(&shown.contents),
+            };
+            self.edited = Some((shown.file_key.clone(), contents));
+        }
+        drop(self.run(window, cx));
         cx.notify();
     }
 

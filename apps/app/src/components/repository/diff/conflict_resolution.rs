@@ -1225,7 +1225,9 @@ mod tests {
         assert_eq!(opened.resolve.calls(), []);
     }
 
-    #[gpui_kit::test]
+    // Of a few orders of the tasks: the edits left are shown before what's read since, whichever
+    // is read first.
+    #[gpui_kit::test(iterations = 8)]
     fn is_edited_by_hand_and_read_again_once_that_stops_before_its_shown(cx: &mut TestAppContext) {
         let _dir = init(cx);
         let opened = open_conflict(&conflicts(2), cx);
