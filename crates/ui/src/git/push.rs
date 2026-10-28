@@ -5,7 +5,7 @@ use gitto_git::features::remote::schema::PushTarget;
 /// What pushing would do, e.g. "Push 2 commits to origin/main", or why it can't.
 pub fn push_title(target: &PushTarget) -> String {
     match target {
-        PushTarget::Blocked { reason } => reason.clone(),
+        PushTarget::Blocked { reason } => reason.to_string(),
         PushTarget::Remote { name, is_new, .. } if *is_new => {
             format!("Push to {name}, a new remote branch")
         }
@@ -19,6 +19,8 @@ pub fn push_title(target: &PushTarget) -> String {
 
 #[cfg(test)]
 mod tests {
+    use gitto_git::PushBlocker;
+
     use super::*;
 
     fn remote(is_new: bool, ahead: u64) -> PushTarget {
@@ -47,9 +49,9 @@ mod tests {
         );
         assert_eq!(
             push_title(&PushTarget::Blocked {
-                reason: "No remote to push to.".into()
+                reason: PushBlocker::NoRemote
             }),
-            "No remote to push to."
+            "There's no remote to push to."
         );
     }
 }

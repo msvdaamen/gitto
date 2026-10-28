@@ -6,13 +6,14 @@ use std::path::{Path, PathBuf};
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 
-use super::commands::{PATHS_FROM_STDIN, nul_separated, unstage_args};
-use crate::core::errors::{Error, Result};
+use super::commands::{PATHS_FROM_STDIN, unstage_args};
+use crate::core::errors::{DiscardBlocker, Error, Result};
 use crate::core::git_dirs::git_dirs;
+use crate::core::records::{nul_terminated, raw_entries};
 use crate::core::repo::{GitCommand, Repo, has_conflicts, ref_exists, succeeds};
 use crate::core::runner::RunOptions;
 use crate::features::operation::commands::operation_under_way;
-use crate::schema::FileStatus;
+use crate::schema::{FileMode, FileStatus};
 
 /// Which of a file's changes are discarded: the ones in the index, or in the working tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,9 +38,15 @@ pub struct Discarded {
 #[derive(Debug, Clone)]
 struct Entry {
     path: String,
-    mode: String,
-    /// Its stage in the index: other than `0` for a conflicted file's sides.
-    stage: String,
+    mode: FileMode,
+    /// Its stage in the index: other than 0 for a conflicted file's sides.
+    stage: u8,
+}
+
+/// The mode on a line of `ls-files --stage` or `ls-tree -r`.
+fn parse_mode(mode: &str) -> Result<FileMode> {
+    mode.parse()
+        .map_err(|_| Error::Bug(format!("Unexpected mode of a file: {mode}")))
 }
 
 /// The files whose changes are discarded by deleting them, as their list has them.
@@ -65,10 +72,9 @@ pub async fn discard(repo: &Repo, file: &Discarded) -> Result<()> {
     let side = file.side;
     // Git lists a repository inside this one as an untracked folder.
     if file.path.ends_with('/') {
-        return Err(Error::DiscardBlocked(format!(
-            "{} is a repository of its own, so its changes weren't discarded.",
-            file.path
-        )));
+        return Err(Error::DiscardBlocked(DiscardBlocker::Repository {
+            path: file.path.clone(),
+        }));
     }
     let orig_path = match (&file.status, file.orig_path.as_deref()) {
         (FileStatus::Renamed, Some(orig_path)) if !orig_path.is_empty() => Some(orig_path),
@@ -100,17 +106,19 @@ pub async fn discard(repo: &Repo, file: &Discarded) -> Result<()> {
                 }
             },
         )?;
-        if index.iter().any(|entry| entry.stage != "0") {
-            return Err(Error::DiscardBlocked(format!(
-                "{} has conflicts, so its changes weren't discarded. Resolve them, or abort what's under way.",
-                file.path
-            )));
+        if index.iter().any(|entry| entry.stage != 0) {
+            return Err(Error::DiscardBlocked(DiscardBlocker::Conflicted {
+                path: file.path.clone(),
+            }));
         }
-        if index.iter().chain(&head).any(|entry| entry.mode == "160000") {
-            return Err(Error::DiscardBlocked(format!(
-                "{} is a submodule, so its changes weren't discarded. Discard them in the submodule itself.",
-                file.path
-            )));
+        if index
+            .iter()
+            .chain(&head)
+            .any(|entry| entry.mode == FileMode::Submodule)
+        {
+            return Err(Error::DiscardBlocked(DiscardBlocker::Submodule {
+                path: file.path.clone(),
+            }));
         }
         // What the files are put back as: HEAD's for the staged changes, the index's for the
         // unstaged ones, but for a placeholder of a file only marked to be added. Any path without
@@ -141,10 +149,10 @@ pub async fn discard(repo: &Repo, file: &Discarded) -> Result<()> {
         let in_index: HashSet<&str> = index.iter().map(|entry| entry.path.as_str()).collect();
         let deleted_set: HashSet<&str> = deleted.iter().copied().collect();
         if let Some(blocker) = in_the_way(repo.path(), &kept, &in_index, &deleted_set).await {
-            return Err(Error::DiscardBlocked(format!(
-                "{}'s changes weren't discarded: putting it back would also lose {blocker}.",
-                file.path
-            )));
+            return Err(Error::DiscardBlocked(DiscardBlocker::WouldLose {
+                path: file.path.clone(),
+                lost: blocker,
+            }));
         }
 
         // Once it's unstaged, the index has the file as HEAD does, which discarding its unstaged
@@ -152,7 +160,7 @@ pub async fn discard(repo: &Repo, file: &Discarded) -> Result<()> {
         if side == DiscardSide::Staged {
             run.run_with(
                 unstage_args(has_head),
-                RunOptions::default().stdin(nul_separated(paths)),
+                RunOptions::default().stdin(nul_terminated(paths)),
             )
             .await?;
         }
@@ -181,7 +189,7 @@ pub async fn discard(repo: &Repo, file: &Discarded) -> Result<()> {
             run.run_with(
                 args,
                 RunOptions::default()
-                    .stdin(nul_separated(&kept_paths))
+                    .stdin(nul_terminated(&kept_paths))
                     .rewrites_files(),
             )
             .await?;
@@ -222,21 +230,27 @@ async fn index_entries(run: &GitCommand, paths: &[&str]) -> Result<Vec<Entry>> {
     let mut args = vec!["ls-files", "--stage", "-z", "--"];
     args.extend(paths);
     let output = run.run(args).await?;
-    Ok(output
+    output
         .split('\0')
-        .filter_map(|line| {
+        .filter(|line| !line.is_empty())
+        .map(|line| {
             // `<mode> <object> <stage>\t<path>`
-            let (info, path) = line.split_once('\t')?;
-            let mut fields = info.split(' ');
-            let mode = fields.next().unwrap_or("").to_owned();
-            let stage = fields.nth(1).unwrap_or("").to_owned();
-            Some(Entry {
+            let fields = line
+                .split_once('\t')
+                .and_then(|(info, path)| Some((info.split_once(' ')?, path)));
+            let Some(((mode, rest), path)) = fields else {
+                return Err(Error::Bug(format!("Unexpected file in the index: {line}")));
+            };
+            let stage = rest.rsplit(' ').next().unwrap_or_default();
+            Ok(Entry {
                 path: path.to_owned(),
-                mode,
-                stage,
+                mode: parse_mode(mode)?,
+                stage: stage
+                    .parse()
+                    .map_err(|_| Error::Bug(format!("Unexpected file in the index: {line}")))?,
             })
         })
-        .collect())
+        .collect()
 }
 
 /// HEAD's files at `paths`, or below them.
@@ -244,19 +258,21 @@ async fn head_entries(run: &GitCommand, paths: &[&str]) -> Result<Vec<Entry>> {
     let mut args = vec!["ls-tree", "-r", "-z", "HEAD", "--"];
     args.extend(paths);
     let output = run.run(args).await?;
-    Ok(output
+    output
         .split('\0')
-        .filter_map(|line| {
+        .filter(|line| !line.is_empty())
+        .map(|line| {
             // `<mode> <type> <object>\t<path>`
-            let (info, path) = line.split_once('\t')?;
-            let mode = info.split(' ').next().unwrap_or("");
-            Some(Entry {
+            let Some((info, path)) = line.split_once('\t') else {
+                return Err(Error::Bug(format!("Unexpected file in HEAD: {line}")));
+            };
+            Ok(Entry {
                 path: path.to_owned(),
-                mode: mode.to_owned(),
-                stage: "0".to_owned(),
+                mode: parse_mode(info.split(' ').next().unwrap_or_default())?,
+                stage: 0,
             })
         })
-        .collect())
+        .collect()
 }
 
 /// Which of `paths` are only marked to be added (`add -N`): the index has a placeholder for them,
@@ -264,16 +280,13 @@ async fn head_entries(run: &GitCommand, paths: &[&str]) -> Result<Vec<Entry>> {
 async fn intent_to_add(run: &GitCommand, paths: &[&str]) -> Result<HashSet<String>> {
     let mut args = vec!["diff-files", "--raw", "-z", "--"];
     args.extend(paths);
-    let output = run.run(args).await?;
-    let fields: Vec<&str> = output.split('\0').collect();
+    let output = run.run_bytes(args).await?;
     let mut added = HashSet::new();
-    // `:<old mode> <new mode> <old object> <new object> <status>`, then the path.
-    let mut i = 0;
-    while i + 1 < fields.len() {
-        if fields[i].ends_with(" A") {
-            added.insert(fields[i + 1].to_owned());
+    for entry in raw_entries(&output) {
+        let entry = entry?;
+        if entry.status == b"A" {
+            added.insert(String::from_utf8_lossy(entry.path).into_owned());
         }
-        i += 2;
     }
     Ok(added)
 }
@@ -352,20 +365,15 @@ pub async fn discard_all(repo: &Repo) -> Result<()> {
             ref_exists(&run, "HEAD"),
         )?;
         if let Some(operation) = operation {
-            return Err(Error::DiscardBlocked(format!(
-                "A {} is under way. Finish or abort it, then discard all changes.",
-                operation.name()
-            )));
+            return Err(Error::DiscardBlocked(DiscardBlocker::OperationUnderWay {
+                operation: operation.name().to_owned(),
+            }));
         }
         if conflicted {
-            return Err(Error::DiscardBlocked(
-                "Some files have conflicts. Resolve them, then discard all changes.".to_owned(),
-            ));
+            return Err(Error::DiscardBlocked(DiscardBlocker::Conflicts));
         }
         if !has_discardable_changes(&run, has_head).await? {
-            return Err(Error::DiscardBlocked(
-                "There's nothing here to discard. A submodule's changes, or those of a repository inside this one, are discarded in it.".to_owned(),
-            ));
+            return Err(Error::DiscardBlocked(DiscardBlocker::NothingToDiscard));
         }
         // Not `reset --hard`, which would also end a merge git left under way in a terminal, say,
         // nor `restore`, which writes every file again, changed or not: in a big repository that's

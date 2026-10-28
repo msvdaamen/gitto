@@ -20,6 +20,7 @@ use gpui_kit::{
 use super::branch_form::NAME_PLACEHOLDER;
 use crate::components::ui::{FormField, Icon, IconName};
 use crate::data::refs::refs_query;
+use crate::data::remote::remotes_query;
 use crate::data::repositories::{find, repositories_query};
 use crate::data::worktree::{AddWorktreeInput, WorktreeActions, worktree_actions, worktrees_query};
 use crate::data::{Operations, Query};
@@ -46,6 +47,7 @@ pub struct AddWorktreeDialog {
     repositories: Query<Vec<Repository>>,
     worktrees: Query<Arc<[Worktree]>>,
     refs: Query<Arc<[Ref]>>,
+    remotes: Query<Vec<String>>,
     actions: WorktreeActions,
     folder: Entity<InputState>,
     new_branch: Entity<InputState>,
@@ -104,6 +106,7 @@ impl AddWorktreeDialog {
             repositories: repositories_query(cx),
             worktrees: worktrees_query(&repository_id, cx),
             refs: refs_query(&repository_id, cx),
+            remotes: remotes_query(&repository_id, cx),
             repository_id,
             actions,
             folder,
@@ -130,6 +133,7 @@ impl AddWorktreeDialog {
         }
         self.worktrees = worktrees_query(&repository_id, cx);
         self.refs = refs_query(&repository_id, cx);
+        self.remotes = remotes_query(&repository_id, cx);
         self.repository_id = repository_id;
         for input in [&self.folder, &self.new_branch] {
             input.update(cx, |input, cx| input.set_value("", window, cx));
@@ -162,10 +166,17 @@ impl AddWorktreeDialog {
     /// Where the branch (for a remote one, the local branch tracking it) is checked out already,
     /// if anywhere: then a new branch has to be made.
     fn clash(&self) -> Option<Worktree> {
-        let worktrees = self.worktrees.data();
+        let worktrees = self.worktrees.data()?;
         let refs = self.refs.data();
+        let remotes = self.remotes.data();
         let branch = self.branch.get().map_or("", String::as_str);
-        checked_out_in(worktrees.as_deref(), refs.as_deref(), branch).cloned()
+        checked_out_in(
+            &worktrees,
+            refs.as_deref().unwrap_or_default(),
+            remotes.as_deref().unwrap_or_default(),
+            branch,
+        )
+        .cloned()
     }
 
     /// Whether a new branch has to be named.
@@ -433,8 +444,8 @@ mod tests {
 
     use super::*;
     use crate::components::repository::test_support::{
-        Repositories, click_label, has_dialog, repository, repository_id, set_refs, set_worktrees,
-        setup_with,
+        Repositories, click_label, has_dialog, repository, repository_id, set_refs, set_remotes,
+        set_worktrees, setup_with,
     };
     use crate::data::{QueryError, RepositoryOperation};
 
@@ -500,7 +511,8 @@ mod tests {
             vec![local("main", Some("origin/main")), local("topic", None)],
             cx,
         );
-        let busy = |id: &str, cx: &App| WorktreeActions::is_pending(id, cx);
+        set_remotes(&id, &["origin"], cx);
+        let busy = |id: &RepositoryId, cx: &App| WorktreeActions::is_pending(id, cx);
         let unused = RepositoryOperation::new("unused", |_, _: String, cx: &mut App| {
             cx.background_spawn(async { Ok::<_, QueryError>(()) })
         });
@@ -665,6 +677,7 @@ mod tests {
         let other = repository_id();
         set_worktrees(&other, Vec::new(), cx);
         set_refs(&other, Vec::new(), cx);
+        set_remotes(&other, &[], cx);
         cx.update_window(window, |_, window, cx| {
             dialog.update(cx, |dialog, cx| dialog.set_repository(other, window, cx))
         })

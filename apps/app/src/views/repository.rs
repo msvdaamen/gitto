@@ -4,6 +4,7 @@ use std::rc::Rc;
 
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::input::RepositoryId;
+use gitto_ui::git::rows::RowId;
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -22,7 +23,6 @@ use crate::components::repository::toolbar::{RepositoryToolbar, ToolbarEvent};
 use crate::components::ui::{HandleSide, PanelDrag, ResizeHandle, dragged_width};
 use crate::data::{QueryClient, RepositoryWatcher};
 use crate::git::diff_source::DiffSource;
-use crate::git::rows::WIP_ID;
 use crate::services::Services;
 use crate::state::panel_width::{PanelBounds, PanelWidth};
 use crate::state::router::Router;
@@ -44,18 +44,60 @@ pub use crate::theme::breakpoints::{LARGE, MEDIUM};
 pub const RAIL_WIDTH: f32 = 3.47;
 pub const DETAILS_OVERLAY_WIDTH: f32 = 22.67;
 
+/// The page's resizable panels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Panel {
+    Sidebar,
+    Details,
+}
+
+impl Panel {
+    /// Its widths, as [`SIDEBAR_BOUNDS`] and [`DETAILS_BOUNDS`] say.
+    pub fn bounds(self) -> PanelBounds {
+        match self {
+            Panel::Sidebar => SIDEBAR_BOUNDS,
+            Panel::Details => DETAILS_BOUNDS,
+        }
+    }
+
+    /// Which side of its edge it's on: the sidebar's left of it, the details right.
+    pub fn side(self) -> HandleSide {
+        match self {
+            Panel::Sidebar => HandleSide::Start,
+            Panel::Details => HandleSide::End,
+        }
+    }
+
+    /// What its handle's called, to assistive technology.
+    pub fn label(self) -> &'static str {
+        match self {
+            Panel::Sidebar => "Resize sidebar",
+            Panel::Details => "Resize details",
+        }
+    }
+
+    /// Its name: its width's saved under it (see `PanelWidth`), and its handle's id is made of
+    /// it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Panel::Sidebar => "sidebar",
+            Panel::Details => "details",
+        }
+    }
+}
+
 /// A row of a repository: tagged with its repository, as the page is kept when switching
 /// repositories, and the new one starts without a selection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RowOf {
     repository_id: RepositoryId,
-    id: String,
+    id: RowId,
 }
 
 /// The file whose changes are shown in place of the history, with the row and the list it's from.
 struct OpenFile {
     repository_id: RepositoryId,
-    row_id: String,
+    row_id: RowId,
     source: DiffSource,
     file: ChangedFile,
     view: Entity<FileDiffView>,
@@ -94,7 +136,8 @@ pub struct RepositoryView {
     _toolbar_events: Subscription,
     operation_bar: Entity<OperationBar>,
     _operation_bar_events: Subscription,
-    /// What changing the working tree waits for (see [`before_change`](Self::before_change)).
+    /// What changing the working tree waits for (see [`before_change`](Self::before_change)),
+    /// and leaving the page (see `Router::set_blocker`): kept for as long as the page is.
     before_change: BeforeChange,
     /// What the branch menus in the sidebar and the history share (TS's `BranchMenuProvider`
     /// around them).
@@ -160,8 +203,9 @@ impl RepositoryView {
         ];
 
         branch_menu.update(cx, |menu, _| menu.set_before_change(before_change.clone()));
-        // Nor is another repository opened, or the home page, before the file's edits are saved.
-        Router::set_blocker(Some(before_change.clone()), cx);
+        // Nor is another repository opened, or the home page, before the file's edits are saved:
+        // for as long as the page keeps it.
+        Router::set_blocker(&before_change, cx);
 
         RepositoryView {
             repository_id,
@@ -173,8 +217,12 @@ impl RepositoryView {
             resolving: None,
             sidebar_open: true,
             details_open: true,
-            sidebar: PanelWidth::new("sidebar", SIDEBAR_BOUNDS, Rc::clone(&storage)),
-            details: PanelWidth::new("details", DETAILS_BOUNDS, storage),
+            sidebar: PanelWidth::new(
+                Panel::Sidebar.name(),
+                Panel::Sidebar.bounds(),
+                Rc::clone(&storage),
+            ),
+            details: PanelWidth::new(Panel::Details.name(), Panel::Details.bounds(), storage),
             toolbar,
             _toolbar_events: toolbar_events,
             operation_bar,
@@ -287,7 +335,7 @@ impl RepositoryView {
     }
 
     /// The selected row, if it's of the repository on show.
-    pub fn selected_id(&self) -> Option<String> {
+    pub fn selected_id(&self) -> Option<RowId> {
         self.selection
             .as_ref()
             .filter(|row| row.repository_id == self.repository_id)
@@ -295,7 +343,7 @@ impl RepositoryView {
     }
 
     /// The row the details show, if it's of the repository on show.
-    pub fn details_id(&self, cx: &gpui_kit::App) -> Option<String> {
+    pub fn details_id(&self, cx: &gpui_kit::App) -> Option<RowId> {
         self.settled
             .read(cx)
             .value()
@@ -311,7 +359,7 @@ impl RepositoryView {
         })
     }
 
-    fn select(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+    fn select(&mut self, id: RowId, window: &mut Window, cx: &mut Context<Self>) {
         let row = RowOf {
             repository_id: self.repository_id.clone(),
             id,
@@ -347,11 +395,11 @@ impl RepositoryView {
         if let Some((repository_id, file)) = self.resolving.clone() {
             // Not once another row, or another repository, was picked meanwhile: it was asked for
             // there.
-            if repository_id != self.repository_id || selected.as_deref() != Some(WIP_ID) {
+            if repository_id != self.repository_id || selected != Some(RowId::Wip) {
                 self.resolving = None;
-            } else if details.as_deref() == Some(WIP_ID) {
+            } else if details == Some(RowId::Wip) {
                 self.resolving = None;
-                self.open_file_of(WIP_ID.to_owned(), DiffSource::Unstaged, file, window, cx);
+                self.open_file_of(RowId::Wip, DiffSource::Unstaged, file, window, cx);
             }
         }
         cx.notify();
@@ -369,7 +417,7 @@ impl RepositoryView {
     /// the file on show lets go.
     fn open_file_of(
         &mut self,
-        row_id: String,
+        row_id: RowId,
         source: DiffSource,
         file: ChangedFile,
         window: &mut Window,
@@ -449,7 +497,7 @@ impl RepositoryView {
             }
             let _ = this.update_in(cx, |this, window, cx| {
                 this.resolving = Some((this.repository_id.clone(), file));
-                this.select(WIP_ID.to_owned(), window, cx);
+                this.select(RowId::Wip, window, cx);
             });
         }));
     }
@@ -472,46 +520,52 @@ impl RepositoryView {
         cx.notify();
     }
 
-    fn on_drag_panel(&mut self, event: &DragMoveEvent<PanelDrag>, cx: &mut Context<Self>) {
-        if let Some(width) = dragged_width(event, "sidebar", HandleSide::Start, cx) {
-            self.sidebar.set_width(width, false);
-        } else if let Some(width) = dragged_width(event, "details", HandleSide::End, cx) {
-            self.details.set_width(width, false);
+    /// The width of `panel`.
+    fn width_of(&self, panel: Panel) -> &PanelWidth {
+        match panel {
+            Panel::Sidebar => &self.sidebar,
+            Panel::Details => &self.details,
         }
+    }
+
+    fn width_of_mut(&mut self, panel: Panel) -> &mut PanelWidth {
+        match panel {
+            Panel::Sidebar => &mut self.sidebar,
+            Panel::Details => &mut self.details,
+        }
+    }
+
+    fn on_drag_panel(&mut self, event: &DragMoveEvent<PanelDrag<Panel>>, cx: &mut Context<Self>) {
+        let panel = event.drag(cx).panel;
+        self.width_of_mut(panel)
+            .set_width(dragged_width(event, panel.side()), false);
         cx.notify();
     }
 
-    fn resize_handle(&self, panel: &'static str, cx: &mut Context<Self>) -> ResizeHandle {
-        let (side, label, width) = match panel {
-            "sidebar" => (HandleSide::Start, "Resize sidebar", self.sidebar.width()),
-            _ => (HandleSide::End, "Resize details", self.details.width()),
-        };
-        let bounds = if panel == "sidebar" {
-            SIDEBAR_BOUNDS
-        } else {
-            DETAILS_BOUNDS
-        };
+    fn resize_handle(&self, panel: Panel, cx: &mut Context<Self>) -> ResizeHandle<Panel> {
+        let width = self.width_of(panel).width();
         let this = cx.entity().downgrade();
         let reset = this.clone();
-        ResizeHandle::new(panel, side, label, width, bounds)
-            .on_resize(move |width, save, _, cx| {
-                let _ = this.update(cx, |this, cx| {
-                    match panel {
-                        "sidebar" => this.sidebar.set_width(width, save),
-                        _ => this.details.set_width(width, save),
-                    }
-                    cx.notify();
-                });
-            })
-            .on_reset(move |_, cx| {
-                let _ = reset.update(cx, |this, cx| {
-                    match panel {
-                        "sidebar" => this.sidebar.reset(),
-                        _ => this.details.reset(),
-                    }
-                    cx.notify();
-                });
-            })
+        ResizeHandle::new(
+            SharedString::from(format!("resize-{}", panel.name())),
+            panel,
+            panel.side(),
+            panel.label(),
+            width,
+            panel.bounds(),
+        )
+        .on_resize(move |width, save, _, cx| {
+            let _ = this.update(cx, |this, cx| {
+                this.width_of_mut(panel).set_width(width, save);
+                cx.notify();
+            });
+        })
+        .on_reset(move |_, cx| {
+            let _ = reset.update(cx, |this, cx| {
+                this.width_of_mut(panel).reset();
+                cx.notify();
+            });
+        })
     }
 }
 
@@ -550,9 +604,9 @@ impl Render for RepositoryView {
             );
 
         let sidebar_handle =
-            (self.sidebar_open && medium).then(|| self.resize_handle("sidebar", cx));
+            (self.sidebar_open && medium).then(|| self.resize_handle(Panel::Sidebar, cx));
         let details_handle =
-            (self.details_open && large).then(|| self.resize_handle("details", cx));
+            (self.details_open && large).then(|| self.resize_handle(Panel::Details, cx));
         let details = self.details_open.then(|| {
             div()
                 .h_full()
@@ -580,11 +634,11 @@ impl Render for RepositoryView {
                     .min_w_0()
                     .items_stretch()
                     .overflow_hidden()
-                    .on_drag_move(
-                        cx.listener(|this, event: &DragMoveEvent<PanelDrag>, _, cx| {
+                    .on_drag_move(cx.listener(
+                        |this, event: &DragMoveEvent<PanelDrag<Panel>>, _, cx| {
                             this.on_drag_panel(event, cx)
-                        }),
-                    )
+                        },
+                    ))
                     .when(self.sidebar_open, |this| {
                         this.child(
                             div()

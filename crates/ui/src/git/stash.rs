@@ -35,10 +35,13 @@ pub fn stash_title(head: &Head, counts: &StatusCounts) -> String {
     }
 }
 
+/// Why there's no stash to pop.
+const NO_STASHES: &str = "No stashes to pop.";
+
 /// Why the newest stash can't be popped, if it can't.
 pub fn pop_blocker(counts: &StatusCounts, stashes: &[Stash]) -> Option<&'static str> {
     if stashes.is_empty() {
-        return Some("No stashes to pop.");
+        return Some(NO_STASHES);
     }
     // Git won't pop over them.
     if counts.conflicted > 0 {
@@ -47,20 +50,20 @@ pub fn pop_blocker(counts: &StatusCounts, stashes: &[Stash]) -> Option<&'static 
     None
 }
 
-/// Whether a stash can be popped: the status and the stashes have loaded, and nothing blocks it.
-pub fn can_pop(counts: Option<&StatusCounts>, stashes: Option<&[Stash]>) -> bool {
-    match (counts, stashes) {
-        (Some(counts), Some(stashes)) => pop_blocker(counts, stashes).is_none(),
-        _ => false,
-    }
+/// Whether a stash can be popped: nothing blocks it (see [`pop_blocker`]).
+pub fn can_pop(counts: &StatusCounts, stashes: &[Stash]) -> bool {
+    pop_blocker(counts, stashes).is_none()
 }
 
 /// Which stash popping would put back, or why it can't.
 pub fn pop_title(counts: &StatusCounts, stashes: &[Stash]) -> String {
-    match pop_blocker(counts, stashes) {
-        Some(blocker) => blocker.to_owned(),
-        None => format!("Pop \"{}\"", stashes[0].message),
+    if let Some(blocker) = pop_blocker(counts, stashes) {
+        return blocker.to_owned();
     }
+    let Some(newest) = stashes.first() else {
+        return NO_STASHES.to_owned();
+    };
+    format!("Pop \"{}\"", newest.message)
 }
 
 #[cfg(test)]
@@ -155,11 +158,10 @@ mod tests {
     }
 
     #[test]
-    fn can_pop_once_the_status_and_stashes_have_loaded() {
+    fn can_pop_when_nothing_blocks_it() {
         let stashes = [stash("WIP")];
-        assert!(can_pop(Some(&clean()), Some(&stashes)));
-        assert!(!can_pop(None, Some(&stashes)));
-        assert!(!can_pop(Some(&clean()), None));
-        assert!(!can_pop(Some(&conflicted()), Some(&stashes)));
+        assert!(can_pop(&clean(), &stashes));
+        assert!(!can_pop(&clean(), &[]));
+        assert!(!can_pop(&conflicted(), &stashes));
     }
 }

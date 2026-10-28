@@ -2,7 +2,6 @@
 
 use futures::FutureExt as _;
 use gitto_git::GitInstall;
-use gitto_git::features::version::check;
 use gpui_kit::{App, Context};
 
 use super::client::{QueryOptions, StaleTime};
@@ -17,7 +16,7 @@ pub fn git_version_options(cx: &App) -> QueryOptions<GitInstall> {
     let git = Services::global(cx).git().clone();
     QueryOptions::new(keys::git_version(), move |_, _| {
         let git = git.clone();
-        async move { Ok(check(git.version()).await) }.boxed()
+        async move { Ok(git.version().check().await) }.boxed()
     })
     .stale_time_with(|install| match install {
         Some(install) if install.supported => StaleTime::Infinite,

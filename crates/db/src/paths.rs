@@ -30,14 +30,11 @@ pub enum Profile {
 }
 
 /// Electron's `app.getPath("appData")`: the folder of every app's settings (see the module's doc).
-/// `None` if the user's home folder can't be found, on macOS or Windows.
+/// `None` if the user's home folder can't be found.
 pub fn app_data_dir() -> Option<PathBuf> {
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        Some(xdg_config_home(
-            std::env::var_os("XDG_CONFIG_HOME"),
-            dirs::home_dir,
-        ))
+        xdg_config_home(std::env::var_os("XDG_CONFIG_HOME"), dirs::home_dir)
     }
     // `~/Library/Application Support` on macOS, the roaming AppData folder on Windows.
     #[cfg(not(all(unix, not(target_os = "macos"))))]
@@ -66,18 +63,16 @@ fn user_data_name(profile: Profile) -> String {
 }
 
 /// Chromium's `GetXDGDirectory(env, "XDG_CONFIG_HOME", ".config")`: the variable if it's set and
-/// not empty, else `.config` in the home folder. Chromium falls back to the temporary folder if
-/// there's no home folder.
-#[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))]
+/// not empty, else `.config` in the home folder. `None` without a home folder, where Chromium falls
+/// back to the temporary folder: a database kept there would be cleaned away.
+#[cfg(all(unix, not(target_os = "macos")))]
 fn xdg_config_home(
     xdg_config_home: Option<std::ffi::OsString>,
     home_dir: impl FnOnce() -> Option<PathBuf>,
-) -> PathBuf {
+) -> Option<PathBuf> {
     match xdg_config_home {
-        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
-        _ => home_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join(".config"),
+        Some(dir) if !dir.is_empty() => Some(PathBuf::from(dir)),
+        _ => Some(home_dir()?.join(".config")),
     }
 }
 
@@ -85,33 +80,33 @@ fn xdg_config_home(
 mod tests {
     use super::*;
 
+    #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn uses_xdg_config_home_when_it_is_set() {
         let dir = xdg_config_home(Some("/custom/config".into()), || {
             Some(PathBuf::from("/home/me"))
         });
-        assert_eq!(dir, PathBuf::from("/custom/config"));
+        assert_eq!(dir, Some(PathBuf::from("/custom/config")));
     }
 
+    #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn uses_dot_config_in_the_home_folder_when_xdg_config_home_is_unset_or_empty() {
         let home = || Some(PathBuf::from("/home/me"));
         assert_eq!(
             xdg_config_home(None, home),
-            PathBuf::from("/home/me/.config")
+            Some(PathBuf::from("/home/me/.config"))
         );
         assert_eq!(
             xdg_config_home(Some("".into()), home),
-            PathBuf::from("/home/me/.config")
+            Some(PathBuf::from("/home/me/.config"))
         );
     }
 
+    #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
-    fn falls_back_to_the_temporary_folder_without_a_home_folder() {
-        assert_eq!(
-            xdg_config_home(None, || None),
-            std::env::temp_dir().join(".config")
-        );
+    fn has_none_without_a_home_folder() {
+        assert_eq!(xdg_config_home(None, || None), None);
     }
 
     #[test]

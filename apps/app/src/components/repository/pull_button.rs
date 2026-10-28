@@ -189,8 +189,8 @@ mod tests {
         let _dir = setup(cx);
         let repo = repository_id();
         let mut summary = status();
-        summary.upstream = None;
-        summary.behind = 0;
+        summary.summary.upstream = None;
+        summary.summary.behind = 0;
         set_status(&repo, summary, cx);
         let (_, pull) = pulls();
         let (_, button) = render(cx, &repo, pull);

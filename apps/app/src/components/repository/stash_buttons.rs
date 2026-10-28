@@ -93,9 +93,10 @@ impl StashButtons {
             (_, None, Some(error)) => format!("Couldn't load the stashes: {}", error.message()),
             _ => "Pop".to_owned(),
         };
-        let poppable = can_pop(
-            status.as_ref().map(|status| &status.counts),
-            stashes.as_deref(),
+        // Not until both have loaded.
+        let poppable = matches!(
+            (&status, &stashes),
+            (Some(status), Some(stashes)) if can_pop(&status.counts, stashes)
         );
         let newest = stashes
             .as_ref()
@@ -155,7 +156,7 @@ mod tests {
     }
 
     fn actions(calls: &Rc<Calls>) -> StashActions {
-        let busy = |id: &str, cx: &App| StashActions::is_pending(id, cx);
+        let busy = |id: &RepositoryId, cx: &App| StashActions::is_pending(id, cx);
         let unused = RepositoryOperation::new("unused", |_, _: String, cx: &mut App| {
             cx.background_spawn(async { Ok(()) })
         });

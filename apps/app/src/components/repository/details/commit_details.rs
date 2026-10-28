@@ -7,7 +7,7 @@ use std::time::Duration;
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::features::history::schema::Commit;
 use gitto_git::input::RepositoryId;
-use gitto_ui::git::rows::stash_sha;
+use gitto_ui::git::rows::RowId;
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -26,7 +26,6 @@ use crate::components::ui::{
 use crate::data::diff::{ChangedFiles, FilesOf, ShownFiles, select_shown_files};
 use crate::data::{Opaque, Query};
 use crate::git::diff_source::DiffSource;
-use crate::git::rows::WIP_ID;
 use crate::state::clock::{Clock, relative_time};
 use crate::theme::{PaletteExt as _, base_px};
 use crate::util::format::{avatar_color, initials};
@@ -105,7 +104,7 @@ enum Body {
 /// [`CommitDetailsEvent`]s.
 pub struct CommitDetails {
     repository_id: RepositoryId,
-    selected_id: Option<String>,
+    selected_id: Option<RowId>,
     shown_file: ShownFile,
     data: DetailsData,
     /// The part showing the selected row, of the repository it was selected in: switching
@@ -155,7 +154,7 @@ impl CommitDetails {
     /// The row the details are of; `None` shows none.
     pub fn set_selected(
         &mut self,
-        selected_id: Option<String>,
+        selected_id: Option<RowId>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -203,39 +202,46 @@ impl CommitDetails {
             .is_some_and(|(of, _)| *of == repository_id);
         let shown = self.shown_file.clone();
         let data = self.data.clone();
-        if id == WIP_ID {
-            if same_repository && matches!(self.body, Some((_, Body::WorkingTree(_)))) {
-                return;
+        match id {
+            RowId::Wip => {
+                if same_repository && matches!(self.body, Some((_, Body::WorkingTree(_)))) {
+                    return;
+                }
+                let tree = cx.new(|cx| {
+                    let mut tree = WorkingTreeDetails::new(repository_id.clone(), data, window, cx);
+                    tree.set_shown_file(shown, cx);
+                    tree
+                });
+                self.adopt(repository_id, tree, Body::WorkingTree, cx);
             }
-            let tree = cx.new(|cx| {
-                let mut tree = WorkingTreeDetails::new(repository_id.clone(), data, window, cx);
-                tree.set_shown_file(shown, cx);
-                tree
-            });
-            self.adopt(repository_id, tree, Body::WorkingTree, cx);
-        } else if let Some(sha) = stash_sha(&id) {
-            if let Some((_, Body::Stash(stash))) = self.body.as_ref().filter(|_| same_repository) {
-                stash.update(cx, |stash, cx| stash.set_sha(sha, cx));
-                return;
+            RowId::Stash(sha) => {
+                if let Some((_, Body::Stash(stash))) =
+                    self.body.as_ref().filter(|_| same_repository)
+                {
+                    stash.update(cx, |stash, cx| stash.set_sha(&sha, cx));
+                    return;
+                }
+                let stash = cx.new(|cx| {
+                    let mut stash = StashDetails::new(repository_id.clone(), &sha, data, cx);
+                    stash.set_shown_file(shown, cx);
+                    stash
+                });
+                self.adopt(repository_id, stash, Body::Stash, cx);
             }
-            let stash = cx.new(|cx| {
-                let mut stash = StashDetails::new(repository_id.clone(), sha, data, cx);
-                stash.set_shown_file(shown, cx);
-                stash
-            });
-            self.adopt(repository_id, stash, Body::Stash, cx);
-        } else {
-            if let Some((_, Body::Commit(commit))) = self.body.as_ref().filter(|_| same_repository)
-            {
-                commit.update(cx, |commit, cx| commit.set_sha(&id, cx));
-                return;
+            RowId::Commit(id) => {
+                if let Some((_, Body::Commit(commit))) =
+                    self.body.as_ref().filter(|_| same_repository)
+                {
+                    commit.update(cx, |commit, cx| commit.set_sha(&id, cx));
+                    return;
+                }
+                let commit = cx.new(|cx| {
+                    let mut commit = SelectedCommit::new(repository_id.clone(), &id, data, cx);
+                    commit.set_shown_file(shown, cx);
+                    commit
+                });
+                self.adopt(repository_id, commit, Body::Commit, cx);
             }
-            let commit = cx.new(|cx| {
-                let mut commit = SelectedCommit::new(repository_id.clone(), &id, data, cx);
-                commit.set_shown_file(shown, cx);
-                commit
-            });
-            self.adopt(repository_id, commit, Body::Commit, cx);
         }
     }
 
@@ -649,7 +655,6 @@ mod tests {
 
     use gitto_git::features::stash::schema::Stash;
     use gitto_git::schema::FileStatus;
-    use gitto_ui::git::rows::stash_row_id;
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{AnyWindowHandle, SharedString, TestAppContext};
 
@@ -687,8 +692,7 @@ mod tests {
     }
 
     impl Details {
-        fn select(&self, id: Option<&str>, cx: &mut TestAppContext) {
-            let id = id.map(str::to_owned);
+        fn select(&self, id: Option<RowId>, cx: &mut TestAppContext) {
             let details = self.details.clone();
             cx.update_window(self.window, |_, window, cx| {
                 details.update(cx, |details, cx| details.set_selected(id, window, cx))
@@ -732,11 +736,11 @@ mod tests {
         let details = render_details(cx, Fakes::new());
         assert_eq!(details.title(cx), None);
 
-        details.select(Some(WIP_ID), cx);
+        details.select(Some(RowId::Wip), cx);
         assert_eq!(details.title(cx), Some("Working directory"));
-        details.select(Some(&stash_row_id("s1")), cx);
+        details.select(Some(RowId::Stash("s1".into())), cx);
         assert_eq!(details.title(cx), Some("Stash"));
-        details.select(Some("a1"), cx);
+        details.select(Some(RowId::Commit("a1".into())), cx);
         assert_eq!(details.title(cx), Some("Commit details"));
         details.select(None, cx);
         assert_eq!(details.title(cx), None);
@@ -757,7 +761,7 @@ mod tests {
             .collect();
         fakes.files.once(Ok(many));
         let details = render_details(cx, fakes);
-        details.select(Some("a1"), cx);
+        details.select(Some(RowId::Commit("a1".into())), cx);
         let commit = details
             .details
             .read_with(cx, |details, _| match &details.body {
@@ -785,7 +789,7 @@ mod tests {
 
         // Another commit's files still loading: its files aren't on show yet.
         let files = details.fakes.files.later();
-        details.select(Some("b2"), cx);
+        details.select(Some(RowId::Commit("b2".into())), cx);
         render(cx);
         assert_eq!(state.logical_scroll_top().item_ix, 50);
 
@@ -801,7 +805,7 @@ mod tests {
     #[gpui_kit::test]
     fn has_no_commit_actions_to_press_yet(cx: &mut TestAppContext) {
         let details = render_details(cx, Fakes::new());
-        details.select(Some("a1"), cx);
+        details.select(Some(RowId::Commit("a1".into())), cx);
         let disabled = cx
             .update_window(details.window, |_, window, cx| {
                 window.render_frame(cx);
@@ -844,7 +848,7 @@ mod tests {
     #[gpui_kit::test]
     fn shows_a_commits_message_with_its_own_files_not_anothers(cx: &mut TestAppContext) {
         let details = render_details(cx, Fakes::new());
-        details.select(Some("a1"), cx);
+        details.select(Some(RowId::Commit("a1".into())), cx);
         assert_eq!(
             details.shown_commit(cx),
             Some(("a1".to_owned(), "a1".to_owned()))
@@ -853,7 +857,7 @@ mod tests {
         // The next commit comes in before its files: the last one stays on show, and its files
         // aren't opened as the next one's.
         let files = details.fakes.files.later();
-        details.select(Some("b2"), cx);
+        details.select(Some(RowId::Commit("b2".into())), cx);
         assert_eq!(
             details.shown_commit(cx),
             Some(("a1".to_owned(), "a1".to_owned()))
@@ -882,7 +886,7 @@ mod tests {
     #[gpui_kit::test]
     fn marks_the_file_on_show_in_its_own_list_only(cx: &mut TestAppContext) {
         let details = render_details(cx, Fakes::new());
-        details.select(Some("a1"), cx);
+        details.select(Some(RowId::Commit("a1".into())), cx);
         let shown = |source: DiffSource| Some((source, "a1.txt".to_owned()));
         let set_shown = |shown: ShownFile, cx: &mut TestAppContext| {
             details
@@ -914,7 +918,7 @@ mod tests {
             created_at: 0,
         }];
         let details = render_details(cx, fakes);
-        details.select(Some(&stash_row_id("s1")), cx);
+        details.select(Some(RowId::Stash("s1".into())), cx);
         details.click("file:s1.txt", cx);
         assert_eq!(
             *details.events.borrow(),

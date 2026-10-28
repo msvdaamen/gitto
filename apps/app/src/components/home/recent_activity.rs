@@ -180,12 +180,9 @@ mod tests {
     use gpui_kit::{Context, IntoElement, Render, TestAppContext, Window};
 
     use super::*;
-    use crate::components::home::test_support as home;
+    use crate::components::home::test_support::{self as home, GITTO, NOTES};
     use crate::state::router::{Route, Router};
     use crate::test_support;
-
-    const GITTO: &str = "0190a6c8-0000-7000-8000-000000000001";
-    const NOTES: &str = "0190a6c8-0000-7000-8000-000000000002";
 
     fn activity(at: i64, kind: ActivityKind, subject: &str) -> Activity {
         Activity {

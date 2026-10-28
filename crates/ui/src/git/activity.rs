@@ -1,20 +1,14 @@
 //! Ported from `git/activity.ts`.
 
 use gitto_git::features::overview::schema::{Activity, ActivityKind};
+use gitto_git::input::FullSha;
 
 use super::short_sha;
 
-/// A commit's full SHA, as git names one when there's no branch to name: 40 hex digits, or 64.
-fn is_full_sha(target: &str) -> bool {
-    matches!(target.len(), 40 | 64)
-        && target
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
-
-/// A branch or commit as git named it, with a commit's SHA shortened.
+/// A branch or commit as git named it, with a commit's SHA shortened: a full one, as git names
+/// a commit when there's no branch to name.
 fn short_name(target: &str) -> &str {
-    if is_full_sha(target) {
+    if FullSha::parse(target).is_ok() {
         short_sha(target)
     } else {
         target

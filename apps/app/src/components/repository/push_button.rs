@@ -341,10 +341,12 @@ mod tests {
 
     /// A push turned down as the UI gets it (see `push_rejection`).
     fn rejected(forcible: bool) -> QueryError {
-        QueryError::from(gitto_git::Error::PushRejected {
-            message: if forcible { REWRITTEN } else { BEHIND }.to_owned(),
-            forcible,
-        })
+        QueryError::from(gitto_git::ApiError::unreported(
+            gitto_git::Error::PushRejected {
+                message: if forcible { REWRITTEN } else { BEHIND }.to_owned(),
+                forcible,
+            },
+        ))
     }
 
     /// The pushes asked for (whether forced), each answered by `answer`; and the pulls.
@@ -400,8 +402,8 @@ mod tests {
     fn seed(target: PushTarget, cx: &mut TestAppContext) -> RepositoryId {
         let id = repository_id();
         let mut summary = status();
-        summary.ahead = 2;
-        summary.behind = 1;
+        summary.summary.ahead = 2;
+        summary.summary.behind = 1;
         set_status(&id, summary, cx);
         set_push_target(&id, target, cx);
         id
@@ -634,7 +636,7 @@ mod tests {
     fn is_disabled_saying_why_when_theres_nothing_to_push_to(cx: &mut TestAppContext) {
         let (_, push, pull) = operations(|_, _| Ok(()));
         let blocked = PushTarget::Blocked {
-            reason: "There's no remote to push to.".into(),
+            reason: gitto_git::PushBlocker::NoRemote,
         };
         let (_dir, _, button) = render(cx, blocked, push, pull);
         let shown = button.read_with(cx, |button, cx| button.button(cx));

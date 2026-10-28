@@ -110,7 +110,7 @@
 //! (in the view's constructor, say) and run with the repository's id:
 //!
 //! ```ignore
-//! let pull = RepositoryOperation::new("pull", |id, branch: Option<NonEmpty>, cx: &mut App| {
+//! let pull = RepositoryOperation::new("pull", |id, branch: Option<BranchShortName>, cx: &mut App| {
 //!     let call = Services::global(cx).git().call("remote.pull", &id, move |repo| async move {
 //!         gitto_git::api::pull(&repo, branch.as_ref()).await
 //!     });

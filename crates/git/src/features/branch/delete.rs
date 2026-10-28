@@ -1,11 +1,9 @@
 //! Deleting a branch, local or remote, with the local branches tracking a remote one. Ported from
 //! `delete.ts`.
 
-use futures::future::BoxFuture;
-
-use super::commands::{branch_name, tracking_locals};
+use super::commands::{branch_target, tracking_locals};
 use super::in_use::branches_in_use;
-use crate::core::errors::{Error, Result};
+use crate::core::errors::{BranchDeletionBlocker, Error, Result};
 use crate::core::repo::{GitCommand, Repo};
 use crate::features::refs::schema::RefKind;
 use crate::features::remote::commands::list_remotes;
@@ -23,20 +21,14 @@ use crate::input::BranchRef;
 /// there. Should a local branch still fail to be deleted after the remote one was, checked out in a
 /// terminal meanwhile say, that's returned, saying the remote one is gone.
 ///
-/// Its place in line among the writes is taken when it's called, not when it's first polled, as
-/// in TS: a write asked for after it waits for it.
-pub fn delete_branch(repo: &Repo, reference: &BranchRef) -> BoxFuture<'static, Result<()>> {
+/// Fails with `Error::InvalidInput` if `ref` isn't a branch, as the UI's input is checked.
+pub async fn delete_branch(repo: &Repo, reference: &BranchRef) -> Result<()> {
     let reference = reference.as_str();
-    let Some(target) = branch_name(reference) else {
-        let error = Error::Bug(format!("{reference} isn't a branch."));
-        return Box::pin(std::future::ready(Err(error)));
-    };
+    let target = branch_target(reference)?;
     if target.kind == RefKind::Local {
-        let write = repo.write(["branch", "--delete", "--force", "--", target.name.as_str()]);
-        return Box::pin(async move {
-            write.await?;
-            Ok(())
-        });
+        repo.write(["branch", "--delete", "--force", "--", target.name.as_str()])
+            .await?;
+        return Ok(());
     }
 
     let reference = reference.to_owned();
@@ -44,7 +36,7 @@ pub fn delete_branch(repo: &Repo, reference: &BranchRef) -> BoxFuture<'static, R
     // One write, from finding the local branches tracking it to deleting them, so no other write
     // (a switch, say) can check one out in between, once the remote one is gone. That holds up the
     // other writes while the remote answers, which a deletion, asked for and waited on, can afford.
-    Box::pin(repo.exclusive(move |run| async move {
+    repo.exclusive(move |run| async move {
         let (tracking, in_use, fetched, remotes) = futures::try_join!(
             tracking_locals(&run, &reference),
             branches_in_use(&run),
@@ -53,10 +45,11 @@ pub fn delete_branch(repo: &Repo, reference: &BranchRef) -> BoxFuture<'static, R
         )?;
         for local in &tracking {
             if let Some(using) = in_use.get(&format!("refs/heads/{}", local.name)) {
-                return Err(Error::BranchDeletionBlocked(format!(
-                    "{} tracks {} and {}, so neither was deleted. {}",
-                    local.name, target.name, using.state, using.fix
-                )));
+                return Err(Error::BranchDeletionBlocked(BranchDeletionBlocker::InUse {
+                    local: local.name.clone(),
+                    branch: target.name.clone(),
+                    in_use: using.clone(),
+                }));
             }
         }
 
@@ -79,10 +72,12 @@ pub fn delete_branch(repo: &Repo, reference: &BranchRef) -> BoxFuture<'static, R
                 .map_err(Error::without_hints)?;
         } else {
             if let Some(remote) = remote_of(&remotes, &target.name) {
-                return Err(Error::BranchDeletionBlocked(format!(
-                    "{remote}'s fetch settings don't fetch {} from a branch there, so nothing was deleted.",
-                    target.name
-                )));
+                return Err(Error::BranchDeletionBlocked(
+                    BranchDeletionBlocker::NotFetched {
+                        remote: remote.to_owned(),
+                        branch: target.name.clone(),
+                    },
+                ));
             }
             run.run([
                 "branch",
@@ -101,13 +96,16 @@ pub fn delete_branch(repo: &Repo, reference: &BranchRef) -> BoxFuture<'static, R
         args.extend(tracking.iter().map(|local| local.name.as_str()));
         match (run.run(args).await, &fetched) {
             (Ok(_), _) => Ok(()),
-            (Err(Error::Git(error)), Some(fetched)) => Err(Error::Git(error.with_message(format!(
-                "{} was deleted on {}, but not every local branch tracking it was. {}",
-                target.name, fetched.remote, error.message
-            )))),
+            (Err(Error::Git(error)), Some(fetched)) => {
+                Err(Error::Git(error.with_message(format!(
+                    "{} was deleted on {}, but not every local branch tracking it was. {}",
+                    target.name, fetched.remote, error.message
+                ))))
+            }
             (Err(error), _) => Err(error),
         }
-    }))
+    })
+    .await
 }
 
 /// A remote, and the branch on it that fetching updates a remote-tracking branch from (see
@@ -459,7 +457,8 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("delete-in-turn").await.unwrap();
 
-            let deleting = delete_branch(&repo, &valid("refs/remotes/origin/other"));
+            let other = valid("refs/remotes/origin/other");
+            let deleting = delete_branch(&repo, &other);
             let switching = repo.write(["switch", "other"]);
             deleting.await.unwrap();
             let error = switching.await.unwrap_err();
@@ -632,17 +631,15 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("delete-other-refs").await.unwrap();
 
-            // A tag is refused as the input's parsed: `delete_branch` takes a `BranchRef`.
+            // A tag, or a link to the remote's default branch, is refused as the input's parsed:
+            // `delete_branch` takes a `BranchRef`.
             assert!(BranchRef::parse("refs/tags/v1").is_err());
-            let error = delete_branch(&repo, &valid("refs/remotes/origin/HEAD"))
+            assert!(BranchRef::parse("refs/remotes/origin/HEAD").is_err());
+            // A branch named like the tag, which isn't there, leaves the tag alone.
+            let error = delete_branch(&repo, &valid("refs/heads/v1"))
                 .await
                 .unwrap_err();
-            assert!(
-                error
-                    .to_string()
-                    .contains("refs/remotes/origin/HEAD isn't a branch."),
-                "{error}"
-            );
+            assert!(error.to_string().contains("not found"), "{error}");
         });
         assert_eq!(refs(&path, "refs/tags/"), strs(&["refs/tags/v1"]));
     }
