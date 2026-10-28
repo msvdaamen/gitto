@@ -18,7 +18,7 @@ use super::history_option::{
 use super::ref_labels::{HistoryRefLabels, LabelActions, MoreLabels};
 use crate::git::changes::LineCounts;
 use crate::state::clock::relative_time;
-use crate::theme::{Palette, PaletteExt as _};
+use crate::theme::{Palette, PaletteExt as _, base_px};
 
 /// What every row gets from the table.
 #[derive(Clone)]
@@ -141,7 +141,7 @@ impl RenderOnce for HistoryCommitRow {
             .flex()
             .items_center()
             .justify_between()
-            .gap(Rems(7. / 15.))
+            .gap(base_px(7.))
             .px(CELL_PADDING)
             .child(
                 div()
