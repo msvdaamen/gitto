@@ -80,7 +80,7 @@ pub fn has_hunks(patch: &str) -> bool {
 /// points to, a submodule's, or a file's that changed type, which git has as two files.
 pub fn staged_whole(patch: &str) -> bool {
     patch_header(patch).split('\n').any(|line| {
-        ends_with_mode(line, FileMode::Link) || ends_with_mode(line, FileMode::Submodule)
+        ends_with_mode(line, FileMode::Symlink) || ends_with_mode(line, FileMode::Submodule)
     }) || patch.contains("\ndiff --git ")
 }
 
@@ -88,7 +88,7 @@ pub fn staged_whole(patch: &str) -> bool {
 pub fn is_link(patch: &str) -> bool {
     patch_header(patch)
         .split('\n')
-        .any(|line| ends_with_mode(line, FileMode::Link))
+        .any(|line| ends_with_mode(line, FileMode::Symlink))
 }
 
 /// Whether the header line `line` ends with the file mode `mode`, as in `new file mode 120000`.

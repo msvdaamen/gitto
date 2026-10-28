@@ -125,9 +125,9 @@ mod tests {
         };
 
         assert!(
-            matches!(&status.head, Head::Branch { name, .. } if name == "main"),
+            matches!(&status.summary.head, Head::Branch { name, .. } if name == "main"),
             "{:?}",
-            status.head
+            status.summary.head
         );
         let unstaged: Vec<_> = status.changes.unstaged.iter().map(|f| &f.path).collect();
         assert_eq!(unstaged, ["new.txt"]);

@@ -122,7 +122,7 @@ pub fn to_ref_labels<S: AsRef<str>>(
             full_name: r.full_name.clone(),
             local: true,
             remotes: Vec::new(),
-            current: r.current.unwrap_or(false),
+            current: r.current,
             worktree: others.branches.get(&r.full_name).cloned(),
         };
         // As a `Map` does: a name set again keeps its place.
@@ -275,7 +275,7 @@ mod tests {
             kind,
             name: name.into(),
             full_name: full_name.into(),
-            current: None,
+            current: false,
         }
     }
 
@@ -285,7 +285,7 @@ mod tests {
 
     fn current(name: &str) -> CommitRef {
         CommitRef {
-            current: Some(true),
+            current: true,
             ..local(name)
         }
     }
@@ -431,7 +431,7 @@ mod tests {
         #[test]
         fn keeps_a_local_branch_named_like_a_remote_one_apart_from_that_remote_branch() {
             let named_like_a_remote = CommitRef {
-                current: Some(true),
+                current: true,
                 ..commit_ref(
                     CommitRefKind::Local,
                     "origin/main",

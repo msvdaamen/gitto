@@ -1,49 +1,38 @@
 //! Names a file's patch by what's in it, so the UI can say which patch it picked lines from without
-//! sending it back (see `stage_lines`), and name it in its caches. Ported from `patch-version.ts`,
-//! which the renderer shared: the name is the one it made, counted in UTF-16 code units as
-//! JavaScript counts a string's characters.
+//! sending it back (see `stage_lines`), and name it in its caches.
 
-use crate::schema::Version;
+use std::fmt;
 
-/// Names `patch` by what's in it: its length, a hash of its text, and its header, which has the
-/// object names of both sides on its `index` line (git hashes the working tree's side for it).
-/// Another patch of the same file, as after a save, gets another name.
-pub fn patch_version(patch: &str) -> Version {
-    let length = patch.encode_utf16().count();
-    Version::from(format!("{length}:{}:{}", hash(patch), patch_header(patch)))
+/// A patch's name, made from what's in it (see `PatchVersion::of`): another patch of the same file,
+/// as after a save, gets another one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PatchVersion {
+    /// Its length, in bytes.
+    length: usize,
+    /// FNV-1a over its bytes.
+    hash: u64,
 }
 
-/// `patch` up to its first hunk: the whole of it when it has none.
-fn patch_header(patch: &str) -> &str {
-    match patch.find("\n@@ ") {
-        Some(body) => &patch[..body],
-        None => patch,
-    }
-}
-
-/// FNV-1a over `text`'s characters (UTF-16 code units, as in JavaScript), in base 36: a few
-/// milliseconds for a patch of megabytes.
-fn hash(text: &str) -> String {
-    let mut value: u32 = 0x811c_9dc5;
-    for unit in text.encode_utf16() {
-        value = (value ^ u32::from(unit)).wrapping_mul(0x0100_0193);
-    }
-    base36(value)
-}
-
-/// `value` in base 36, as JavaScript's `toString(36)` writes it.
-fn base36(mut value: u32) -> String {
-    const DIGITS: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
-    let mut digits = Vec::new();
-    loop {
-        digits.push(DIGITS[(value % 36) as usize]);
-        value /= 36;
-        if value == 0 {
-            break;
+impl PatchVersion {
+    /// Names `patch`, a file's patch as the UI got it, by its length and a hash of all of it,
+    /// header included, which has the object names of both sides on its `index` line (git hashes
+    /// the working tree's side for it): a few milliseconds for a patch of megabytes.
+    pub fn of(patch: &str) -> PatchVersion {
+        let hash = patch.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+        });
+        PatchVersion {
+            length: patch.len(),
+            hash,
         }
     }
-    digits.reverse();
-    String::from_utf8(digits).expect("ASCII digits")
+}
+
+/// `<length>:<hash>`, the hash in hex, e.g. to key a cache by.
+impl fmt::Display for PatchVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{:016x}", self.length, self.hash)
+    }
 }
 
 #[cfg(test)]
@@ -58,37 +47,38 @@ mod tests {
     #[test]
     fn names_the_same_patch_the_same_and_another_patch_of_the_file_otherwise() {
         let patch = format!("{HEADER}\n@@ -1 +1 @@\n-a\n+b\n");
-        assert_eq!(patch_version(&patch), patch_version(&patch.clone()));
+        assert_eq!(PatchVersion::of(&patch), PatchVersion::of(&patch.clone()));
         assert_ne!(
-            patch_version(&patch),
-            patch_version(&patch.replacen("2222", "3333", 1))
+            PatchVersion::of(&patch),
+            PatchVersion::of(&patch.replacen("2222", "3333", 1))
         );
         assert_ne!(
-            patch_version(&patch),
-            patch_version(&format!("{patch}+c\n"))
+            PatchVersion::of(&patch),
+            PatchVersion::of(&format!("{patch}+c\n"))
         );
         // The same length and header, other lines.
         assert_ne!(
-            patch_version(&patch),
-            patch_version(&format!("{HEADER}\n@@ -1 +1 @@\n-a\n+c\n"))
+            PatchVersion::of(&patch),
+            PatchVersion::of(&format!("{HEADER}\n@@ -1 +1 @@\n-a\n+c\n"))
         );
     }
 
     #[test]
     fn names_a_patch_without_hunks_by_all_of_it() {
         assert_ne!(
-            patch_version("Binary files differ\n"),
-            patch_version("Binary files diffir\n")
+            PatchVersion::of("Binary files differ\n"),
+            PatchVersion::of("Binary files diffir\n")
         );
     }
 
     #[test]
-    fn names_a_patch_as_javascript_does() {
-        // As `patchVersion` names them in Node: counted and hashed in UTF-16 code units.
-        assert_eq!(patch_version(""), "0:ztntfp:");
-        assert_eq!(patch_version("a"), "1:1r9wi7g:a");
-        assert_eq!(patch_version("é😀\n@@ x"), "8:160e0e1:é😀");
-        assert_eq!(base36(0), "0");
-        assert_eq!(base36(u32::MAX), "1z141z3");
+    fn is_written_as_its_length_and_hash() {
+        // FNV-1a's offset basis, for nothing hashed.
+        assert_eq!(PatchVersion::of("").to_string(), "0:cbf29ce484222325");
+        assert_eq!(PatchVersion::of("a").to_string(), "1:af63dc4c8601ec8c");
+        assert_eq!(
+            PatchVersion::of("é").to_string().split(':').next(),
+            Some("2")
+        );
     }
 }

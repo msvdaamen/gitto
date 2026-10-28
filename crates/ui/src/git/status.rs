@@ -2,7 +2,7 @@
 //!
 //! TS took `Pick`s of the `StatusSummary`; these take those of its fields.
 
-use gitto_git::features::remote::blockers::pull_blocker;
+use gitto_git::features::remote::blockers::{PullBlocker, pull_blocker};
 use gitto_git::features::status::schema::{Head, StatusSummary};
 
 /// What to call HEAD: the branch name, or "detached HEAD".
@@ -59,14 +59,14 @@ pub fn sync_label(ahead: u64, behind: u64) -> String {
 }
 
 /// Why HEAD can't be pulled into, if it can't: it isn't on a branch, or the branch has no upstream.
-pub fn head_pull_blocker(head: &Head, upstream: Option<&str>) -> Option<String> {
+pub fn head_pull_blocker(head: &Head, upstream: Option<&str>) -> Option<PullBlocker> {
     pull_blocker(head_branch(head), upstream)
 }
 
 /// What pulling would do, e.g. "Pull 2 commits from origin/main", or why it can't.
 pub fn pull_title(head: &Head, upstream: Option<&str>, behind: u64) -> String {
     if let Some(blocker) = head_pull_blocker(head, upstream) {
-        return blocker;
+        return blocker.to_string();
     }
     let upstream = upstream.unwrap_or_default();
     // `behind` is as of the last fetch; the pull fetches first, so there may be more.

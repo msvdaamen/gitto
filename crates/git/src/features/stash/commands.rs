@@ -80,9 +80,10 @@ pub async fn get_stash_files(repo: &Repo, sha: &FullSha) -> Result<Vec<ChangedFi
 /// are in a commit of their own, its third parent, without one.
 pub async fn get_stash_file_patch(repo: &Repo, sha: &FullSha, file: &FileInput) -> Result<String> {
     let run = repo.git();
+    let commit = Sha::from(sha.clone());
     let third = format!("{sha}^3");
     let (tracked, untracked) = futures::try_join!(
-        get_commit_file_patch(repo, &Sha::from(sha.clone()), file),
+        get_commit_file_patch(repo, &commit, file),
         resolve_ref(&run, &third)
     )?;
     let Some(untracked) = untracked else {
@@ -477,7 +478,7 @@ mod tests {
             );
             assert_eq!(
                 status_files(&repo).await,
-                rows(&[("b.txt", None, Some("modified"))])
+                rows(&[("b.txt", None, Some(FileStatus::Modified))])
             );
 
             drop_stash(&repo, &valid(&newer.sha)).await.unwrap();
@@ -578,8 +579,8 @@ mod tests {
             assert_eq!(
                 status_files(&repo).await,
                 rows(&[
-                    ("a.txt", None, Some("modified")),
-                    ("other.txt", Some("added"), None),
+                    ("a.txt", None, Some(FileStatus::Modified)),
+                    ("other.txt", Some(FileStatus::Added), None),
                 ])
             );
             assert_eq!(list_stashes(&repo).await.unwrap(), []);
@@ -609,8 +610,8 @@ mod tests {
             assert_eq!(
                 status_files(&repo).await,
                 rows(&[
-                    ("a.txt", None, Some("modified")),
-                    ("new.txt", None, Some("untracked")),
+                    ("a.txt", None, Some(FileStatus::Modified)),
+                    ("new.txt", None, Some(FileStatus::Untracked)),
                 ])
             );
             assert_eq!(read(&path.join("a.txt")), "1\nstashed\n3\ncommitted\n5\n");
@@ -634,7 +635,11 @@ mod tests {
             assert!(matches!(error, Error::StashConflict(_)), "{error:?}");
             assert_eq!(
                 status_files(&repo).await,
-                rows(&[("a.txt", Some("conflicted"), Some("conflicted"))])
+                rows(&[(
+                    "a.txt",
+                    Some(FileStatus::Conflicted),
+                    Some(FileStatus::Conflicted)
+                )])
             );
             assert_eq!(newest(&repo).await, sha);
 

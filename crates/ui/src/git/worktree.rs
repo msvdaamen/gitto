@@ -115,9 +115,9 @@ pub fn describe_worktree(worktree: &Worktree) -> String {
     if worktree.current {
         lines.push("Open here".to_owned());
     }
-    match worktree.locked.as_deref() {
-        Some("") => lines.push("Locked".to_owned()),
-        Some(reason) => lines.push(format!("Locked: {reason}")),
+    match worktree.locked.as_ref().map(|lock| lock.reason.as_deref()) {
+        Some(None) => lines.push("Locked".to_owned()),
+        Some(Some(reason)) => lines.push(format!("Locked: {reason}")),
         None => {}
     }
     if worktree.prunable.is_some() {
@@ -128,6 +128,8 @@ pub fn describe_worktree(worktree: &Worktree) -> String {
 
 #[cfg(test)]
 mod tests {
+    use gitto_git::features::worktree::schema::Lock;
+
     use super::*;
 
     fn r(name: &str, upstream: Option<&str>, current: bool) -> Ref {
@@ -331,7 +333,9 @@ mod tests {
             );
             assert_eq!(
                 describe_worktree(&Worktree {
-                    locked: Some("busy".into()),
+                    locked: Some(Lock {
+                        reason: Some("busy".into())
+                    }),
                     prunable: Some("gitdir file points elsewhere".into()),
                     ..worktree("/repo-c", None)
                 }),
@@ -339,7 +343,7 @@ mod tests {
             );
             assert_eq!(
                 describe_worktree(&Worktree {
-                    locked: Some(String::new()),
+                    locked: Some(Lock { reason: None }),
                     ..worktree("/repo-l", Some("refs/heads/l"))
                 }),
                 "/repo-l\nOn l\nLocked"

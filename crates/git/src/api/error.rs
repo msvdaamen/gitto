@@ -108,7 +108,11 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::core::errors::{GitError, GitErrorKind, ListAction, RepositoryListError};
+    use crate::core::errors::{
+        BranchDeletionBlocker, DiscardBlocker, GitError, GitErrorKind, InUse, IntegrationBlocker,
+        ListAction, RepositoryListError, WorktreeRemovalBlocker,
+    };
+    use crate::features::remote::blockers::{PullBlocker, PushBlocker};
 
     /// What the UI gets of `error`: the code as the renderer knew it, the message, and whether
     /// it's a bug.
@@ -137,9 +141,9 @@ mod tests {
             ("NOT_FOUND", "Repository not found.".into(), false)
         );
         assert_eq!(
-            shown(Error::NoUpstream(
-                "main doesn't track a remote branch.".into()
-            )),
+            shown(Error::PullBlocked(PullBlocker::NoUpstream {
+                branch: "main".into()
+            })),
             (
                 "PRECONDITION_FAILED",
                 "main doesn't track a remote branch.".into(),
@@ -198,6 +202,64 @@ mod tests {
             shown(Error::LinesNotStageable("Binary.".into())),
             ("UNPROCESSABLE_CONTENT", "Binary.".into(), false)
         );
+    }
+
+    #[test]
+    fn says_why_what_was_blocked_couldnt_start_or_stopped() {
+        let precondition = |error: Error| {
+            let (code, message, bug) = shown(error);
+            assert_eq!((code, bug), ("PRECONDITION_FAILED", false), "{message}");
+            message
+        };
+        assert_eq!(
+            precondition(Error::PushBlocked(PushBlocker::NoRemote)),
+            "There's no remote to push to."
+        );
+        assert_eq!(
+            precondition(Error::PullBlocked(PullBlocker::Diverged {
+                branch: "main".into(),
+                upstream: "origin/main".into()
+            })),
+            Error::PullBlocked(PullBlocker::Diverged {
+                branch: "main".into(),
+                upstream: "origin/main".into()
+            })
+            .to_string()
+        );
+        assert_eq!(
+            precondition(Error::MergeBlocked(IntegrationBlocker::Conflicts)),
+            "Some files have conflicts. Resolve them, then merge."
+        );
+        assert_eq!(
+            precondition(Error::RebaseBlocked(IntegrationBlocker::NoCommits {
+                branch: "new".into(),
+                onto: "main".into()
+            })),
+            "new has no commits yet, so there's nothing to rebase. Merge main into it instead."
+        );
+        assert_eq!(
+            precondition(Error::DiscardBlocked(DiscardBlocker::Conflicts)),
+            Error::DiscardBlocked(DiscardBlocker::Conflicts).to_string()
+        );
+        assert_eq!(
+            precondition(Error::WorktreeRemovalBlocked(WorktreeRemovalBlocker::Main)),
+            "The main worktree can't be removed."
+        );
+        let in_use = || BranchDeletionBlocker::InUse {
+            local: "feature".into(),
+            branch: "origin/feature".into(),
+            in_use: InUse::Rebasing,
+        };
+        assert_eq!(
+            precondition(Error::BranchDeletionBlocked(in_use())),
+            Error::BranchDeletionBlocked(in_use()).to_string()
+        );
+        let stopped = shown(Error::MergeStopped {
+            branch: "side".into(),
+            reason: "error: hook failed".into(),
+        });
+        assert_eq!((stopped.0, stopped.2), ("CONFLICT", false), "{}", stopped.1);
+        assert!(stopped.1.contains("error: hook failed"), "{}", stopped.1);
     }
 
     #[test]

@@ -3,8 +3,7 @@
 
 use crate::core::repo::Repo;
 use crate::features::status::parse::{STATUS_ARGS, parse_status};
-use crate::features::status::schema::StatusConflict;
-use crate::features::status::schema::StatusFile;
+use crate::features::status::schema::{ConflictKind, StatusConflict, StatusFile};
 use crate::schema::FileStatus;
 
 impl StatusFile {
@@ -30,9 +29,9 @@ impl StatusFile {
             staged: Some(FileStatus::Conflicted),
             unstaged: Some(FileStatus::Conflicted),
             conflict: Some(StatusConflict {
-                xy: xy.to_owned(),
-                ours: ours.to_owned(),
-                theirs: theirs.to_owned(),
+                kind: ConflictKind::from_xy(xy).expect("a conflict's XY"),
+                ours: ours.parse().unwrap(),
+                theirs: theirs.parse().unwrap(),
             }),
         }
     }
@@ -44,25 +43,19 @@ pub async fn status_entries(repo: &Repo) -> Vec<StatusFile> {
 }
 
 /// A changed file's path, and how it changed in the index and the working tree.
-pub type Row = (String, Option<&'static str>, Option<&'static str>);
+pub type Row = (String, Option<FileStatus>, Option<FileStatus>);
 
 /// Each changed file, with how it changed in the index and the working tree.
 pub async fn status_files(repo: &Repo) -> Vec<Row> {
     status_entries(repo)
         .await
         .into_iter()
-        .map(|file| {
-            (
-                file.path,
-                file.staged.map(FileStatus::as_str),
-                file.unstaged.map(FileStatus::as_str),
-            )
-        })
+        .map(|file| (file.path, file.staged, file.unstaged))
         .collect()
 }
 
 /// `rows` as `status_files` has them.
-pub fn rows(rows: &[(&str, Option<&'static str>, Option<&'static str>)]) -> Vec<Row> {
+pub fn rows(rows: &[(&str, Option<FileStatus>, Option<FileStatus>)]) -> Vec<Row> {
     rows.iter()
         .map(|(path, staged, unstaged)| (path.to_string(), *staged, *unstaged))
         .collect()
