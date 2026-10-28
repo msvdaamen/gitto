@@ -73,6 +73,7 @@ pub fn init(services: Services, route: Route, cx: &mut App) {
     cx.set_global(services);
     crate::theme::init(Some(storage), cx);
     crate::data::init(cx);
+    crate::state::init(cx);
     Router::init(route, cx);
     cx.bind_keys([KeyBinding::new("secondary-q", Quit, None)]);
     cx.on_action(|_: &Quit, cx| cx.quit());

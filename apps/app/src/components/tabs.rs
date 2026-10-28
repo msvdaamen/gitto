@@ -162,7 +162,11 @@ impl Tabs {
         }
         self.moved = Some(id.to_owned());
         self.move_error = None;
-        let saving = reorder_repositories(order, cx);
+        let ids = order
+            .iter()
+            .filter_map(|id| RepositoryId::parse(id.as_str()).ok())
+            .collect();
+        let saving = reorder_repositories(ids, cx);
         cx.spawn(async move |this, cx| {
             let result = saving.await;
             let _ = this.update(cx, |tabs, cx| {
@@ -201,9 +205,12 @@ impl Tabs {
     }
 
     fn remove(&mut self, id: String, cx: &mut Context<Self>) {
+        let Ok(repository_id) = RepositoryId::parse(id.as_str()) else {
+            return;
+        };
         self.removing = Some(id.clone());
         self.remove_error = None;
-        let removing = remove_repository(id.clone(), cx);
+        let removing = remove_repository(repository_id, cx);
         cx.spawn(async move |this, cx| {
             let result = removing.await;
             let _ = this.update(cx, |tabs, cx| {
@@ -522,11 +529,12 @@ mod ui_tests {
             async { Err(QueryError::msg("Not in this test.")) }.boxed()
         }
 
-        fn remove(&self, _: String) -> BoxFuture<'static, Result<(), QueryError>> {
+        fn remove(&self, _: RepositoryId) -> BoxFuture<'static, Result<(), QueryError>> {
             async { Err(QueryError::msg("Not in this test.")) }.boxed()
         }
 
-        fn reorder(&self, ids: Vec<String>) -> BoxFuture<'static, Result<(), QueryError>> {
+        fn reorder(&self, ids: Vec<RepositoryId>) -> BoxFuture<'static, Result<(), QueryError>> {
+            let ids: Vec<String> = ids.into_iter().map(String::from).collect();
             self.reorders.borrow_mut().push(ids.clone());
             if self.fail.get() {
                 return async { Err(QueryError::msg("The database is locked.")) }.boxed();
