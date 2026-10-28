@@ -363,43 +363,13 @@ impl RenderOnce for SyncStatus {
 
 #[cfg(test)]
 mod tests {
-    use gitto_git::features::overview::schema::Overview;
-    use gitto_git::features::status::schema::{Head, StatusCounts, StatusSummary};
-    use gitto_repository::Repository;
-
     use super::*;
+    use crate::components::home::test_support as home;
 
     fn summary(upstream: Option<&str>, ahead: u64, behind: u64) -> RepositorySummary {
-        RepositorySummary {
-            repository: Repository {
-                id: "1".into(),
-                name: "gitto".into(),
-                path: "/src/gitto".into(),
-            },
-            status: Some(StatusSummary {
-                head: Head::Branch {
-                    name: "main".into(),
-                    sha: "abc".into(),
-                },
-                upstream: upstream.map(str::to_owned),
-                ahead,
-                behind,
-                counts: StatusCounts {
-                    files: 0,
-                    staged: 0,
-                    unstaged: 0,
-                    conflicted: 0,
-                },
-            }),
-            overview: Some(Overview {
-                remote: None,
-                fetched_at: None,
-                committed_at: None,
-                activity: Vec::new(),
-            }),
-            error: None,
-            settled: true,
-        }
+        home::summary("1", "gitto")
+            .upstream(upstream, ahead, behind)
+            .build()
     }
 
     #[test]
@@ -419,8 +389,10 @@ mod tests {
 
     #[test]
     fn waits_for_every_status_before_telling_the_sync() {
-        let mut loading = summary(Some("origin/main"), 0, 1);
-        loading.settled = false;
+        let loading = home::summary("2", "notes")
+            .upstream(Some("origin/main"), 0, 1)
+            .loading()
+            .build();
         assert_eq!(
             sync_state(&[summary(Some("origin/main"), 0, 0), loading]),
             None
@@ -430,8 +402,10 @@ mod tests {
     #[test]
     fn tells_the_sync_only_with_an_upstream() {
         assert_eq!(sync_state(&[summary(None, 0, 0)]), None);
-        let mut fetched = summary(Some("origin/main"), 1, 2);
-        fetched.overview.as_mut().unwrap().fetched_at = Some(1_000.5);
+        let fetched = home::summary("1", "gitto")
+            .upstream(Some("origin/main"), 1, 2)
+            .fetched_at(1_000.5)
+            .build();
         assert_eq!(
             sync_state(&[
                 fetched,
