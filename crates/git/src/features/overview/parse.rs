@@ -7,7 +7,7 @@ use regex::Regex;
 
 use super::schema::{Activity, ActivityKind, HostedRemote};
 use crate::core::errors::Result;
-use crate::features::history::parse::millis;
+use crate::features::history::parse::{millis, warn_of_fields_left};
 
 /// With -z, entries are NUL-separated as well, so the output is a flat list of fields where every
 /// three make up one entry: the reflog selector (with `--date=unix`, `HEAD@{<seconds>}`), git's
@@ -46,11 +46,10 @@ fn capture(pattern: &Regex, text: &str) -> Option<String> {
 /// `Error::Bug` for a time git wouldn't print.
 pub fn parse_reflog(output: &str) -> Result<Vec<Activity>> {
     let fields: Vec<&str> = output.split('\0').collect();
+    let (entries, rest) = fields.as_chunks::<3>();
+    warn_of_fields_left("reflog", rest);
     let mut activity = Vec::new();
-    for entry in fields.chunks_exact(3) {
-        let [selector, message, subject] = entry else {
-            unreachable!("chunks of 3")
-        };
+    for [selector, message, subject] in entries {
         let Some(seconds) = capture(&SELECTOR, selector.trim()) else {
             continue;
         };
