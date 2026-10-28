@@ -5,7 +5,7 @@
 //! derefs to what it holds (a string's pass as git arguments, `AsRef<OsStr>`).
 //!
 //! TS's `RepositoryInput` (a procedure's `repositoryId`) is [`RepositoryId`]: the features take
-//! the `Repo` that `GitApi::open` opens with it instead (see `crate::api`).
+//! the `Repo` that `GitApi::call` opens with it instead (see `crate::api`).
 //!
 //! The checks of a feature's own input are its own types: a page of the log is
 //! `history::commands::Page`, lines of a patch `staging::schema::LineRange`.
