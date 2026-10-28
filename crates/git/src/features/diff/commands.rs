@@ -13,10 +13,10 @@ use super::working_tree::check_working_tree_path;
 use crate::core::errors::{Error, Result};
 use crate::core::repo::{GitCommand, Repo};
 use crate::core::runner::RunOptions;
-use crate::input::FileInput;
+use crate::input::{FileInput, FullSha, Sha};
 
 /// The files the commit `sha` changed compared to its first parent, with their line counts.
-pub async fn get_commit_files(repo: &Repo, sha: &str) -> Result<Vec<ChangedFile>> {
+pub async fn get_commit_files(repo: &Repo, sha: &Sha) -> Result<Vec<ChangedFile>> {
     let output = repo
         .read([
             "diff-tree",
@@ -28,7 +28,8 @@ pub async fn get_commit_files(repo: &Repo, sha: &str) -> Result<Vec<ChangedFile>
             "-z",
             "--no-commit-id",
             "--diff-merges=first-parent",
-            sha,
+            "--end-of-options",
+            sha.as_str(),
         ])
         .await?;
     Ok(parse_diff(&output))
@@ -39,7 +40,7 @@ pub async fn get_commit_files(repo: &Repo, sha: &str) -> Result<Vec<ChangedFile>
 /// one. With full object names on its `index` line, which `get_blob` reads the whole file by.
 pub fn get_commit_file_patch(
     repo: &Repo,
-    sha: &str,
+    sha: &Sha,
     file: &FileInput,
 ) -> BoxFuture<'static, Result<String>> {
     let mut args = vec![
@@ -51,7 +52,8 @@ pub fn get_commit_file_patch(
         "--full-index",
         "--no-commit-id",
         "--diff-merges=first-parent",
-        sha,
+        "--end-of-options",
+        sha.as_str(),
         "--",
     ];
     args.extend(file_paths(file));
@@ -243,14 +245,17 @@ pub const PORCELAIN_DIFF: [&str; 4] = [
 
 /// The contents of a file, by its object name; fails with `Error::FileTooLarge` above
 /// `MAX_BLOB_BYTES`.
-pub async fn get_blob(repo: &Repo, oid: &str) -> Result<String> {
-    let size = repo.read(["cat-file", "-s", oid]).await?;
+pub async fn get_blob(repo: &Repo, oid: &FullSha) -> Result<String> {
+    let size = repo
+        .read(["cat-file", "-s", "--end-of-options", oid.as_str()])
+        .await?;
     // A size that isn't a number (it always is) is no reason not to read it, as in TS (`NaN`).
     let bytes = size.trim().parse::<u64>().unwrap_or(0);
     if bytes > MAX_BLOB_BYTES {
         return Err(Error::FileTooLarge { bytes });
     }
-    repo.read(["cat-file", "blob", oid]).await
+    repo.read(["cat-file", "blob", "--end-of-options", oid.as_str()])
+        .await
 }
 
 #[cfg(test)]
@@ -268,7 +273,7 @@ mod tests {
         SaveExpectation, read_working_tree_file, save_working_tree_file,
     };
     use crate::schema::FileStatus;
-    use crate::test_support::{Fixture, git};
+    use crate::test_support::{Fixture, git, valid};
 
     fn file(path: &str, orig_path: Option<&str>) -> FileInput {
         FileInput {
@@ -346,7 +351,7 @@ mod tests {
             let merge = sha_of(repo.path(), "Merge side");
             let first = sha_of(repo.path(), "first");
             assert_eq!(
-                get_commit_files(&repo, &merge).await.unwrap(),
+                get_commit_files(&repo, &valid(&merge)).await.unwrap(),
                 vec![
                     changed(
                         "c.txt",
@@ -359,7 +364,7 @@ mod tests {
                 ]
             );
             assert_eq!(
-                get_commit_files(&repo, &first).await.unwrap(),
+                get_commit_files(&repo, &valid(&first)).await.unwrap(),
                 vec![
                     changed("a file.txt", FileStatus::Added, None, Some(1), Some(0)),
                     changed("b.txt", FileStatus::Added, None, Some(1), Some(0)),
@@ -374,7 +379,7 @@ mod tests {
         let fx = Fixture::new();
         smol::block_on(async {
             let repo = fx.create_history_repo("history").await;
-            let error = get_commit_files(&repo, "0123456789abcdef0123456789abcdef01234567")
+            let error = get_commit_files(&repo, &valid("0123456789abcdef0123456789abcdef01234567"))
                 .await
                 .unwrap_err();
             assert!(is_git_error(&error), "{error:?}");
@@ -390,7 +395,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.create_history_repo("patches").await;
             let sha = sha_of(repo.path(), "main commit");
-            let patch = get_commit_file_patch(&repo, &sha, &file("a file.txt", None))
+            let patch = get_commit_file_patch(&repo, &valid(&sha), &file("a file.txt", None))
                 .await
                 .unwrap();
             let header = Regex::new(
@@ -408,7 +413,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.create_history_repo("patches").await;
             let sha = sha_of(repo.path(), "Merge side");
-            let patch = get_commit_file_patch(&repo, &sha, &file("c.txt", Some("b.txt")))
+            let patch = get_commit_file_patch(&repo, &valid(&sha), &file("c.txt", Some("b.txt")))
                 .await
                 .unwrap();
             assert!(
@@ -424,7 +429,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.create_history_repo("patches").await;
             let sha = sha_of(repo.path(), "first");
-            let patch = get_commit_file_patch(&repo, &sha, &file("b.txt", None))
+            let patch = get_commit_file_patch(&repo, &valid(&sha), &file("b.txt", None))
                 .await
                 .unwrap();
             assert!(patch.contains("new file mode 100644\n"), "{patch}");
@@ -440,13 +445,16 @@ mod tests {
         smol::block_on(async {
             let repo = fx.create_history_repo("blobs").await;
             let sha = sha_of(repo.path(), "main commit");
-            let patch = get_commit_file_patch(&repo, &sha, &file("a file.txt", None))
+            let patch = get_commit_file_patch(&repo, &valid(&sha), &file("a file.txt", None))
                 .await
                 .unwrap();
             let index = Regex::new(r"(?m)^index ([0-9a-f]+)\.\.([0-9a-f]+)").unwrap();
             let captures = index.captures(&patch).unwrap();
-            assert_eq!(get_blob(&repo, &captures[1]).await.unwrap(), "a\n");
-            assert_eq!(get_blob(&repo, &captures[2]).await.unwrap(), "a\nmore\n");
+            assert_eq!(get_blob(&repo, &valid(&captures[1])).await.unwrap(), "a\n");
+            assert_eq!(
+                get_blob(&repo, &valid(&captures[2])).await.unwrap(),
+                "a\nmore\n"
+            );
         });
     }
 
@@ -471,7 +479,7 @@ mod tests {
                 .unwrap();
             let output = child.wait_with_output().unwrap();
             let oid = String::from_utf8(output.stdout).unwrap().trim().to_owned();
-            let error = get_blob(&repo, &oid).await.unwrap_err();
+            let error = get_blob(&repo, &valid(&oid)).await.unwrap_err();
             assert!(matches!(error, Error::FileTooLarge { .. }), "{error:?}");
         });
     }

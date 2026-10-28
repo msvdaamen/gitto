@@ -150,6 +150,7 @@ pub async fn get_commit(repo: &Repo, sha: &Sha) -> Result<Commit> {
         LOG_FORMAT,
         "--decorate=full",
         "--max-count=1",
+        "--end-of-options",
         sha.as_str(),
         "--",
     ];

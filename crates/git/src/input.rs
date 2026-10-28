@@ -159,6 +159,9 @@ mod tests {
         assert!(Sha::parse("abcd").is_ok());
         assert!(Sha::parse("abc").is_err());
         assert!(Sha::parse("ABCD").is_err());
+        assert!(Sha::parse("HEAD").is_err());
+        // Never read by git as an option.
+        assert!(Sha::parse("--output=/tmp/x").is_err());
         assert!(FullSha::parse("a".repeat(40)).is_ok());
         assert!(FullSha::parse("a".repeat(64)).is_ok());
         assert!(FullSha::parse("a".repeat(41)).is_err());
