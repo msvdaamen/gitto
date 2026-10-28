@@ -75,10 +75,6 @@ impl GitApi {
         self
     }
 
-    pub fn repos(&self) -> &GitRepos {
-        &self.repos
-    }
-
     /// The installed git, which `features::version::check` says is supported or not.
     pub fn version(&self) -> &GitVersion {
         &self.version
