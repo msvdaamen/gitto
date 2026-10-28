@@ -1983,7 +1983,7 @@ checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
 name = "gitto-db"
 version = "0.1.0"
 dependencies = [
- "blocking",
+ "async-channel",
  "dirs 6.0.0",
  "rusqlite",
  "smol",

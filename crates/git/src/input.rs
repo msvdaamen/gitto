@@ -1,7 +1,8 @@
 //! Input the features take from the UI, checked when it's made. Ported from
 //! `packages/git/src/input.ts`, and the checks of each feature's `contract.ts`: their zod schemas
 //! are the newtypes here, so a feature can't be called with input the contract refused. Each is
-//! made with `parse` (or `TryFrom<String>`), fails with `Error::InvalidInput` saying why, and derefs to what it holds (a string's pass as git arguments, `AsRef<OsStr>`).
+//! made with `parse` (or `TryFrom<String>`), fails with `Error::InvalidInput` saying why, and
+//! derefs to what it holds (a string's pass as git arguments, `AsRef<OsStr>`).
 //!
 //! TS's `RepositoryInput` (a procedure's `repositoryId`) is [`RepositoryId`]: the features take
 //! the `Repo` that `GitApi::open` opens with it instead (see `crate::api`).
@@ -280,12 +281,10 @@ impl Deref for Paths {
     }
 }
 
-/// Whether `value` has a character JS's `\S` matches: one that isn't whitespace as JS has it,
-/// which is Unicode's but for U+0085 (NEL), and with the byte order mark.
+/// Whether `value` has a character JS's `\S` matches: one that isn't whitespace, nor the byte
+/// order mark, which JS's `\s` also has and Unicode's whitespace doesn't.
 fn has_non_space(value: &str) -> bool {
-    value
-        .chars()
-        .any(|c| !(c.is_whitespace() && c != '\u{85}') && c != '\u{feff}')
+    value.chars().any(|c| !c.is_whitespace() && c != '\u{feff}')
 }
 
 fn is_lower_hex(value: &str) -> bool {
@@ -320,6 +319,8 @@ mod tests {
         assert!(Sha::parse("a".repeat(65)).is_err());
         assert!(Sha::parse("ABCD").is_err());
         assert!(Sha::parse("HEAD").is_err());
+        // Never read by git as an option.
+        assert!(Sha::parse("--output=/tmp/x").is_err());
         assert!(FullSha::parse("a".repeat(40)).is_ok());
         assert!(FullSha::parse("a".repeat(64)).is_ok());
         assert!(FullSha::parse("a".repeat(41)).is_err());
@@ -389,8 +390,8 @@ mod tests {
         );
         // Kept as it's sent.
         assert_eq!(Message::parse(" Fix\n").unwrap().as_str(), " Fix\n");
-        // NEL isn't whitespace to JS's `\S`.
-        assert!(Message::parse("\u{85}").is_ok());
+        // NEL is whitespace, as Unicode has it.
+        assert!(Message::parse("\u{85}").is_err());
     }
 
     #[test]

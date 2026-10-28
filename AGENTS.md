@@ -62,3 +62,10 @@ cargo fmt --all
 cargo clippy --workspace --exclude app --all-targets --locked -- -D warnings
 cargo test --workspace --exclude app --locked
 ```
+
+## Gitto's database
+
+While both apps ship, the Rust app opens the Electron app's `gitto.db` (see `crates/db/src/paths.rs`),
+whose schema each migrates its own way: Drizzle in `apps/electron/migrations`, `user_version` in
+`crates/db/migrations`. A change to a table they share, like `repositories`, goes into both, and
+`check_shared_tables` in `crates/db/src/migrations.rs` brings a table the other app made up to date.

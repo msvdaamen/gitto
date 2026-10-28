@@ -16,7 +16,8 @@ async-process = "2.5.0"
 blocking = "1.7.0"
 dunce = "1.0.5"
 event-listener = "5.4.2"
-futures = "0.3.34"
+# Without the executor and its thread pool: tasks run on smol's, or the caller's.
+futures = { version = "0.3.34", default-features = false, features = ["std", "async-await"] }
 futures-lite = "2.6.1"
 libc = "0.2.191"
 log = { version = "0.4.34", features = ["std"] }

@@ -5,8 +5,10 @@ use std::collections::HashMap;
 use crate::core::errors::Result;
 use crate::core::repo::GitCommand;
 
-/// The settings a pull or push depends on, by key. Git lowercases the section and name, but not a
-/// branch's name or a URL: e.g. `branch.Feature.merge`.
+/// The settings a pull or push depends on, read through the accessors: the repository's own, a
+/// branch's ([`RemoteConfig::branch`]) and a remote's ([`RemoteConfig::remote`]), which spell
+/// the keys as git has them, its section and name lowercased but not a branch's or remote's name:
+/// e.g. `branch.Feature.merge`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RemoteConfig {
     /// The keys, in the order they were first set, as `keys` lists them.
@@ -16,7 +18,7 @@ pub struct RemoteConfig {
 
 impl RemoteConfig {
     /// The value `key` is set to; the last, if it's set several times, as git takes it.
-    pub fn get(&self, key: &str) -> Option<&str> {
+    fn get(&self, key: &str) -> Option<&str> {
         self.values
             .get(key)
             .and_then(|values| values.last())
@@ -24,20 +26,20 @@ impl RemoteConfig {
     }
 
     /// Every value `key` is set to, in order: a branch's `merge` can name several branches.
-    pub fn all(&self, key: &str) -> &[String] {
+    fn all(&self, key: &str) -> &[String] {
         self.values.get(key).map_or(&[], Vec::as_slice)
     }
 
-    pub fn has(&self, key: &str) -> bool {
+    fn has(&self, key: &str) -> bool {
         self.values.contains_key(key)
     }
 
     /// The keys set, in the order they were first set.
-    pub fn keys(&self) -> impl Iterator<Item = &str> {
+    fn keys(&self) -> impl Iterator<Item = &str> {
         self.order.iter().map(String::as_str)
     }
 
-    pub fn add(&mut self, key: &str, value: &str) {
+    fn add(&mut self, key: &str, value: &str) {
         match self.values.get_mut(key) {
             Some(values) => values.push(value.to_owned()),
             None => {
@@ -45,6 +47,242 @@ impl RemoteConfig {
                 self.values.insert(key.to_owned(), vec![value.to_owned()]);
             }
         }
+    }
+
+    /// The settings of the branch `name`, by its short name.
+    pub fn branch<'n>(&self, name: &'n str) -> BranchConfig<'_, 'n> {
+        BranchConfig { config: self, name }
+    }
+
+    /// The settings of the remote `name`.
+    pub fn remote<'n>(&self, name: &'n str) -> RemoteSettings<'_, 'n> {
+        RemoteSettings { config: self, name }
+    }
+
+    /// `pull.ff`: whether a pull merges by fast-forwarding.
+    pub fn pull_ff(&self) -> Option<PullFf> {
+        self.get("pull.ff").map(PullFf::parse)
+    }
+
+    /// `push.default`: where `git push` pushes a branch; `None` if it isn't set, or is set to a
+    /// value git doesn't know.
+    pub fn push_default(&self) -> Option<PushDefault> {
+        self.get("push.default").and_then(PushDefault::parse)
+    }
+
+    /// The remotes that have one of `settings` (e.g. `url`, which fetching needs), by name.
+    pub fn remote_names(&self, settings: &[&str]) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        for key in self.keys() {
+            // `remote.<name>.<setting>`: the name is all up to the last dot, as it can have dots.
+            let Some((name, setting)) = key
+                .strip_prefix("remote.")
+                .and_then(|rest| rest.rsplit_once('.'))
+            else {
+                continue;
+            };
+            if name.is_empty() || setting.is_empty() {
+                continue;
+            }
+            if settings.contains(&setting) && !names.iter().any(|known| known == name) {
+                names.push(name.to_owned());
+            }
+        }
+        names
+    }
+
+    /// The remotes `git fetch --all` fetches (those not set to be skipped), but for `except`,
+    /// which a pull already fetched.
+    pub fn remotes_to_fetch(&self, except: &str) -> Vec<String> {
+        self.remote_names(&["url"])
+            .into_iter()
+            .filter(|name| name != except && !self.remote(name).skip_fetch_all())
+            .collect()
+    }
+}
+
+/// A branch's settings (see [`RemoteConfig::branch`]).
+#[derive(Debug, Clone, Copy)]
+pub struct BranchConfig<'c, 'n> {
+    config: &'c RemoteConfig,
+    name: &'n str,
+}
+
+impl<'c> BranchConfig<'c, '_> {
+    fn key(&self, setting: &str) -> String {
+        format!("branch.{}.{setting}", self.name)
+    }
+
+    /// `branch.<name>.remote`: the remote it pulls from, by name or as a URL; "." for the
+    /// repository itself.
+    pub fn remote(&self) -> Option<&'c str> {
+        self.config.get(&self.key("remote"))
+    }
+
+    /// `branch.<name>.merge`: the branch it pulls from, by its full name on the remote, e.g.
+    /// `refs/heads/main`; the last, if it's set several times (see `merges`).
+    pub fn merge(&self) -> Option<&'c str> {
+        self.config.get(&self.key("merge"))
+    }
+
+    /// Every branch it's set to pull from: `git pull` merges them all at once.
+    pub fn merges(&self) -> &'c [String] {
+        self.config.all(&self.key("merge"))
+    }
+
+    /// How it's rebased when pulled: as its own `rebase` says, or else `pull.rebase`; `None` when
+    /// neither is set.
+    pub fn rebase(&self) -> Option<PullRebase> {
+        self.config
+            .get(&self.key("rebase"))
+            .or_else(|| self.config.get("pull.rebase"))
+            .map(PullRebase::parse)
+    }
+
+    /// Whether a pull of it rebases: as in `git pull`, `pull.ff=only` wins.
+    pub fn rebases(&self) -> bool {
+        self.config.pull_ff() != Some(PullFf::Only)
+            && self
+                .rebase()
+                .is_some_and(|rebase| rebase != PullRebase::False)
+    }
+
+    /// Whether a pull of it can make a merge commit.
+    pub fn makes_merge_commit(&self) -> bool {
+        !self.rebases() && self.config.pull_ff() != Some(PullFf::Only)
+    }
+
+    /// The remote it's pushed to, as `git push` picks it: its `pushRemote`, the repository's
+    /// `pushDefault`, or the remote it pulls from (unless that's the repository itself, "."), by
+    /// name or as a URL. Without any, the only remote, or `origin` among several; `None` if
+    /// there's none.
+    pub fn push_remote(&self) -> Option<String> {
+        let upstream = self.remote();
+        let set = self
+            .config
+            .get(&self.key("pushremote"))
+            .or_else(|| self.config.get("remote.pushdefault"))
+            .or(upstream.filter(|upstream| *upstream != "."));
+        if let Some(set) = set.filter(|set| !set.is_empty()) {
+            return Some(set.to_owned());
+        }
+        let mut remotes = self.config.remote_names(&["url", "pushurl"]);
+        if remotes.len() == 1 {
+            return remotes.pop();
+        }
+        remotes
+            .iter()
+            .any(|remote| remote == "origin")
+            .then(|| "origin".to_owned())
+    }
+}
+
+/// A remote's settings (see [`RemoteConfig::remote`]).
+#[derive(Debug, Clone, Copy)]
+pub struct RemoteSettings<'c, 'n> {
+    config: &'c RemoteConfig,
+    name: &'n str,
+}
+
+impl<'c> RemoteSettings<'c, '_> {
+    fn key(&self, setting: &str) -> String {
+        format!("remote.{}.{setting}", self.name)
+    }
+
+    /// Whether it has a URL, which a remote that's fetched from needs.
+    pub fn has_url(&self) -> bool {
+        self.config.has(&self.key("url"))
+    }
+
+    /// Its `fetch` refspecs (see `map_ref`).
+    pub fn fetch_specs(&self) -> &'c [String] {
+        self.config.all(&self.key("fetch"))
+    }
+
+    /// Its `push` refspecs (see `map_ref`).
+    pub fn push_specs(&self) -> &'c [String] {
+        self.config.all(&self.key("push"))
+    }
+
+    /// Whether `git fetch --all` leaves it out (`skipFetchAll`).
+    pub fn skip_fetch_all(&self) -> bool {
+        self.config
+            .get(&self.key("skipfetchall"))
+            .is_some_and(|skip| !is_false(skip))
+    }
+}
+
+/// How a pull rebases (`pull.rebase`, or a branch's `rebase`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PullRebase {
+    /// It merges.
+    False,
+    True,
+    /// With `--rebase-merges` (`merges`).
+    Merges,
+    /// Interactively (`interactive`), which Gitto doesn't: there's no one to use the editor. It
+    /// rebases as for `true`.
+    Interactive,
+}
+
+impl PullRebase {
+    /// `value` as git takes it, in any case. One git doesn't know, which it refuses, is taken for
+    /// `true`.
+    fn parse(value: &str) -> Self {
+        match value.to_lowercase().as_str() {
+            "merges" | "m" => PullRebase::Merges,
+            "interactive" | "i" => PullRebase::Interactive,
+            value if is_false(value) => PullRebase::False,
+            _ => PullRebase::True,
+        }
+    }
+}
+
+/// Whether a pull merges by fast-forwarding (`pull.ff`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PullFf {
+    /// Only by fast-forwarding, failing otherwise (`only`); it never rebases either.
+    Only,
+    /// Never: always with a merge commit (`false`).
+    No,
+    /// When it can (`true`, git's default).
+    Yes,
+}
+
+impl PullFf {
+    /// `value` as git takes it, in any case. One git doesn't know, which it refuses, is taken for
+    /// `true`.
+    fn parse(value: &str) -> Self {
+        match value.to_lowercase().as_str() {
+            "only" => PullFf::Only,
+            value if is_false(value) => PullFf::No,
+            _ => PullFf::Yes,
+        }
+    }
+}
+
+/// Where `git push` pushes a branch without being told (`push.default`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PushDefault {
+    Nothing,
+    Current,
+    /// To the branch it pulls from (`upstream`, or `tracking`, its old name).
+    Upstream,
+    Simple,
+    Matching,
+}
+
+impl PushDefault {
+    /// `value` as git takes it, in any case; `None` for one git doesn't know.
+    fn parse(value: &str) -> Option<Self> {
+        Some(match value.to_lowercase().as_str() {
+            "nothing" => PushDefault::Nothing,
+            "current" => PushDefault::Current,
+            "upstream" | "tracking" => PushDefault::Upstream,
+            "simple" => PushDefault::Simple,
+            "matching" => PushDefault::Matching,
+            _ => return None,
+        })
     }
 }
 
@@ -77,91 +315,12 @@ pub fn parse_config(output: &str) -> RemoteConfig {
     config
 }
 
-/// Whether git takes `value`, lowercased, for false; an empty one is false too.
-pub fn is_false(value: &str) -> bool {
-    matches!(value, "false" | "no" | "off" | "0" | "")
-}
-
-/// `key`'s value in `config`, lowercased.
-fn lowercase(config: &RemoteConfig, key: &str) -> Option<String> {
-    config.get(key).map(str::to_lowercase)
-}
-
-/// The remotes `git fetch --all` fetches (those not set to be skipped), going by `config`, but for
-/// `except`, which a pull already fetched.
-pub fn remotes_to_fetch(config: &RemoteConfig, except: &str) -> Vec<String> {
-    remote_names(config, &["url"])
-        .into_iter()
-        .filter(|name| {
-            let skip = lowercase(config, &format!("remote.{name}.skipfetchall"));
-            name != except && skip.as_deref().is_none_or(is_false)
-        })
-        .collect()
-}
-
-/// The remotes that have one of `settings` (e.g. `url`, which fetching needs), by name, as
-/// `config` has them.
-pub fn remote_names(config: &RemoteConfig, settings: &[&str]) -> Vec<String> {
-    let mut names: Vec<String> = Vec::new();
-    for key in config.keys() {
-        // `remote.<name>.<setting>`: the name is all up to the last dot, as it can have dots.
-        let Some((name, setting)) = key
-            .strip_prefix("remote.")
-            .and_then(|rest| rest.rsplit_once('.'))
-        else {
-            continue;
-        };
-        if name.is_empty() || setting.is_empty() {
-            continue;
-        }
-        if settings.contains(&setting) && !names.iter().any(|known| known == name) {
-            names.push(name.to_owned());
-        }
-    }
-    names
-}
-
-/// How `branch` is set to be rebased when pulled, lowercased; `None` when it isn't set.
-pub fn rebase_setting(config: &RemoteConfig, branch: &str) -> Option<String> {
-    config
-        .get(&format!("branch.{branch}.rebase"))
-        .or_else(|| config.get("pull.rebase"))
-        .map(str::to_lowercase)
-}
-
-/// Whether a pull of `branch` can make a merge commit, going by `config`.
-pub fn makes_merge_commit(config: &RemoteConfig, branch: &str) -> bool {
-    !rebases(config, branch) && lowercase(config, "pull.ff").as_deref() != Some("only")
-}
-
-/// Whether a pull of `branch` rebases, going by `config`: as in `git pull`, `pull.ff=only` wins.
-pub fn rebases(config: &RemoteConfig, branch: &str) -> bool {
-    let rebase = rebase_setting(config, branch);
-    lowercase(config, "pull.ff").as_deref() != Some("only")
-        && rebase.as_deref().is_some_and(|rebase| !is_false(rebase))
-}
-
-/// The remote `branch` is pushed to, as `git push` picks it: the branch's `pushRemote`, the
-/// repository's `pushDefault`, or the remote it pulls from (unless that's the repository itself,
-/// "."), by name or as a URL. Without any, the only remote, or `origin` among several; `None` if
-/// there's none.
-pub fn push_remote(config: &RemoteConfig, branch: &str) -> Option<String> {
-    let upstream = config.get(&format!("branch.{branch}.remote"));
-    let set = config
-        .get(&format!("branch.{branch}.pushremote"))
-        .or_else(|| config.get("remote.pushdefault"))
-        .or(upstream.filter(|upstream| *upstream != "."));
-    if let Some(set) = set.filter(|set| !set.is_empty()) {
-        return Some(set.to_owned());
-    }
-    let mut remotes = remote_names(config, &["url", "pushurl"]);
-    if remotes.len() == 1 {
-        return remotes.pop();
-    }
-    remotes
-        .iter()
-        .any(|remote| remote == "origin")
-        .then(|| "origin".to_owned())
+/// Whether git takes `value`, in any case, for false; an empty one is false too.
+fn is_false(value: &str) -> bool {
+    matches!(
+        value.to_lowercase().as_str(),
+        "false" | "no" | "off" | "0" | ""
+    )
 }
 
 /// Where `reference` (a full ref name, e.g. `refs/heads/main`) goes through `refspecs`, a remote's
@@ -286,6 +445,7 @@ mod tests {
 
     #[test]
     fn rebase_unless_the_setting_is_false_with_the_branchs_own_setting_first() {
+        let rebases = |config: &RemoteConfig, branch: &str| config.branch(branch).rebases();
         assert!(!rebases(&parse_config(""), "main"));
         assert!(rebases(&config(&[("pull.rebase", "true")]), "main"));
         assert!(rebases(&config(&[("pull.rebase", "merges")]), "main"));
@@ -298,13 +458,65 @@ mod tests {
     #[test]
     fn only_fast_forward_wins_over_rebasing_and_makes_no_merge_commit() {
         let ff_only = config(&[("pull.rebase", "true"), ("pull.ff", "only")]);
-        assert!(!rebases(&ff_only, "main"));
-        assert!(!makes_merge_commit(&ff_only, "main"));
-        assert!(!makes_merge_commit(
-            &config(&[("pull.rebase", "true")]),
-            "main"
-        ));
-        assert!(makes_merge_commit(&parse_config(""), "main"));
+        assert!(!ff_only.branch("main").rebases());
+        assert!(!ff_only.branch("main").makes_merge_commit());
+        assert!(
+            !config(&[("pull.rebase", "true")])
+                .branch("main")
+                .makes_merge_commit()
+        );
+        assert!(parse_config("").branch("main").makes_merge_commit());
+    }
+
+    #[test]
+    fn settings_are_read_as_git_takes_their_values_in_any_case() {
+        let rebase = |value: &str| config(&[("pull.rebase", value)]).branch("main").rebase();
+        assert_eq!(rebase("Merges"), Some(PullRebase::Merges));
+        assert_eq!(rebase("m"), Some(PullRebase::Merges));
+        assert_eq!(rebase("interactive"), Some(PullRebase::Interactive));
+        assert_eq!(rebase("off"), Some(PullRebase::False));
+        assert_eq!(rebase("yes"), Some(PullRebase::True));
+        assert_eq!(parse_config("").branch("main").rebase(), None);
+
+        let ff = |value: &str| config(&[("pull.ff", value)]).pull_ff();
+        assert_eq!(ff("ONLY"), Some(PullFf::Only));
+        assert_eq!(ff("false"), Some(PullFf::No));
+        assert_eq!(ff("true"), Some(PullFf::Yes));
+        assert_eq!(parse_config("").pull_ff(), None);
+
+        let push = |value: &str| config(&[("push.default", value)]).push_default();
+        assert_eq!(push("tracking"), Some(PushDefault::Upstream));
+        assert_eq!(push("Upstream"), Some(PushDefault::Upstream));
+        assert_eq!(push("simple"), Some(PushDefault::Simple));
+        assert_eq!(push("sideways"), None);
+    }
+
+    #[test]
+    fn a_branchs_and_a_remotes_settings_are_read_by_their_names_as_they_are() {
+        let config = config(&[
+            ("branch.Feature.remote", "origin"),
+            ("branch.Feature.merge", "refs/heads/a"),
+            ("branch.Feature.merge", "refs/heads/b"),
+            ("remote.my.fork.url", "https://example.com/a.git"),
+            ("remote.my.fork.push", "refs/heads/*:refs/for/*"),
+            (
+                "remote.my.fork.fetch",
+                "+refs/heads/*:refs/remotes/my.fork/*",
+            ),
+        ]);
+        let branch = config.branch("Feature");
+        assert_eq!(branch.remote(), Some("origin"));
+        assert_eq!(branch.merge(), Some("refs/heads/b"));
+        assert_eq!(branch.merges(), ["refs/heads/a", "refs/heads/b"]);
+        assert_eq!(config.branch("feature").remote(), None);
+        let remote = config.remote("my.fork");
+        assert!(remote.has_url());
+        assert_eq!(remote.push_specs(), ["refs/heads/*:refs/for/*"]);
+        assert_eq!(
+            remote.fetch_specs(),
+            ["+refs/heads/*:refs/remotes/my.fork/*"]
+        );
+        assert!(!config.remote("origin").has_url());
     }
 
     #[test]
@@ -317,11 +529,8 @@ mod tests {
             ("remote.other.url", "https://example.com/d.git"),
             ("remote.other.skipfetchall", "off"),
         ]);
-        assert_eq!(remotes_to_fetch(&config, "origin"), ["fork", "other"]);
-        assert_eq!(
-            remotes_to_fetch(&config, "none"),
-            ["origin", "fork", "other"]
-        );
+        assert_eq!(config.remotes_to_fetch("origin"), ["fork", "other"]);
+        assert_eq!(config.remotes_to_fetch("none"), ["origin", "fork", "other"]);
     }
 
     #[test]
