@@ -3,11 +3,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use gitto_git::ContentVersion;
 use gitto_git::features::conflicts::commands::{
     ShownConflict, get_conflict, keep_side, mark_resolved,
 };
-use gitto_git::features::conflicts::schema::{Conflict, ConflictSides, Side};
-use gitto_git::input::{NonEmpty, RepositoryId};
+use gitto_git::features::conflicts::schema::{Conflict, ConflictSides, FileVersion, Side};
+use gitto_git::input::{RepoPath, RepositoryId};
 use gpui_kit::{App, AppContext as _, Context, Entity};
 
 use super::call::{call, loads, parse};
@@ -27,7 +28,7 @@ pub fn conflict_options(id: &RepositoryId, path: &str, cx: &App) -> QueryOptions
         keys::conflict(id, &path),
         loads(cx, "conflicts.get", id, move |repo| {
             let path = path.clone();
-            async move { get_conflict(&repo, &parse::<NonEmpty>(path)?).await }
+            async move { get_conflict(&repo, &parse::<RepoPath>(path)?).await }
         }),
     )
     // Only reloaded once it's invalidated: like the status, whenever the working tree or the
@@ -75,10 +76,11 @@ pub enum ConflictResolution {
         side: Side,
         /// The sides the user saw, which have to be the file's still.
         sides: ConflictSides,
-        version: Option<String>,
+        /// The version of the file the user saw (`ConflictFile::version`).
+        version: Option<FileVersion>,
     },
     Mark {
-        version: Option<String>,
+        version: Option<ContentVersion>,
         /// Even with conflict markers left: the user said they belong in it.
         with_markers: bool,
     },
@@ -108,7 +110,7 @@ pub fn resolve_file_mutation(cx: &mut App) -> Entity<Mutation<FileToResolve>> {
                 ConflictResolution::Mark { .. } => "conflicts.markResolved",
             };
             let action = call(cx, procedure, &id, move |repo| async move {
-                let path = parse::<NonEmpty>(path)?;
+                let path = parse::<RepoPath>(path)?;
                 match resolution {
                     ConflictResolution::Keep {
                         side,
@@ -118,7 +120,7 @@ pub fn resolve_file_mutation(cx: &mut App) -> Entity<Mutation<FileToResolve>> {
                     ConflictResolution::Mark {
                         version,
                         with_markers,
-                    } => mark_resolved(&repo, &path, version.as_deref(), with_markers).await,
+                    } => mark_resolved(&repo, &path, version.as_ref(), with_markers).await,
                 }
             });
             cx.spawn(async move |cx| {

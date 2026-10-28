@@ -4,9 +4,7 @@ use std::rc::Rc;
 
 use gitto_ui::git::rows::StashRow;
 use gpui_kit::prelude::*;
-use gpui_kit::{
-    App, FontWeight, Rems, SharedString, Window, div, linear_color_stop, linear_gradient,
-};
+use gpui_kit::{App, FontWeight, SharedString, Window, div, linear_color_stop, linear_gradient};
 
 use super::columns::{CELL_PADDING, Column, MESSAGE_TEXT, SMALL_TEXT, keyed, tinted};
 use super::commit_row::RowProps;
@@ -14,7 +12,7 @@ use super::history_graph::{GraphNode, HistoryGraph};
 use super::history_option::{HistoryOption, RowKindBadge, RowLook, RowTotals};
 use crate::components::ui::IconName;
 use crate::state::clock::relative_time;
-use crate::theme::{Palette, PaletteExt as _};
+use crate::theme::{Palette, PaletteExt as _, base_px};
 
 /// A stash in the history: a box in the graph, with a dashed line to the commit it was made on.
 #[derive(IntoElement)]
@@ -56,7 +54,7 @@ impl RenderOnce for HistoryStashRow {
         let palette = *cx.palette();
         let stash = self.stash;
         let props = self.props;
-        let id: SharedString = stash.id.clone().into();
+        let id: SharedString = stash.sha.clone().into();
         let on_select = Rc::clone(&props.on_select);
         let graph = stash.graph.map(|row| {
             HistoryGraph::new(keyed("graph", id.clone()), row, GraphNode::Stash)
@@ -66,7 +64,7 @@ impl RenderOnce for HistoryStashRow {
             .flex()
             .items_center()
             .justify_between()
-            .gap(Rems(7. / 15.))
+            .gap(base_px(7.))
             .px(CELL_PADDING)
             .child(
                 div()

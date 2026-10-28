@@ -7,6 +7,7 @@ use std::rc::Rc;
 use futures::FutureExt as _;
 use futures::channel::oneshot;
 use futures::future::Shared;
+use gitto_git::ContentVersion;
 use gitto_git::features::diff::working_tree::WorkingTreeFile;
 use gitto_git::input::RepositoryId;
 use gpui_kit::component::Sizable as _;
@@ -23,42 +24,6 @@ use crate::data::file_diff::{fetch_working_tree_file, save_working_tree_file};
 use crate::data::{QueryClient, QueryError, QueryKey, keys};
 use crate::theme::PaletteExt as _;
 
-/// A version of a file in the working tree, as git's API names one (see
-/// `read_working_tree_file`): a write over the file is checked against the version it's of, so it
-/// doesn't go over changes made since.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct FileVersion(String);
-
-impl FileVersion {
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    pub fn into_string(self) -> String {
-        self.0
-    }
-}
-
-impl From<String> for FileVersion {
-    fn from(version: String) -> Self {
-        FileVersion(version)
-    }
-}
-
-impl From<&str> for FileVersion {
-    fn from(version: &str) -> Self {
-        FileVersion(version.to_owned())
-    }
-}
-
-impl std::ops::Deref for FileVersion {
-    type Target = str;
-
-    fn deref(&self) -> &str {
-        &self.0
-    }
-}
-
 /// Whether a save goes over the file whatever it is now, or only as it was at the version
 /// expected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,7 +37,7 @@ pub enum Overwrite {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SaveRequest {
     pub contents: String,
-    pub expected: FileVersion,
+    pub expected: ContentVersion,
     pub overwrite: Overwrite,
 }
 
@@ -81,7 +46,7 @@ pub struct SaveRequest {
 /// saved.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditSession {
-    pub version: FileVersion,
+    pub version: ContentVersion,
     pub editor: Entity<EditorState>,
 }
 
@@ -91,8 +56,9 @@ pub type ReadWorkingTreeFile =
 
 /// Saves a file's text over it in the working tree, as the request says; resolves to its new
 /// version.
-pub type SaveWorkingTreeFile =
-    Rc<dyn Fn(&RepositoryId, &str, SaveRequest, &mut App) -> Task<Result<FileVersion, QueryError>>>;
+pub type SaveWorkingTreeFile = Rc<
+    dyn Fn(&RepositoryId, &str, SaveRequest, &mut App) -> Task<Result<ContentVersion, QueryError>>,
+>;
 
 /// Loads again what's under a key, as what it's of changed: the file's changes once its edits
 /// are saved, say.
@@ -112,15 +78,14 @@ impl FileIo {
         FileIo {
             read: Rc::new(fetch_working_tree_file),
             save: Rc::new(|id, path, request, cx| {
-                let saving = save_working_tree_file(
+                save_working_tree_file(
                     id,
                     path,
                     request.contents,
-                    request.expected.into_string(),
+                    request.expected,
                     request.overwrite == Overwrite::Always,
                     cx,
-                );
-                cx.spawn(async move |_| saving.await.map(FileVersion::from))
+                )
             }),
             reload: Rc::new(|key, cx| drop(QueryClient::invalidate(&key, cx))),
         }
@@ -605,8 +570,8 @@ async fn save_and_stop(
 
 #[cfg(test)]
 mod tests {
+    use gitto_git::DiskChange;
     use gitto_git::FileStatus;
-    use gitto_git::core::errors::DiskChange;
     use gitto_git::{ApiError, Error};
     use gpui_kit::TestAppContext;
 
@@ -622,7 +587,7 @@ mod tests {
 
     /// Saving fails as git's API says the file changed on disk.
     fn changed_on_disk() -> QueryError {
-        ApiError::from(Error::FileChangedOnDisk {
+        ApiError::unreported(Error::FileChangedOnDisk {
             path: "a.txt".into(),
             how: DiskChange::Changed,
         })

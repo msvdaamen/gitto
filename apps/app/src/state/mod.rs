@@ -25,3 +25,13 @@ pub mod router;
 pub mod settled;
 pub mod update;
 pub mod whats_new;
+
+/// Sets up the state the whole app shares, in globals: the clock, the update's status and What's
+/// new. Call once the services are set up (`Services` is a global): the update's status starts
+/// watching the updater. The router's set up on its own, on the page to start on
+/// (`Router::init`).
+pub fn init(cx: &mut gpui_kit::App) {
+    clock::Clock::init(cx);
+    update::UpdateStatus::init(cx);
+    whats_new::WhatsNew::init(cx);
+}

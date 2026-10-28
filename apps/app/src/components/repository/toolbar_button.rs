@@ -12,18 +12,14 @@ use gpui_kit::{App, ClickEvent, ElementId, FontWeight, SharedString, Window, div
 use crate::components::ui::{FailurePopover, Icon, IconName};
 use crate::data::QueryError;
 use crate::theme::PaletteExt as _;
-use crate::views::repository::{LARGE, MEDIUM};
-
-/// The window width below which the toolbar's gaps tighten and the buttons hidden below `Small`
-/// go (`index.css`'s `sm` breakpoint).
-pub const SMALL: f32 = 700.;
+use crate::theme::breakpoints::{LARGE, MEDIUM, SMALL};
 
 /// Below which window width a toolbar button is left out, to make room (TS's `hideBelow`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HideBelow {
-    /// [`SMALL`].
+    /// `sm`, below which the toolbar's gaps tighten too.
     Small,
-    /// `views::repository::LARGE`.
+    /// `lg`.
     Large,
 }
 
@@ -278,7 +274,7 @@ impl RenderOnce for ToolbarButton {
                 FailurePopover::new(
                     SharedString::from(format!("{}-failure", self.id)),
                     failure.title,
-                    failure.error,
+                    failure.error.map(|error| error.message().into()),
                     button,
                 )
                 .on_dismiss(move |window, cx| on_dismiss(window, cx))

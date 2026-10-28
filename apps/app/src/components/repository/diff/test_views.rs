@@ -7,19 +7,23 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use futures::FutureExt as _;
-use gitto_git::FileStatus;
-use gitto_git::features::conflicts::schema::{Conflict, ConflictSide, ConflictText};
+use gitto_git::features::conflicts::schema::{
+    Conflict, ConflictFile, ConflictSide, ConflictSides, ConflictText,
+};
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::features::diff::working_tree::WorkingTreeFile;
-use gitto_git::features::status::schema::{Head, StatusCounts, Uncommitted, WorkingTreeFiles};
+use gitto_git::features::status::schema::{
+    Head, StatusCounts, StatusSummary, Uncommitted, WorkingTreeFiles,
+};
 use gitto_git::input::RepositoryId;
+use gitto_git::{ContentVersion, FileMode, FileStatus};
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, App, AppContext as _, Entity, Task, TestAppContext};
 
 use super::conflict_resolution::ResolveFileMutation;
 use super::file_diff_view::{FileDiffEvent, FileDiffView};
-use super::file_editing::{FileIo, FileVersion, Overwrite};
+use super::file_editing::{FileIo, Overwrite};
 use crate::data::conflicts::FileToResolve;
 use crate::data::file_diff::{FilePatch, file_patch_key};
 use crate::data::{Mutation, Opaque, QueryClient, QueryError, QueryKey, QueryOptions, keys};
@@ -55,7 +59,7 @@ pub fn conflicted(path: &str) -> ChangedFile {
 
 pub fn side(oid: &str) -> ConflictSide {
     ConflictSide {
-        mode: "100644".into(),
+        mode: FileMode::Regular,
         oid: oid.into(),
     }
 }
@@ -63,16 +67,15 @@ pub fn side(oid: &str) -> ConflictSide {
 /// A conflict both sides changed as text, read at `version`.
 pub fn text_conflict(contents: &str, version: &str) -> Conflict {
     Conflict {
-        base: Some(side("b1")),
-        ours: Some(side("o1")),
-        theirs: Some(side("t1")),
-        text: Some(ConflictText {
+        sides: ConflictSides {
+            base: Some(side("b1")),
+            ours: Some(side("o1")),
+            theirs: Some(side("t1")),
+        },
+        file: ConflictFile::Text(ConflictText {
             contents: contents.into(),
             version: version.into(),
         }),
-        version: Some(version.into()),
-        binary: false,
-        unreadable: None,
     }
 }
 
@@ -83,18 +86,20 @@ pub fn set_changes(staged: Vec<ChangedFile>, unstaged: Vec<ChangedFile>, cx: &mu
         .filter(|file| file.status == FileStatus::Conflicted)
         .count() as u64;
     let status = Uncommitted {
-        head: Head::Branch {
-            name: "main".into(),
-            sha: "a1".into(),
-        },
-        upstream: None,
-        ahead: 0,
-        behind: 0,
-        counts: StatusCounts {
-            files: (staged.len() + unstaged.len()) as u64,
-            staged: staged.len() as u64,
-            unstaged: unstaged.len() as u64,
-            conflicted,
+        summary: StatusSummary {
+            head: Head::Branch {
+                name: "main".into(),
+                sha: "a1".into(),
+            },
+            upstream: None,
+            ahead: 0,
+            behind: 0,
+            counts: StatusCounts {
+                files: (staged.len() + unstaged.len()) as u64,
+                staged: staged.len() as u64,
+                unstaged: unstaged.len() as u64,
+                conflicted,
+            },
         },
         changes: WorkingTreeFiles {
             staged,
@@ -102,7 +107,7 @@ pub fn set_changes(staged: Vec<ChangedFile>, unstaged: Vec<ChangedFile>, cx: &mu
             uncounted: false,
             marker_free: Vec::new(),
         },
-        version: uuid::Uuid::new_v4().to_string(),
+        version: uuid::Uuid::new_v4().to_string().into(),
     };
     cx.update(|cx| QueryClient::set_data(&keys::status(&id()), Opaque::new(status), cx));
 }
@@ -232,11 +237,11 @@ impl FakeTree {
                 let asked = Save {
                     path: path.into(),
                     contents: request.contents,
-                    version: request.expected.into_string(),
+                    version: request.expected.to_string(),
                     overwrite: request.overwrite == Overwrite::Always,
                 };
                 saves.borrow_mut().push(asked.clone());
-                Task::ready((reply.borrow_mut())(&asked).map(FileVersion::from))
+                Task::ready((reply.borrow_mut())(&asked).map(ContentVersion::from))
             }),
             reload: Rc::new(move |key, _| reloads.borrow_mut().push(key)),
         }

@@ -8,47 +8,58 @@ use crate::services::Services;
 use crate::services::system::TelemetryState;
 use crate::theme::PaletteExt as _;
 
+/// Where saving the setting is.
+enum Save {
+    Idle,
+    /// Saving it; dropping the task stops waiting for it.
+    Saving {
+        _task: Task<()>,
+    },
+    /// The last save failed.
+    Failed,
+}
+
 /// Whether Gitto sends error reports: a switch, saved through `Services::system().telemetry`
 /// (which keeps the user's setting; see its stub). An entity, as it keeps whether it's saving and
 /// whether that failed. The switch stays as it is, focus and all, when the state changes.
 pub struct TelemetrySetting {
     state: TelemetryState,
-    saving: bool,
-    failed: bool,
-    _saving: Option<Task<()>>,
+    save: Save,
 }
 
 impl TelemetrySetting {
     pub fn new(_: &mut Window, cx: &mut Context<Self>) -> Self {
         TelemetrySetting {
             state: Services::global(cx).system().telemetry.state(),
-            saving: false,
-            failed: false,
-            _saving: None,
+            save: Save::Idle,
         }
     }
 
     /// Lets Gitto send error reports, or not; says if that couldn't be saved, and keeps the switch
     /// as it was then.
     pub fn set_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
-        self.saving = true;
-        self.failed = false;
-        cx.notify();
         let saving = Services::global(cx).system().telemetry.set_enabled(enabled);
-        self._saving = Some(cx.spawn(async move |this, cx| {
-            let result = saving.await;
-            let _ = this.update(cx, |this, cx| {
-                match result {
-                    Ok(state) => this.state = state,
-                    Err(error) => {
-                        log::error!("Couldn't change whether Gitto sends error reports: {error}");
-                        this.failed = true;
-                    }
-                }
-                this.saving = false;
-                cx.notify();
-            });
-        }));
+        self.save = Save::Saving {
+            _task: cx.spawn(async move |this, cx| {
+                let result = saving.await;
+                let _ = this.update(cx, |this, cx| {
+                    this.save = match result {
+                        Ok(state) => {
+                            this.state = state;
+                            Save::Idle
+                        }
+                        Err(error) => {
+                            log::error!(
+                                "Couldn't change whether Gitto sends error reports: {error}"
+                            );
+                            Save::Failed
+                        }
+                    };
+                    cx.notify();
+                });
+            }),
+        };
+        cx.notify();
     }
 }
 
@@ -58,7 +69,7 @@ impl Render for TelemetrySetting {
         let current = self.state;
         SettingSwitch::new("send-error-reports", "Send error reports")
             .checked(current.enabled)
-            .disabled(!current.available || self.saving)
+            .disabled(!current.available || matches!(self.save, Save::Saving { .. }))
             .on_change(cx.listener(|this, enabled: &bool, _, cx| this.set_enabled(*enabled, cx)))
             .child(div().child(
                 "When something goes wrong, Gitto tells its developers what and where. Reports \
@@ -86,7 +97,7 @@ impl Render for TelemetrySetting {
                     )
                 },
             )
-            .when(self.failed, |this| {
+            .when(matches!(self.save, Save::Failed), |this| {
                 this.child(
                     div()
                         .id("telemetry-failed")

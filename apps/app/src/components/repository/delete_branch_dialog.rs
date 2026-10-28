@@ -140,7 +140,7 @@ pub fn open_delete_branch_dialog(
     let description = consequences(&deletion);
     ConfirmDialog::new(IconName::Trash, Tone::Coral, deletion.title())
         .description(description)
-        .action("Delete", ButtonVariant::Primary, move |window, cx| {
+        .action("Delete", ButtonVariant::Danger, move |window, cx| {
             on_delete(&deletion, window, cx)
         })
         .open(window, cx);

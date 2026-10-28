@@ -8,6 +8,10 @@ publish = false
 [lib]
 name = "gitto_git"
 
+[features]
+# `ApiError::unreported`, for the fakes of other crates' tests.
+test-support = []
+
 [dependencies]
 async-channel.workspace = true
 async-fs.workspace = true
@@ -18,11 +22,11 @@ dunce.workspace = true
 event-listener.workspace = true
 futures.workspace = true
 futures-lite.workspace = true
+log.workspace = true
 memchr.workspace = true
 notify.workspace = true
 regex.workspace = true
 serde.workspace = true
-serde_json.workspace = true
 sha1_smol.workspace = true
 smol.workspace = true
 thiserror.workspace = true
@@ -32,4 +36,5 @@ uuid.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
+serde_json.workspace = true
 tempfile.workspace = true

@@ -4,8 +4,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use gitto_git::ContentVersion;
 use gitto_git::FileStatus;
-use gitto_git::features::conflicts::schema::{Conflict, Side};
+use gitto_git::features::conflicts::schema::{Conflict, FileVersion, Side};
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::input::RepositoryId;
 use gitto_ui::git::conflicts::{ConflictKind, conflict_kind, describe_conflict};
@@ -19,7 +20,7 @@ use super::conflict_viewer::{
     ConflictProgress, ConflictViewer, ConflictViewerEvent, DiskFile, Resolution, SaveResolved,
 };
 use super::file_diff_view::{FileDiffEvent, FileDiffView};
-use super::file_editing::{EditSession, FileIo, FileVersion, Overwrite, SaveRequest};
+use super::file_editing::{EditSession, FileIo, Overwrite, SaveRequest};
 use super::markers_dialog::open_markers_dialog;
 use crate::components::ui::{EmptyState, IconButton, IconName, LoadingState, Notice};
 use crate::data::conflicts::{
@@ -199,7 +200,7 @@ impl ConflictResolutionView {
                 return None;
             };
             let disk = DiskFile {
-                version: version.into(),
+                version: version.clone(),
                 contents: contents.into(),
             };
             Some((conflict, disk))
@@ -331,14 +332,24 @@ impl ConflictResolutionView {
             .is_some_and(|shown| shown.left == 0 && shown.problem.is_none())
     }
 
-    /// The version of the file to check before resolving it whole: the latest one written here.
-    fn version(&self) -> Option<String> {
+    /// The version of the file's text to check before marking it resolved: the latest one written
+    /// here, or else the one loaded.
+    fn text_version(&self) -> Option<ContentVersion> {
         self.shown_progress()
-            .and_then(|shown| shown.version.clone().map(FileVersion::into_string))
+            .and_then(|shown| shown.version.clone())
             .or_else(|| {
                 self.conflict()
-                    .and_then(|conflict| conflict.version.clone())
+                    .and_then(|conflict| Some(conflict.file.text()?.version.clone()))
             })
+    }
+
+    /// The version of the file to check before keeping a side: the latest one written here, or
+    /// else the loaded file's (see `ConflictFile::version`), which isn't always of its text.
+    fn file_version(&self) -> Option<FileVersion> {
+        self.shown_progress()
+            .and_then(|shown| shown.version.clone())
+            .map(FileVersion::Content)
+            .or_else(|| self.conflict().and_then(|conflict| conflict.file.version()))
     }
 
     /// Resolves the file whole: marks it resolved, or keeps a side; then on to the next
@@ -396,7 +407,7 @@ impl ConflictResolutionView {
         if !self.is_text() || self.is_busy() {
             return true;
         }
-        let version = self.version();
+        let version = self.text_version();
         if self.is_ready() {
             self.resolve_whole(
                 ConflictResolution::Mark {
@@ -414,7 +425,7 @@ impl ConflictResolutionView {
             left,
             move |_, cx| {
                 let _ = resolution.update(cx, |this, cx| {
-                    let version = this.version();
+                    let version = this.text_version();
                     this.resolve_whole(
                         ConflictResolution::Mark {
                             version,
@@ -432,11 +443,11 @@ impl ConflictResolutionView {
 
     /// Keeps `side` of `conflict` whole.
     fn keep(&mut self, conflict: &Conflict, side: Side, cx: &mut Context<Self>) {
-        let version = self.version();
+        let version = self.file_version();
         self.resolve_whole(
             ConflictResolution::Keep {
                 side,
-                sides: conflict.sides(),
+                sides: conflict.sides.clone(),
                 version,
             },
             cx,
@@ -448,9 +459,9 @@ impl ConflictResolutionView {
     fn save(
         &mut self,
         contents: String,
-        expected: FileVersion,
+        expected: ContentVersion,
         cx: &mut Context<Self>,
-    ) -> Task<Result<FileVersion, QueryError>> {
+    ) -> Task<Result<ContentVersion, QueryError>> {
         let id = self.file.repository_id.clone();
         let path = self.file.file.path.clone();
         let io = self.io.borrow().clone();
@@ -624,7 +635,7 @@ impl ConflictResolutionView {
             let message = self
                 .shown_progress()
                 .and_then(|shown| shown.problem.clone())
-                .unwrap_or_else(|| describe_conflict(&conflict.sides()).to_owned());
+                .unwrap_or_else(|| describe_conflict(&conflict.sides).to_owned());
             let (ours, theirs) = ((this.clone(), conflict.clone()), (this.clone(), conflict));
             banners.push(
                 Notice::new(message)
@@ -699,7 +710,7 @@ impl ConflictResolutionView {
                 let busy = self.is_busy();
                 let kept = Arc::clone(&conflict);
                 let resolution = cx.entity().downgrade();
-                ConflictSides::new(conflict, busy, move |side, _, cx| {
+                ConflictSides::new(conflict, &self.file.file.path, busy, move |side, _, cx| {
                     let _ = resolution.update(cx, |this, cx| this.keep(&kept, side, cx));
                 })
                 .into_any_element()
@@ -807,7 +818,7 @@ fn conflicts_left_label(left: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use gitto_git::features::conflicts::schema::ConflictSides;
+    use gitto_git::features::conflicts::schema::{ConflictFile, ConflictSides};
     use gpui_kit::{AppContext as _, TestAppContext};
 
     use super::super::conflict_viewer::ConflictProgress;
@@ -1196,7 +1207,7 @@ mod tests {
                         ours: Some(side("o1")),
                         theirs: Some(side("t1")),
                     },
-                    version: Some("v1".into()),
+                    version: Some(FileVersion::Content("v1".into())),
                 },
             }]
         );
@@ -1260,12 +1271,10 @@ mod tests {
     fn says_what_each_side_did_and_keeps_one_whole(cx: &mut TestAppContext) {
         let _dir = init(cx);
         set_changes(vec![], vec![conflicted("gone.txt")], cx);
-        let conflict = Conflict {
-            theirs: None,
-            ..text_conflict("ours\n", "v1")
-        };
+        let mut conflict = text_conflict("ours\n", "v1");
+        conflict.sides.theirs = None;
         assert_eq!(
-            describe_conflict(&conflict.sides()),
+            describe_conflict(&conflict.sides),
             "Deleted in theirs, changed in ours"
         );
         set_conflict("gone.txt", conflict, cx);
@@ -1283,7 +1292,7 @@ mod tests {
                     ..
                 },
                 ..
-            }] if path == "gone.txt" && version == "v1"
+            }] if path == "gone.txt" && *version == FileVersion::Content("v1".into())
         ));
         // It was the last one: its staged changes, its deletion, are next.
         assert!(matches!(
@@ -1300,9 +1309,9 @@ mod tests {
         set_conflict(
             "gone.txt",
             Conflict {
-                text: None,
-                binary: true,
-                unreadable: Some("This file is binary.".into()),
+                file: ConflictFile::Binary {
+                    version: "v1".into(),
+                },
                 ..text_conflict(MARKERS, "v1")
             },
             cx,

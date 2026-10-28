@@ -4,8 +4,8 @@
 
 use std::sync::Arc;
 
+use gitto_git::PatchVersion;
 use gitto_git::features::diff::schema::ChangedFile;
-use gitto_git::features::staging::patch_version::patch_version;
 use gitto_git::features::staging::schema::LineSelection;
 use gitto_ui::git::changes::is_nested_repository;
 use gitto_ui::git::patch::has_hunks;
@@ -130,7 +130,7 @@ impl FileDiffView {
             repository_id: self.view.repository_id().clone(),
             action: self.staging_action(),
             file: self.view.file(),
-            version: patch_version(&from),
+            version: PatchVersion::of(&from),
             lines,
         };
         let staged = self

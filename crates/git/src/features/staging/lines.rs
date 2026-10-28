@@ -2,11 +2,13 @@
 //! changes: the one the user picked them from. Nothing is diffed again here; lines are only kept,
 //! dropped, or kept as they are on both sides, and the hunk headers counted again to match.
 //!
+//! The patch is read and built as bytes, so a file that isn't UTF-8 goes back to git as it came.
+//!
 //! Ported from `lines.ts`.
 
 use super::schema::{LineRange, LineSelection};
 use crate::core::errors::{Error, Result, StageAction};
-use crate::features::diff::hunk_header::parse_hunk_header;
+use crate::features::diff::hunk_header::parse_hunk_header_bytes;
 
 /// Which way the lines go: staged, from the unstaged changes (the index compared to the working
 /// tree), or unstaged, from the staged ones (HEAD compared to the index). Either way, the patch
@@ -27,27 +29,70 @@ impl LineAction {
     }
 }
 
+/// What a line of a hunk is, as its marker says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LineKind {
+    /// ` `: on both sides.
+    Context,
+    /// `-`: only on the old side.
+    Removed,
+    /// `+`: only on the new side.
+    Added,
+}
+
+impl LineKind {
+    /// The kind `marker` says; `None` for another byte.
+    fn of(marker: u8) -> Option<LineKind> {
+        match marker {
+            b' ' => Some(LineKind::Context),
+            b'-' => Some(LineKind::Removed),
+            b'+' => Some(LineKind::Added),
+            _ => None,
+        }
+    }
+
+    fn marker(self) -> u8 {
+        match self {
+            LineKind::Context => b' ',
+            LineKind::Removed => b'-',
+            LineKind::Added => b'+',
+        }
+    }
+
+    /// Whether a line of this kind is on the old side.
+    fn is_old(self) -> bool {
+        self != LineKind::Added
+    }
+
+    /// Whether a line of this kind is on the new side.
+    fn is_new(self) -> bool {
+        self != LineKind::Removed
+    }
+}
+
 /// One line of a hunk, without its marker; `text` keeps a CR before the line's end, if it has one.
 #[derive(Debug, Clone, Copy)]
 struct PatchLine<'a> {
-    kind: char,
-    text: &'a str,
+    kind: LineKind,
+    text: &'a [u8],
     /// It's the last of its side of the file, without a newline ("\ No newline at end of file").
     no_eol: bool,
 }
 
 #[derive(Debug)]
 struct Hunk<'a> {
-    old_start: i64,
-    old_count: i64,
-    new_start: i64,
-    new_count: i64,
+    old_start: u64,
+    old_count: u64,
+    new_start: u64,
+    new_count: u64,
     /// What follows the second `@@`, e.g. the function the hunk is in.
-    heading: &'a str,
+    heading: &'a [u8],
     lines: Vec<PatchLine<'a>>,
 }
 
-const NO_EOL: &str = "\\ No newline at end of file";
+const NO_EOL: &[u8] = b"\\ No newline at end of file";
+
+const DEV_NULL: &[u8] = b"/dev/null";
 
 /// The patch that stages (or unstages, `action`) the lines `selection` picks from `patch`, git's
 /// patch of one file's unstaged (or staged) changes; `None` if none of them are changes.
@@ -64,74 +109,97 @@ const NO_EOL: &str = "\\ No newline at end of file";
 ///
 /// Fails with `Error::LinesNotStageable` for a patch whose lines can't be picked: a binary file's,
 /// a link's or a submodule's, one that changed type, or one without changed lines.
-///
-/// `patch` can be a file's bytes read as Latin-1, one character per byte (see `apply_lines`): the
-/// patch built is too, as all it adds is ASCII.
 pub fn lines_patch(
-    patch: &str,
+    patch: &[u8],
     selection: &LineSelection,
     action: LineAction,
-) -> Result<Option<String>> {
+) -> Result<Option<Vec<u8>>> {
     let verb = action.verb();
     let (header, hunks) = parse_patch(patch, verb)?;
-    let picked = build_hunks(&hunks, selection, action);
+    let picked = build_hunks(&hunks, selection, action)?;
     if picked.is_empty() {
         return Ok(None);
     }
 
     let file = parse_header(&header, verb)?;
     // Whether the file is still added, or deleted, as a whole: all of its lines move.
-    let added = file.minus == "/dev/null" && picked.iter().all(|hunk| hunk.old_count == 0);
-    let deleted = file.plus == "/dev/null" && picked.iter().all(|hunk| hunk.new_count == 0);
+    let added = file.minus == DEV_NULL && picked.iter().all(|hunk| hunk.old_count == 0);
+    let deleted = file.plus == DEV_NULL && picked.iter().all(|hunk| hunk.new_count == 0);
     let has_rename = !file.rename.is_empty();
     // Unstaging lines leaves the rename staged: they're unstaged from the renamed file.
     let renamed = has_rename && action == LineAction::Stage;
-    let plus = if file.plus == "/dev/null" && !deleted {
-        other_side(file.minus, "b/")?
+    let plus = if file.plus == DEV_NULL && !deleted {
+        other_side(file.minus, b"b/")?
     } else {
-        file.plus.to_owned()
+        file.plus.to_vec()
     };
-    let minus = if (file.minus == "/dev/null" && !added) || (has_rename && !renamed) {
-        other_side(&plus, "a/")?
+    let minus = if (file.minus == DEV_NULL && !added) || (has_rename && !renamed) {
+        other_side(&plus, b"a/")?
     } else {
-        file.minus.to_owned()
+        file.minus.to_vec()
     };
 
-    let mut lines: Vec<String> = vec![if has_rename && !renamed {
-        format!("diff --git {} {}", without_tab(&minus), without_tab(&plus))
+    let mut built = Vec::with_capacity(patch.len());
+    if has_rename && !renamed {
+        push_line(
+            &mut built,
+            &[
+                b"diff --git ",
+                without_tab(&minus),
+                b" ",
+                without_tab(&plus),
+            ],
+        );
     } else {
-        file.diff.to_owned()
-    }];
+        push_line(&mut built, &[file.diff]);
+    }
     if added && let Some(created) = file.created {
-        lines.push(created.to_owned());
+        push_line(&mut built, &[created]);
     }
     if deleted && let Some(deleted) = file.deleted {
-        lines.push(deleted.to_owned());
+        push_line(&mut built, &[deleted]);
     }
     if renamed {
-        lines.extend(file.rename.iter().map(|line| (*line).to_owned()));
+        for line in &file.rename {
+            push_line(&mut built, &[line]);
+        }
     }
-    lines.push(format!("--- {minus}"));
-    lines.push(format!("+++ {plus}"));
+    push_line(&mut built, &[b"--- ", &minus]);
+    push_line(&mut built, &[b"+++ ", &plus]);
     for hunk in &picked {
-        lines.push(format!(
-            "@@ -{} +{} @@{}",
-            range(hunk.old_start, hunk.old_count),
-            range(hunk.new_start, hunk.new_count),
-            hunk.heading
-        ));
+        let old = range(hunk.old_start, hunk.old_count);
+        let new = range(hunk.new_start, hunk.new_count);
+        push_line(
+            &mut built,
+            &[
+                b"@@ -",
+                old.as_bytes(),
+                b" +",
+                new.as_bytes(),
+                b" @@",
+                hunk.heading,
+            ],
+        );
         for line in &hunk.lines {
-            lines.push(format!("{}{}", line.kind, line.text));
+            push_line(&mut built, &[&[line.kind.marker()], line.text]);
             if line.no_eol {
-                lines.push(NO_EOL.to_owned());
+                push_line(&mut built, &[NO_EOL]);
             }
         }
     }
-    Ok(Some(format!("{}\n", lines.join("\n"))))
+    Ok(Some(built))
+}
+
+/// Adds a line made of `parts` to `patch`, ended by a newline.
+fn push_line(patch: &mut Vec<u8>, parts: &[&[u8]]) {
+    for part in parts {
+        patch.extend_from_slice(part);
+    }
+    patch.push(b'\n');
 }
 
 /// A hunk header's range, as git writes it: without the count when it's 1.
-fn range(start: i64, count: i64) -> String {
+fn range(start: u64, count: u64) -> String {
     if count == 1 {
         start.to_string()
     } else {
@@ -139,36 +207,34 @@ fn range(start: i64, count: i64) -> String {
     }
 }
 
-/// The first `count` characters of `text`, for a message.
-fn prefix(text: &str, count: usize) -> &str {
-    match text.char_indices().nth(count) {
-        Some((end, _)) => &text[..end],
-        None => text,
-    }
+/// A line of a patch that isn't what git writes there, for a message: its first 40 characters.
+fn unexpected_line(line: &[u8]) -> Error {
+    let start: String = String::from_utf8_lossy(line).chars().take(40).collect();
+    Error::Bug(format!("Unexpected line in a hunk: {start}"))
 }
 
 /// A hunk header's number; one too large to count is a patch git didn't write.
-fn number(value: usize) -> Result<i64> {
-    i64::try_from(value)
+fn number(value: usize) -> Result<u64> {
+    u64::try_from(value)
         .map_err(|_| Error::Bug(format!("Unexpected number in a hunk header: {value}")))
 }
 
 /// Splits `patch` into its header's lines and its hunks.
-fn parse_patch(patch: &str, verb: StageAction) -> Result<(Vec<&str>, Vec<Hunk<'_>>)> {
-    let mut lines: Vec<&str> = patch.split('\n').collect();
+fn parse_patch(patch: &[u8], verb: StageAction) -> Result<(Vec<&[u8]>, Vec<Hunk<'_>>)> {
+    let mut lines: Vec<&[u8]> = patch.split(|&byte| byte == b'\n').collect();
     // The newline that ends the last line.
-    if lines.last() == Some(&"") {
+    if lines.last().is_some_and(|last| last.is_empty()) {
         lines.pop();
     }
     let mut i = 0;
     let mut header = Vec::new();
-    while i < lines.len() && !lines[i].starts_with("@@ ") {
+    while i < lines.len() && !lines[i].starts_with(b"@@ ") {
         header.push(lines[i]);
         i += 1;
     }
     if header
         .iter()
-        .any(|line| line.starts_with("Binary files ") || *line == "GIT binary patch")
+        .any(|line| line.starts_with(b"Binary files ") || *line == b"GIT binary patch")
     {
         return Err(Error::LinesNotStageable(format!(
             "A binary file's changes can only be {verb} whole."
@@ -179,7 +245,7 @@ fn parse_patch(patch: &str, verb: StageAction) -> Result<(Vec<&str>, Vec<Hunk<'_
     while i < lines.len() {
         // A second file, after the first one's hunks: git has a file that changed type (from a
         // link to a file, say) as one deleted and another added.
-        let Some(header) = parse_hunk_header(lines[i]) else {
+        let Some(header) = parse_hunk_header_bytes(lines[i]) else {
             return Err(Error::LinesNotStageable(format!(
                 "A file that changed type can only be {verb} whole."
             )));
@@ -197,32 +263,35 @@ fn parse_patch(patch: &str, verb: StageAction) -> Result<(Vec<&str>, Vec<Hunk<'_
         // left empty, without its marker.
         let mut old_left = hunk.old_count;
         let mut new_left = hunk.new_count;
-        while i < lines.len() && (old_left > 0 || new_left > 0 || lines[i].starts_with('\\')) {
+        while i < lines.len() && (old_left > 0 || new_left > 0 || lines[i].starts_with(b"\\")) {
             let line = lines[i];
             i += 1;
-            let mut chars = line.chars();
-            let marker = chars.next().unwrap_or(' ');
-            if marker == '\\' {
+            let (marker, text) = line
+                .split_first()
+                .map_or((b' ', &b""[..]), |(marker, text)| (*marker, text));
+            if marker == b'\\' {
                 if let Some(last) = hunk.lines.last_mut() {
                     last.no_eol = true;
                 }
                 continue;
             }
-            if marker != ' ' && marker != '-' && marker != '+' {
-                return Err(Error::Bug(format!(
-                    "Unexpected line in a hunk: {}",
-                    prefix(line, 40)
-                )));
+            let Some(kind) = LineKind::of(marker) else {
+                return Err(unexpected_line(line));
+            };
+            // More lines of a side than the header counts is a patch git didn't write.
+            if kind.is_old() {
+                old_left = old_left
+                    .checked_sub(1)
+                    .ok_or_else(|| unexpected_line(line))?;
             }
-            if marker != '+' {
-                old_left -= 1;
-            }
-            if marker != '-' {
-                new_left -= 1;
+            if kind.is_new() {
+                new_left = new_left
+                    .checked_sub(1)
+                    .ok_or_else(|| unexpected_line(line))?;
             }
             hunk.lines.push(PatchLine {
-                kind: marker,
-                text: chars.as_str(),
+                kind,
+                text,
                 no_eol: false,
             });
         }
@@ -239,51 +308,64 @@ fn parse_patch(patch: &str, verb: StageAction) -> Result<(Vec<&str>, Vec<Hunk<'_
 /// What the lines are built from, of a patch's header.
 struct FileHeader<'a> {
     /// Its `diff --git` line.
-    diff: &'a str,
+    diff: &'a [u8],
     /// The paths on its `---` and `+++` lines, as git wrote them, or `/dev/null`.
-    minus: &'a str,
-    plus: &'a str,
+    minus: &'a [u8],
+    plus: &'a [u8],
     /// Its `new file mode` or `deleted file mode` line, for a file added or deleted.
-    created: Option<&'a str>,
-    deleted: Option<&'a str>,
+    created: Option<&'a [u8]>,
+    deleted: Option<&'a [u8]>,
     /// Its `rename from` and `rename to` lines, for a renamed file.
-    rename: Vec<&'a str>,
+    rename: Vec<&'a [u8]>,
 }
+
+/// The lines of a patch's header that end in a mode: the `index` line, and the ones that say a
+/// mode changed, or the file's mode when it's added or deleted. Not the others, which have paths
+/// that could end like one.
+const MODE_LINES: [&[u8]; 5] = [
+    b"index ",
+    b"old mode ",
+    b"new mode ",
+    b"new file mode ",
+    b"deleted file mode ",
+];
 
 /// Reads the parts of a patch's header that are kept. The `index` line isn't: its object names are
 /// of the whole file, not of the lines picked (git doesn't check them in a patch of text), and the
 /// mode on it, like the `old mode` and `new mode` of a mode change, would move the mode too.
-fn parse_header<'a>(header: &[&'a str], verb: StageAction) -> Result<FileHeader<'a>> {
+fn parse_header<'a>(header: &[&'a [u8]], verb: StageAction) -> Result<FileHeader<'a>> {
     let mut file = FileHeader {
-        diff: header.first().copied().unwrap_or(""),
-        minus: "",
-        plus: "",
+        diff: header.first().copied().unwrap_or_default(),
+        minus: b"",
+        plus: b"",
         created: None,
         deleted: None,
         rename: Vec::new(),
     };
     for &line in header {
         // A link's contents are the path it points to, and a submodule's the commit it's at.
-        let link = line.ends_with(" 120000");
-        if link || line.ends_with(" 160000") {
-            let what = if link { "A link" } else { "A submodule" };
-            return Err(Error::LinesNotStageable(format!(
-                "{what} can only be {verb} whole."
-            )));
+        if MODE_LINES.iter().any(|start| line.starts_with(start)) {
+            let link = line.ends_with(b" 120000");
+            if link || line.ends_with(b" 160000") {
+                let what = if link { "A link" } else { "A submodule" };
+                return Err(Error::LinesNotStageable(format!(
+                    "{what} can only be {verb} whole."
+                )));
+            }
         }
-        if let Some(path) = line.strip_prefix("--- ") {
+        if let Some(path) = line.strip_prefix(b"--- ") {
             file.minus = path;
-        } else if let Some(path) = line.strip_prefix("+++ ") {
+        } else if let Some(path) = line.strip_prefix(b"+++ ") {
             file.plus = path;
-        } else if line.starts_with("new file mode ") {
+        } else if line.starts_with(b"new file mode ") {
             file.created = Some(line);
-        } else if line.starts_with("deleted file mode ") {
+        } else if line.starts_with(b"deleted file mode ") {
             file.deleted = Some(line);
-        } else if line.starts_with("rename from ") || line.starts_with("rename to ") {
+        } else if line.starts_with(b"rename from ") || line.starts_with(b"rename to ") {
             file.rename.push(line);
         }
     }
-    if !file.diff.starts_with("diff --git ") || file.minus.is_empty() || file.plus.is_empty() {
+    if !file.diff.starts_with(b"diff --git ") || file.minus.is_empty() || file.plus.is_empty() {
         return Err(Error::Bug("The patch has no file header.".to_owned()));
     }
     Ok(file)
@@ -291,19 +373,35 @@ fn parse_header<'a>(header: &[&'a str], verb: StageAction) -> Result<FileHeader<
 
 /// `path` from a `---` or `+++` line (`a/x` or `b/x`, or quoted, `"a/x\ty"`), as the other side has
 /// it: with `prefix`.
-fn other_side(path: &str, prefix: &str) -> Result<String> {
-    let quoted = path.starts_with('"');
-    let name = if quoted { &path[1..] } else { path };
-    let Some(rest) = name.strip_prefix("a/").or_else(|| name.strip_prefix("b/")) else {
-        return Err(Error::Bug(format!("Unexpected path in a patch: {path}")));
+fn other_side(path: &[u8], prefix: &[u8]) -> Result<Vec<u8>> {
+    let (quote, name) = match path.strip_prefix(b"\"") {
+        Some(name) => (&b"\""[..], name),
+        None => (&b""[..], path),
     };
-    Ok(format!("{}{prefix}{rest}", if quoted { "\"" } else { "" }))
+    let Some(rest) = name
+        .strip_prefix(b"a/")
+        .or_else(|| name.strip_prefix(b"b/"))
+    else {
+        return Err(Error::Bug(format!(
+            "Unexpected path in a patch: {}",
+            String::from_utf8_lossy(path)
+        )));
+    };
+    Ok([quote, prefix, rest].concat())
 }
 
 /// A path from a `---` or `+++` line without the tab git ends one with that has a space, as on the
 /// `diff --git` line.
-fn without_tab(path: &str) -> &str {
-    path.strip_suffix('\t').unwrap_or(path)
+fn without_tab(path: &[u8]) -> &[u8] {
+    path.strip_suffix(b"\t").unwrap_or(path)
+}
+
+/// How many of `lines` are on a side, as `on_side` says of their kinds.
+fn side_count(lines: &[PatchLine<'_>], on_side: fn(LineKind) -> bool) -> u64 {
+    lines
+        .iter()
+        .filter(|line| on_side(line.kind))
+        .fold(0, |count, _| count + 1)
 }
 
 /// The hunks with the lines picked, renumbered, without the ones left with no changes.
@@ -311,57 +409,74 @@ fn build_hunks<'a>(
     hunks: &[Hunk<'a>],
     selection: &LineSelection,
     action: LineAction,
-) -> Vec<Hunk<'a>> {
+) -> Result<Vec<Hunk<'a>>> {
     let mut deletions = Picked::new(&selection.deletions);
     let mut additions = Picked::new(&selection.additions);
     let mut built = Vec::new();
-    // How many more lines the new side of the hunks built so far has than the old one.
-    let mut grown: i64 = 0;
+    // How many lines the old and the new side of the hunks built so far have: the new side has
+    // moved by the difference.
+    let (mut old_lines, mut new_lines) = (0_u64, 0_u64);
     for hunk in hunks {
         let mut lines = Vec::new();
         let mut old_line = hunk.old_start;
         let mut new_line = hunk.new_start;
         for &line in &hunk.lines {
-            if line.kind == ' ' {
-                old_line += 1;
-                new_line += 1;
-                lines.push(line);
-            } else if line.kind == '-' {
-                let picked = deletions.has(old_line);
-                old_line += 1;
-                if picked {
+            let unchanged = PatchLine {
+                kind: LineKind::Context,
+                ..line
+            };
+            match line.kind {
+                LineKind::Context => {
+                    old_line += 1;
+                    new_line += 1;
                     lines.push(line);
-                } else if action == LineAction::Stage {
-                    lines.push(PatchLine { kind: ' ', ..line });
                 }
-            } else {
-                let picked = additions.has(new_line);
-                new_line += 1;
-                if picked {
-                    lines.push(line);
-                } else if action == LineAction::Unstage {
-                    lines.push(PatchLine { kind: ' ', ..line });
+                LineKind::Removed => {
+                    let picked = deletions.has(old_line);
+                    old_line += 1;
+                    if picked {
+                        lines.push(line);
+                    } else if action == LineAction::Stage {
+                        lines.push(unchanged);
+                    }
+                }
+                LineKind::Added => {
+                    let picked = additions.has(new_line);
+                    new_line += 1;
+                    if picked {
+                        lines.push(line);
+                    } else if action == LineAction::Unstage {
+                        lines.push(unchanged);
+                    }
                 }
             }
         }
-        if lines.iter().all(|line| line.kind == ' ') {
+        if lines.iter().all(|line| line.kind == LineKind::Context) {
             continue;
         }
 
         let ended = end_of_file(&lines);
-        let old_count = ended.iter().filter(|line| line.kind != '+').count() as i64;
-        let new_count = ended.iter().filter(|line| line.kind != '-').count() as i64;
+        let old_count = side_count(&ended, LineKind::is_old);
+        let new_count = side_count(&ended, LineKind::is_new);
         // The side the patch is applied to keeps its lines, and their numbers; the other side's are
         // moved by the lines the hunks before added or removed. A side without lines in the hunk is
-        // numbered by the line before it.
-        let (old_start, new_start) = if action == LineAction::Stage {
-            let before = hunk.old_start - i64::from(hunk.old_count > 0) + grown;
-            (hunk.old_start, before + i64::from(new_count > 0))
-        } else {
-            let before = hunk.new_start - i64::from(hunk.new_count > 0) - grown;
-            (before + i64::from(old_count > 0), hunk.new_start)
+        // numbered by the line before it. Only a patch git didn't write numbers one before 0.
+        let moved = |start: u64, count: u64, plus: u64, minus: u64| {
+            start
+                .checked_sub(u64::from(count > 0))
+                .and_then(|before| before.checked_add(plus))
+                .and_then(|before| before.checked_sub(minus))
+                .ok_or_else(|| Error::Bug("Unexpected hunk numbers in a patch.".to_owned()))
         };
-        grown += new_count - old_count;
+        let (old_start, new_start) = if action == LineAction::Stage {
+            let before = moved(hunk.old_start, hunk.old_count, new_lines, old_lines)?;
+            (hunk.old_start, before + u64::from(new_count > 0))
+        } else {
+            let before = moved(hunk.new_start, hunk.new_count, old_lines, new_lines)?;
+            (before + u64::from(old_count > 0), hunk.new_start)
+        };
+        old_lines += old_count;
+        new_lines += new_count;
         built.push(Hunk {
             old_start,
             old_count,
@@ -371,7 +486,7 @@ fn build_hunks<'a>(
             lines: ended,
         });
     }
-    built
+    Ok(built)
 }
 
 /// `lines` with a newline at the end of any line that's no longer the last of its side: one without
@@ -387,34 +502,33 @@ fn end_of_file<'a>(lines: &[PatchLine<'a>]) -> Vec<PatchLine<'a>> {
             continue;
         }
         let after = &lines[i + 1..];
-        let old_after = after.iter().any(|next| next.kind != '+');
-        let new_after = after.iter().any(|next| next.kind != '-');
-        if line.kind == '-' {
-            ended.push(PatchLine {
+        let old_after = after.iter().any(|next| next.kind.is_old());
+        let new_after = after.iter().any(|next| next.kind.is_new());
+        match line.kind {
+            LineKind::Removed => ended.push(PatchLine {
                 no_eol: !old_after,
                 ..line
-            });
-        } else if line.kind == '+' {
-            ended.push(PatchLine {
+            }),
+            LineKind::Added => ended.push(PatchLine {
                 no_eol: !new_after,
                 ..line
-            });
-        } else if old_after == new_after {
-            ended.push(PatchLine {
+            }),
+            LineKind::Context if old_after == new_after => ended.push(PatchLine {
                 no_eol: !old_after,
                 ..line
-            });
-        } else {
-            ended.push(PatchLine {
-                kind: '-',
-                text: line.text,
-                no_eol: !old_after,
-            });
-            ended.push(PatchLine {
-                kind: '+',
-                text: line.text,
-                no_eol: !new_after,
-            });
+            }),
+            LineKind::Context => {
+                ended.push(PatchLine {
+                    kind: LineKind::Removed,
+                    text: line.text,
+                    no_eol: !old_after,
+                });
+                ended.push(PatchLine {
+                    kind: LineKind::Added,
+                    text: line.text,
+                    no_eol: !new_after,
+                });
+            }
         }
     }
     ended
@@ -424,22 +538,21 @@ fn end_of_file<'a>(lines: &[PatchLine<'a>]) -> Vec<PatchLine<'a>> {
 /// the ranges, however many lines and ranges there are.
 struct Picked {
     /// `(start, end)`, by their start.
-    ranges: Vec<(i64, i64)>,
+    ranges: Vec<(u64, u64)>,
     next: usize,
 }
 
 impl Picked {
     fn new(ranges: &[LineRange]) -> Self {
-        let line = |number: u64| i64::try_from(number).unwrap_or(i64::MAX);
-        let mut ranges: Vec<(i64, i64)> = ranges
+        let mut ranges: Vec<(u64, u64)> = ranges
             .iter()
-            .map(|range| (line(range.start()), line(range.end())))
+            .map(|range| (range.start(), range.end()))
             .collect();
         ranges.sort_by_key(|&(start, _)| start);
         Picked { ranges, next: 0 }
     }
 
-    fn has(&mut self, line: i64) -> bool {
+    fn has(&mut self, line: u64) -> bool {
         while self.next < self.ranges.len() && self.ranges[self.next].1 < line {
             self.next += 1;
         }
@@ -474,12 +587,19 @@ mod tests {
         }
     }
 
+    /// The patch that moves the lines `selection` picks from `patch`, as text.
+    fn built(patch: &str, selection: LineSelection, action: LineAction) -> Option<String> {
+        lines_patch(patch.as_bytes(), &selection, action)
+            .unwrap()
+            .map(|built| String::from_utf8(built).unwrap())
+    }
+
     fn stage(patch: &str, selection: LineSelection) -> Option<String> {
-        lines_patch(patch, &selection, LineAction::Stage).unwrap()
+        built(patch, selection, LineAction::Stage)
     }
 
     fn unstage(patch: &str, selection: LineSelection) -> Option<String> {
-        lines_patch(patch, &selection, LineAction::Unstage).unwrap()
+        built(patch, selection, LineAction::Unstage)
     }
 
     const HEADER: [&str; 4] = [
@@ -1080,6 +1200,37 @@ mod tests {
     }
 
     #[test]
+    fn keeps_the_bytes_of_a_file_that_isnt_utf8_as_they_are() {
+        let latin1 = b"diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1,3 @@ caf\xe9\n \xe9\n+\xff\xfe\n+b\n";
+        assert_eq!(
+            lines_patch(latin1, &pick(&[], &[2]), LineAction::Stage).unwrap(),
+            Some(
+                b"diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1,2 @@ caf\xe9\n \xe9\n+\xff\xfe\n"
+                    .to_vec()
+            )
+        );
+    }
+
+    #[test]
+    fn reads_a_heading_with_any_characters_in_it() {
+        let heading = with(&HEADER, &["@@ -1 +1 @@ a\u{2028}b\rc", "-a", "+b"]);
+        assert_eq!(
+            stage(&heading, pick(&[1], &[1])),
+            Some(with(&BUILT, &["@@ -1 +1 @@ a\u{2028}b\rc", "-a", "+b"]))
+        );
+    }
+
+    #[test]
+    fn fails_for_more_lines_than_a_hunk_header_counts() {
+        // Two removed lines where the header has one: not a patch git wrote.
+        let miscounted = with(&HEADER, &["@@ -1 +1,2 @@", "-a", "-b", "+c"]);
+        let error =
+            lines_patch(miscounted.as_bytes(), &pick(&[1], &[1]), LineAction::Stage).unwrap_err();
+        assert!(matches!(error, Error::Bug(_)), "{error:?}");
+        assert_eq!(error.to_string(), "Unexpected line in a hunk: -b");
+    }
+
+    #[test]
     fn leaves_a_change_of_mode_out() {
         let chmod = patch(&[
             "diff --git a/f.txt b/f.txt",
@@ -1094,7 +1245,7 @@ mod tests {
         ]);
         for action in [LineAction::Stage, LineAction::Unstage] {
             assert_eq!(
-                lines_patch(&chmod, &pick(&[1], &[1]), action).unwrap(),
+                built(&chmod, pick(&[1], &[1]), action),
                 Some(with(&BUILT, &["@@ -1 +1 @@", "-a", "+A"]))
             );
         }
@@ -1108,7 +1259,7 @@ mod tests {
             (LineAction::Stage, "staged"),
             (LineAction::Unstage, "unstaged"),
         ] {
-            match lines_patch(input, &pick(&[1], &[1]), action) {
+            match lines_patch(input.as_bytes(), &pick(&[1], &[1]), action) {
                 Err(Error::LinesNotStageable(got)) => {
                     assert_eq!(got, message.replace("VERB", verb));
                 }
@@ -1159,6 +1310,30 @@ mod tests {
                 "+Subproject commit 2222222222222222222222222222222222222222",
             ]),
             "A submodule can only be VERB whole.",
+        );
+    }
+
+    #[test]
+    fn stages_lines_of_a_file_whose_name_ends_like_a_links_mode() {
+        let named = patch(&[
+            "diff --git a/notes 120000 b/notes 120000",
+            "index 1111111..2222222 100644",
+            "--- a/notes 120000\t",
+            "+++ b/notes 120000\t",
+            "@@ -1 +1 @@",
+            "-a",
+            "+b",
+        ]);
+        assert_eq!(
+            stage(&named, pick(&[1], &[1])),
+            Some(patch(&[
+                "diff --git a/notes 120000 b/notes 120000",
+                "--- a/notes 120000\t",
+                "+++ b/notes 120000\t",
+                "@@ -1 +1 @@",
+                "-a",
+                "+b",
+            ]))
         );
     }
 

@@ -44,9 +44,17 @@ impl<I: Clone + 'static, R: 'static> Mutation<I, R> {
         })
     }
 
+    /// Runs it with `input`, for what it shows (its state, and the error it fails with): what it
+    /// resolves to isn't waited for. Most changes are run so; see [`mutate`](Self::mutate) to act
+    /// on the result too.
+    pub fn run(&mut self, input: I, cx: &mut Context<Self>) {
+        drop(self.mutate(input, cx));
+    }
+
     /// Runs it with `input` (TanStack's `mutate`). It runs to the end whatever happens to the
     /// view that ran it; the receiver is told what it resolved to, for that view to act on if it's
-    /// still there (TS's `onSuccess` given to `mutate`).
+    /// still there (TS's `onSuccess` given to `mutate`). It's only cancelled if Gitto quits
+    /// first.
     pub fn mutate(
         &mut self,
         input: I,
@@ -165,7 +173,7 @@ mod tests {
     #[gpui_kit::test]
     fn shows_its_last_run_not_one_from_before(cx: &mut TestAppContext) {
         let (mutation, finishes) = mutation(cx);
-        drop(mutation.update(cx, |mutation, cx| mutation.mutate("a", cx)));
+        mutation.update(cx, |mutation, cx| mutation.run("a", cx));
         let second = mutation.update(cx, |mutation, cx| mutation.mutate("b", cx));
 
         let first = finishes.borrow_mut().remove(0);

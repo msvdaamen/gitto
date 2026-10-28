@@ -82,10 +82,10 @@ pub fn prefetch_file_diff(
         cx.spawn(async move |cx| {
             // Only ahead of time: opening it says what went wrong.
             if let Ok(conflict) = fetching.await
-                && let Some(text) = conflict.text
+                && let Some(text) = conflict.file.text()
             {
                 cx.update(|cx| {
-                    prepare_conflicts(&file_key, &path, text.contents, &text.version, cx)
+                    prepare_conflicts(&file_key, &path, text.contents.clone(), &text.version, cx)
                 });
             }
         })
@@ -984,9 +984,11 @@ mod tests {
 
     use futures::FutureExt as _;
     use futures::channel::oneshot;
-    use gitto_git::features::staging::patch_version::patch_version;
+    use gitto_git::PatchVersion;
     use gitto_git::features::staging::schema::{LineRange, LineSelection};
-    use gitto_git::features::status::schema::{Head, StatusCounts, Uncommitted, WorkingTreeFiles};
+    use gitto_git::features::status::schema::{
+        Head, StatusCounts, StatusSummary, Uncommitted, WorkingTreeFiles,
+    };
     use gitto_ui::git::changes::staging_paths;
     use gpui_kit::component::WindowExt as _;
     use gpui_kit::test::TestWindowExt as _;
@@ -1108,18 +1110,20 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let status = Uncommitted {
-            head: Head::Branch {
-                name: "main".into(),
-                sha: "a1".into(),
-            },
-            upstream: None,
-            ahead: 0,
-            behind: 0,
-            counts: StatusCounts {
-                files: 0,
-                staged: 0,
-                unstaged: 0,
-                conflicted: 0,
+            summary: StatusSummary {
+                head: Head::Branch {
+                    name: "main".into(),
+                    sha: "a1".into(),
+                },
+                upstream: None,
+                ahead: 0,
+                behind: 0,
+                counts: StatusCounts {
+                    files: 0,
+                    staged: 0,
+                    unstaged: 0,
+                    conflicted: 0,
+                },
             },
             changes: WorkingTreeFiles {
                 staged,
@@ -1127,7 +1131,7 @@ mod tests {
                 uncounted,
                 marker_free: Vec::new(),
             },
-            version: uuid::Uuid::new_v4().to_string(),
+            version: uuid::Uuid::new_v4().to_string().into(),
         };
         cx.update(|cx| QueryClient::set_data(&keys::status(&id()), Opaque::new(status), cx));
     }
@@ -1738,7 +1742,7 @@ mod tests {
                 format!(
                     "{}:{}:0",
                     DiffSource::Unstaged.file_key(path),
-                    patch_version(&patch)
+                    PatchVersion::of(&patch)
                 )
             };
             assert!(ViewerRuntime::has_highlights(&key("a.txt"), cx));
@@ -1786,7 +1790,7 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].file, counted("a.txt"));
         assert_eq!(calls[0].action, StageAction::Stage);
-        assert_eq!(calls[0].version, patch_version(&from));
+        assert_eq!(calls[0].version, PatchVersion::of(&from));
         assert_eq!(calls[0].lines, lines());
         assert_eq!(opened.shown(cx), Some(changed_line("a.txt", "left")));
     }
@@ -1815,7 +1819,7 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(
             calls[0].version,
-            patch_version(&changed_line("a.txt", "new a.txt"))
+            PatchVersion::of(&changed_line("a.txt", "new a.txt"))
         );
         assert_eq!(
             calls[0].lines,
@@ -1869,7 +1873,7 @@ mod tests {
         opened.stage("the patch", lines(), cx);
         let calls = opened.lines.calls();
         assert_eq!(calls[0].action, StageAction::Unstage);
-        assert_eq!(calls[0].version, patch_version("the patch"));
+        assert_eq!(calls[0].version, PatchVersion::of("the patch"));
         assert_eq!(
             opened.shown(cx),
             Some(changed_line("a.txt", "still staged"))

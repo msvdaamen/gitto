@@ -9,14 +9,14 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, ElementId, FontWeight, Hsla, Role, SharedString, TestSupportExt as _, Window,
-    anchored, deferred, div, px, rems,
+    AnyElement, App, ElementId, Entity, FontWeight, Hsla, Role, SharedString, TestSupportExt as _,
+    Window, anchored, deferred, div, px,
 };
 
 use super::columns::{LABEL_ICON, LABEL_LINE, LABEL_TEXT, mixed, part, tinted};
-use crate::components::repository::branch_menu::branch_menu;
+use crate::components::repository::branch_menu::BranchMenuProvider;
 use crate::components::ui::{Icon, IconName};
-use crate::theme::{Palette, PaletteExt as _};
+use crate::theme::{Palette, PaletteExt as _, base_px};
 
 /// Switches to a branch, by its full ref name; or opens a worktree, by its path.
 pub type OnRef = Rc<dyn Fn(String, &mut Window, &mut App)>;
@@ -32,6 +32,8 @@ pub struct LabelActions {
     /// Opens the worktree a branch is checked out in, by its path, when its label is
     /// double-clicked: git won't switch to it here.
     pub open_worktree: OnRef,
+    /// The branches' menus.
+    pub branch_menu: Entity<BranchMenuProvider>,
     /// The full ref name of the branch whose menu is open, if any.
     pub menu_open_for: Option<SharedString>,
 }
@@ -92,7 +94,7 @@ pub fn label_target(label: &RefLabel) -> Option<LabelTarget> {
 /// a worktree checked out at the commit with no branch. While searching, a label the search
 /// matches comes first, so the row shows why it matched. Double-clicking a branch switches to it,
 /// or opens the worktree it's checked out in, as git won't switch to it here; and right-clicking
-/// one opens its menu (see `branch_menu`), like in the sidebar.
+/// one opens its menu (see `BranchMenuProvider`), like in the sidebar.
 ///
 /// Whether the rest are listed is the table's (see `MoreLabels`): it opens them after the count's
 /// hovered a moment, and keeps them while a menu opened from them is.
@@ -109,6 +111,10 @@ pub struct HistoryRefLabels {
 /// The count of the labels a row has no room for, and the list of them it opens. The list
 /// neither takes the focus from the history, nor closes as it's clicked: it's only hovered, and
 /// its owner closes it once the pointer's been off it for a moment.
+///
+/// Not Kit's `HoverCard`, though it opens and closes on hover with delays too: it keeps whether
+/// it's open itself, with no way for its owner to say, and the list has to stay open while the
+/// menu of a branch in it is open, which the pointer leaves the list for.
 pub struct MoreLabels {
     /// Whether the list is open.
     pub open: bool,
@@ -171,10 +177,21 @@ fn pill(color: Hsla, palette: &Palette) -> gpui_kit::Div {
         .rounded_sm()
         .border_1()
         .border_color(mixed(color, 0.45, palette.border))
-        .py(rems(3. / 15.))
+        .py(base_px(3.))
         .text_size(LABEL_TEXT)
         .line_height(LABEL_LINE)
         .text_color(palette.text_soft)
+}
+
+/// What tells a label apart from its row's others, for its element's id: the full ref name of a
+/// branch or a tag, `HEAD`, or a worktree's path. Not what it shows, which changes with it.
+fn label_key(label: &RefLabel) -> String {
+    match label {
+        RefLabel::Branch(branch) => branch.full_name.clone(),
+        RefLabel::Tag { name } => format!("refs/tags/{name}"),
+        RefLabel::Head => "HEAD".to_owned(),
+        RefLabel::Worktree(worktree) => worktree.path.clone(),
+    }
 }
 
 fn ref_pill(
@@ -194,10 +211,7 @@ fn ref_pill(
         .is_some_and(|branch| actions.menu_open_for.as_deref() == Some(branch.full_name.as_str()));
     let title: SharedString = label_title(&label).into();
     let name: SharedString = label.name().to_owned().into();
-    let key = match &branch {
-        Some(branch) => branch.full_name.clone(),
-        None => format!("{label:?}"),
-    };
+    let key = label_key(&label);
     let icon = |name: IconName| Icon::new(name).size(LABEL_ICON).flex_none();
     let target = label_target(&label);
     let actions = actions.clone();
@@ -207,8 +221,8 @@ fn ref_pill(
         .aria_label(name.clone())
         .test_support()
         .min_w_0()
-        .gap(rems(3. / 15.))
-        .px(rems(5. / 15.))
+        .gap(base_px(3.))
+        .px(base_px(5.))
         .bg(tinted(color, if menu_open { 0.34 } else { 0.16 }))
         .when(current, |this| {
             this.font_weight(FontWeight(720.)).text_color(palette.text)
@@ -252,8 +266,9 @@ fn ref_pill(
     match branch {
         Some(branch) => {
             let reference: SharedString = branch.full_name.into();
-            pill.context_menu(move |menu, window, cx| {
-                branch_menu(menu, reference.clone(), window, cx)
+            let provider = actions.branch_menu.clone();
+            pill.context_menu(move |menu, _, cx| {
+                BranchMenuProvider::build_menu(&provider, reference.clone(), menu, cx)
             })
             .into_any_element()
         }
@@ -294,7 +309,7 @@ fn more_labels(
                         .test_support()
                         .occlude()
                         .mt_1()
-                        .max_w(rems(320. / 15.))
+                        .max_w(base_px(320.))
                         .items_start()
                         .gap_1()
                         .p_1p5()
@@ -343,8 +358,8 @@ impl RenderOnce for MoreCount {
             .rounded_sm()
             .border_1()
             .border_color(mixed(self.color, 0.45, self.border))
-            .py(rems(3. / 15.))
-            .px(rems(4. / 15.))
+            .py(base_px(3.))
+            .px(base_px(4.))
             .text_size(LABEL_TEXT)
             .line_height(LABEL_LINE)
             .text_color(self.text)
@@ -360,7 +375,7 @@ impl RenderOnce for MoreCount {
 #[cfg(test)]
 mod tests {
     use gitto_git::features::history::schema::{CommitRef, CommitRefKind};
-    use gitto_ui::git::ref_labels::{Checkouts, to_ref_labels};
+    use gitto_ui::git::ref_labels::{Checkouts, WorktreeAt, to_ref_labels};
 
     use super::*;
 
@@ -371,10 +386,10 @@ mod tests {
                 kind: *kind,
                 name: (*name).into(),
                 full_name: (*full_name).into(),
-                current: None,
+                current: false,
             })
             .collect();
-        to_ref_labels(&refs, "e5", &Checkouts::default())
+        to_ref_labels(&refs, "e5", &Checkouts::default(), &["origin"])
     }
 
     // `ref-labels.test.tsx`: what double-clicking a label switches to.
@@ -431,6 +446,22 @@ mod tests {
         assert_eq!(names(""), ["main", "v1"]);
         assert_eq!(names("v1"), ["v1", "main"]);
         assert_eq!(names("nothing"), ["main", "v1"]);
+    }
+
+    #[test]
+    fn tells_labels_apart_by_their_ref_or_worktree() {
+        let labels = labels(&[
+            (CommitRefKind::Local, "main", "refs/heads/main"),
+            (CommitRefKind::Tag, "v1", "refs/tags/v1"),
+        ]);
+        let keys: Vec<String> = labels.iter().map(label_key).collect();
+        assert_eq!(keys, ["refs/heads/main", "refs/tags/v1"]);
+        assert_eq!(label_key(&RefLabel::Head), "HEAD");
+        let worktree = RefLabel::Worktree(WorktreeAt {
+            name: "side".into(),
+            path: "/work/side".into(),
+        });
+        assert_eq!(label_key(&worktree), "/work/side");
     }
 
     #[test]

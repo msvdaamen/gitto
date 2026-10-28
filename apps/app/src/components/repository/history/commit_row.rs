@@ -3,10 +3,9 @@
 use std::rc::Rc;
 
 use gitto_ui::git::rows::CommitRow;
-use gpui_kit::component::Colorize as _;
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    App, FontWeight, Hsla, Rems, SharedString, Window, div, linear_color_stop, linear_gradient,
+    App, FontWeight, Hsla, Rems, SharedString, Window, div, linear_color_stop, linear_gradient, rgb,
 };
 
 use super::author_tooltip::GraphAuthor;
@@ -18,7 +17,7 @@ use super::history_option::{
 use super::ref_labels::{HistoryRefLabels, LabelActions, MoreLabels};
 use crate::git::changes::LineCounts;
 use crate::state::clock::relative_time;
-use crate::theme::{Palette, PaletteExt as _};
+use crate::theme::{Palette, PaletteExt as _, base_px};
 
 /// What every row gets from the table.
 #[derive(Clone)]
@@ -104,9 +103,9 @@ fn commit_look(selected: bool, menu_open: bool, palette: &Palette) -> RowLook {
     }
 }
 
-/// An author's avatar colour, from the hex `rows.ts` picked.
-pub fn author_color(hex: &str) -> Option<Hsla> {
-    Hsla::parse_hex(hex).ok()
+/// An author's avatar colour, from the `0xRRGGBB` the rows were given.
+pub fn author_color(color: u32) -> Hsla {
+    rgb(color).into()
 }
 
 impl RenderOnce for HistoryCommitRow {
@@ -132,7 +131,7 @@ impl RenderOnce for HistoryCommitRow {
                 GraphNode::Commit(GraphAuthor {
                     name: commit.author.clone().into(),
                     initials: commit.initials.into(),
-                    color: author_color(commit.avatar_color),
+                    color: Some(author_color(commit.avatar_color)),
                 }),
             )
             .node_only(!props.needle.is_empty())
@@ -141,7 +140,7 @@ impl RenderOnce for HistoryCommitRow {
             .flex()
             .items_center()
             .justify_between()
-            .gap(Rems(7. / 15.))
+            .gap(base_px(7.))
             .px(CELL_PADDING)
             .child(
                 div()
@@ -181,6 +180,21 @@ impl RenderOnce for HistoryCommitRow {
         match self.menu {
             Some(menu) => option.menu(move |popup, window, cx| menu(popup, window, cx)),
             None => option,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gitto_ui::format::AVATAR_COLORS;
+
+    use super::*;
+    use crate::theme::palette;
+
+    #[test]
+    fn colours_authors_with_the_avatars_colours() {
+        for (index, color) in AVATAR_COLORS.into_iter().enumerate() {
+            assert_eq!(author_color(color), palette::avatar_color(index));
         }
     }
 }

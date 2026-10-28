@@ -2,9 +2,10 @@
 //! `staging::lines`) and by the app's diff viewer alike, so the lines a selection picks are counted
 //! the same way by both.
 
-/// The numbers of a hunk's `@@ -a,b +c,d @@` line, and what follows it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct HunkHeader<'a> {
+/// The numbers of a hunk's `@@ -a,b +c,d @@` line, and what follows it: text (`str`), as the diff
+/// viewer reads it, or bytes (`[u8]`), as staging reads a patch of a file that may not be UTF-8.
+#[derive(Debug, PartialEq, Eq)]
+pub struct HunkHeader<'a, Heading: ?Sized = str> {
     /// The first line of the old file the hunk covers, and how many lines it covers there.
     pub old_start: usize,
     pub old_count: usize,
@@ -13,8 +14,17 @@ pub struct HunkHeader<'a> {
     pub new_count: usize,
     /// What follows the second `@@`, as it is, without the line end: after a space, what git says
     /// the lines are in, like a function's name.
-    pub heading: &'a str,
+    pub heading: &'a Heading,
 }
+
+// By hand: derived, they'd only be for a `Heading` that's `Clone` itself, which `str` isn't.
+impl<Heading: ?Sized> Clone for HunkHeader<'_, Heading> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<Heading: ?Sized> Copy for HunkHeader<'_, Heading> {}
 
 impl<'a> HunkHeader<'a> {
     /// What git says the lines are in, if it says: the heading, after its space.
@@ -28,11 +38,26 @@ impl<'a> HunkHeader<'a> {
 pub fn parse_hunk_header(line: &str) -> Option<HunkHeader<'_>> {
     let line = line.strip_suffix('\n').unwrap_or(line);
     let line = line.strip_suffix('\r').unwrap_or(line);
-    let rest = line.strip_prefix("@@ -")?;
+    let header = parse_hunk_header_bytes(line.as_bytes())?;
+    Some(HunkHeader {
+        old_start: header.old_start,
+        old_count: header.old_count,
+        new_start: header.new_start,
+        new_count: header.new_count,
+        // What's before the heading is all ASCII, so the heading starts at a character.
+        heading: &line[line.len() - header.heading.len()..],
+    })
+}
+
+/// Reads `line`, one line of a patch without its LF, as a hunk's header, as `parse_hunk_header`
+/// does, but of bytes: the heading is what follows the second `@@` as it is, a CR at its end too,
+/// in whatever encoding the file is.
+pub fn parse_hunk_header_bytes(line: &[u8]) -> Option<HunkHeader<'_, [u8]>> {
+    let rest = line.strip_prefix(b"@@ -")?;
     let (old_start, old_count, rest) = read_range(rest)?;
-    let rest = rest.strip_prefix(" +")?;
+    let rest = rest.strip_prefix(b" +")?;
     let (new_start, new_count, rest) = read_range(rest)?;
-    let heading = rest.strip_prefix(" @@")?;
+    let heading = rest.strip_prefix(b" @@")?;
     Some(HunkHeader {
         old_start,
         old_count,
@@ -43,9 +68,9 @@ pub fn parse_hunk_header(line: &str) -> Option<HunkHeader<'_>> {
 }
 
 /// A side's `start,count` (or `start` alone, of one line), and what follows it.
-fn read_range(text: &str) -> Option<(usize, usize, &str)> {
+fn read_range(text: &[u8]) -> Option<(usize, usize, &[u8])> {
     let (start, rest) = read_number(text)?;
-    match rest.strip_prefix(',') {
+    match rest.strip_prefix(b",") {
         Some(rest) => {
             let (count, rest) = read_number(rest)?;
             Some((start, count, rest))
@@ -54,12 +79,12 @@ fn read_range(text: &str) -> Option<(usize, usize, &str)> {
     }
 }
 
-fn read_number(text: &str) -> Option<(usize, &str)> {
-    let digits = text.bytes().take_while(u8::is_ascii_digit).count();
+fn read_number(text: &[u8]) -> Option<(usize, &[u8])> {
+    let digits = text.iter().take_while(|byte| byte.is_ascii_digit()).count();
     if digits == 0 {
         return None;
     }
-    let value = text[..digits].parse().ok()?;
+    let value = std::str::from_utf8(&text[..digits]).ok()?.parse().ok()?;
     Some((value, &text[digits..]))
 }
 
@@ -135,5 +160,20 @@ mod tests {
         ] {
             assert_eq!(parse_hunk_header(line), None, "{line:?}");
         }
+    }
+
+    #[test]
+    fn reads_bytes_in_any_encoding_keeping_the_heading_as_it_is() {
+        assert_eq!(
+            parse_hunk_header_bytes(b"@@ -1 +1,3 @@ caf\xe9\r"),
+            Some(HunkHeader {
+                old_start: 1,
+                old_count: 1,
+                new_start: 1,
+                new_count: 3,
+                heading: &b" caf\xe9\r"[..],
+            })
+        );
+        assert_eq!(parse_hunk_header_bytes(b"@@ -\xe9 +1 @@"), None);
     }
 }

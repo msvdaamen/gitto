@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use futures::FutureExt as _;
 use futures::future::Shared;
+use gitto_git::ContentVersion;
 use gitto_ui::diff::diff_metadata::Side;
 use gitto_ui::diff::patch_files::Expanded;
 use gitto_ui::diff::viewer_rows::{ExpandDirection, SeparatorButtons, expand};
@@ -30,7 +31,7 @@ use super::conflict_diff::{
 };
 use super::conflict_rows::{ConflictRow, LineRole, actions_row, conflict_rows};
 use super::conflict_whole_file::WholeFile;
-use super::file_editing::{EditSession, FileVersion};
+use super::file_editing::EditSession;
 use super::highlight::DiffHighlights;
 use super::patch_viewer::{
     DrawnLine, FONT_REMS, ROW_REMS, Scroll, code_char_width, scroll_list, scroll_list_to,
@@ -57,7 +58,7 @@ pub struct ConflictProgress {
     /// Whether a conflict is being resolved: written to disk, and shown once it is.
     pub saving: bool,
     /// The version of the file on show on disk; `None` until it's known, e.g. after editing.
-    pub version: Option<FileVersion>,
+    pub version: Option<ContentVersion>,
     /// Why the file's conflicts aren't shown one by one, as its whole text is instead.
     pub problem: Option<String>,
 }
@@ -65,14 +66,14 @@ pub struct ConflictProgress {
 /// The file on disk, as last read: its text shared, so it's given and compared without copying.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiskFile {
-    pub version: FileVersion,
+    pub version: ContentVersion,
     pub contents: Arc<str>,
 }
 
 /// Writes a resolved conflict's text, `contents`, over the file at the version expected; resolves
 /// to its new version.
 pub type SaveResolved =
-    Rc<dyn Fn(String, FileVersion, &mut App) -> Task<Result<FileVersion, QueryError>>>;
+    Rc<dyn Fn(String, ContentVersion, &mut App) -> Task<Result<ContentVersion, QueryError>>>;
 
 /// What the conflict viewer tells the file's view.
 #[derive(Debug, Clone, PartialEq)]
@@ -95,7 +96,7 @@ struct Shown {
     file_key: String,
     contents: Arc<str>,
     /// Its version on disk; `None` while that isn't known.
-    version: Option<FileVersion>,
+    version: Option<ContentVersion>,
     /// Its conflicts, if they're shown one by one.
     state: Option<Arc<ConflictState>>,
     problem: Option<String>,
@@ -108,7 +109,7 @@ struct ReadResult {
     file_key: String,
     contents: Arc<str>,
     /// Its version on disk; `None` while that isn't known.
-    version: Option<FileVersion>,
+    version: Option<ContentVersion>,
     read: ReadConflicts,
     /// The widest line of its conflicts' sides, in characters as drawn.
     widest: usize,
@@ -142,7 +143,7 @@ pub struct ConflictViewer {
     pub(super) given: Option<(String, Option<DiskFile>)>,
     shown: Option<Shown>,
     /// Versions of the file that were written over here: read from disk before that, and stale.
-    superseded: HashSet<FileVersion>,
+    superseded: HashSet<ContentVersion>,
     /// The conflict the header's buttons and keys are of, by its index.
     current: Option<usize>,
     saving: bool,
@@ -389,7 +390,7 @@ impl ConflictViewer {
         &mut self,
         file_key: String,
         contents: Arc<str>,
-        version: Option<FileVersion>,
+        version: Option<ContentVersion>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<()> {

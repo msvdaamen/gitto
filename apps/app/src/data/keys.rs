@@ -1,6 +1,8 @@
 //! Query keys for git data. Ported from `git/queries/keys.ts`. Everything under
 //! [`repository`]`(id)` is refetched when it changes on disk (see `super::watch`).
 
+use gitto_git::input::RepositoryId;
+
 use super::key::QueryKey;
 
 /// Every repository's data that can change on disk; see `QueryClient`'s defaults for how it's kept
@@ -9,17 +11,17 @@ pub fn all() -> QueryKey {
     QueryKey::new(["git"])
 }
 
-pub fn repository(repository_id: &str) -> QueryKey {
-    all().with(repository_id.to_owned())
+pub fn repository(repository_id: &RepositoryId) -> QueryKey {
+    all().with(repository_id.to_string())
 }
 
 /// What's changed since the last commit: refetched on its own when files are edited or staged.
-pub fn uncommitted(repository_id: &str) -> QueryKey {
+pub fn uncommitted(repository_id: &RepositoryId) -> QueryKey {
     repository(repository_id).with("uncommitted")
 }
 
 /// The status, with the changed files: one query, so the working tree is only walked once.
-pub fn status(repository_id: &str) -> QueryKey {
+pub fn status(repository_id: &RepositoryId) -> QueryKey {
     uncommitted(repository_id).with("status")
 }
 
@@ -40,7 +42,11 @@ impl UncommittedSide {
 }
 
 /// The patch of a file's unstaged or staged changes, by its path.
-pub fn uncommitted_file_patch(repository_id: &str, side: UncommittedSide, path: &str) -> QueryKey {
+pub fn uncommitted_file_patch(
+    repository_id: &RepositoryId,
+    side: UncommittedSide,
+    path: &str,
+) -> QueryKey {
     uncommitted(repository_id)
         .with("patch")
         .with(side.as_str())
@@ -48,96 +54,96 @@ pub fn uncommitted_file_patch(repository_id: &str, side: UncommittedSide, path: 
 }
 
 /// A conflicted file's sides, and its text with the conflict markers, by its path.
-pub fn conflict(repository_id: &str, path: &str) -> QueryKey {
+pub fn conflict(repository_id: &RepositoryId, path: &str) -> QueryKey {
     uncommitted(repository_id)
         .with("conflict")
         .with(path.to_owned())
 }
 
 /// The merge, rebase, cherry-pick or revert under way: refetched when the refs change.
-pub fn operation(repository_id: &str) -> QueryKey {
+pub fn operation(repository_id: &RepositoryId) -> QueryKey {
     repository(repository_id).with("operation")
 }
 
-pub fn log(repository_id: &str) -> QueryKey {
+pub fn log(repository_id: &RepositoryId) -> QueryKey {
     repository(repository_id).with("log")
 }
 
-pub fn refs(repository_id: &str) -> QueryKey {
+pub fn refs(repository_id: &RepositoryId) -> QueryKey {
     repository(repository_id).with("refs")
 }
 
 /// The remotes' names: refetched when the refs change, as the config does.
-pub fn remotes(repository_id: &str) -> QueryKey {
+pub fn remotes(repository_id: &RepositoryId) -> QueryKey {
     repository(repository_id).with("remotes")
 }
 
-pub fn stashes(repository_id: &str) -> QueryKey {
+pub fn stashes(repository_id: &RepositoryId) -> QueryKey {
     repository(repository_id).with("stashes")
 }
 
 /// The worktrees: refetched when the refs change, as the git directory's `worktrees` folder does.
-pub fn worktrees(repository_id: &str) -> QueryKey {
+pub fn worktrees(repository_id: &RepositoryId) -> QueryKey {
     repository(repository_id).with("worktrees")
 }
 
 /// What the home page shows of a repository, beyond its status.
-pub fn overview(repository_id: &str) -> QueryKey {
+pub fn overview(repository_id: &RepositoryId) -> QueryKey {
     repository(repository_id).with("overview")
 }
 
 /// Which remote branch has a commit: refetched when the refs change, e.g. after a push.
-pub fn pushed_to(repository_id: &str, sha: &str) -> QueryKey {
+pub fn pushed_to(repository_id: &RepositoryId, sha: &str) -> QueryKey {
     repository(repository_id)
         .with("pushed-to")
         .with(sha.to_owned())
 }
 
 /// Where the Push button pushes, and how many commits: refetched when the refs or config change.
-pub fn push_target(repository_id: &str) -> QueryKey {
+pub fn push_target(repository_id: &RepositoryId) -> QueryKey {
     repository(repository_id).with("push-target")
 }
 
 /// A commit never changes, so it and its files are kept outside [`repository`]`(id)`.
-pub fn commit(repository_id: &str, sha: &str) -> QueryKey {
+pub fn commit(repository_id: &RepositoryId, sha: &str) -> QueryKey {
     QueryKey::new([
         "git-commit".to_owned(),
-        repository_id.to_owned(),
+        repository_id.to_string(),
         sha.to_owned(),
     ])
 }
 
-pub fn commit_files(repository_id: &str, sha: &str) -> QueryKey {
+pub fn commit_files(repository_id: &RepositoryId, sha: &str) -> QueryKey {
     commit(repository_id, sha).with("files")
 }
 
-pub fn commit_message(repository_id: &str, sha: &str) -> QueryKey {
+pub fn commit_message(repository_id: &RepositoryId, sha: &str) -> QueryKey {
     commit(repository_id, sha).with("message")
 }
 
 /// The patch of one of a commit's files, by its path.
-pub fn commit_file_patch(repository_id: &str, sha: &str, path: &str) -> QueryKey {
+pub fn commit_file_patch(repository_id: &RepositoryId, sha: &str, path: &str) -> QueryKey {
     commit(repository_id, sha)
         .with("patch")
         .with(path.to_owned())
 }
 
 /// A file's contents by their object name, which never change.
-pub fn blob(repository_id: &str, oid: &str) -> QueryKey {
+pub fn blob(repository_id: &RepositoryId, oid: &str) -> QueryKey {
     QueryKey::new([
         "git-blob".to_owned(),
-        repository_id.to_owned(),
+        repository_id.to_string(),
         oid.to_owned(),
     ])
 }
 
 /// A stash is a commit too, and never changes either.
-pub fn stash_files(repository_id: &str, sha: &str) -> QueryKey {
+pub fn stash_files(repository_id: &RepositoryId, sha: &str) -> QueryKey {
     commit(repository_id, sha).with("stash-files")
 }
 
 /// The patch of one of a stash's files, by its path.
-pub fn stash_file_patch(repository_id: &str, sha: &str, path: &str) -> QueryKey {
+pub fn stash_file_patch(repository_id: &RepositoryId, sha: &str, path: &str) -> QueryKey {
     commit(repository_id, sha)
         .with("stash-patch")
         .with(path.to_owned())
@@ -162,9 +168,13 @@ pub fn repositories() -> QueryKey {
 mod tests {
     use super::*;
 
+    fn id() -> RepositoryId {
+        RepositoryId::parse("01890a5d-ac96-774b-bcce-b302099a8057").unwrap()
+    }
+
     #[test]
     fn keeps_what_changes_on_disk_under_the_repository() {
-        let id = "repo";
+        let id = &id();
         for key in [
             status(id),
             uncommitted_file_patch(id, UncommittedSide::Staged, "a.txt"),
@@ -187,18 +197,24 @@ mod tests {
 
     #[test]
     fn keeps_what_never_changes_outside_it() {
+        let id = &id();
         for key in [
-            commit("repo", "abc"),
-            commit_files("repo", "abc"),
-            commit_file_patch("repo", "abc", "a.txt"),
-            blob("repo", "def"),
-            stash_files("repo", "abc"),
+            commit(id, "abc"),
+            commit_files(id, "abc"),
+            commit_file_patch(id, "abc", "a.txt"),
+            blob(id, "def"),
+            stash_files(id, "abc"),
         ] {
             assert!(!key.starts_with(&all()), "{key:?}");
         }
         assert_eq!(
-            commit_message("repo", "abc"),
-            QueryKey::new(["git-commit", "repo", "abc", "message"])
+            commit_message(id, "abc"),
+            QueryKey::new([
+                "git-commit",
+                "01890a5d-ac96-774b-bcce-b302099a8057",
+                "abc",
+                "message"
+            ])
         );
     }
 }

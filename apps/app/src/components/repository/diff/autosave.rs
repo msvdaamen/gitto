@@ -6,9 +6,10 @@ use std::time::Duration;
 use futures::FutureExt as _;
 use futures::future::Shared;
 use gitto_git::ApiCode;
+use gitto_git::ContentVersion;
 use gpui_kit::{App, Context, Task};
 
-use super::file_editing::{FileVersion, Overwrite, SaveRequest};
+use super::file_editing::{Overwrite, SaveRequest};
 use crate::data::QueryError;
 
 /// Where saving a file that's being edited is at.
@@ -36,7 +37,7 @@ impl SaveState {
 
 /// Saves the edits over the file being edited, as the request says; resolves to the version saved.
 pub type SaveEdits =
-    Rc<dyn Fn(SaveRequest, &mut App) -> Task<Result<FileVersion, QueryError>> + 'static>;
+    Rc<dyn Fn(SaveRequest, &mut App) -> Task<Result<ContentVersion, QueryError>> + 'static>;
 
 /// The text the edits left, as it is now (an editor's): read only as it's saved, rather than
 /// copied with each edit, as a file can be megabytes.
@@ -55,7 +56,7 @@ pub struct Autosave {
     save: SaveEdits,
     delay: Duration,
     state: SaveState,
-    version: Option<FileVersion>,
+    version: Option<ContentVersion>,
     /// Where the edits are read, while there are edits to save.
     edits: Option<ReadEdits>,
     /// How many edits there have been, to tell whether there were more while one was saved.
@@ -102,7 +103,7 @@ impl Autosave {
 
     /// Saves the edits `edits` reads over the file as it is at `version` from now on, with
     /// nothing to save yet.
-    pub fn start(&mut self, version: FileVersion, edits: ReadEdits, cx: &mut Context<Self>) {
+    pub fn start(&mut self, version: ContentVersion, edits: ReadEdits, cx: &mut Context<Self>) {
         self.clear_timer();
         self.version = Some(version);
         self.edits = Some(edits);
@@ -137,7 +138,7 @@ impl Autosave {
     pub fn flush_now(
         &mut self,
         cx: &mut Context<Self>,
-    ) -> Option<Task<Result<FileVersion, QueryError>>> {
+    ) -> Option<Task<Result<ContentVersion, QueryError>>> {
         self.clear_timer();
         self.unsaved?;
         let (edits, expected) = (self.edits.clone()?, self.version.clone()?);
@@ -216,7 +217,7 @@ impl Autosave {
         &mut self,
         overwrite: bool,
         cx: &mut Context<Self>,
-    ) -> Option<(u64, Task<Result<FileVersion, QueryError>>)> {
+    ) -> Option<(u64, Task<Result<ContentVersion, QueryError>>)> {
         let at = self.unsaved?;
         let (edits, expected) = (self.edits.clone()?, self.version.clone()?);
         if !overwrite && matches!(self.state, SaveState::ChangedOnDisk(_)) {
@@ -237,7 +238,12 @@ impl Autosave {
     }
 
     /// The edits made by the `at`th were saved, or not.
-    fn saved(&mut self, at: u64, result: Result<FileVersion, QueryError>, cx: &mut Context<Self>) {
+    fn saved(
+        &mut self,
+        at: u64,
+        result: Result<ContentVersion, QueryError>,
+        cx: &mut Context<Self>,
+    ) {
         // Stopped meanwhile: nothing left to save, nor to say about it.
         if self.version.is_none() {
             return;
@@ -280,7 +286,8 @@ mod tests {
     use std::cell::RefCell;
 
     use futures::channel::oneshot;
-    use gitto_git::core::errors::DiskChange;
+    use gitto_git::DiskChange;
+    use gitto_git::input::RepositoryId;
     use gitto_git::{ApiError, Error};
     use gpui_kit::{AppContext as _, Entity, TestAppContext};
 
@@ -302,12 +309,12 @@ mod tests {
         let recorded = Rc::clone(&calls);
         let save: SaveEdits = Rc::new(move |request, cx| {
             let overwrite = request.overwrite == Overwrite::Always;
-            let (text, version) = (request.contents, request.expected.into_string());
+            let (text, version) = (request.contents, request.expected.to_string());
             recorded
                 .borrow_mut()
                 .push((text.clone(), version.clone(), overwrite));
             let responding = respond(&text, &version, overwrite, cx);
-            cx.spawn(async move |_| responding.await.map(FileVersion::from))
+            cx.spawn(async move |_| responding.await.map(ContentVersion::from))
         });
         (
             cx.new(|_| Autosave::new(save, DELAY)),
@@ -339,7 +346,7 @@ mod tests {
 
     /// An error as git's API makes it for a file changed on disk.
     fn changed_on_disk() -> QueryError {
-        ApiError::from(Error::FileChangedOnDisk {
+        ApiError::unreported(Error::FileChangedOnDisk {
             path: "a.txt".into(),
             how: DiskChange::Changed,
         })
@@ -578,8 +585,8 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let (autosave, _, text) = autosave(cx, |_, _, _, _| {
-            Task::ready(Err(ApiError::from(Error::RepositoryNotFound {
-                repository_id: "repo".into(),
+            Task::ready(Err(ApiError::unreported(Error::RepositoryNotFound {
+                repository_id: RepositoryId::parse("01890a5d-ac96-774b-bcce-b302099a8057").unwrap(),
             })
             .into()))
         });
