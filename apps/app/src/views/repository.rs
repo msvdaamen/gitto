@@ -137,6 +137,9 @@ pub struct RepositoryView {
     commit_details: Entity<CommitDetails>,
     /// Waiting for the file on show to let go, to open another or close it.
     pending: Option<Task<()>>,
+    /// What leaving the page waits for (see `Router::set_blocker`), kept for as long as the page
+    /// is.
+    _blocker: BeforeChange,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -193,8 +196,9 @@ impl RepositoryView {
 
         let before_change = Self::before_change(cx.entity().downgrade());
         operation_bar.update(cx, |bar, _| bar.set_before_change(before_change.clone()));
-        // Nor is another repository opened, or the home page, before the file's edits are saved.
-        Router::set_blocker(Some(before_change), cx);
+        // Nor is another repository opened, or the home page, before the file's edits are saved:
+        // for as long as the page keeps it.
+        Router::set_blocker(&before_change, cx);
 
         RepositoryView {
             repository_id,
@@ -218,6 +222,7 @@ impl RepositoryView {
             history,
             commit_details,
             pending: None,
+            _blocker: before_change,
             _subscriptions: subscriptions,
         }
     }
