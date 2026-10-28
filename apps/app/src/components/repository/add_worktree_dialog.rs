@@ -27,6 +27,9 @@ use crate::services::SystemContext;
 use crate::state::lingering::Lingering;
 use crate::theme::PaletteExt as _;
 
+/// The folder's hint once one was picked whose path isn't UTF-8.
+const UNUSABLE_PICK: &str = "That folder's path can't be used: pick or type another";
+
 /// How wide the dialog is (`max-w-[400px]`), in rems of the 15px base.
 const WIDTH: f32 = 26.67;
 
@@ -53,6 +56,9 @@ pub struct AddWorktreeDialog {
     /// The new branch's placeholder, as it was last set: it names the branch kept, unless one
     /// has to be named.
     placeholder: SharedString,
+    /// The folder last picked had a path that isn't UTF-8, which git is given as text: it's
+    /// said so, until another is picked or typed.
+    unusable_pick: bool,
     open: bool,
     _subscriptions: Vec<Subscription>,
 }
@@ -72,12 +78,17 @@ impl AddWorktreeDialog {
         let folder = cx.new(|cx| InputState::new(window, cx).placeholder("/path/to/folder"));
         let new_branch = cx.new(|cx| InputState::new(window, cx));
         let on_input = |this: &mut Self,
-                        _: &Entity<InputState>,
+                        input: &Entity<InputState>,
                         event: &InputEvent,
                         window: &mut Window,
                         cx: &mut Context<Self>| match event {
             InputEvent::PressEnter { .. } => this.submit(window, cx),
-            InputEvent::Change => cx.notify(),
+            InputEvent::Change => {
+                if *input == this.folder {
+                    this.unusable_pick = false;
+                }
+                cx.notify()
+            }
             _ => {}
         };
         let subscriptions = vec![
@@ -100,6 +111,7 @@ impl AddWorktreeDialog {
             branch: Lingering::default(),
             suggested: String::new(),
             placeholder: SharedString::default(),
+            unusable_pick: false,
             open: false,
             _subscriptions: subscriptions,
         }
@@ -122,6 +134,7 @@ impl AddWorktreeDialog {
         for input in [&self.folder, &self.new_branch] {
             input.update(cx, |input, cx| input.set_value("", window, cx));
         }
+        self.unusable_pick = false;
         if self.open {
             self.open = false;
             window.close_dialog(cx);
@@ -210,6 +223,7 @@ impl AddWorktreeDialog {
     pub fn open(&mut self, branch: String, window: &mut Window, cx: &mut Context<Self>) {
         // Out of the way of the folder and name, which are kept after a failure to fix them.
         self.actions.add.dismiss(&self.repository_id, cx);
+        self.unusable_pick = false;
         let folder = Self::typed(&self.folder, cx);
         let repository = self
             .repositories
@@ -270,7 +284,7 @@ impl AddWorktreeDialog {
 
     fn render_form(this: &Entity<Self>, cx: &mut App) -> impl IntoElement {
         let palette = *cx.palette();
-        let (summary, needs_new_branch, folder, new_branch, valid, blocked) = {
+        let (summary, needs_new_branch, folder, new_branch, valid, blocked, unusable_pick) = {
             let shown = this.read(cx);
             (
                 shown.summary(),
@@ -279,6 +293,7 @@ impl AddWorktreeDialog {
                 shown.new_branch.clone(),
                 shown.is_valid(cx),
                 WorktreeActions::add_is_blocked(&shown.repository_id, cx),
+                shown.unusable_pick,
             )
         };
         let naming = !Self::typed(&new_branch, cx).is_empty();
@@ -300,7 +315,11 @@ impl AddWorktreeDialog {
                     .text_color(palette.muted)
                     .child(summary),
             )
-            .child(FormField::input("Folder", &folder).hint("Empty, or not there yet"))
+            .child(FormField::input("Folder", &folder).hint(if unusable_pick {
+                UNUSABLE_PICK
+            } else {
+                "Empty, or not there yet"
+            }))
             .child(FormField::input(
                 if needs_new_branch {
                     "New branch"
@@ -343,9 +362,15 @@ impl AddWorktreeDialog {
         cx.spawn_in(window, async move |this, cx| {
             if let Ok(Some(picked)) = picking.await {
                 let _ = this.update_in(cx, |this, window, cx| {
-                    let picked = picked.to_string_lossy().into_owned();
-                    this.folder
-                        .update(cx, |input, cx| input.set_value(picked, window, cx));
+                    // Not made into another path, as a lossy conversion would.
+                    match picked.into_os_string().into_string() {
+                        Ok(picked) => {
+                            this.unusable_pick = false;
+                            this.folder
+                                .update(cx, |input, cx| input.set_value(picked, window, cx));
+                        }
+                        Err(_) => this.unusable_pick = true,
+                    }
                     cx.notify();
                 });
             }
@@ -408,7 +433,8 @@ mod tests {
 
     use super::*;
     use crate::components::repository::test_support::{
-        Repositories, has_dialog, repository, repository_id, set_refs, set_worktrees, setup_with,
+        Repositories, click_label, has_dialog, repository, repository_id, set_refs, set_worktrees,
+        setup_with,
     };
     use crate::data::{QueryError, RepositoryOperation};
 
@@ -593,6 +619,33 @@ mod tests {
         );
         cx.run_until_parked();
         assert_eq!(placeholder(cx), NAME_PLACEHOLDER);
+    }
+
+    #[cfg(unix)]
+    #[gpui_kit::test]
+    fn refuses_a_picked_folder_whose_path_isnt_utf8(cx: &mut TestAppContext) {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt as _;
+        use std::path::PathBuf;
+
+        let adds = Rc::new(RefCell::new(Vec::new()));
+        let (_dir, window, dialog) = render(cx, &adds);
+        open(window, &dialog, "refs/heads/topic", cx);
+        let folder = dialog.read_with(cx, |dialog, _| dialog.folder.clone());
+        let pick = |path: PathBuf, cx: &mut TestAppContext| {
+            click_label(window, "Browse…", cx);
+            assert!(cx.did_prompt_for_paths());
+            cx.simulate_path_prompt_response(move |_| Some(vec![path]));
+            cx.run_until_parked();
+        };
+
+        pick(PathBuf::from(OsStr::from_bytes(b"/work/gitto-\xff")), cx);
+        assert_eq!(value(&folder, cx), "/work/gitto-topic");
+        assert!(dialog.read_with(cx, |dialog, _| dialog.unusable_pick));
+
+        pick(PathBuf::from("/work/elsewhere"), cx);
+        assert_eq!(value(&folder, cx), "/work/elsewhere");
+        assert!(!dialog.read_with(cx, |dialog, _| dialog.unusable_pick));
     }
 
     #[gpui_kit::test]
