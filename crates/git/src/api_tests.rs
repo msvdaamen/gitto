@@ -174,11 +174,12 @@ fn merges_a_branch_saying_what_it_did_or_why_it_didnt() {
         );
         let (code, _) = api_error(merge("refs/tags/v1", "main").await.unwrap_err());
         assert_eq!(code, "BAD_REQUEST");
-        // Past the input's check, but not a branch: a link to the remote's default one.
+        // Past the input's check, but not a branch: a link to the remote's default one. Refused
+        // as input too.
         assert_eq!(
             api_error(merge("refs/remotes/origin/HEAD", "main").await.unwrap_err()),
             (
-                "PRECONDITION_FAILED",
+                "BAD_REQUEST",
                 "refs/remotes/origin/HEAD isn't a branch.".to_owned()
             )
         );

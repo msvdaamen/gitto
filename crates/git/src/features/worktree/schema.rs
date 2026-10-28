@@ -20,9 +20,15 @@ pub struct Worktree {
     pub bare: bool,
     /// Whether it's the one the repository was opened as, so the one on show.
     pub current: bool,
-    /// Why it's locked, which keeps it from being pruned or removed; `""` without a reason, `None`
-    /// if it isn't.
-    pub locked: Option<String>,
+    /// Its lock, which keeps it from being pruned or removed; `None` if it isn't locked.
+    pub locked: Option<Lock>,
     /// Why it can be pruned, e.g. its folder is gone; `None` if it can't.
     pub prunable: Option<String>,
+}
+
+/// A worktree's lock (see `Worktree::locked`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Lock {
+    /// Why it's locked; `None` if it was locked without saying why.
+    pub reason: Option<String>,
 }

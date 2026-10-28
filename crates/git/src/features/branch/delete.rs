@@ -3,7 +3,7 @@
 
 use futures::future::BoxFuture;
 
-use super::commands::{branch_name, tracking_locals};
+use super::commands::{branch_target, tracking_locals};
 use super::in_use::branches_in_use;
 use crate::core::errors::{Error, Result};
 use crate::core::repo::{GitCommand, Repo};
@@ -22,12 +22,14 @@ use crate::features::remote::remote_name::remote_of;
 /// there. Should a local branch still fail to be deleted after the remote one was, checked out in a
 /// terminal meanwhile say, that's returned, saying the remote one is gone.
 ///
+/// Fails with `Error::InvalidInput` if `ref` isn't a branch, as the UI's input is checked.
+///
 /// Its place in line among the writes is taken when it's called, not when it's first polled, as
 /// in TS: a write asked for after it waits for it.
 pub fn delete_branch(repo: &Repo, reference: &str) -> BoxFuture<'static, Result<()>> {
-    let Some(target) = branch_name(reference) else {
-        let error = Error::Bug(format!("{reference} isn't a branch."));
-        return Box::pin(std::future::ready(Err(error)));
+    let target = match branch_target(reference) {
+        Ok(target) => target,
+        Err(error) => return Box::pin(std::future::ready(Err(error))),
     };
     if target.kind == RefKind::Local {
         let write = repo.write(["branch", "--delete", "--force", "--", target.name.as_str()]);
@@ -623,10 +625,8 @@ mod tests {
             let repo = fx.repos.open("delete-other-refs").await.unwrap();
 
             let error = delete_branch(&repo, "refs/tags/v1").await.unwrap_err();
-            assert!(
-                error.to_string().contains("refs/tags/v1 isn't a branch."),
-                "{error}"
-            );
+            assert!(matches!(error, Error::InvalidInput(_)), "{error:?}");
+            assert_eq!(error.to_string(), "refs/tags/v1 isn't a branch.");
         });
         assert_eq!(refs(&path, "refs/tags/"), strs(&["refs/tags/v1"]));
     }

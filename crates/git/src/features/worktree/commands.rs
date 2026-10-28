@@ -1,6 +1,5 @@
 //! Listing, adding and removing worktrees. Ported from `commands.ts`.
 
-use std::cmp::Ordering;
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 
@@ -10,7 +9,8 @@ use crate::core::errors::{Error, Result};
 use crate::core::git_dirs::real_path;
 use crate::core::repo::{GitCommand, Repo};
 use crate::features::branch::commands::{
-    Tracking, branch_name, has_non_space, is_ref, no_ref_syntax_advice, tracking_branch,
+    Tracking, branch_target, has_non_space, is_ref, no_ref_syntax_advice, not_a_branch,
+    tracking_branch,
 };
 use crate::features::refs::schema::RefKind;
 
@@ -28,8 +28,8 @@ pub async fn list_worktrees(repo: &Repo) -> Result<Vec<Worktree>> {
 /// a branch that's checked out in a worktree already, the main one included, and a folder that's
 /// in use, saying so.
 ///
-/// Fails with `Error::InvalidInput` if `folder`, or `new_branch`, is only whitespace, as the UI's
-/// input is checked.
+/// Fails with `Error::InvalidInput` if `folder`, or `new_branch`, is only whitespace, or `branch`
+/// isn't a branch that's there, as the UI's input is checked.
 pub async fn add_worktree(
     repo: &Repo,
     folder: &str,
@@ -42,16 +42,14 @@ pub async fn add_worktree(
     if new_branch.is_some_and(|name| !has_non_space(name)) {
         return Err(Error::InvalidInput("The name is empty.".to_owned()));
     }
-    let Some(target) = branch_name(branch) else {
-        return Err(Error::Bug(format!("{branch} isn't a branch.")));
-    };
+    let target = branch_target(branch)?;
     let path = resolve(repo.path(), folder);
     // One write, so nothing else changes the branches halfway.
     repo.exclusive(|run| async move {
         // That ref itself, rather than git reading `branch` as a revision, like
         // `refs/heads/main~3`.
         if !is_ref(&run, branch).await? {
-            return Err(Error::Bug(format!("{branch} isn't a branch.")));
+            return Err(not_a_branch(branch));
         }
         let add = |args: Vec<OsString>| {
             let mut all: Vec<OsString> = ["worktree", "add", "--quiet"]
@@ -156,7 +154,7 @@ async fn listed(root: &Path, run: &GitCommand) -> Result<(Vec<Worktree>, Vec<Pat
         return Ok((Vec::new(), Vec::new()));
     }
     // Git lists the linked ones as it finds their folders, in no set order.
-    worktrees[1..].sort_by(|a, b| locale_compare(&a.path, &b.path));
+    worktrees[1..].sort_by_cached_key(|worktree| locale_key(&worktree.path));
     let (here, paths) = futures::join!(
         real_path_or_itself(root),
         futures::future::join_all(
@@ -171,26 +169,21 @@ async fn listed(root: &Path, run: &GitCommand) -> Result<(Vec<Worktree>, Vec<Pat
     Ok((worktrees, paths))
 }
 
-/// Orders `a` and `b` roughly as JavaScript's `localeCompare` does: by their letters regardless of
+/// What orders paths roughly as JavaScript's `localeCompare` does: by their letters regardless of
 /// case first, then lowercase before uppercase. Punctuation is ordered by code point, where ICU has
 /// an order of its own (`a-b`, `a.b`, `a_b` here; `a_b`, `a-b`, `a.b` in TS), which only moves a
 /// worktree about in the list.
-fn locale_compare(a: &str, b: &str) -> Ordering {
+fn locale_key(path: &str) -> (String, String) {
     // Lowercase first, as ICU's tertiary strength has it.
-    let swap_case = |text: &str| -> String {
-        text.chars()
-            .flat_map(|c| {
-                if c.is_uppercase() {
-                    c.to_lowercase().collect::<Vec<_>>()
-                } else {
-                    c.to_uppercase().collect::<Vec<_>>()
-                }
-            })
-            .collect()
-    };
-    a.to_lowercase()
-        .cmp(&b.to_lowercase())
-        .then_with(|| swap_case(a).cmp(&swap_case(b)))
+    let mut swapped_case = String::with_capacity(path.len());
+    for c in path.chars() {
+        if c.is_uppercase() {
+            swapped_case.extend(c.to_lowercase());
+        } else {
+            swapped_case.extend(c.to_uppercase());
+        }
+    }
+    (path.to_lowercase(), swapped_case)
 }
 
 /// Where `path` really is, symlinks resolved; `path` itself if it's gone.
@@ -311,7 +304,10 @@ mod tests {
             );
             let repo = fx.repos.open("linked").await.unwrap();
             let check = list_worktrees(&repo).await.unwrap().remove(1);
-            assert_eq!(check.locked.as_deref(), Some("busy"));
+            assert_eq!(
+                check.locked.and_then(|lock| lock.reason).as_deref(),
+                Some("busy")
+            );
             assert_eq!(check.head, Some(git(&path, ["rev-parse", "HEAD"])));
         });
     }
@@ -488,12 +484,8 @@ mod tests {
             let error = add_worktree(&repo, s(&x), "refs/heads/gone", None)
                 .await
                 .unwrap_err();
-            assert!(
-                error
-                    .to_string()
-                    .contains("refs/heads/gone isn't a branch."),
-                "{error}"
-            );
+            assert!(matches!(error, Error::InvalidInput(_)), "{error:?}");
+            assert_eq!(error.to_string(), "refs/heads/gone isn't a branch.");
             let error = add_worktree(&repo, s(&x), "refs/heads/feature", Some("a..b"))
                 .await
                 .unwrap_err();
@@ -613,7 +605,7 @@ mod tests {
     #[test]
     fn orders_paths_regardless_of_case_then_lowercase_first() {
         let mut paths = ["/r/b", "/r/A", "/r/a", "/r/B", "/r/ab"];
-        paths.sort_by(|a, b| locale_compare(a, b));
+        paths.sort_by_cached_key(|path| locale_key(path));
         assert_eq!(paths, ["/r/a", "/r/A", "/r/ab", "/r/b", "/r/B"]);
     }
 
