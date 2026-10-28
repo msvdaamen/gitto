@@ -1,9 +1,9 @@
 //! Ported from `git/conflicts.ts`: what a conflicted file is, and what's under way in the
 //! repository, in the user's words.
 
-use gitto_git::Version;
 use gitto_git::features::conflicts::schema::{Conflict, ConflictSide, ConflictSides, Side};
 use gitto_git::features::operation::schema::{CommitName, Operation};
+use gitto_git::{FileMode, Version};
 
 use super::short_sha;
 
@@ -16,9 +16,9 @@ pub enum SideKind {
 }
 
 pub fn side_kind(side: &ConflictSide) -> SideKind {
-    match side.mode.as_str() {
-        "120000" => SideKind::Link,
-        "160000" => SideKind::Submodule,
+    match side.file_mode() {
+        Some(FileMode::Link) => SideKind::Link,
+        Some(FileMode::Submodule) => SideKind::Submodule,
         _ => SideKind::File,
     }
 }
@@ -79,7 +79,9 @@ pub fn describe_side(side: Option<&ConflictSide>) -> String {
     match side_kind(side) {
         SideKind::Link => "A symbolic link".to_owned(),
         SideKind::Submodule => format!("A submodule at {}", short_sha(&side.oid)),
-        SideKind::File if side.mode == "100755" => "An executable file".to_owned(),
+        SideKind::File if side.file_mode() == Some(FileMode::Executable) => {
+            "An executable file".to_owned()
+        }
         SideKind::File => "A file".to_owned(),
     }
 }

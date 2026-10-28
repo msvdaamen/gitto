@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::schema::Version;
+use crate::schema::{FileMode, Version};
 
 /// One side of a conflicted file, as the index has it while it's unmerged: its mode (`100644`, say,
 /// or `120000` for a symbolic link and `160000` for a submodule) and its object.
@@ -11,6 +11,13 @@ use crate::schema::Version;
 pub struct ConflictSide {
     pub mode: String,
     pub oid: String,
+}
+
+impl ConflictSide {
+    /// What the side has (see [`FileMode`]); `None` for a mode git doesn't give a file.
+    pub fn file_mode(&self) -> Option<FileMode> {
+        FileMode::parse(&self.mode)
+    }
 }
 
 /// The sides of a conflicted file: `None` where the file isn't there, e.g. deleted on one side, or

@@ -36,6 +36,48 @@ impl FileStatus {
     }
 }
 
+/// What git has at a path, by its mode in a tree or the index, as git writes it (`100644`, say).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FileMode {
+    /// `100644`.
+    File,
+    /// `100755`.
+    Executable,
+    /// `120000`: a symbolic link, whose contents are the path it points to.
+    Link,
+    /// `160000`: a submodule, at a commit.
+    Submodule,
+}
+
+impl FileMode {
+    /// The mode `mode` is, as git writes it; `None` for another, e.g. a folder's or none
+    /// (`000000`).
+    pub fn parse(mode: &str) -> Option<Self> {
+        Some(match mode {
+            "100644" => FileMode::File,
+            "100755" => FileMode::Executable,
+            "120000" => FileMode::Link,
+            "160000" => FileMode::Submodule,
+            _ => return None,
+        })
+    }
+
+    /// As git writes it, e.g. `120000`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FileMode::File => "100644",
+            FileMode::Executable => "100755",
+            FileMode::Link => "120000",
+            FileMode::Submodule => "160000",
+        }
+    }
+
+    /// Whether it's a file's, executable or not, rather than a link's or a submodule's.
+    pub fn is_file(self) -> bool {
+        matches!(self, FileMode::File | FileMode::Executable)
+    }
+}
+
 /// The git Gitto runs, and whether Gitto works with it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GitInstall {
@@ -110,5 +152,21 @@ mod tests {
             "\"typechange\""
         );
         assert_eq!(FileStatus::Untracked.as_str(), "untracked");
+    }
+
+    #[test]
+    fn reads_the_file_modes_as_git_writes_them() {
+        for mode in [
+            FileMode::File,
+            FileMode::Executable,
+            FileMode::Link,
+            FileMode::Submodule,
+        ] {
+            assert_eq!(FileMode::parse(mode.as_str()), Some(mode));
+        }
+        assert_eq!(FileMode::parse("040000"), None);
+        assert_eq!(FileMode::parse("000000"), None);
+        assert!(FileMode::Executable.is_file());
+        assert!(!FileMode::Submodule.is_file());
     }
 }

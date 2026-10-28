@@ -19,10 +19,7 @@ use crate::features::diff::working_tree::{
     decode_utf8, read_working_tree_bytes, scan_working_tree_file,
 };
 use crate::input::RepoPath;
-use crate::schema::Version;
-
-/// A submodule's mode in the index: its commit, rather than a file.
-const SUBMODULE: &str = "160000";
+use crate::schema::{FileMode, Version};
 
 /// The sides of the conflicted file at `path`, as `git ls-files -u` lists them: stage 1 is the
 /// common ancestor's, 2 ours, 3 theirs. All `None` once it isn't conflicted.
@@ -196,7 +193,8 @@ pub async fn keep_side(
                 )
                 .await?;
             }
-            Some(kept) if kept.mode == SUBMODULE => {
+            // A submodule's commit, rather than a file.
+            Some(kept) if kept.file_mode() == Some(FileMode::Submodule) => {
                 let info = format!("{},{},{path}", kept.mode, kept.oid);
                 run.run(["update-index", "--cacheinfo", &info]).await?;
             }

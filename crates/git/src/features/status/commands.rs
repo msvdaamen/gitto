@@ -15,7 +15,7 @@ use crate::core::repo::Repo;
 use crate::features::conflicts::commands::marker_free;
 use crate::features::diff::parse::parse_diff;
 use crate::features::diff::schema::ChangedFile;
-use crate::schema::{FileStatus, Version};
+use crate::schema::{FileMode, FileStatus, Version};
 
 /// The status, and the changed files with their line counts: all the uncommitted changes show.
 ///
@@ -151,7 +151,7 @@ async fn resolved_conflicts(repo: &Repo, files: &[StatusFile]) -> Vec<String> {
 
 /// Whether `mode` is a file's, executable or not, rather than a link's or a submodule's.
 fn is_regular_file(mode: &str) -> bool {
-    mode == "100644" || mode == "100755"
+    FileMode::parse(mode).is_some_and(FileMode::is_file)
 }
 
 /// Past this many characters of paths, the unstaged diff isn't limited to the changed files: the

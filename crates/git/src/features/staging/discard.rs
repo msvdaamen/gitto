@@ -12,7 +12,7 @@ use crate::core::git_dirs::git_dirs;
 use crate::core::repo::{GitCommand, Repo, has_conflicts, ref_exists, succeeds};
 use crate::core::runner::RunOptions;
 use crate::features::operation::commands::operation_under_way;
-use crate::schema::FileStatus;
+use crate::schema::{FileMode, FileStatus};
 
 /// Which of a file's changes are discarded: the ones in the index, or in the working tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -106,7 +106,7 @@ pub async fn discard(repo: &Repo, file: &Discarded) -> Result<()> {
                 file.path
             )));
         }
-        if index.iter().chain(&head).any(|entry| entry.mode == "160000") {
+        if index.iter().chain(&head).any(|entry| entry.mode == FileMode::Submodule.as_str()) {
             return Err(Error::DiscardBlocked(format!(
                 "{} is a submodule, so its changes weren't discarded. Discard them in the submodule itself.",
                 file.path

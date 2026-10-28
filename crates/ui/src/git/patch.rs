@@ -1,5 +1,6 @@
 //! Ported from `git/patch.ts`: what a file's patch, as git gives it, says about its changes.
 
+use gitto_git::FileMode;
 use memchr::memmem;
 
 /// What a file's patch, as git gives it, says about its changes.
@@ -78,17 +79,22 @@ pub fn has_hunks(patch: &str) -> bool {
 /// Whether `patch`'s lines can only be staged all at once: a link's, whose contents are the path it
 /// points to, a submodule's, or a file's that changed type, which git has as two files.
 pub fn staged_whole(patch: &str) -> bool {
-    patch_header(patch)
-        .split('\n')
-        .any(|line| line.ends_with(" 120000") || line.ends_with(" 160000"))
-        || patch.contains("\ndiff --git ")
+    patch_header(patch).split('\n').any(|line| {
+        ends_with_mode(line, FileMode::Link) || ends_with_mode(line, FileMode::Submodule)
+    }) || patch.contains("\ndiff --git ")
 }
 
 /// Whether `patch` is of a symbolic link, whose contents are the path it points to.
 pub fn is_link(patch: &str) -> bool {
     patch_header(patch)
         .split('\n')
-        .any(|line| line.ends_with(" 120000"))
+        .any(|line| ends_with_mode(line, FileMode::Link))
+}
+
+/// Whether the header line `line` ends with the file mode `mode`, as in `new file mode 120000`.
+fn ends_with_mode(line: &str, mode: FileMode) -> bool {
+    line.strip_suffix(mode.as_str())
+        .is_some_and(|rest| rest.ends_with(' '))
 }
 
 /// `patch` up to its first hunk: the whole of it when it has none.
