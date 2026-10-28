@@ -15,7 +15,7 @@ use crate::core::repo::Repo;
 use crate::features::conflicts::commands::marker_free;
 use crate::features::diff::parse::parse_diff;
 use crate::features::diff::schema::ChangedFile;
-use crate::schema::FileStatus;
+use crate::schema::{FileStatus, Version};
 
 /// The status, and the changed files with their line counts: all the uncommitted changes show.
 ///
@@ -38,9 +38,9 @@ pub fn get_status(
 /// The status, as `status.get` answers it: `{ unchanged: true }` when it's of `since`, the
 /// `version` of the status the caller already has, so a big list of changes isn't sent (and
 /// processed by the UI) again for nothing.
-pub async fn get_status_since(repo: &Repo, since: Option<&str>) -> Result<StatusReply> {
+pub async fn get_status_since(repo: &Repo, since: Option<&Version>) -> Result<StatusReply> {
     let status = get_status(repo).await?;
-    Ok(if Some(status.version.as_str()) == since {
+    Ok(if Some(&status.version) == since {
         StatusReply::Unchanged {
             unchanged: Unchanged,
         }
@@ -96,7 +96,7 @@ async fn read_status(repo: &Repo) -> Result<(Uncommitted, String)> {
             uncounted: changes.uncounted,
             marker_free: resolved,
         },
-        version: hash.hexdigest(),
+        version: Version::from(hash.hexdigest()),
     };
     Ok((uncommitted, snapshot_of(&output)))
 }
@@ -418,7 +418,9 @@ mod tests {
                 StatusReply::Unchanged { .. }
             ));
             assert!(matches!(
-                get_status_since(&repo, Some("other")).await.unwrap(),
+                get_status_since(&repo, Some(&"other".into()))
+                    .await
+                    .unwrap(),
                 StatusReply::Status(_)
             ));
         });

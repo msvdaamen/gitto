@@ -417,7 +417,7 @@ mod tests {
         let conflict = get_conflict(repo, &valid("f.txt")).await.unwrap();
         let version = save_working_tree_file(
             repo,
-            "f.txt",
+            &valid("f.txt"),
             contents,
             &SaveExpectation {
                 version: conflict.text.unwrap().version,

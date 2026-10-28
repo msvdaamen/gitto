@@ -195,11 +195,17 @@ impl From<FullSha> for Sha {
 }
 
 checked_string!(
-    /// A string that isn't empty (zod's `z.string().min(1)`), e.g. a branch's short name the UI
-    /// saw checked out, or a conflicted file's path.
-    NonEmpty,
+    /// A file's path in the repository, as git names it: not empty, e.g. a conflicted file's.
+    RepoPath,
     |value| !value.is_empty(),
-    |_| "Too small: expected string to have >=1 characters".to_owned()
+    |_| "The path is empty.".to_owned()
+);
+
+checked_string!(
+    /// A local branch, by its short name: not empty, e.g. the one the UI saw checked out.
+    BranchShortName,
+    |value| !value.is_empty(),
+    |_| "The branch name is empty.".to_owned()
 );
 
 checked_string!(
@@ -228,7 +234,7 @@ checked_string!(
 /// Paths of files in the repository: at least one, none of them empty (the staging contract's
 /// `z.array(z.string().min(1)).min(1)`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Paths(Vec<String>);
+pub struct Paths(Vec<RepoPath>);
 
 impl Paths {
     /// `paths`, if there's one and none is empty; `Error::InvalidInput` otherwise.
@@ -237,17 +243,17 @@ impl Paths {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        let paths: Vec<String> = paths.into_iter().map(Into::into).collect();
+        let paths = paths
+            .into_iter()
+            .map(RepoPath::parse)
+            .collect::<Result<Vec<_>>>()?;
         if paths.is_empty() {
             return Err(Error::InvalidInput("No paths.".to_owned()));
-        }
-        if paths.iter().any(String::is_empty) {
-            return Err(Error::InvalidInput("Not a path.".to_owned()));
         }
         Ok(Paths(paths))
     }
 
-    pub fn as_slice(&self) -> &[String] {
+    pub fn as_slice(&self) -> &[RepoPath] {
         &self.0
     }
 }
@@ -260,16 +266,16 @@ impl TryFrom<Vec<String>> for Paths {
     }
 }
 
-impl From<Paths> for Vec<String> {
-    fn from(paths: Paths) -> Vec<String> {
+impl From<Paths> for Vec<RepoPath> {
+    fn from(paths: Paths) -> Vec<RepoPath> {
         paths.0
     }
 }
 
 impl Deref for Paths {
-    type Target = [String];
+    type Target = [RepoPath];
 
-    fn deref(&self) -> &[String] {
+    fn deref(&self) -> &[RepoPath] {
         &self.0
     }
 }
@@ -291,13 +297,14 @@ fn is_lower_hex(value: &str) -> bool {
 /// A file, by its path in the repository and, for a rename, its previous one.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FileInput {
-    pub path: String,
-    pub orig_path: Option<String>,
+    pub path: RepoPath,
+    pub orig_path: Option<RepoPath>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::valid;
 
     fn invalid(error: Error) -> String {
         assert!(matches!(error, Error::InvalidInput(_)), "{error:?}");
@@ -387,22 +394,30 @@ mod tests {
     }
 
     #[test]
-    fn non_empty_strings_may_be_whitespace() {
-        assert!(NonEmpty::parse(" ").is_ok());
+    fn paths_and_branch_names_may_be_whitespace_but_not_empty() {
+        assert!(RepoPath::parse(" ").is_ok());
         assert_eq!(
-            invalid(NonEmpty::parse("").unwrap_err()),
-            "Too small: expected string to have >=1 characters"
+            invalid(RepoPath::parse("").unwrap_err()),
+            "The path is empty."
+        );
+        assert!(BranchShortName::parse(" ").is_ok());
+        assert_eq!(
+            invalid(BranchShortName::parse("").unwrap_err()),
+            "The branch name is empty."
         );
     }
 
     #[test]
     fn paths_are_one_or_more_and_none_empty() {
         let paths = Paths::parse(["a", "b c"]).unwrap();
-        assert_eq!(&*paths, ["a", "b c"]);
+        assert_eq!(paths.as_slice(), [valid::<RepoPath>("a"), valid("b c")]);
         assert_eq!(
             invalid(Paths::parse(Vec::<String>::new()).unwrap_err()),
             "No paths."
         );
-        assert_eq!(invalid(Paths::parse(["a", ""]).unwrap_err()), "Not a path.");
+        assert_eq!(
+            invalid(Paths::parse(["a", ""]).unwrap_err()),
+            "The path is empty."
+        );
     }
 }

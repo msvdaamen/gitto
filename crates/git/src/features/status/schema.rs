@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::features::diff::schema::ChangedFile;
-use crate::schema::FileStatus;
+use crate::schema::{FileStatus, Version};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -100,7 +100,7 @@ pub struct Uncommitted {
     pub counts: StatusCounts,
     pub changes: WorkingTreeFiles,
     /// Changes whenever anything above does, so a caller can ask to skip a status it already has.
-    pub version: String,
+    pub version: Version,
 }
 
 impl Uncommitted {

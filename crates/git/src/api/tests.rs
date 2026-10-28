@@ -27,7 +27,8 @@ use crate::features::status::commands::get_status_since;
 use crate::features::status::schema::{Head, StatusReply};
 use crate::features::version::check;
 use crate::features::watch::schema::GitDirChange;
-use crate::input::{BranchRef, FullSha, NonEmpty, Paths, RepositoryId, Sha};
+use crate::input::{BranchRef, BranchShortName, FullSha, Paths, RepositoryId, Sha};
+use crate::schema::Version;
 use crate::test_support::{Fixture, git, valid};
 
 /// Procedures only take UUIDv7 repository ids.
@@ -201,7 +202,7 @@ fn merges_a_branch_saying_what_it_did_or_why_it_didnt() {
         // The UI's input, checked as it's parsed, then the procedure.
         let merge = |reference: &str, into: &str| {
             let input = BranchRef::parse(reference).and_then(|reference| {
-                let into = NonEmpty::parse(into)?;
+                let into = BranchShortName::parse(into)?;
                 Ok((reference, into))
             });
             let api = api.clone();
@@ -254,9 +255,9 @@ fn skips_a_status_the_caller_already_has() {
     let api = api(&fx);
     smol::block_on(async {
         history(&fx).await;
-        let status = |since: Option<String>| {
+        let status = |since: Option<Version>| {
             api.call("status.get", &id(HISTORY), |repo| async move {
-                get_status_since(&repo, since.as_deref()).await
+                get_status_since(&repo, since.as_ref()).await
             })
         };
         let StatusReply::Status(full) = status(None).await.unwrap() else {
@@ -268,7 +269,7 @@ fn skips_a_status_the_caller_already_has() {
             StatusReply::Unchanged { .. }
         ));
         assert_eq!(
-            status(Some("an older version".to_owned())).await.unwrap(),
+            status(Some("an older version".into())).await.unwrap(),
             StatusReply::Status(full)
         );
     });
@@ -420,7 +421,7 @@ fn pulls_the_checked_out_branch_or_the_one_named() {
     git(&upstream, ["commit", "-q", "--allow-empty", "-m", "second"]);
     smol::block_on(async {
         let repo = fx.repos.open("clone").await.unwrap();
-        let other = NonEmpty::parse("other").unwrap();
+        let other = BranchShortName::parse("other").unwrap();
         pull(&repo, Some(&other)).await.unwrap();
         let upstream_head = git(&upstream, ["rev-parse", "HEAD"]);
         assert_eq!(git(&path, ["rev-parse", "other"]), upstream_head);
@@ -472,7 +473,7 @@ fn calls_can_run_on_another_thread() {
     let fx = Fixture::new();
     let api = api(&fx);
     let reference = valid::<BranchRef>("refs/heads/side");
-    let into = valid::<NonEmpty>("main");
+    let into = valid::<BranchShortName>("main");
     let merge = api.call("branch.merge", &id(HISTORY), |repo| async move {
         merge_branch(&repo, &reference, &into).await
     });
