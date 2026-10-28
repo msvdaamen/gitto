@@ -10,7 +10,7 @@ use crate::core::git_dirs::git_dirs;
 use crate::core::repo::{GitCommand, Repo, current_branch, has_conflicts, resolve_ref};
 use crate::core::runner::RunOptions;
 use crate::features::operation::commands::operation_under_way;
-use crate::features::remote::progress::rebase_state;
+use crate::features::operation::commands::rebase_state;
 
 /// Rebases the checked-out branch, `branch`, the one the user saw, onto the branch `ref` (a full
 /// ref name, local or remote): replays the commits only it has on top of `ref`'s, one by one.
