@@ -22,6 +22,10 @@ pub enum Error {
     /// The folder someone tried to add isn't a git repository.
     #[error("{path} is not a git repository.")]
     NotAGitRepository { path: String },
+    /// The folder someone tried to add has a path that isn't UTF-8, which Gitto can't keep in its
+    /// list: `path` is it, lossily.
+    #[error("Gitto can't add {path}, as its path isn't UTF-8.")]
+    PathNotUtf8 { path: String },
     /// Gitto's list of repositories couldn't be read or changed.
     #[error(transparent)]
     List(#[from] ListError),

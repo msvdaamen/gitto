@@ -43,11 +43,15 @@ impl RepositoryService {
 
     /// Adds the git repository at `path` after the others; returns the existing entry if it was
     /// already added. `path` is made absolute as Node's `path.resolve` does (see [`resolve`]), and
-    /// is refused with [`Error::NotAGitRepository`] if it has no `.git`.
+    /// is refused with [`Error::NotAGitRepository`] if it has no `.git`, and with
+    /// [`Error::PathNotUtf8`] if it isn't UTF-8, as the list keeps paths as text.
     pub async fn add_repository(&self, path: impl AsRef<Path>) -> Result<Repository> {
-        // A string, as in TS: Node had the path as one, lossily if it wasn't UTF-8 (in which case
-        // the folder isn't found, and it's not a git repository).
-        let repo_path = resolve(path.as_ref()).to_string_lossy().into_owned();
+        let resolved = resolve(path.as_ref());
+        let Some(repo_path) = resolved.to_str().map(str::to_owned) else {
+            return Err(Error::PathNotUtf8 {
+                path: resolved.to_string_lossy().into_owned(),
+            });
+        };
 
         let existing = listed(ListAction::Read, self.store.get_by_path(&repo_path).await)?;
         if let Some(existing) = existing {
@@ -230,6 +234,28 @@ mod tests {
             format!("{} is not a git repository.", text(&path))
         );
         assert!(matches!(&error, Error::NotAGitRepository { path: p } if *p == text(&path)));
+        assert!(!error.is_bug());
+        assert!(f.names().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_a_folder_whose_path_isnt_utf8() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let f = fixture();
+        let path = f.dir.path().join(OsStr::from_bytes(b"caf\xe9"));
+
+        let error = f.add(&path).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "Gitto can't add {}, as its path isn't UTF-8.",
+                resolve(&path).to_string_lossy()
+            )
+        );
         assert!(!error.is_bug());
         assert!(f.names().is_empty());
     }
