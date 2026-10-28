@@ -29,8 +29,6 @@ use crate::data::repositories::RepositorySource;
 /// The services the UI works with (see the module's doc). Cheap to clone.
 #[derive(Clone)]
 pub struct Services {
-    paths: AppPaths,
-    db: Db,
     repositories: RepositoryService,
     /// The list of repositories as the UI reads and changes it: `repositories`, or a test's.
     repository_source: Rc<dyn RepositorySource>,
@@ -52,12 +50,12 @@ impl Services {
             .with_context(|| format!("Couldn't open {}", paths.database().display()))?;
         let system = SystemContext::stubs(paths.settings(), paths.last_seen_version());
         let storage = Rc::new(LocalStorage::open(paths.local_storage()));
-        Ok(Services::with(paths, db, system, storage))
+        Ok(Services::with(db, system, storage))
     }
 
     /// The services on `db`, with `system` and `storage`: for tests, an in-memory database.
-    pub fn with(paths: AppPaths, db: Db, system: SystemContext, storage: Rc<LocalStorage>) -> Self {
-        let repositories = RepositoryService::new(RepositoryStore::new(db.clone()));
+    pub fn with(db: Db, system: SystemContext, storage: Rc<LocalStorage>) -> Self {
+        let repositories = RepositoryService::new(RepositoryStore::new(db));
         let git = GitApi::new(repositories.clone()).on_bug(|error, action| {
             log::error!(
                 "[bug] {action} failed ({}): {}",
@@ -66,8 +64,6 @@ impl Services {
             );
         });
         Services {
-            paths,
-            db,
             repository_source: Rc::new(repositories.clone()),
             repositories,
             git,
@@ -83,7 +79,6 @@ impl Services {
         let db = Db::open_in_memory()?;
         let system = SystemContext::stubs(paths.settings(), paths.last_seen_version());
         Ok(Services::with(
-            paths,
             db,
             system,
             Rc::new(LocalStorage::in_memory()),
@@ -111,14 +106,6 @@ impl Services {
 
     pub fn global(cx: &App) -> &Services {
         cx.global::<Services>()
-    }
-
-    pub fn paths(&self) -> &AppPaths {
-        &self.paths
-    }
-
-    pub fn db(&self) -> &Db {
-        &self.db
     }
 
     /// The repositories added to Gitto, in the order of their tabs.

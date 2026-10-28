@@ -264,6 +264,7 @@ impl Repository {
     }
 
     /// Asks `git` from now on: for tests, which make up what a repository's git answers.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_git(&mut self, git: Rc<dyn RepositoryGit>) {
         self.git = git;
     }
@@ -897,56 +898,65 @@ impl Repository {
         hold
     }
 
-    // Setting what's loaded: what a change knows it changed, and tests' data.
+    // Setting what's loaded: tests' data.
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_status(&mut self, status: Uncommitted, cx: &mut Context<Self>) {
         self.status.cancel();
         self.status.set(Opaque::new(status));
         self.changed(Part::Status, cx);
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_operation(&mut self, operation: Option<Operation>, cx: &mut Context<Self>) {
         self.operation.cancel();
         self.operation.set(operation);
         self.changed(Part::Operation, cx);
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_log(&mut self, log: Log, cx: &mut Context<Self>) {
         self.log.cancel();
         self.log.set(log);
         self.changed(Part::Log, cx);
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_refs(&mut self, refs: Vec<Ref>, cx: &mut Context<Self>) {
         self.refs.cancel();
         self.refs.set(refs.into());
         self.changed(Part::Refs, cx);
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_remotes(&mut self, remotes: Vec<String>, cx: &mut Context<Self>) {
         self.remotes.cancel();
         self.remotes.set(remotes);
         self.changed(Part::Remotes, cx);
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_stashes(&mut self, stashes: Vec<Stash>, cx: &mut Context<Self>) {
         self.stashes.cancel();
         self.stashes.set(stashes.into());
         self.changed(Part::Stashes, cx);
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_worktrees(&mut self, worktrees: Vec<Worktree>, cx: &mut Context<Self>) {
         self.worktrees.cancel();
         self.worktrees.set(worktrees.into());
         self.changed(Part::Worktrees, cx);
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_push_target(&mut self, target: PushTarget, cx: &mut Context<Self>) {
         self.push_target.cancel();
         self.push_target.set(target);
         self.changed(Part::PushTarget, cx);
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_pushed_to(&mut self, sha: &str, remote: Option<String>, cx: &mut Context<Self>) {
         self.pushed_to.set(sha.to_owned(), remote);
         self.changed(Part::PushedTo, cx);
@@ -969,22 +979,26 @@ impl Repository {
         true
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_patch(&mut self, source: &DiffSource, patch: FilePatch, cx: &mut Context<Self>) {
         self.patches
             .set((source.clone(), patch.file.path.clone()), patch);
         self.changed(Part::Patches, cx);
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_conflict(&mut self, path: &str, conflict: Conflict, cx: &mut Context<Self>) {
         self.conflicts.set(path.to_owned(), conflict);
         self.changed(Part::Conflicts, cx);
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_files(&mut self, of: FilesOf, files: ChangedFiles, cx: &mut Context<Self>) {
         self.files.set((of, files.sha.clone()), files);
         self.changed(Part::Commits, cx);
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_message(&mut self, sha: &str, message: String, cx: &mut Context<Self>) {
         self.messages.set(sha.to_owned(), message);
         self.changed(Part::Commits, cx);
@@ -1260,11 +1274,20 @@ impl Repositories {
             return repository.clone();
         }
         let git = GitRepository::new(Services::global(cx).git().clone(), id.clone());
-        Repositories::insert(id, Rc::new(git), cx)
+        Repositories::open_with(id, Rc::new(git), cx)
     }
 
     /// Opens the repository `id` with `git`, in place of one that was: for tests.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn insert(
+        id: &RepositoryId,
+        git: Rc<dyn RepositoryGit>,
+        cx: &mut App,
+    ) -> Entity<Repository> {
+        Repositories::open_with(id, git, cx)
+    }
+
+    fn open_with(
         id: &RepositoryId,
         git: Rc<dyn RepositoryGit>,
         cx: &mut App,

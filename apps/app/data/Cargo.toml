@@ -5,6 +5,11 @@ edition.workspace = true
 description = "Gitto app's data layer, services and state: what the GPUI UI shows, loaded off the main thread."
 publish = false
 
+[features]
+# What tests set up a repository's data with (`Repository::set_status`, `Repositories::insert`,
+# …), for the app's tests too.
+test-support = []
+
 [dependencies]
 gpui-kit.workspace = true
 
