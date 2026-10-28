@@ -137,7 +137,7 @@ pub fn init(storage: Option<Rc<LocalStorage>>, cx: &mut App) {
 pub fn set(theme: AppTheme, cx: &mut App) {
     Theme::change(theme.mode(), None, cx);
     if let Some(storage) = &cx.global::<ActiveTheme>().storage {
-        let _ = storage.set_item(STORAGE_KEY, theme.as_str());
+        storage.set_item(STORAGE_KEY, theme.as_str());
     }
 }
 
@@ -318,12 +318,12 @@ mod tests {
     #[test]
     fn starts_from_the_saved_theme_and_saves_a_toggle() {
         let storage = LocalStorage::in_memory();
-        storage.set_item(STORAGE_KEY, "light").unwrap();
+        storage.set_item(STORAGE_KEY, "light");
 
         let theme = AppTheme::load(&storage);
         assert_eq!(theme, AppTheme::Light);
         let toggled = theme.toggled();
-        storage.set_item(STORAGE_KEY, toggled.as_str()).unwrap();
+        storage.set_item(STORAGE_KEY, toggled.as_str());
         assert_eq!(toggled, AppTheme::Dark);
         assert_eq!(storage.get_item(STORAGE_KEY).as_deref(), Some("dark"));
     }
@@ -332,7 +332,7 @@ mod tests {
     fn falls_back_to_dark() {
         assert_eq!(AppTheme::load(&LocalStorage::in_memory()), AppTheme::Dark);
         let storage = LocalStorage::in_memory();
-        storage.set_item(STORAGE_KEY, "sepia").unwrap();
+        storage.set_item(STORAGE_KEY, "sepia");
         assert_eq!(AppTheme::load(&storage), AppTheme::Dark);
     }
 
@@ -400,7 +400,7 @@ mod ui_tests {
     #[gpui_kit::test]
     fn starts_from_the_saved_theme(cx: &mut TestAppContext) {
         let storage = Rc::new(LocalStorage::in_memory());
-        storage.set_item(STORAGE_KEY, "light").unwrap();
+        storage.set_item(STORAGE_KEY, "light");
         cx.update(gpui_kit::init);
         cx.update(|cx| init(Some(Rc::clone(&storage)), cx));
         assert_eq!(cx.update(|cx| cx.app_theme()), AppTheme::Light);

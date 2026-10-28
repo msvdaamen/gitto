@@ -66,8 +66,7 @@ impl PanelWidth {
     pub fn set_width(&mut self, width: f32, save: bool) {
         self.width = self.bounds.clamp(width);
         if save {
-            let _ = self
-                .storage
+            self.storage
                 .set_item(&storage_key(self.name), self.width.to_string());
         }
     }
@@ -133,9 +132,7 @@ mod tests {
     #[test]
     fn ignores_unreadable_saved_widths() {
         let storage = Rc::new(LocalStorage::in_memory());
-        storage
-            .set_item("gitto-panel-width:sidebar", "wide")
-            .unwrap();
+        storage.set_item("gitto-panel-width:sidebar", "wide");
         assert_eq!(mount(&storage).width(), 220.);
     }
 }
