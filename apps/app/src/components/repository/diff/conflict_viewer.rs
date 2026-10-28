@@ -1305,8 +1305,9 @@ mod tests {
     }
 
     fn viewer(opened: &Opened, cx: &mut TestAppContext) -> gpui_kit::Entity<ConflictViewer> {
-        opened.read(cx, |view, _| {
+        opened.read(cx, |view, cx| {
             view.resolution
+                .read(cx)
                 .viewer()
                 .cloned()
                 .expect("the conflicts' viewer")

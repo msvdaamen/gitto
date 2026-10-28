@@ -217,6 +217,12 @@ impl FileEditing {
         self.io.borrow().clone()
     }
 
+    /// What the view reads and writes the working tree with, shared with what else does (see
+    /// `ConflictResolutionView`): changed with [`FileDiffView::set_io`] for all of them.
+    pub fn shared_io(&self) -> Rc<RefCell<FileIo>> {
+        Rc::clone(&self.io)
+    }
+
     pub fn autosave(&self) -> &Entity<Autosave> {
         &self.autosave
     }
@@ -242,7 +248,7 @@ impl FileDiffView {
 
     /// Stops editing, dropping the edits that aren't saved.
     pub(super) fn discard_edits(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(conflict) = self.resolution.viewer() {
+        if let Some(conflict) = self.resolution.read(cx).viewer().cloned() {
             conflict.update(cx, |conflict, cx| conflict.discard(window, cx));
         }
         self.patch_editor = None;
@@ -345,6 +351,7 @@ impl FileDiffView {
             .is_some_and(|editor| editor.read(cx).has_selection(cx))
             || self
                 .resolution
+                .read(cx)
                 .viewer()
                 .is_some_and(|viewer| viewer.read(cx).has_selection(cx));
         if selection {
