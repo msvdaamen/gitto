@@ -6,6 +6,7 @@
 //! loads a page at a time as its end comes near.
 
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -115,6 +116,8 @@ struct Layout {
     has_changes: bool,
     head: Option<String>,
     rows: Rc<[HistoryRow]>,
+    /// Each row's place among them, by its id.
+    places: HashMap<String, usize>,
     /// The most lanes a row's graph uses, which the graph's column is sized to.
     lanes: usize,
     /// Whether more of the log was asked for since the rows were laid out (see
@@ -132,7 +135,7 @@ fn same<T>(a: &Arc<[T]>, b: &Arc<[T]>) -> bool {
 struct Filtered {
     needle: String,
     rows: Rc<[HistoryRow]>,
-    /// `None`: all of them.
+    /// Their places among the rows, in order; `None`: all of them.
     shown: Option<Rc<[usize]>>,
 }
 
@@ -253,6 +256,7 @@ impl HistoryTable {
             has_changes: false,
             head: None,
             rows: Rc::from(Vec::new()),
+            places: HashMap::new(),
             lanes: 1,
             asked_for_more: Rc::default(),
         };
@@ -385,19 +389,23 @@ impl HistoryTable {
 
     /// The selected row: the one selected, or the first if it's not there.
     pub fn selected(&self) -> Option<&HistoryRow> {
-        let rows = &self.layout.rows;
+        self.selected_row_ix().map(|ix| &self.layout.rows[ix])
+    }
+
+    /// The selected row's place among all the rows (see [`selected`](Self::selected)).
+    fn selected_row_ix(&self) -> Option<usize> {
         self.selected_id
             .as_deref()
-            .and_then(|id| rows.iter().find(|row| row.id() == id))
-            .or_else(|| rows.first())
+            .and_then(|id| self.layout.places.get(id).copied())
+            .or_else(|| (!self.layout.rows.is_empty()).then_some(0))
     }
 
     /// The selected row's place among the rows on show; `None` when the search hides it.
     fn selected_ix(&self) -> Option<usize> {
-        let id = self.selected()?.id();
+        let ix = self.selected_row_ix()?;
         match &self.filtered.shown {
-            None => self.layout.rows.iter().position(|row| row.id() == id),
-            Some(shown) => shown.iter().position(|&ix| self.layout.rows[ix].id() == id),
+            None => Some(ix),
+            Some(shown) => shown.binary_search(&ix).ok(),
         }
     }
 
@@ -492,6 +500,11 @@ impl HistoryTable {
             .max()
             .unwrap_or(1)
             .max(1);
+        let places = rows
+            .iter()
+            .enumerate()
+            .map(|(ix, row)| (row.id().to_owned(), ix))
+            .collect();
         self.layout = Layout {
             repository_id: self.repository_id.clone(),
             commits,
@@ -500,6 +513,7 @@ impl HistoryTable {
             has_changes,
             head,
             rows: rows.into(),
+            places,
             lanes,
             asked_for_more: Rc::default(),
         };
