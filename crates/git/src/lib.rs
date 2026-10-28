@@ -16,6 +16,7 @@ pub(crate) mod test_support;
 
 pub use crate::core::errors::{ApiCode, Error, GitError, GitErrorKind, Result};
 pub use crate::core::repo::{GitCommand, GitRepos, Repo, RepositoryLookup};
-pub use crate::core::runner::RunOptions;
-pub use crate::core::version::GitVersion;
+pub use crate::core::runner::{MaxOutput, RunOptions, stop_commands_on_exit};
+pub use crate::core::shell_path::use_path_from_shell;
+pub use crate::core::version::{GitVersion, Version};
 pub use crate::schema::{FileStatus, GitInstall};

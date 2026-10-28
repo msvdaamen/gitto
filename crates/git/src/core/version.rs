@@ -12,9 +12,9 @@ use regex::Regex;
 
 use super::errors::{Error, Result};
 use super::runner::lock;
+use super::shell_path::git_path;
 use crate::schema::GitInstall;
 
-/// The oldest git Gitto works with: it uses options and output that older ones don't have.
 /// A git version, e.g. `2.39.3`, ordered as versions are; `2.41` is `2.41.0`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Version {
@@ -63,6 +63,7 @@ impl fmt::Display for Version {
     }
 }
 
+/// The oldest git Gitto works with: it uses options and output that older ones don't have.
 pub(crate) const MIN_GIT_VERSION: Version = Version::new(2, 41, 0);
 
 /// The version in `git version`'s output, as git words it, e.g. `2.45.1` from
@@ -78,7 +79,12 @@ pub(crate) fn parse_git_version(output: &str) -> Option<String> {
 
 /// Runs `git version`; resolves to its output, or `None` if git couldn't be run.
 async fn read_git_version() -> Option<String> {
-    let output = async_process::Command::new("git")
+    let mut command = async_process::Command::new("git");
+    // The git that runs the commands (see `shell_path`).
+    if let Some(path) = git_path().await {
+        command.env("PATH", path);
+    }
+    let output = command
         .arg("version")
         .env("LC_ALL", "C")
         .stdin(Stdio::null())

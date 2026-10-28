@@ -18,6 +18,7 @@ use futures::future::BoxFuture;
 use futures_lite::{AsyncReadExt, AsyncWriteExt};
 
 use super::errors::{Error, GitError, Result, command_error};
+use super::shell_path::git_path;
 use super::trace::{trace, tracing};
 
 pub(crate) use super::caches::{CommitGraphs, IndexRefreshes, ShownStatuses};
@@ -323,14 +324,24 @@ async fn read_output(
     output
 }
 
-/// `git` with `args`, to run in `cwd` with `options`, in a session of its own (see `run_git_bytes`).
-fn git_command(cwd: &Path, args: &[OsString], options: &RunOptions) -> std::process::Command {
+/// `git` with `args`, to run in `cwd` with `options`, in a session of its own (see `run_git_bytes`),
+/// and with the PATH `path`, if it's not Gitto's own (see `shell_path`).
+fn git_command(
+    cwd: &Path,
+    args: &[OsString],
+    options: &RunOptions,
+    path: Option<&OsStr>,
+) -> std::process::Command {
     let mut command = std::process::Command::new("git");
     command.args(CONFIG);
     for setting in &options.config {
         command.arg("-c").arg(setting);
     }
     command.args(args).current_dir(cwd);
+    // The program is looked up on it too.
+    if let Some(path) = path {
+        command.env("PATH", path);
+    }
     for key in REPOSITORY_ENV {
         command.env_remove(key);
     }
@@ -362,7 +373,9 @@ async fn run(cwd: PathBuf, args: Vec<OsString>, options: RunOptions) -> Result<V
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect();
 
-    let mut command = async_process::Command::from(git_command(&cwd, &args, &options));
+    let path = git_path().await;
+    let mut command =
+        async_process::Command::from(git_command(&cwd, &args, &options, path.as_deref()));
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -547,7 +560,7 @@ mod tests {
     #[test]
     fn leaves_out_the_variables_that_point_git_at_another_repository() {
         let options = RunOptions::default().env("GIT_INDEX_FILE", "/elsewhere/index");
-        let command = git_command(Path::new("/repo"), &os_args(["status"]), &options);
+        let command = git_command(Path::new("/repo"), &os_args(["status"]), &options, None);
         let envs: Vec<_> = command.get_envs().collect();
         for key in REPOSITORY_ENV {
             let key = OsStr::new(key);
@@ -562,6 +575,19 @@ mod tests {
                 assert_eq!(value, Some(None), "{key:?}");
             }
         }
+    }
+
+    #[test]
+    fn runs_git_with_the_path_its_given() {
+        let path = OsStr::new("/opt/homebrew/bin:/usr/bin");
+        let command = git_command(
+            Path::new("/repo"),
+            &os_args(["status"]),
+            &RunOptions::default(),
+            Some(path),
+        );
+        let set = command.get_envs().find(|(key, _)| *key == "PATH");
+        assert_eq!(set, Some((OsStr::new("PATH"), Some(path))));
     }
 
     #[test]

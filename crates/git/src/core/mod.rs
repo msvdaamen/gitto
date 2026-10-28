@@ -8,5 +8,6 @@ pub mod git_dirs;
 mod queue;
 pub mod repo;
 pub mod runner;
+pub mod shell_path;
 pub mod trace;
 pub mod version;

@@ -256,6 +256,16 @@ pub async fn wait_for(timeout: Duration, mut done: impl FnMut() -> bool) {
     }
 }
 
+/// Writes the executable script `file`, a hook, say.
+pub fn write_script(file: &Path, script: &str) {
+    fs::write(file, script).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(file, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::conflicts::{Files, commit_files};
