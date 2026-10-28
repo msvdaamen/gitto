@@ -1,6 +1,7 @@
 //! A conflict resolved by keeping one side whole. Ported from `conflict-sides.tsx`.
 
 use std::rc::Rc;
+use std::sync::Arc;
 
 use gitto_git::features::conflicts::schema::{Conflict, Side};
 use gitto_ui::git::conflicts::{describe_conflict, describe_side, keep_label};
@@ -18,14 +19,14 @@ type OnKeep = Rc<dyn Fn(Side, &mut Window, &mut App) + 'static>;
 /// and a button to keep it, e.g. "Delete, as theirs does".
 #[derive(IntoElement)]
 pub struct ConflictSides {
-    conflict: Conflict,
+    conflict: Arc<Conflict>,
     disabled: bool,
     on_keep: OnKeep,
 }
 
 impl ConflictSides {
     pub fn new(
-        conflict: Conflict,
+        conflict: Arc<Conflict>,
         disabled: bool,
         on_keep: impl Fn(Side, &mut Window, &mut App) + 'static,
     ) -> Self {

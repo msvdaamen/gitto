@@ -58,11 +58,11 @@ pub struct ConflictProgress {
     pub problem: Option<String>,
 }
 
-/// The file on disk, as last read.
+/// The file on disk, as last read: its text shared, so it's given and compared without copying.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiskFile {
-    pub contents: String,
     pub version: FileVersion,
+    pub contents: Arc<str>,
 }
 
 /// Writes a resolved conflict's text, `contents`, over the file at the version expected; resolves
@@ -135,7 +135,7 @@ pub struct ConflictViewer {
     save: SaveResolved,
     path: SharedString,
     /// What the file's view last gave: the file, and the file as it was read from disk.
-    given: Option<(String, Option<DiskFile>)>,
+    pub(super) given: Option<(String, Option<DiskFile>)>,
     shown: Option<Shown>,
     /// Versions of the file that were written over here: read from disk before that, and stale.
     superseded: HashSet<FileVersion>,
@@ -348,26 +348,14 @@ impl ConflictViewer {
         cx: &mut Context<Self>,
     ) -> Task<()> {
         let Some(shown) = &mut self.shown else {
-            return self.show_text(
-                file_key,
-                disk.contents.into(),
-                Some(disk.version),
-                window,
-                cx,
-            );
+            return self.show_text(file_key, disk.contents, Some(disk.version), window, cx);
         };
         if shown.file_key != file_key {
             self.superseded.clear();
             self.requests.clear();
-            return self.show_text(
-                file_key,
-                disk.contents.into(),
-                Some(disk.version),
-                window,
-                cx,
-            );
+            return self.show_text(file_key, disk.contents, Some(disk.version), window, cx);
         }
-        if *shown.contents == *disk.contents {
+        if shown.contents == disk.contents {
             // Written here, or the same again: only its version is news.
             let known = shown.version.is_some();
             shown.version = Some(disk.version);
@@ -382,13 +370,7 @@ impl ConflictViewer {
         }
         // Changed elsewhere: what was asked of the last text isn't of this one.
         self.requests.clear();
-        self.show_text(
-            file_key,
-            disk.contents.into(),
-            Some(disk.version),
-            window,
-            cx,
-        )
+        self.show_text(file_key, disk.contents, Some(disk.version), window, cx)
     }
 
     /// Shows `contents`: its conflicts, highlighted, or the whole of it. Another file starts at

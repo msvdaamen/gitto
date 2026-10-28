@@ -1,6 +1,7 @@
 //! Resolving the conflicted file on show, in its view. Ported from `conflict-resolution.tsx`.
 
 use std::rc::Rc;
+use std::sync::Arc;
 
 use gitto_git::FileStatus;
 use gitto_git::features::conflicts::schema::{Conflict, Side};
@@ -40,7 +41,10 @@ pub type ResolveFileMutation = Entity<Mutation<FileToResolve>>;
 /// In the view, `[` and `]` step through the conflicts, `O`, `T` and `B` keep ours, theirs or both
 /// of the current one, `N` opens the next conflicted file, and ⌘↵ marks the file resolved.
 pub struct FileResolution {
-    query: Query<Conflict>,
+    query: Query<Conflict, Arc<Conflict>>,
+    /// The text of the conflict loaded last, if it's resolved in its text: worked out once per
+    /// load, rather than each time it's read, as it's the whole file.
+    text: Option<(Arc<Conflict>, DiskFile)>,
     /// What the query is of: the file's path, and whether it's loaded at all.
     query_of: (String, bool),
     /// After editing, the file is read again before it's shown: what was read before is of the
@@ -68,6 +72,7 @@ impl FileResolution {
         cx.observe(&resolve, |_, _, cx| cx.notify()).detach();
         FileResolution {
             query,
+            text: None,
             query_of: (file.path.clone(), active),
             read_after: None,
             was_editing: false,
@@ -85,16 +90,33 @@ impl FileResolution {
     }
 
     /// The conflicted file, as it was last read.
-    pub fn conflict(&self) -> Option<Conflict> {
+    pub fn conflict(&self) -> Option<Arc<Conflict>> {
         self.query.data()
     }
 
-    fn kind(&self) -> Option<ConflictKind> {
-        self.query.data().map(|conflict| conflict_kind(&conflict))
+    fn is_text(&self) -> bool {
+        self.query
+            .data()
+            .is_some_and(|conflict| matches!(conflict_kind(&conflict), ConflictKind::Text { .. }))
     }
 
-    fn is_text(&self) -> bool {
-        matches!(self.kind(), Some(ConflictKind::Text { .. }))
+    /// Takes the text of the conflict loaded last, unless it has already.
+    fn sync_text(&mut self) {
+        let loaded = self.query.data();
+        let taken = self.text.as_ref().map(|(conflict, _)| conflict);
+        if loaded.as_ref().map(Arc::as_ptr) == taken.map(Arc::as_ptr) {
+            return;
+        }
+        self.text = loaded.and_then(|conflict| {
+            let ConflictKind::Text { contents, version } = conflict_kind(&conflict) else {
+                return None;
+            };
+            let disk = DiskFile {
+                version: version.into(),
+                contents: contents.into(),
+            };
+            Some((conflict, disk))
+        });
     }
 }
 
@@ -133,6 +155,7 @@ impl FileDiffView {
             cx.spawn(async move |_, _| refetching.await).detach();
         }
         self.resolution.was_editing = editing;
+        self.resolution.sync_text();
 
         if !(show && active && self.resolution.is_text()) {
             if let Some(viewer) = self.resolution.viewer.take()
@@ -201,13 +224,7 @@ impl FileDiffView {
         {
             return None;
         }
-        match resolution.kind()? {
-            ConflictKind::Text { contents, version } => Some(DiskFile {
-                contents,
-                version: version.into(),
-            }),
-            _ => None,
-        }
+        resolution.text.as_ref().map(|(_, disk)| disk.clone())
     }
 
     /// The viewer's progress, once it's of this file: the last one's is still on show while this
@@ -263,7 +280,7 @@ impl FileDiffView {
             .or_else(|| {
                 self.resolution
                     .conflict()
-                    .and_then(|conflict| conflict.version)
+                    .and_then(|conflict| conflict.version.clone())
             })
     }
 
@@ -766,6 +783,23 @@ mod tests {
         // Ours above theirs, one way only.
         assert!(!opened.has("split", cx));
         assert!(!opened.has("stage-file", cx));
+    }
+
+    #[gpui_kit::test]
+    fn gives_the_viewer_the_text_it_read_without_copying_it_each_time(cx: &mut TestAppContext) {
+        let _dir = init(cx);
+        let opened = open_conflict(&conflicts(2), cx);
+        let first = opened.read(cx, |view, _| view.disk()).expect("its text");
+        opened.press("]", cx);
+        let again = opened.read(cx, |view, _| view.disk()).expect("its text");
+        assert!(Arc::ptr_eq(&first.contents, &again.contents));
+        let viewer = opened.read(cx, |view, _| view.resolution.viewer().cloned().unwrap());
+        assert!(cx.update(|cx| {
+            let given = viewer.read(cx).given.clone();
+            given.is_some_and(|(_, disk)| {
+                disk.is_some_and(|disk| Arc::ptr_eq(&disk.contents, &first.contents))
+            })
+        }));
     }
 
     #[gpui_kit::test]

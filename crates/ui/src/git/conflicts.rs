@@ -24,15 +24,16 @@ pub fn side_kind(side: &ConflictSide) -> SideKind {
 
 /// How a conflicted file is resolved: in its text, conflict by conflict, when both sides changed it
 /// as a text file; or by keeping one side whole otherwise, e.g. when one deleted it, or it's binary;
-/// or not at all, once it isn't conflicted any more.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConflictKind {
-    Text { contents: String, version: String },
+/// or not at all, once it isn't conflicted any more. Its text is the conflict's, borrowed: a file
+/// can be megabytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConflictKind<'a> {
+    Text { contents: &'a str, version: &'a str },
     Sides,
     Resolved,
 }
 
-pub fn conflict_kind(conflict: &Conflict) -> ConflictKind {
+pub fn conflict_kind(conflict: &Conflict) -> ConflictKind<'_> {
     let Conflict {
         base,
         ours,
@@ -48,8 +49,8 @@ pub fn conflict_kind(conflict: &Conflict) -> ConflictKind {
             if side_kind(ours) == SideKind::File && side_kind(theirs) == SideKind::File =>
         {
             ConflictKind::Text {
-                contents: text.contents.clone(),
-                version: text.version.clone(),
+                contents: &text.contents,
+                version: &text.version,
             }
         }
         _ => ConflictKind::Sides,
@@ -197,8 +198,8 @@ mod tests {
             assert_eq!(
                 conflict_kind(&conflict()),
                 ConflictKind::Text {
-                    contents: "text".into(),
-                    version: "v1".into()
+                    contents: "text",
+                    version: "v1"
                 }
             );
             let added = Conflict {

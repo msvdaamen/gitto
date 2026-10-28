@@ -1,5 +1,6 @@
 //! A conflicted file, and resolving it whole. Ported from `git/queries/conflicts.ts`.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use gitto_git::features::conflicts::commands::{
@@ -52,14 +53,19 @@ pub fn conflict_query_options(
 
 /// A conflicted file (see [`conflict_options`]), kept up to date as it's resolved (`useConflict`).
 /// While another one's loads (see `Query::set_options` and [`conflict_query_options`]), the last
-/// one's stays, as `Query::is_placeholder_data` says: what's on show stays until it's in.
+/// one's stays, as `Query::is_placeholder_data` says: what's on show stays until it's in. Shared
+/// as it's loaded, so the view reads the whole file without copying it.
 pub fn conflict_query<V: 'static>(
     id: &RepositoryId,
     path: &str,
     enabled: bool,
     cx: &mut Context<V>,
-) -> Query<Conflict> {
-    Query::new(conflict_query_options(id, path, enabled, cx), cx)
+) -> Query<Conflict, Arc<Conflict>> {
+    Query::with_select(
+        conflict_query_options(id, path, enabled, cx),
+        |conflict: &Conflict| Arc::new(conflict.clone()),
+        cx,
+    )
 }
 
 /// Resolving a conflicted file whole: keeping one side, or marking it resolved as it is.
