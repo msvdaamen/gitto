@@ -23,8 +23,8 @@ use gpui_kit::component::WindowExt as _;
 use gpui_kit::test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _};
 use gpui_kit::{
     AnyWindowHandle, App, AppContext as _, Context, Entity, Focusable as _, IntoElement,
-    MouseButton, ParentElement as _, Render, Role, ScrollStrategy, Styled as _, Subscription,
-    TestAppContext, Window, div,
+    MouseButton, ParentElement as _, Render, Role, ScrollStrategy, SharedString, Styled as _,
+    Subscription, TestAppContext, Window, div,
 };
 
 use super::columns::{keyed, part};
@@ -322,7 +322,8 @@ fn render(cx: &mut TestAppContext, start: Start) -> Rendered {
         let provider =
             cx.new(|cx| BranchMenuProvider::with(shown.clone(), actions, create, add, cx));
         let sources = sources(cx);
-        let table = cx.new(|cx| HistoryTable::with(shown.clone(), sources, window, cx));
+        let table =
+            cx.new(|cx| HistoryTable::with(shown.clone(), provider.clone(), sources, window, cx));
         let selections = Rc::new(RefCell::new(Vec::new()));
         let details_follow = start.details_follow;
         let subscription = cx.subscribe(&table, {
@@ -1012,6 +1013,27 @@ fn leaves_a_branchs_label_in_the_row_to_the_branchs_menu(cx: &mut TestAppContext
     let items = history.menu_of(history.label("e5", "refs/heads/main"), cx);
     assert!(items.contains(&"Create branch…".to_owned()), "{items:?}");
     assert!(!items.contains(&"Edit message…".to_owned()));
+}
+
+#[gpui_kit::test]
+fn opens_the_menus_of_the_branch_menus_its_given_rather_than_the_last_made(
+    cx: &mut TestAppContext,
+) {
+    let history = render(cx, two_commits(0));
+    // Another page's, made after this one's.
+    let id = history.id.clone();
+    let _later = cx
+        .update_window(history.window, |_, window, cx| {
+            cx.new(|cx| BranchMenuProvider::new(id, window, cx))
+        })
+        .unwrap();
+    let items = history.menu_of(history.label("e5", "refs/heads/main"), cx);
+    assert!(items.contains(&"Create branch…".to_owned()), "{items:?}");
+    let provider = history.host.read_with(cx, |host, _| host.provider.clone());
+    assert_eq!(
+        provider.read_with(cx, |provider, _| provider.open_for().cloned()),
+        Some(SharedString::from("refs/heads/main"))
+    );
 }
 
 // --- history-branches.test.tsx ---------------------------------------------------------------

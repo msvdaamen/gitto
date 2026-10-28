@@ -9,12 +9,12 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, ElementId, FontWeight, Hsla, Role, SharedString, TestSupportExt as _, Window,
-    anchored, deferred, div, px, rems,
+    AnyElement, App, ElementId, Entity, FontWeight, Hsla, Role, SharedString, TestSupportExt as _,
+    Window, anchored, deferred, div, px, rems,
 };
 
 use super::columns::{LABEL_ICON, LABEL_LINE, LABEL_TEXT, mixed, part, tinted};
-use crate::components::repository::branch_menu::branch_menu;
+use crate::components::repository::branch_menu::BranchMenuProvider;
 use crate::components::ui::{Icon, IconName};
 use crate::theme::{Palette, PaletteExt as _};
 
@@ -32,6 +32,8 @@ pub struct LabelActions {
     /// Opens the worktree a branch is checked out in, by its path, when its label is
     /// double-clicked: git won't switch to it here.
     pub open_worktree: OnRef,
+    /// The branches' menus.
+    pub branch_menu: Entity<BranchMenuProvider>,
     /// The full ref name of the branch whose menu is open, if any.
     pub menu_open_for: Option<SharedString>,
 }
@@ -92,7 +94,7 @@ pub fn label_target(label: &RefLabel) -> Option<LabelTarget> {
 /// a worktree checked out at the commit with no branch. While searching, a label the search
 /// matches comes first, so the row shows why it matched. Double-clicking a branch switches to it,
 /// or opens the worktree it's checked out in, as git won't switch to it here; and right-clicking
-/// one opens its menu (see `branch_menu`), like in the sidebar.
+/// one opens its menu (see `BranchMenuProvider`), like in the sidebar.
 ///
 /// Whether the rest are listed is the table's (see `MoreLabels`): it opens them after the count's
 /// hovered a moment, and keeps them while a menu opened from them is.
@@ -252,8 +254,9 @@ fn ref_pill(
     match branch {
         Some(branch) => {
             let reference: SharedString = branch.full_name.into();
-            pill.context_menu(move |menu, window, cx| {
-                branch_menu(menu, reference.clone(), window, cx)
+            let provider = actions.branch_menu.clone();
+            pill.context_menu(move |menu, _, cx| {
+                BranchMenuProvider::build_menu(&provider, reference.clone(), menu, cx)
             })
             .into_any_element()
         }

@@ -152,7 +152,7 @@ pub struct HistoryTable {
     updating: Entity<Delayed>,
     loading_more: Entity<Delayed>,
     commit_menu: Entity<CommitMenu>,
-    branch_menu: Option<Entity<BranchMenuProvider>>,
+    branch_menu: Entity<BranchMenuProvider>,
     more_labels: MoreLabelsState,
     focus: FocusHandle,
     /// Whether the keyboard moved the selection last, rather than the pointer: the selected row
@@ -172,14 +172,22 @@ impl Focusable for HistoryTable {
 }
 
 impl HistoryTable {
-    pub fn new(repository_id: RepositoryId, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    /// The history of the repository `repository_id`, whose branches' labels have
+    /// `branch_menu`'s menus.
+    pub fn new(
+        repository_id: RepositoryId,
+        branch_menu: Entity<BranchMenuProvider>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let sources = HistorySources::new(cx);
-        HistoryTable::with(repository_id, sources, window, cx)
+        HistoryTable::with(repository_id, branch_menu, sources, window, cx)
     }
 
     /// Running what `sources` runs: e.g. a test's.
     pub fn with(
         repository_id: RepositoryId,
+        branch_menu: Entity<BranchMenuProvider>,
         sources: HistorySources,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -193,9 +201,8 @@ impl HistoryTable {
         });
         let updating = cx.new(|cx| Delayed::new(false, DELAY, cx));
         let loading_more = cx.new(|cx| Delayed::new(false, DELAY, cx));
-        let branch_menu = BranchMenuProvider::current(cx);
         let clock = Clock::global(cx);
-        let mut subscriptions = vec![
+        let subscriptions = vec![
             cx.observe(&updating, |_, _, cx| cx.notify()),
             cx.observe(&loading_more, |_, _, cx| cx.notify()),
             cx.observe(&clock, |_, _, cx| cx.notify()),
@@ -205,13 +212,11 @@ impl HistoryTable {
             }),
             // A switch shows in the toolbar; a label double-clicked meanwhile does nothing.
             cx.observe_global::<Operations>(|_, cx| cx.notify()),
-        ];
-        if let Some(provider) = &branch_menu {
-            subscriptions.push(cx.observe(provider, |this, _, cx| {
+            cx.observe(&branch_menu, |this, _, cx| {
                 this.recheck_more_labels(cx);
                 cx.notify();
-            }));
-        }
+            }),
+        ];
         let layout = Layout {
             repository_id: repository_id.clone(),
             commits: None,
@@ -655,9 +660,7 @@ impl HistoryTable {
     }
 
     fn is_branch_menu_open(&self, cx: &App) -> bool {
-        self.branch_menu
-            .as_ref()
-            .is_some_and(|provider| provider.read(cx).open_for().is_some())
+        self.branch_menu.read(cx).open_for().is_some()
     }
 
     /// A branch's menu closed: the list of other labels it was opened from closes too, once the
@@ -766,15 +769,11 @@ impl HistoryTable {
             open_worktree: Rc::new({
                 let provider = self.branch_menu.clone();
                 move |path, _, cx| {
-                    if let Some(provider) = &provider {
-                        provider.update(cx, |provider, cx| provider.open_worktree(path, cx));
-                    }
+                    provider.update(cx, |provider, cx| provider.open_worktree(path, cx));
                 }
             }),
-            menu_open_for: self
-                .branch_menu
-                .as_ref()
-                .and_then(|provider| provider.read(cx).open_for().cloned()),
+            branch_menu: self.branch_menu.clone(),
+            menu_open_for: self.branch_menu.read(cx).open_for().cloned(),
         };
         let context = Rc::new(RowsContext {
             table: table.clone(),
