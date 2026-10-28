@@ -2,12 +2,10 @@
 //! a side whole, or as it is in the working tree. Ported from `commands.ts`.
 
 use std::collections::{HashMap, HashSet};
-use std::convert::Infallible;
-use std::future::Future;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use futures::future::try_join_all;
+use futures::{StreamExt, TryStreamExt, stream};
 
 use super::markers::{BINARY_CHECK_BYTES, ConflictCounter, is_binary};
 use super::schema::{
@@ -254,11 +252,11 @@ pub async fn refuse_conflict_markers(
         None => unmerged,
     };
     // However large it is: only one that's left out could be staged with its markers.
-    let marked = read_at_once(&staged, |path| async move {
-        let count = conflicts_in(repo, path, u64::MAX).await?;
-        Ok::<_, Error>(count.unwrap_or(0) > 0)
-    })
-    .await?;
+    let marked: Vec<bool> = stream::iter(&staged)
+        .map(|path| has_markers(repo, path))
+        .buffered(READ_AT_ONCE)
+        .try_collect()
+        .await?;
     let left: Vec<String> = staged
         .iter()
         .zip(marked)
@@ -271,26 +269,14 @@ pub async fn refuse_conflict_markers(
     Ok(())
 }
 
-/// How many conflicted files are read at once, to tell whether they have markers left: a merge can
-/// leave thousands conflicted, and every one of them open at the same time would run the process
-/// out of file descriptors.
+/// How many conflicted files are read at once (in order, the next one started as soon as one is
+/// done), to tell whether they have markers left: a merge can leave thousands conflicted, and every
+/// one of them open at the same time would run the process out of file descriptors.
 const READ_AT_ONCE: usize = 50;
 
-/// `read` of each of `paths`, `READ_AT_ONCE` at a time, in order; stops at the first that fails.
-async fn read_at_once<'a, T, E, F, Fut>(
-    paths: &'a [String],
-    read: F,
-) -> std::result::Result<Vec<T>, E>
-where
-    F: Fn(&'a str) -> Fut,
-    Fut: Future<Output = std::result::Result<T, E>>,
-{
-    let mut results = Vec::with_capacity(paths.len());
-    for batch in paths.chunks(READ_AT_ONCE) {
-        // One batch at a time, on purpose.
-        results.extend(try_join_all(batch.iter().map(|path| read(path))).await?);
-    }
-    Ok(results)
+/// Whether the file at `path` in the working tree has conflict markers, however large it is.
+async fn has_markers(repo: &Repo, path: &str) -> Result<bool> {
+    Ok(conflicts_in(repo, path, u64::MAX).await?.unwrap_or(0) > 0)
 }
 
 /// How many conflicts the text file at `path` in the working tree has left; `None` if it isn't
@@ -401,19 +387,11 @@ pub async fn marker_free(repo: &Repo, paths: &[String]) -> Vec<String> {
     let kept = repo.keep::<MarkerChecks>();
     let last = Arc::clone(&lock(&kept.0));
     let last = &*last;
-    let Ok(read) = read_at_once(paths, |path| async move {
-        let stamp = stamp_of(repo, path).await;
-        let known = stamp
-            .as_ref()
-            .and_then(|stamp| last.get(path).filter(|known| known.stamp == *stamp));
-        let free = match known {
-            Some(known) => known.free,
-            // Failing to read it is not being free of markers.
-            None => matches!(conflicts_in(repo, path, MAX_BLOB_BYTES).await, Ok(Some(0))),
-        };
-        Ok::<_, Infallible>((stamp, free))
-    })
-    .await;
+    let read: Vec<(Option<String>, bool)> = stream::iter(paths.iter().cloned())
+        .map(|path| check_markers(repo, last, path))
+        .buffered(READ_AT_ONCE)
+        .collect()
+        .await;
     let mut checks = HashMap::new();
     let mut free = Vec::new();
     for (path, (stamp, is_free)) in paths.iter().zip(read) {
@@ -432,6 +410,25 @@ pub async fn marker_free(repo: &Repo, paths: &[String]) -> Vec<String> {
     }
     *lock(&kept.0) = Arc::new(checks);
     free
+}
+
+/// Whether the conflicted file at `path` has no markers left, and when it last changed, going by
+/// `last` if it didn't since.
+async fn check_markers(
+    repo: &Repo,
+    last: &HashMap<String, MarkerCheck>,
+    path: String,
+) -> (Option<String>, bool) {
+    let stamp = stamp_of(repo, &path).await;
+    let known = stamp
+        .as_ref()
+        .and_then(|stamp| last.get(&path).filter(|known| known.stamp == *stamp));
+    let free = match known {
+        Some(known) => known.free,
+        // Failing to read it is not being free of markers.
+        None => matches!(conflicts_in(repo, &path, MAX_BLOB_BYTES).await, Ok(Some(0))),
+    };
+    (stamp, free)
 }
 
 #[cfg(test)]
