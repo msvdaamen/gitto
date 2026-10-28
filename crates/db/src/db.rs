@@ -7,7 +7,7 @@ use rusqlite::Connection;
 use rusqlite::config::DbConfig;
 
 use crate::Result;
-use crate::migrations::{MIGRATIONS, migrate};
+use crate::migrations::{MIGRATIONS, check_shared_tables, migrate};
 
 /// Gitto's database: one SQLite connection, migrated. Cheap to clone; clones share the connection.
 ///
@@ -43,6 +43,7 @@ impl Db {
         conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DQS_DDL, false)?;
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
         migrate(&mut conn, migrations)?;
+        check_shared_tables(&mut conn)?;
         Ok(Db {
             conn: Arc::new(Mutex::new(conn)),
         })
@@ -171,6 +172,26 @@ mod tests {
             smol::block_on(db.run(|conn| conn.query_row("SELECT 1", [], |row| row.get(0))))
                 .unwrap();
         assert_eq!(one, 1);
+    }
+
+    #[test]
+    fn opens_the_electron_apps_first_database_adding_the_position() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gitto.db");
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch(include_str!(
+                "../../../apps/electron/migrations/20260930091652_dapper_captain_stacy/migration.sql"
+            ))
+            .unwrap();
+        let db = Db::open(&path).unwrap();
+        let count: i64 = smol::block_on(db.run(|conn| {
+            conn.query_row("SELECT count(`position`) FROM repositories", [], |row| {
+                row.get(0)
+            })
+        }))
+        .unwrap();
+        assert_eq!(count, 0);
     }
 
     #[test]

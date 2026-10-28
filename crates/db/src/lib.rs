@@ -31,4 +31,8 @@ pub enum Error {
         "the database is at version {version}, newer than this Gitto knows ({known}): update Gitto"
     )]
     TooNew { version: u32, known: u32 },
+    /// A table the Electron app shares isn't as either app makes it (see
+    /// [`migrations::check_shared_tables`]).
+    #[error("the database isn't as Gitto makes it: {0}")]
+    Schema(String),
 }
