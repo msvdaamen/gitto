@@ -134,10 +134,9 @@ impl WholeFile {
             _ => {
                 let editor = code_editor(path, contents, window, cx);
                 // What's typed, while it's edited, is told.
-                self._changes = Some(cx.subscribe(&editor, |this, editor, event, cx| {
+                self._changes = Some(cx.subscribe(&editor, |this, _, event, cx| {
                     if matches!(event, InputEvent::Change) && this.whole.is_editing() {
-                        let text = editor.read(cx).value().to_string();
-                        cx.emit(ConflictViewerEvent::Edit(text));
+                        cx.emit(ConflictViewerEvent::Edit);
                     }
                 }));
                 self.editor = Some(editor);

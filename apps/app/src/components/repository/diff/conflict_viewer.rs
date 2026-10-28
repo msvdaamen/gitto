@@ -75,8 +75,8 @@ pub type SaveResolved =
 pub enum ConflictViewerEvent {
     /// Editing the whole file started, or stopped (`onEditing`).
     Editing(Option<EditSession>),
-    /// The whole file's text, as it's edited.
-    Edit(String),
+    /// The whole file was edited: its text is read from its editor as it's saved.
+    Edit,
     /// Why editing couldn't start.
     EditFailed(String),
     Progress(ConflictProgress),
@@ -673,7 +673,17 @@ impl ConflictViewer {
                     .map(|region| region.start_line);
                 let path = this.path.to_string();
                 this.whole.edit(&path, &contents, line, window, cx);
-                cx.emit(ConflictViewerEvent::Editing(Some(EditSession { version })));
+                let Some(editor) = this.whole.editor().cloned() else {
+                    this.editing = false;
+                    cx.emit(ConflictViewerEvent::EditFailed(
+                        "This file can't be edited.".to_owned(),
+                    ));
+                    return;
+                };
+                cx.emit(ConflictViewerEvent::Editing(Some(EditSession {
+                    version,
+                    editor,
+                })));
                 cx.notify();
             });
         })

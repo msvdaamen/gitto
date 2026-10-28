@@ -26,8 +26,8 @@ use crate::theme::PaletteExt as _;
 pub enum PatchEditorEvent {
     /// Editing started (see `EditSession`), or stopped.
     Editing(Option<EditSession>),
-    /// The file was edited to the text it has.
-    Edit(String),
+    /// The file was edited: its text is read from the editor as it's saved.
+    Edit,
     /// Why editing couldn't start, e.g. as the file changed again meanwhile.
     EditFailed(String),
 }
@@ -111,9 +111,10 @@ impl PatchEditor {
                     .and_then(|read| editable_text(&diff, read));
                 match edited {
                     Ok((contents, version)) => {
-                        this.open(&diff, &path, &contents, window, cx);
+                        let editor = this.open(&diff, &path, &contents, window, cx);
                         cx.emit(PatchEditorEvent::Editing(Some(EditSession {
                             version: version.into(),
+                            editor,
                         })));
                     }
                     Err(message) => cx.emit(PatchEditorEvent::EditFailed(message)),
@@ -128,7 +129,7 @@ impl PatchEditor {
         }
     }
 
-    /// Puts `contents` in the editor, its added lines marked, from the first change.
+    /// Puts `contents` in an editor, its added lines marked, from the first change; returns it.
     fn open(
         &mut self,
         diff: &FileDiff,
@@ -136,7 +137,7 @@ impl PatchEditor {
         contents: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> Entity<EditorState> {
         let editor = code_editor(path, contents, window, cx);
         let added = added_lines(diff);
         let tint = cx.palette().mint.opacity(0.14);
@@ -152,17 +153,17 @@ impl PatchEditor {
             editor.set_readonly(false, cx);
             editor.create_range_decorations_collection(decorations, cx)
         });
-        self._changes = Some(cx.subscribe(&editor, |_, editor, event, cx| {
+        self._changes = Some(cx.subscribe(&editor, |_, _, event, cx| {
             if matches!(event, InputEvent::Change) {
-                let text = editor.read(cx).value().to_string();
-                cx.emit(PatchEditorEvent::Edit(text));
+                cx.emit(PatchEditorEvent::Edit);
             }
         }));
         let first = added.first().map_or(0, |range| range.start - 1);
         reveal_line(&editor, first, window, cx);
         self._decorations = Some(collection);
-        self.editor = Some(editor);
+        self.editor = Some(editor.clone());
         cx.notify();
+        editor
     }
 
     /// The editor, once the file's read.

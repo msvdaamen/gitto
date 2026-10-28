@@ -11,10 +11,11 @@ use gitto_git::features::diff::working_tree::WorkingTreeFile;
 use gitto_git::input::RepositoryId;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::EditorState;
 use gpui_kit::prelude::*;
 use gpui_kit::{AnyElement, App, Context, Entity, Task, Window, div};
 
-use super::autosave::{AUTOSAVE_DELAY, Autosave, SaveEdits, SaveState};
+use super::autosave::{AUTOSAVE_DELAY, Autosave, ReadEdits, SaveEdits, SaveState};
 use super::file_diff_view::FileDiffView;
 use super::unsaved_changes_dialog::{UnsavedChoice, open_unsaved_changes_dialog};
 use crate::components::ui::{IconButton, IconName, Notice};
@@ -76,10 +77,12 @@ pub struct SaveRequest {
 }
 
 /// Editing the file on show: the version of it on disk the edits are of (see
-/// `read_working_tree_file`).
+/// `read_working_tree_file`), and the editor they're made in, which they're read from as they're
+/// saved.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditSession {
     pub version: FileVersion,
+    pub editor: Entity<EditorState>,
 }
 
 /// Reads a file in the working tree, with its version.
@@ -358,9 +361,11 @@ impl FileDiffView {
         match &session {
             Some(session) => {
                 let version = session.version.clone();
+                let editor = session.editor.clone();
+                let edits: ReadEdits = Rc::new(move |cx| editor.read(cx).value().to_string());
                 self.editing
                     .autosave
-                    .update(cx, |autosave, cx| autosave.start(version, cx));
+                    .update(cx, |autosave, cx| autosave.start(version, edits, cx));
             }
             None if self.editing.editing => {
                 // Ended without being asked to (the viewer went): what's left is saved all the
@@ -383,12 +388,12 @@ impl FileDiffView {
         cx.notify();
     }
 
-    /// The file was edited to `text`.
-    pub(super) fn on_edit(&mut self, text: String, cx: &mut Context<Self>) {
+    /// The file was edited.
+    pub(super) fn on_edit(&mut self, cx: &mut Context<Self>) {
         self.editing.edited = true;
         self.editing
             .autosave
-            .update(cx, |autosave, cx| autosave.change(text, cx));
+            .update(cx, |autosave, cx| autosave.change(cx));
     }
 
     /// Editing couldn't start, for `message`.

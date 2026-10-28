@@ -465,7 +465,7 @@ impl FileDiffView {
         self._subscriptions
             .push(cx.subscribe(&editor, |this, _, event, cx| match event {
                 PatchEditorEvent::Editing(session) => this.on_editing(session.clone(), cx),
-                PatchEditorEvent::Edit(text) => this.on_edit(text.clone(), cx),
+                PatchEditorEvent::Edit => this.on_edit(cx),
                 PatchEditorEvent::EditFailed(message) => this.on_edit_failed(message.clone(), cx),
             }));
         self.patch_editor = Some(editor);

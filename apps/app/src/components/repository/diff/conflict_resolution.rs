@@ -173,7 +173,7 @@ impl FileDiffView {
     fn on_conflict_viewer(&mut self, event: &ConflictViewerEvent, cx: &mut Context<Self>) {
         match event {
             ConflictViewerEvent::Editing(session) => self.on_editing(session.clone(), cx),
-            ConflictViewerEvent::Edit(text) => self.on_edit(text.clone(), cx),
+            ConflictViewerEvent::Edit => self.on_edit(cx),
             ConflictViewerEvent::EditFailed(message) => self.on_edit_failed(message.clone(), cx),
             ConflictViewerEvent::Progress(progress) => {
                 self.resolution.progress = Some(progress.clone())
