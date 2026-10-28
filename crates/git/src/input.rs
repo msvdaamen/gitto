@@ -1,8 +1,7 @@
 //! Input the features take from the UI, checked when it's made. Ported from
 //! `packages/git/src/input.ts`, and the checks of each feature's `contract.ts`: their zod schemas
 //! are the newtypes here, so a feature can't be called with input the contract refused. Each is
-//! made with `parse` (or `TryFrom<String>`, which serde uses), fails with `Error::InvalidInput`
-//! saying why, and derefs to what it holds (a string's pass as git arguments, `AsRef<OsStr>`).
+//! made with `parse` (or `TryFrom<String>`), fails with `Error::InvalidInput` saying why, and derefs to what it holds (a string's pass as git arguments, `AsRef<OsStr>`).
 //!
 //! TS's `RepositoryInput` (a procedure's `repositoryId`) is [`RepositoryId`]: the features take
 //! the `Repo` that `GitApi::open` opens with it instead (see `crate::api`).
@@ -15,7 +14,6 @@ use std::fmt;
 use std::ops::Deref;
 use std::str::FromStr;
 
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::core::errors::{Error, Result};
@@ -23,8 +21,7 @@ use crate::core::errors::{Error, Result};
 macro_rules! checked_string {
     ($(#[$doc:meta])* $name:ident, $valid:expr, $message:expr) => {
         $(#[$doc])*
-        #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-        #[serde(try_from = "String", into = "String")]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
         pub struct $name(String);
 
         impl $name {
@@ -230,8 +227,7 @@ checked_string!(
 
 /// Paths of files in the repository: at least one, none of them empty (the staging contract's
 /// `z.array(z.string().min(1)).min(1)`).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(try_from = "Vec<String>", into = "Vec<String>")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Paths(Vec<String>);
 
 impl Paths {
@@ -293,8 +289,7 @@ fn is_lower_hex(value: &str) -> bool {
 }
 
 /// A file, by its path in the repository and, for a rename, its previous one.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FileInput {
     pub path: String,
     pub orig_path: Option<String>,
@@ -409,17 +404,5 @@ mod tests {
             "No paths."
         );
         assert_eq!(invalid(Paths::parse(["a", ""]).unwrap_err()), "Not a path.");
-    }
-
-    #[test]
-    fn input_is_checked_when_its_deserialized() {
-        let sha: Result<Sha, _> = serde_json::from_str("\"zzzz\"");
-        assert!(sha.is_err());
-        let paths: Result<Paths, _> = serde_json::from_str("[]");
-        assert!(paths.is_err());
-        let name: Result<BranchName, _> = serde_json::from_str("\" \"");
-        assert!(name.is_err());
-        let file: FileInput = serde_json::from_str(r#"{"path":"a","origPath":null}"#).unwrap();
-        assert_eq!(file.path, "a");
     }
 }
