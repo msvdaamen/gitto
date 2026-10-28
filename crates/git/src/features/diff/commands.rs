@@ -249,8 +249,10 @@ pub async fn get_blob(repo: &Repo, oid: &FullSha) -> Result<String> {
     let size = repo
         .read(["cat-file", "-s", "--end-of-options", oid.as_str()])
         .await?;
-    // A size that isn't a number (it always is) is no reason not to read it, as in TS (`NaN`).
-    let bytes = size.trim().parse::<u64>().unwrap_or(0);
+    let bytes: u64 = size
+        .trim()
+        .parse()
+        .map_err(|_| Error::Bug(format!("Not a size from git: {size:?}")))?;
     if bytes > MAX_BLOB_BYTES {
         return Err(Error::FileTooLarge { bytes });
     }

@@ -1,6 +1,7 @@
 //! Reading the log. Ported from `history/parse.ts`.
 
 use super::schema::{Commit, CommitRef, CommitRefKind};
+use crate::core::errors::{Error, Result};
 use crate::features::refs::parse::parse_ref_name;
 
 /// What the log prints of each commit: SHA, parents, author name, author email, author date,
@@ -11,17 +12,19 @@ const FIELDS: usize = 9;
 /// [`FIELDS`] entries make up one commit. None of the fields can contain NUL.
 pub const LOG_FORMAT: &str = "--format=%H%x00%P%x00%an%x00%ae%x00%at%x00%ct%x00%D%x00%s%x00%b";
 
-/// Seconds since the epoch, as the log prints them, in milliseconds; 0 for none (JS's `Number("")`).
-pub(crate) fn millis(seconds: &str) -> i64 {
-    seconds
+/// Seconds since the epoch, as git prints them, in milliseconds; `Error::Bug` for anything else,
+/// which git doesn't print.
+pub(crate) fn millis(seconds: &str) -> Result<i64> {
+    let parsed: i64 = seconds
         .trim()
-        .parse::<i64>()
-        .unwrap_or(0)
-        .saturating_mul(1000)
+        .parse()
+        .map_err(|_| Error::Bug(format!("Not a time from git: {seconds:?}")))?;
+    Ok(parsed.saturating_mul(1000))
 }
 
-/// The commits in the output of `log -z` with [`LOG_FORMAT`].
-pub fn parse_log(output: &str) -> Vec<Commit> {
+/// The commits in the output of `log -z` with [`LOG_FORMAT`]; `Error::Bug` for a date git wouldn't
+/// print.
+pub fn parse_log(output: &str) -> Result<Vec<Commit>> {
     let fields: Vec<&str> = output.split('\0').collect();
     fields
         .chunks_exact(FIELDS)
@@ -40,7 +43,7 @@ pub fn parse_log(output: &str) -> Vec<Commit> {
             else {
                 unreachable!("chunks of {FIELDS}")
             };
-            Commit {
+            Ok(Commit {
                 sha: sha.trim().to_owned(),
                 parents: if parents.is_empty() {
                     Vec::new()
@@ -49,12 +52,12 @@ pub fn parse_log(output: &str) -> Vec<Commit> {
                 },
                 author_name: (*author_name).to_owned(),
                 author_email: (*author_email).to_owned(),
-                authored_at: millis(authored_at),
-                committed_at: millis(committed_at),
+                authored_at: millis(authored_at)?,
+                committed_at: millis(committed_at)?,
                 refs: parse_decorations(refs),
                 subject: (*subject).to_owned(),
                 body: body.trim().to_owned(),
-            }
+            })
         })
         .collect()
 }
@@ -146,7 +149,7 @@ mod tests {
         let output = commits.concat().join("\0");
 
         assert_eq!(
-            parse_log(&output),
+            parse_log(&output).unwrap(),
             [
                 Commit {
                     sha: "bbb".into(),
@@ -205,7 +208,7 @@ mod tests {
         ];
 
         assert_eq!(
-            parse_log(&output.join("\0"))[0].refs,
+            parse_log(&output.join("\0")).unwrap()[0].refs,
             [
                 commit_ref(CommitRefKind::Head, "HEAD", "HEAD", false),
                 commit_ref(CommitRefKind::Local, "main", "refs/heads/main", false),
@@ -215,7 +218,15 @@ mod tests {
 
     #[test]
     fn returns_nothing_for_an_empty_log() {
-        assert_eq!(parse_log(""), []);
+        assert_eq!(parse_log("").unwrap(), []);
+    }
+
+    #[test]
+    fn says_a_date_git_wouldnt_print_is_a_bug() {
+        let output = ["aaa", "", "Ada", "ada@example.com", "", "1", "", "S", ""];
+        let error = parse_log(&output.join("\0")).unwrap_err();
+        assert!(matches!(error, Error::Bug(_)), "{error:?}");
+        assert_eq!(millis(" 12\n").unwrap(), 12_000);
     }
 
     #[test]

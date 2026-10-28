@@ -6,6 +6,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use super::schema::{Activity, ActivityKind, HostedRemote};
+use crate::core::errors::Result;
 use crate::features::history::parse::millis;
 
 /// With -z, entries are NUL-separated as well, so the output is a flat list of fields where every
@@ -41,8 +42,9 @@ fn capture(pattern: &Regex, text: &str) -> Option<String> {
         .map(|captures| captures[1].to_owned())
 }
 
-/// HEAD's reflog, as `log -g -z --date=unix` prints it with [`REFLOG_FORMAT`], as activity.
-pub fn parse_reflog(output: &str) -> Vec<Activity> {
+/// HEAD's reflog, as `log -g -z --date=unix` prints it with [`REFLOG_FORMAT`], as activity;
+/// `Error::Bug` for a time git wouldn't print.
+pub fn parse_reflog(output: &str) -> Result<Vec<Activity>> {
     let fields: Vec<&str> = output.split('\0').collect();
     let mut activity = Vec::new();
     for entry in fields.chunks_exact(3) {
@@ -57,7 +59,7 @@ pub fn parse_reflog(output: &str) -> Vec<Activity> {
         }
         if let Some((kind, target)) = to_activity(message) {
             activity.push(Activity {
-                at: millis(&seconds),
+                at: millis(&seconds)?,
                 kind,
                 target,
                 subject: (*subject).to_owned(),
@@ -65,7 +67,7 @@ pub fn parse_reflog(output: &str) -> Vec<Activity> {
             });
         }
     }
-    activity
+    Ok(activity)
 }
 
 /// What a reflog message (e.g. `checkout: moving from main to feature`) says was done, and with
@@ -186,6 +188,7 @@ mod tests {
 
     fn kinds(output: &str) -> Vec<String> {
         parse_reflog(output)
+            .unwrap()
             .into_iter()
             .map(|Activity { kind, target, .. }| match target {
                 Some(target) => format!("{} {target}", kind.as_str()),
@@ -204,7 +207,7 @@ mod tests {
     #[test]
     fn reads_when_what_and_gits_message() {
         assert_eq!(
-            parse_reflog(&reflog(&["commit: Fix it"])),
+            parse_reflog(&reflog(&["commit: Fix it"])).unwrap(),
             [Activity {
                 at: 1_700_000_000_000,
                 kind: ActivityKind::Commit,
@@ -276,7 +279,7 @@ mod tests {
 
     #[test]
     fn reads_nothing_from_no_output() {
-        assert_eq!(parse_reflog(""), []);
+        assert_eq!(parse_reflog("").unwrap(), []);
     }
 
     #[test]

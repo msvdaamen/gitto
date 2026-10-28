@@ -63,14 +63,13 @@ pub struct HostedRemote {
 }
 
 /// What the home page shows of a repository, beyond its status.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Overview {
     /// The remote it's shown as hosted on: `origin`, or else the first one; `None` without any.
     pub remote: Option<HostedRemote>,
-    /// When a remote was last fetched from, in milliseconds since the epoch (with a fraction, as
-    /// Node's `mtimeMs`); `None` if never.
-    pub fetched_at: Option<f64>,
+    /// When a remote was last fetched from, in milliseconds since the epoch; `None` if never.
+    pub fetched_at: Option<i64>,
     /// When HEAD's commit was made, in milliseconds since the epoch; `None` before the first one.
     pub committed_at: Option<i64>,
     /// What was last done in the repository, most recent first.
