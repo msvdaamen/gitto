@@ -187,21 +187,11 @@ impl RepositoryView {
         branch_menu.update(cx, |menu, _| menu.set_before_change(before_change.clone()));
         // Nor is another repository opened, or the home page, before the file's edits are saved.
         Router::set_blocker(Some(before_change), cx);
-        // A repository loaded before has its rows at once: the one the history fell back to was
-        // reported before anything listened.
-        cx.defer_in(window, |this: &mut Self, window, cx| {
-            if this.selection.is_none()
-                && let Some(id) = this
-                    .history
-                    .read(cx)
-                    .selected()
-                    .map(|row| row.id().to_owned())
-            {
-                this.select(id, window, cx);
-            }
-        });
+        // A repository loaded before has its rows at once: the one the history falls back to is
+        // read now, as it's picked before anything listens. Its events are of what it picks later.
+        let selected = history.read(cx).selected().map(|row| row.id().to_owned());
 
-        RepositoryView {
+        let mut view = RepositoryView {
             repository_id,
             streams,
             watcher,
@@ -222,7 +212,11 @@ impl RepositoryView {
             commit_details,
             pending: None,
             _subscriptions: subscriptions,
+        };
+        if let Some(id) = selected {
+            view.select(id, window, cx);
         }
+        view
     }
 
     /// Starts watching the repository `id`, which comes on show now.
@@ -729,9 +723,9 @@ mod tests {
         view: Entity<RepositoryView>,
     }
 
-    /// The page of a repository on main at `b1` ("Second", made on "First", `a1`), each commit
-    /// adding a file, without changes.
-    fn render(cx: &mut TestAppContext) -> Page {
+    /// A repository on main at `b1` ("Second", made on "First", `a1`), each commit adding a file,
+    /// without changes, loaded before: its history, and its commits' files and patches.
+    fn loaded(cx: &mut TestAppContext) -> (tempfile::TempDir, RepositoryId) {
         let id = repository_id();
         let repositories = Rc::new(Repositories::default());
         repositories
@@ -785,6 +779,12 @@ mod tests {
             };
             cx.update(|cx| QueryClient::set_data(&file_patch_key(&id, &source, path), patch, cx));
         }
+        (dir, id)
+    }
+
+    /// The page of the repository [`loaded`].
+    fn render(cx: &mut TestAppContext) -> Page {
+        let (dir, id) = loaded(cx);
         let (window, view) = crate::test_support::open(cx, |window, cx| {
             RepositoryView::with_streams(id, Rc::new(Unchanged), window, cx)
         });
@@ -832,6 +832,19 @@ mod tests {
                     .map(|open| (open.source.clone(), open.file.path.clone()))
             })
         }
+    }
+
+    #[gpui_kit::test]
+    fn selects_the_row_the_history_of_a_repository_loaded_before_falls_back_to_as_its_made(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, id) = loaded(cx);
+        crate::test_support::open(cx, |window, cx| {
+            let view = RepositoryView::with_streams(id, Rc::new(Unchanged), window, cx);
+            // Nothing's put off until later: the history's row is read as the page is made.
+            assert_eq!(view.selected_id().as_deref(), Some("b1"));
+            view
+        });
     }
 
     #[gpui_kit::test]

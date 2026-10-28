@@ -257,7 +257,9 @@ impl HistoryTable {
             _subscriptions: subscriptions,
         };
         table.watch_history(cx);
-        table.sync(cx);
+        // The row it falls back to isn't reported: nothing listens yet. Its owner reads it
+        // ([`selected`](Self::selected)) once it's made.
+        table.bring_up_to_date(cx);
         table
     }
 
@@ -384,15 +386,23 @@ impl HistoryTable {
         &self.scroll
     }
 
+    /// Brings what follows from the data and the selection up to date (see
+    /// [`bring_up_to_date`](Self::bring_up_to_date)), and reports the row it fell back to, if it
+    /// did, so the details show it too.
+    fn sync(&mut self, cx: &mut Context<Self>) {
+        if let Some(to) = self.bring_up_to_date(cx) {
+            cx.emit(HistoryEvent::Select(to));
+        }
+    }
+
     /// Brings what follows from the data and the selection up to date: the rows, those the search
     /// shows, falling back to the first row, the line totals' files, and what says the history
-    /// is loading.
-    fn sync(&mut self, cx: &mut Context<Self>) {
+    /// is loading. The row it fell back to, if it did: nothing was selected yet, or the selected
+    /// row is gone.
+    fn bring_up_to_date(&mut self, cx: &mut Context<Self>) -> Option<String> {
         self.lay_out();
         self.filter();
 
-        // Nothing selected yet, or the selected row is gone: report the row the table falls back
-        // to, so the details show it too.
         let fallback = self
             .selected()
             .filter(|row| {
@@ -400,10 +410,9 @@ impl HistoryTable {
                     && Some(row.id()) != self.selected_id.as_deref()
             })
             .map(|row| row.id().to_owned());
-        if let Some(to) = fallback {
+        if let Some(to) = &fallback {
             self.fell_back = Some((self.selected_id.clone(), to.clone()));
             self.selected_id = Some(to.clone());
-            cx.emit(HistoryEvent::Select(to));
         }
 
         self.sync_totals(cx);
@@ -415,6 +424,7 @@ impl HistoryTable {
         self.loading_more
             .update(cx, |loading, cx| loading.set(more_pending, cx));
         cx.notify();
+        fallback
     }
 
     /// Lays the rows out again, if what they're made of changed.
