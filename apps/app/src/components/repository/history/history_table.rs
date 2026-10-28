@@ -117,6 +117,9 @@ struct Layout {
     rows: Rc<[HistoryRow]>,
     /// The most lanes a row's graph uses, which the graph's column is sized to.
     lanes: usize,
+    /// Whether more of the log was asked for since the rows were laid out (see
+    /// `RowsContext::ask_for_more`).
+    asked_for_more: Rc<Cell<bool>>,
 }
 
 /// Whether two shared lists are the same: the same list, or both empty (what's shown of one
@@ -174,6 +177,9 @@ pub struct HistoryTable {
     commit_menu: Entity<CommitMenu>,
     branch_menu: Entity<BranchMenuProvider>,
     more_labels: MoreLabelsState,
+    /// How many times the rows asked for more of the log (see `RowsContext::ask_for_more`).
+    #[cfg(test)]
+    asked_for_more: usize,
     focus: FocusHandle,
     /// Whether the keyboard moved the selection last, rather than the pointer: the selected row
     /// is outlined then, while the list has the focus.
@@ -248,6 +254,7 @@ impl HistoryTable {
             head: None,
             rows: Rc::from(Vec::new()),
             lanes: 1,
+            asked_for_more: Rc::default(),
         };
         let rows = Rc::clone(&layout.rows);
         let mut table = HistoryTable {
@@ -271,6 +278,8 @@ impl HistoryTable {
             commit_menu,
             branch_menu,
             more_labels: MoreLabelsState::default(),
+            #[cfg(test)]
+            asked_for_more: 0,
             focus: cx.focus_handle(),
             keyboard: false,
             scroll: UniformListScrollHandle::new(),
@@ -402,6 +411,12 @@ impl HistoryTable {
         &self.commit_menu
     }
 
+    /// How many times the rows asked for more of the log.
+    #[cfg(test)]
+    pub(crate) fn asked_for_more(&self) -> usize {
+        self.asked_for_more
+    }
+
     pub fn scroll_handle(&self) -> &UniformListScrollHandle {
         &self.scroll
     }
@@ -486,6 +501,7 @@ impl HistoryTable {
             head,
             rows: rows.into(),
             lanes,
+            asked_for_more: Rc::default(),
         };
     }
 
@@ -640,9 +656,14 @@ impl HistoryTable {
     }
 
     /// Loads more of the log as its end comes near; not while searching, which only goes through
-    /// what's loaded: a search that finds little would have it load page after page. A page that
-    /// couldn't be loaded isn't tried again until the history is reloaded.
+    /// what's loaded: a search that finds little would have it load page after page (nor is it
+    /// asked to, see `RowsContext::ask_for_more`). A page that couldn't be loaded isn't tried
+    /// again until the history is reloaded.
     fn load_more_near_end(&mut self, cx: &mut Context<Self>) {
+        #[cfg(test)]
+        {
+            self.asked_for_more += 1;
+        }
         if self.needle.is_empty() && self.history.log().more().read(cx).error().is_none() {
             self.history.load_more(cx);
         }
@@ -836,13 +857,11 @@ impl HistoryTable {
                 .clone()
                 .map(|row| (row, self.more_labels.open)),
             searching: !self.needle.is_empty(),
+            asked_for_more: Rc::clone(&self.layout.asked_for_more),
         });
         VirtualList::new("history-rows", count, ROW_HEIGHT, move |range, _, cx| {
-            if !context.searching && is_near_end(&range, count, LOAD_AHEAD) {
-                let table = context.table.clone();
-                cx.defer(move |cx| {
-                    let _ = table.update(cx, |table, cx| table.load_more_near_end(cx));
-                });
+            if is_near_end(&range, count, LOAD_AHEAD) {
+                context.ask_for_more(cx);
             }
             range
                 .filter_map(|ix| context.render_row(ix, count))
@@ -869,9 +888,25 @@ struct RowsContext {
     commit_menu_open: Option<SharedString>,
     more: Option<(String, bool)>,
     searching: bool,
+    /// Whether more of the log was asked for since the rows were laid out.
+    asked_for_more: Rc<Cell<bool>>,
 }
 
 impl RowsContext {
+    /// The rows in view came near the end of the log loaded so far: asks the table for more,
+    /// once per layout of the rows, rather than on every frame they're drawn, as the list's
+    /// renderer is otherwise side-effect-free. Laid out again with another page, the rows ask
+    /// again if they're still near the end. Not while searching.
+    fn ask_for_more(&self, cx: &mut App) {
+        if self.searching || self.asked_for_more.replace(true) {
+            return;
+        }
+        let table = self.table.clone();
+        cx.defer(move |cx| {
+            let _ = table.update(cx, |table, cx| table.load_more_near_end(cx));
+        });
+    }
+
     fn render_row(&self, ix: usize, count: usize) -> Option<AnyElement> {
         let row = match &self.shown {
             None => self.rows.get(ix)?,

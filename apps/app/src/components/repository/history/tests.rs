@@ -744,6 +744,33 @@ fn loads_more_as_its_end_comes_near_until_theres_none_left(cx: &mut TestAppConte
 }
 
 #[gpui_kit::test]
+fn asks_for_more_once_while_its_end_stays_near_rather_than_every_frame(cx: &mut TestAppContext) {
+    let history = paged(1500, cx);
+    // The second page, held back until it's let through.
+    let (release, held) = oneshot::channel();
+    *history.repository.hold.borrow_mut() = Some(held);
+    history.scroll_to(120, cx);
+    history.render_frame(cx);
+    history.render_frame(cx);
+    let asked = |cx: &mut TestAppContext| {
+        history
+            .table
+            .read_with(cx, |table, _| table.asked_for_more())
+    };
+    assert_eq!(asked(cx), 1);
+    assert_eq!(history.pages().len(), 2);
+
+    // Laid out again with the page, and near its end again.
+    release.send(()).unwrap();
+    cx.run_until_parked();
+    assert_eq!(history.rows(cx), 1200);
+    history.scroll_to(1150, cx);
+    history.render_frame(cx);
+    assert_eq!(asked(cx), 2);
+    assert_eq!(history.pages().len(), 3);
+}
+
+#[gpui_kit::test]
 fn doesnt_load_more_while_searching(cx: &mut TestAppContext) {
     let history = paged(1500, cx);
     // Only a handful of commits match, so the end is in view straight away.
