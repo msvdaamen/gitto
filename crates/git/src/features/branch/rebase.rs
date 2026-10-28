@@ -137,12 +137,12 @@ pub async fn rebase_branch(repo: &Repo, reference: &str, branch: &str) -> Result
                 let reason = failure.without_hints().message;
                 let undone = run
                     .run_with(["rebase", "--abort"], RunOptions::default().rewrites_files())
-                    .await
-                    .is_ok();
-                if !undone {
+                    .await;
+                if let Err(abort) = undone {
                     return Err(Error::RebaseStopped(format!(
-                        "Rebasing {branch} onto {} stopped partway:\n{reason}\nFinish the rebase in a terminal, or abort it.",
-                        target.name
+                        "Rebasing {branch} onto {} stopped partway:\n{reason}\nIt couldn't be undone either:\n{}\nFinish the rebase in a terminal, or abort it.",
+                        target.name,
+                        abort.without_hints()
                     )));
                 }
                 return Err(Error::RebaseUndone(format!(
@@ -952,7 +952,7 @@ mod tests {
             assert!(matches!(error, Error::RebaseStopped(_)), "{error:?}");
             assert!(
                 regex::Regex::new(
-                    r"(?s)^Rebasing side onto main stopped partway:\n.*failed to write commit object\nFinish the rebase in a terminal, or abort it\.$"
+                    r"(?s)^Rebasing side onto main stopped partway:\n.*failed to write commit object\nIt couldn't be undone either:\n.+\nFinish the rebase in a terminal, or abort it\.$"
                 )
                 .unwrap()
                 .is_match(&error.to_string()),
