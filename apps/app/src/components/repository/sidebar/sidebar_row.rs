@@ -11,9 +11,8 @@ use gpui_kit::{
     App, Context, ElementId, Rems, Role, SharedString, TestSupportExt as _, Window, div,
 };
 
-use super::base_px;
 use crate::components::ui::{Icon, IconName};
-use crate::theme::PaletteExt as _;
+use crate::theme::{PaletteExt as _, base_px};
 
 /// Space below every row in a section.
 const ROW_GAP: f32 = 1.;

@@ -22,7 +22,6 @@ use gpui_kit::{
     WeakEntity, Window, div,
 };
 
-use super::base_px;
 use super::drop_stash_dialog::open_drop_stash_dialog;
 use super::remove_worktree_dialog::open_remove_worktree_dialog;
 use super::sidebar_row::{RowTag, SidebarFolder, SidebarRow};
@@ -41,6 +40,7 @@ use crate::data::{Opaque, Operations, Query};
 use crate::services::Services;
 use crate::state::clock::Clock;
 use crate::state::collapsed::Collapsed;
+use crate::theme::base_px;
 use crate::views::repository::MEDIUM;
 
 /// The sections, by the id their collapsed state is saved under.

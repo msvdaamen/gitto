@@ -7,10 +7,9 @@ use gpui_kit::prelude::*;
 use gpui_kit::{Context, Entity, SharedString, Window, div};
 
 use super::agent_placeholder::AgentPlaceholder;
-use super::base_px;
 use super::ref_list::RefList;
 use crate::components::ui::{Icon, IconName, SegmentedControl};
-use crate::theme::PaletteExt as _;
+use crate::theme::{PaletteExt as _, base_px};
 use crate::views::repository::MEDIUM;
 
 /// What the sidebar shows: the refs, or the agents.

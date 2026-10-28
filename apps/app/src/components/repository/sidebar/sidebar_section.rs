@@ -14,11 +14,10 @@ use gpui_kit::{
     Window, div,
 };
 
-use super::base_px;
 use super::sidebar_row::{ROW_HEIGHT, ROW_PX, RowAction};
 use crate::components::ui::{FailurePopover, Icon, IconName, VirtualList};
 use crate::data::QueryError;
-use crate::theme::PaletteExt as _;
+use crate::theme::{PaletteExt as _, base_px};
 
 /// Height of a section's header.
 const HEADER_HEIGHT: f32 = 30.;
