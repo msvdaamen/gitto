@@ -2,16 +2,21 @@
 
 use gitto_git::features::overview::schema::{Activity, HostedRemote, Overview};
 use gitto_git::features::status::schema::{Head, StatusCounts, StatusSummary};
+use gitto_git::input::RepositoryId;
 use gitto_repository::Repository;
 
 use super::summaries::RepositorySummary;
 
+/// Two repositories' ids.
+pub const GITTO: &str = "0190a6c8-0000-7000-8000-000000000001";
+pub const NOTES: &str = "0190a6c8-0000-7000-8000-000000000002";
+
 /// A repository at `/src/{name}` whose overview has loaded, with no remote and nothing done in it,
-/// and whose status hasn't.
+/// and whose status hasn't; `id` is a UUID, e.g. [`GITTO`].
 pub fn summary(id: &str, name: &str) -> SummaryBuilder {
     SummaryBuilder(RepositorySummary {
         repository: Repository {
-            id: id.into(),
+            id: RepositoryId::parse(id).unwrap(),
             name: name.into(),
             path: format!("/src/{name}"),
         },
@@ -81,7 +86,7 @@ impl SummaryBuilder {
     }
 
     /// Last fetched at `at`, in milliseconds since the epoch.
-    pub fn fetched_at(mut self, at: f64) -> Self {
+    pub fn fetched_at(mut self, at: i64) -> Self {
         self.overview_mut().fetched_at = Some(at);
         self
     }

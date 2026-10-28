@@ -1,7 +1,7 @@
 //! The name the user commits with. Ported from `git/queries/user.ts`.
 
 use futures::FutureExt as _;
-use gitto_git::features::user::commands::get_user_name;
+use gitto_git::get_user_name;
 use gpui_kit::Context;
 
 use super::client::{QueryOptions, RefetchOnFocus, StaleTime};

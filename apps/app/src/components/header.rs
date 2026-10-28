@@ -7,6 +7,8 @@ use gpui_kit::{Context, Entity, Window, rems};
 use super::notifications::Notifications;
 use super::profile::Profile;
 use super::tabs::Tabs;
+use crate::data::Query;
+use crate::data::user::user_name_query;
 use crate::theme::PaletteExt as _;
 
 /// The header's height (TS's grid row, 49px).
@@ -16,6 +18,8 @@ pub const HEADER_HEIGHT: f32 = 3.25;
 pub struct Header {
     tabs: Entity<Tabs>,
     notifications: Entity<Notifications>,
+    /// The name the user commits with, which the profile shows the initials of.
+    user_name: Query<Option<String>>,
 }
 
 impl Header {
@@ -23,6 +27,7 @@ impl Header {
         Header {
             tabs: cx.new(Tabs::new),
             notifications: cx.new(Notifications::new),
+            user_name: user_name_query(cx),
         }
     }
 
@@ -51,7 +56,7 @@ impl Render for Header {
                     .pl_2()
                     .pr_3()
                     .child(self.notifications.clone())
-                    .child(Profile),
+                    .child(Profile::new(self.user_name.data().flatten().as_deref())),
             )
     }
 }

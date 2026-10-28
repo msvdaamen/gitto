@@ -3,6 +3,7 @@
 
 use gitto_git::features::conflicts::schema::{Conflict, ConflictSide, ConflictSides, Side};
 use gitto_git::features::operation::schema::{CommitName, Operation};
+use gitto_git::{ContentVersion, FileMode};
 
 use super::short_sha;
 
@@ -15,9 +16,9 @@ pub enum SideKind {
 }
 
 pub fn side_kind(side: &ConflictSide) -> SideKind {
-    match side.mode.as_str() {
-        "120000" => SideKind::Link,
-        "160000" => SideKind::Submodule,
+    match side.mode {
+        FileMode::Symlink => SideKind::Link,
+        FileMode::Submodule => SideKind::Submodule,
         _ => SideKind::File,
     }
 }
@@ -27,23 +28,20 @@ pub fn side_kind(side: &ConflictSide) -> SideKind {
 /// or not at all, once it isn't conflicted any more.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConflictKind {
-    Text { contents: String, version: String },
+    Text {
+        contents: String,
+        version: ContentVersion,
+    },
     Sides,
     Resolved,
 }
 
 pub fn conflict_kind(conflict: &Conflict) -> ConflictKind {
-    let Conflict {
-        base,
-        ours,
-        theirs,
-        text,
-        ..
-    } = conflict;
+    let ConflictSides { base, ours, theirs } = &conflict.sides;
     if base.is_none() && ours.is_none() && theirs.is_none() {
         return ConflictKind::Resolved;
     }
-    match (ours, theirs, text) {
+    match (ours, theirs, conflict.file.text()) {
         (Some(ours), Some(theirs), Some(text))
             if side_kind(ours) == SideKind::File && side_kind(theirs) == SideKind::File =>
         {
@@ -78,7 +76,7 @@ pub fn describe_side(side: Option<&ConflictSide>) -> String {
     match side_kind(side) {
         SideKind::Link => "A symbolic link".to_owned(),
         SideKind::Submodule => format!("A submodule at {}", short_sha(&side.oid)),
-        SideKind::File if side.mode == "100755" => "An executable file".to_owned(),
+        SideKind::File if side.mode == FileMode::Executable => "An executable file".to_owned(),
         SideKind::File => "A file".to_owned(),
     }
 }
@@ -105,10 +103,11 @@ pub fn operation_title(operation: &Operation) -> String {
             None => format!("Merging {merging}"),
         },
         Operation::Rebase { branch, onto, .. } => {
-            format!(
-                "Rebasing {} onto {onto}",
-                branch.as_deref().unwrap_or("HEAD")
-            )
+            let branch = branch.as_deref().unwrap_or("HEAD");
+            match onto {
+                Some(onto) => format!("Rebasing {branch} onto {onto}"),
+                None => format!("Rebasing {branch}"),
+            }
         }
         Operation::CherryPick { commit, .. } => picking("Cherry-picking", commit.as_ref()),
         Operation::Revert { commit, .. } => picking("Reverting", commit.as_ref()),
@@ -117,7 +116,7 @@ pub fn operation_title(operation: &Operation) -> String {
 }
 
 /// A cherry-pick's or revert's title: `verb` and the commit it's at, e.g. "Reverting 1a2b3c4 Fix
-/// it"; `None` between the commits of a series, once one was committed by hand.
+/// it"; or `"{verb} commits"` between the commits of a series, once one was committed by hand.
 fn picking(verb: &str, commit: Option<&CommitName>) -> String {
     match commit {
         Some(commit) => format!("{verb} {} {}", commit.sha, commit.subject)
@@ -150,14 +149,14 @@ pub fn operation_name(operation: &Operation) -> String {
 
 #[cfg(test)]
 mod tests {
-    use gitto_git::features::conflicts::schema::ConflictText;
+    use gitto_git::features::conflicts::schema::{ConflictFile, ConflictText};
     use gitto_git::features::operation::schema::Steps;
 
     use super::*;
 
     fn side(mode: &str, oid: &str) -> ConflictSide {
         ConflictSide {
-            mode: mode.into(),
+            mode: mode.parse().unwrap(),
             oid: oid.into(),
         }
     }
@@ -168,16 +167,11 @@ mod tests {
 
     fn conflict() -> Conflict {
         Conflict {
-            base: file(),
-            ours: file(),
-            theirs: file(),
-            text: Some(ConflictText {
+            sides: sides(file(), file(), file()),
+            file: ConflictFile::Text(ConflictText {
                 contents: "text".into(),
                 version: "v1".into(),
             }),
-            version: Some("v1".into()),
-            binary: false,
-            unreadable: None,
         }
     }
 
@@ -202,7 +196,7 @@ mod tests {
                 }
             );
             let added = Conflict {
-                base: None,
+                sides: sides(None, file(), file()),
                 ..conflict()
             };
             assert!(matches!(conflict_kind(&added), ConflictKind::Text { .. }));
@@ -211,18 +205,19 @@ mod tests {
         #[test]
         fn keeps_a_side_whole_otherwise() {
             let deleted = Conflict {
-                theirs: None,
+                sides: sides(file(), file(), None),
                 ..conflict()
             };
             assert_eq!(conflict_kind(&deleted), ConflictKind::Sides);
             let binary = Conflict {
-                text: None,
-                binary: true,
+                file: ConflictFile::Binary {
+                    version: "v1".into(),
+                },
                 ..conflict()
             };
             assert_eq!(conflict_kind(&binary), ConflictKind::Sides);
             let submodule = Conflict {
-                ours: Some(side("160000", &"b".repeat(40))),
+                sides: sides(file(), Some(side("160000", &"b".repeat(40))), file()),
                 ..conflict()
             };
             assert_eq!(conflict_kind(&submodule), ConflictKind::Sides);
@@ -231,9 +226,7 @@ mod tests {
         #[test]
         fn has_nothing_to_resolve_once_it_isnt_conflicted() {
             let resolved = Conflict {
-                base: None,
-                ours: None,
-                theirs: None,
+                sides: sides(None, None, None),
                 ..conflict()
             };
             assert_eq!(conflict_kind(&resolved), ConflictKind::Resolved);
@@ -311,13 +304,19 @@ mod tests {
             );
             let rebase = Operation::Rebase {
                 branch: Some("feature".into()),
-                onto: "origin/main".into(),
+                onto: Some("origin/main".into()),
                 steps: Some(Steps { step: 3, total: 7 }),
             };
             assert_eq!(
                 operation_title(&rebase),
                 "Rebasing feature onto origin/main"
             );
+            let onto_unknown = Operation::Rebase {
+                branch: Some("feature".into()),
+                onto: None,
+                steps: None,
+            };
+            assert_eq!(operation_title(&onto_unknown), "Rebasing feature");
             assert_eq!(operation_progress(&rebase).as_deref(), Some("3/7"));
             let pick =
                 |commit: Option<CommitName>, remaining| Operation::CherryPick { commit, remaining };

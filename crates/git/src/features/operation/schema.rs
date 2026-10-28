@@ -28,7 +28,11 @@ pub struct Steps {
 /// TS has cherry-picks and reverts share one shape, `kind` being either; here each is a variant of
 /// its own, with the same fields, which serializes the same.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 pub enum Operation {
     Merge {
         /// What's being merged.
@@ -39,11 +43,11 @@ pub enum Operation {
     Rebase {
         /// The branch being rebased; `None` if it's a detached HEAD.
         branch: Option<String>,
-        onto: String,
+        /// What it rebases onto; `None` if git's record of it can't be read.
+        onto: Option<String>,
         /// The commit being replayed, of how many.
         steps: Option<Steps>,
     },
-    #[serde(rename = "cherry-pick", rename_all = "camelCase")]
     CherryPick {
         /// The commit being cherry-picked; `None` between the commits of a series, once the one it
         /// stopped at was committed by hand.
@@ -51,7 +55,6 @@ pub enum Operation {
         /// How many more are to be after it, in a series of them.
         remaining: u64,
     },
-    #[serde(rename_all = "camelCase")]
     Revert {
         /// The commit being reverted; `None` between the commits of a series, once the one it
         /// stopped at was committed by hand.
@@ -80,16 +83,12 @@ impl Operation {
 
 /// Which operation is under way: the `kind` of an [`Operation`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum OperationKind {
-    #[serde(rename = "merge")]
     Merge,
-    #[serde(rename = "rebase")]
     Rebase,
-    #[serde(rename = "cherry-pick")]
     CherryPick,
-    #[serde(rename = "revert")]
     Revert,
-    #[serde(rename = "am")]
     Am,
 }
 
@@ -115,6 +114,25 @@ impl OperationKind {
             OperationKind::CherryPick => "cherry-pick",
             OperationKind::Revert => "revert",
             OperationKind::Am => "git am",
+        }
+    }
+}
+
+/// What's done with the operation under way: `git <operation> --continue`, `--abort` or `--skip`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationAction {
+    Continue,
+    Abort,
+    Skip,
+}
+
+impl OperationAction {
+    /// The flag of the git command that does it, e.g. `--continue`.
+    pub fn as_flag(self) -> &'static str {
+        match self {
+            OperationAction::Continue => "--continue",
+            OperationAction::Abort => "--abort",
+            OperationAction::Skip => "--skip",
         }
     }
 }
@@ -148,7 +166,7 @@ mod tests {
         );
         let rebase = Operation::Rebase {
             branch: None,
-            onto: "main".into(),
+            onto: Some("main".into()),
             steps: Some(Steps { step: 1, total: 2 }),
         };
         assert_eq!(
@@ -165,5 +183,29 @@ mod tests {
             OperationKind::CherryPick
         );
         assert_eq!(OperationKind::Am.name(), "git am");
+    }
+
+    #[test]
+    fn kinds_are_spelled_as_their_git_commands() {
+        for kind in [
+            OperationKind::Merge,
+            OperationKind::Rebase,
+            OperationKind::CherryPick,
+            OperationKind::Revert,
+            OperationKind::Am,
+        ] {
+            assert_eq!(
+                serde_json::to_value(kind).unwrap(),
+                serde_json::json!(kind.as_str())
+            );
+        }
+        assert_eq!(
+            serde_json::to_value(Operation::Revert {
+                commit: None,
+                remaining: 0
+            })
+            .unwrap(),
+            serde_json::json!({ "kind": "revert", "commit": null, "remaining": 0 })
+        );
     }
 }

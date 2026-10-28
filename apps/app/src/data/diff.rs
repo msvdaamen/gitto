@@ -167,7 +167,8 @@ impl WorkingTreeLists {
         WorkingTreeLists {
             status: status.clone(),
             staged: Opaque::new(staged_files(&status.changes.staged)),
-            unstaged: Opaque::new(status.changes.unstaged.clone()),
+            // Shared with the status: it's the status's own list, which can be thousands.
+            unstaged: Opaque::part(status, |status| &status.changes.unstaged),
             marker_free: Opaque::new(status.changes.marker_free.iter().cloned().collect()),
         }
     }
@@ -233,6 +234,10 @@ pub fn staged_files(staged: &[ChangedFile]) -> Vec<ChangedFile> {
 
 #[cfg(test)]
 mod tests {
+    use gitto_git::features::status::schema::{
+        Head, StatusCounts, StatusSummary, WorkingTreeFiles,
+    };
+
     use super::*;
 
     fn file(path: &str, status: FileStatus) -> ChangedFile {
@@ -274,5 +279,39 @@ mod tests {
             }
         );
         assert_eq!(select(&changed), shown);
+    }
+
+    #[test]
+    fn shares_the_unstaged_files_with_the_status() {
+        let status = Opaque::new(Uncommitted {
+            summary: StatusSummary {
+                head: Head::Branch {
+                    name: "main".into(),
+                    sha: "abc".into(),
+                },
+                upstream: None,
+                ahead: 0,
+                behind: 0,
+                counts: StatusCounts {
+                    files: 2,
+                    staged: 1,
+                    unstaged: 1,
+                    conflicted: 0,
+                },
+            },
+            changes: WorkingTreeFiles {
+                staged: vec![file("a.txt", FileStatus::Added)],
+                unstaged: vec![file("b.txt", FileStatus::Modified)],
+                uncounted: false,
+                marker_free: vec![],
+            },
+            version: "v1".into(),
+        });
+        let lists = WorkingTreeLists::of(&status);
+        assert!(std::ptr::eq(
+            lists.unstaged().value(),
+            &status.changes.unstaged
+        ));
+        assert_eq!(**lists.staged(), [file("a.txt", FileStatus::Added)]);
     }
 }

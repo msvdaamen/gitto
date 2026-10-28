@@ -155,7 +155,7 @@ impl RenderOnce for WelcomeHero {
                                 FailurePopover::new(
                                     "open-repository-failure",
                                     "Open repository",
-                                    self.open_error,
+                                    self.open_error.map(|error| error.message().into()),
                                     Button::new("open-repository")
                                         .primary()
                                         .icon(Icon::new(IconName::Folder))
@@ -243,7 +243,7 @@ pub struct SyncState {
     /// How many have commits to push.
     pub ahead: usize,
     /// When any was last fetched, in milliseconds since the epoch; `None` if none ever was.
-    pub fetched_at: Option<f64>,
+    pub fetched_at: Option<i64>,
 }
 
 impl SyncState {
@@ -269,11 +269,11 @@ pub fn sync_state(summaries: &[RepositorySummary]) -> Option<SyncState> {
     let fetched_at = summaries
         .iter()
         .filter_map(|summary| summary.overview.as_ref()?.fetched_at)
-        .fold(0., f64::max);
+        .fold(0, i64::max);
     Some(SyncState {
         behind: tracked.iter().filter(|status| status.behind > 0).count(),
         ahead: tracked.iter().filter(|status| status.ahead > 0).count(),
-        fetched_at: (fetched_at > 0.).then_some(fetched_at),
+        fetched_at: (fetched_at > 0).then_some(fetched_at),
     })
 }
 
@@ -317,7 +317,7 @@ impl RenderOnce for SyncStatus {
             out_of_sync(self.sync.behind, self.sync.ahead)
         };
         let fetched = match self.sync.fetched_at {
-            Some(at) => format!("Last fetched {}", relative_time(at as i64).to_lowercase()),
+            Some(at) => format!("Last fetched {}", relative_time(at).to_lowercase()),
             None => "Not fetched yet".to_owned(),
         };
         h_flex()
@@ -367,7 +367,7 @@ mod tests {
     use crate::components::home::test_support as home;
 
     fn summary(upstream: Option<&str>, ahead: u64, behind: u64) -> RepositorySummary {
-        home::summary("1", "gitto")
+        home::summary(home::GITTO, "gitto")
             .upstream(upstream, ahead, behind)
             .build()
     }
@@ -389,7 +389,7 @@ mod tests {
 
     #[test]
     fn waits_for_every_status_before_telling_the_sync() {
-        let loading = home::summary("2", "notes")
+        let loading = home::summary(home::NOTES, "notes")
             .upstream(Some("origin/main"), 0, 1)
             .loading()
             .build();
@@ -402,9 +402,9 @@ mod tests {
     #[test]
     fn tells_the_sync_only_with_an_upstream() {
         assert_eq!(sync_state(&[summary(None, 0, 0)]), None);
-        let fetched = home::summary("1", "gitto")
+        let fetched = home::summary(home::GITTO, "gitto")
             .upstream(Some("origin/main"), 1, 2)
-            .fetched_at(1_000.5)
+            .fetched_at(1_000)
             .build();
         assert_eq!(
             sync_state(&[
@@ -415,7 +415,7 @@ mod tests {
             Some(SyncState {
                 behind: 1,
                 ahead: 1,
-                fetched_at: Some(1_000.5),
+                fetched_at: Some(1_000),
             })
         );
         assert_eq!(

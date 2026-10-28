@@ -2,13 +2,14 @@
 
 use gitto_git::features::refs::schema::{Ref, RefKind};
 use gitto_git::features::worktree::schema::Worktree;
+use gitto_git::{local_name, pick_tracking};
 
 use super::short_sha;
 use super::status::branch_name;
 
 /// The worktree the local branch `ref` (a full ref name) is checked out in, if any.
-pub fn worktree_on<'a>(worktrees: Option<&'a [Worktree]>, r#ref: &str) -> Option<&'a Worktree> {
-    worktrees?
+pub fn worktree_on<'a>(worktrees: &'a [Worktree], r#ref: &str) -> Option<&'a Worktree> {
+    worktrees
         .iter()
         .find(|worktree| worktree.branch.as_deref() == Some(r#ref))
 }
@@ -23,37 +24,39 @@ pub fn tracking_branches<'a>(refs: &'a [Ref], r#ref: &str) -> Vec<&'a Ref> {
         .collect()
 }
 
-/// The local branch switching to the remote branch `ref` (a full ref name) switches to, among
-/// `refs`: the one tracking it, the current one or the one named after it if several do (as
-/// `tracking_branch` picks it in gitto-git); `None` if none does, when a new one is made.
-pub fn tracking_branch<'a>(refs: &'a [Ref], r#ref: &str) -> Option<&'a Ref> {
-    let name = branch_name(r#ref);
+/// The local branch switching to the remote branch `ref` (a full ref name), on one of `remotes`,
+/// switches to, among `refs`: the one tracking it, the current one or the one named after it if
+/// several do, as gitto-git's [`pick_tracking`] picks it; `None` if none does, when a new one is
+/// made.
+pub fn tracking_branch<'a, S: AsRef<str>>(
+    refs: &'a [Ref],
+    remotes: &[S],
+    r#ref: &str,
+) -> Option<&'a Ref> {
+    let local = local_name(remotes, branch_name(r#ref));
     let tracking = tracking_branches(refs, r#ref);
-    tracking
-        .iter()
-        .find(|candidate| candidate.current)
-        .or_else(|| {
-            tracking.iter().find(|candidate| {
-                name.strip_suffix(candidate.name.as_str())
-                    .is_some_and(|rest| rest.ends_with('/'))
-            })
-        })
-        .or_else(|| tracking.first())
-        .copied()
+    pick_tracking(
+        &tracking,
+        local,
+        |branch| &branch.name,
+        |branch| branch.current,
+    )
+    .copied()
 }
 
 /// The worktree checking the branch `ref` (a full ref name) out in a new one would clash with, if
 /// any: the one it's checked out in, or for a remote branch, the one the local branch tracking it
-/// is (see [`tracking_branch`]).
-pub fn checked_out_in<'a>(
-    worktrees: Option<&'a [Worktree]>,
-    refs: Option<&[Ref]>,
+/// is (see [`tracking_branch`]), on one of `remotes`.
+pub fn checked_out_in<'a, S: AsRef<str>>(
+    worktrees: &'a [Worktree],
+    refs: &[Ref],
+    remotes: &[S],
     r#ref: &str,
 ) -> Option<&'a Worktree> {
     if !r#ref.starts_with("refs/remotes/") {
         return worktree_on(worktrees, r#ref);
     }
-    let local = tracking_branch(refs.unwrap_or_default(), r#ref)?;
+    let local = tracking_branch(refs, remotes, r#ref)?;
     worktree_on(worktrees, &local.full_name)
 }
 
@@ -112,9 +115,9 @@ pub fn describe_worktree(worktree: &Worktree) -> String {
     if worktree.current {
         lines.push("Open here".to_owned());
     }
-    match worktree.locked.as_deref() {
-        Some("") => lines.push("Locked".to_owned()),
-        Some(reason) => lines.push(format!("Locked: {reason}")),
+    match worktree.locked.as_ref().map(|lock| lock.reason.as_deref()) {
+        Some(None) => lines.push("Locked".to_owned()),
+        Some(Some(reason)) => lines.push(format!("Locked: {reason}")),
         None => {}
     }
     if worktree.prunable.is_some() {
@@ -125,6 +128,8 @@ pub fn describe_worktree(worktree: &Worktree) -> String {
 
 #[cfg(test)]
 mod tests {
+    use gitto_git::features::worktree::schema::Lock;
+
     use super::*;
 
     fn r(name: &str, upstream: Option<&str>, current: bool) -> Ref {
@@ -168,11 +173,11 @@ mod tests {
                 worktree("/repo-f", Some("refs/heads/f")),
             ];
             assert_eq!(
-                path(worktree_on(Some(&worktrees), "refs/heads/f")),
+                path(worktree_on(&worktrees, "refs/heads/f")),
                 Some("/repo-f")
             );
-            assert_eq!(worktree_on(Some(&worktrees), "refs/heads/gone"), None);
-            assert_eq!(worktree_on(None, "refs/heads/main"), None);
+            assert_eq!(worktree_on(&worktrees, "refs/heads/gone"), None);
+            assert_eq!(worktree_on(&[], "refs/heads/main"), None);
         }
     }
 
@@ -185,21 +190,28 @@ mod tests {
             let other = r("my-feature", Some("origin/feature"), false);
             let current = r("wip", Some("origin/feature"), true);
             let remote = "refs/remotes/origin/feature";
+            let tracking = |refs: &[Ref]| tracking_branch(refs, &["origin"], remote).cloned();
             assert_eq!(
-                tracking_branch(&[other.clone(), named.clone(), current.clone()], remote),
-                Some(&current)
+                tracking(&[other.clone(), named.clone(), current.clone()]),
+                Some(current)
             );
+            assert_eq!(tracking(&[other.clone(), named.clone()]), Some(named));
+            assert_eq!(tracking(std::slice::from_ref(&other)), Some(other));
+            assert_eq!(tracking(&[r("main", Some("origin/main"), false)]), None);
+        }
+
+        #[test]
+        fn names_the_branch_after_the_remote_one_without_its_whole_remote() {
+            // `stream/main` ends the name of `main` on remote `up/stream`, but isn't named after it.
+            let stream = r("stream/main", Some("up/stream/main"), false);
+            let main = r("main", Some("up/stream/main"), false);
             assert_eq!(
-                tracking_branch(&[other.clone(), named.clone()], remote),
-                Some(&named)
-            );
-            assert_eq!(
-                tracking_branch(std::slice::from_ref(&other), remote),
-                Some(&other)
-            );
-            assert_eq!(
-                tracking_branch(&[r("main", Some("origin/main"), false)], remote),
-                None
+                tracking_branch(
+                    &[stream, main.clone()],
+                    &["up", "up/stream"],
+                    "refs/remotes/up/stream/main"
+                ),
+                Some(&main)
             );
         }
     }
@@ -229,14 +241,15 @@ mod tests {
             let (worktrees, refs) = (worktrees(), refs());
             assert_eq!(
                 path(checked_out_in(
-                    Some(&worktrees),
-                    Some(&refs),
+                    &worktrees,
+                    &refs,
+                    &["origin"],
                     "refs/heads/feature"
                 )),
                 Some("/repo-f")
             );
             assert_eq!(
-                checked_out_in(Some(&worktrees), Some(&refs), "refs/heads/other"),
+                checked_out_in(&worktrees, &refs, &["origin"], "refs/heads/other"),
                 None
             );
         }
@@ -244,12 +257,12 @@ mod tests {
         #[test]
         fn is_the_worktree_the_branch_tracking_a_remote_one_is_checked_out_in() {
             let (worktrees, refs) = (worktrees(), refs());
-            let checked_out = |r#ref| path(checked_out_in(Some(&worktrees), Some(&refs), r#ref));
+            let checked_out = |r#ref| path(checked_out_in(&worktrees, &refs, &["origin"], r#ref));
             assert_eq!(checked_out("refs/remotes/origin/main"), Some("/repo"));
             assert_eq!(checked_out("refs/remotes/origin/feature"), Some("/repo-f"));
             assert_eq!(checked_out("refs/remotes/origin/other"), None);
             assert_eq!(
-                checked_out_in(Some(&worktrees), None, "refs/remotes/origin/main"),
+                checked_out_in(&worktrees, &[], &["origin"], "refs/remotes/origin/main"),
                 None
             );
         }
@@ -320,7 +333,9 @@ mod tests {
             );
             assert_eq!(
                 describe_worktree(&Worktree {
-                    locked: Some("busy".into()),
+                    locked: Some(Lock {
+                        reason: Some("busy".into())
+                    }),
                     prunable: Some("gitdir file points elsewhere".into()),
                     ..worktree("/repo-c", None)
                 }),
@@ -328,7 +343,7 @@ mod tests {
             );
             assert_eq!(
                 describe_worktree(&Worktree {
-                    locked: Some(String::new()),
+                    locked: Some(Lock { reason: None }),
                     ..worktree("/repo-l", Some("refs/heads/l"))
                 }),
                 "/repo-l\nOn l\nLocked"

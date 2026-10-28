@@ -43,6 +43,48 @@ pub use crate::theme::breakpoints::{LARGE, MEDIUM};
 pub const RAIL_WIDTH: f32 = 3.47;
 pub const DETAILS_OVERLAY_WIDTH: f32 = 22.67;
 
+/// The page's resizable panels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Panel {
+    Sidebar,
+    Details,
+}
+
+impl Panel {
+    /// Its widths, as [`SIDEBAR_BOUNDS`] and [`DETAILS_BOUNDS`] say.
+    pub fn bounds(self) -> PanelBounds {
+        match self {
+            Panel::Sidebar => SIDEBAR_BOUNDS,
+            Panel::Details => DETAILS_BOUNDS,
+        }
+    }
+
+    /// Which side of its edge it's on: the sidebar's left of it, the details right.
+    pub fn side(self) -> HandleSide {
+        match self {
+            Panel::Sidebar => HandleSide::Start,
+            Panel::Details => HandleSide::End,
+        }
+    }
+
+    /// What its handle's called, to assistive technology.
+    pub fn label(self) -> &'static str {
+        match self {
+            Panel::Sidebar => "Resize sidebar",
+            Panel::Details => "Resize details",
+        }
+    }
+
+    /// Its name: its width's saved under it (see `PanelWidth`), and its handle's id is made of
+    /// it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Panel::Sidebar => "sidebar",
+            Panel::Details => "details",
+        }
+    }
+}
+
 /// A row of a repository: tagged with its repository, as the page is kept when switching
 /// repositories, and the new one starts without a selection.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,6 +136,9 @@ pub struct RepositoryView {
     commit_details: Entity<CommitDetails>,
     /// Waiting for the file on show to let go, to open another or close it.
     pending: Option<Task<()>>,
+    /// What leaving the page waits for (see `Router::set_blocker`), kept for as long as the page
+    /// is.
+    _blocker: BeforeChange,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -150,8 +195,9 @@ impl RepositoryView {
 
         let before_change = Self::before_change(cx.entity().downgrade());
         operation_bar.update(cx, |bar, _| bar.set_before_change(before_change.clone()));
-        // Nor is another repository opened, or the home page, before the file's edits are saved.
-        Router::set_blocker(Some(before_change), cx);
+        // Nor is another repository opened, or the home page, before the file's edits are saved:
+        // for as long as the page keeps it.
+        Router::set_blocker(&before_change, cx);
 
         RepositoryView {
             repository_id,
@@ -163,14 +209,19 @@ impl RepositoryView {
             resolving: None,
             sidebar_open: true,
             details_open: true,
-            sidebar: PanelWidth::new("sidebar", SIDEBAR_BOUNDS, Rc::clone(&storage)),
-            details: PanelWidth::new("details", DETAILS_BOUNDS, storage),
+            sidebar: PanelWidth::new(
+                Panel::Sidebar.name(),
+                Panel::Sidebar.bounds(),
+                Rc::clone(&storage),
+            ),
+            details: PanelWidth::new(Panel::Details.name(), Panel::Details.bounds(), storage),
             toolbar,
             operation_bar,
             refs_sidebar,
             history,
             commit_details,
             pending: None,
+            _blocker: before_change,
             _subscriptions: subscriptions,
         }
     }
@@ -412,46 +463,52 @@ impl RepositoryView {
         cx.notify();
     }
 
-    fn on_drag_panel(&mut self, event: &DragMoveEvent<PanelDrag>, cx: &mut Context<Self>) {
-        if let Some(width) = dragged_width(event, "sidebar", HandleSide::Start, cx) {
-            self.sidebar.set_width(width, false);
-        } else if let Some(width) = dragged_width(event, "details", HandleSide::End, cx) {
-            self.details.set_width(width, false);
+    /// The width of `panel`.
+    fn width_of(&self, panel: Panel) -> &PanelWidth {
+        match panel {
+            Panel::Sidebar => &self.sidebar,
+            Panel::Details => &self.details,
         }
+    }
+
+    fn width_of_mut(&mut self, panel: Panel) -> &mut PanelWidth {
+        match panel {
+            Panel::Sidebar => &mut self.sidebar,
+            Panel::Details => &mut self.details,
+        }
+    }
+
+    fn on_drag_panel(&mut self, event: &DragMoveEvent<PanelDrag<Panel>>, cx: &mut Context<Self>) {
+        let panel = event.drag(cx).panel;
+        self.width_of_mut(panel)
+            .set_width(dragged_width(event, panel.side()), false);
         cx.notify();
     }
 
-    fn resize_handle(&self, panel: &'static str, cx: &mut Context<Self>) -> ResizeHandle {
-        let (side, label, width) = match panel {
-            "sidebar" => (HandleSide::Start, "Resize sidebar", self.sidebar.width()),
-            _ => (HandleSide::End, "Resize details", self.details.width()),
-        };
-        let bounds = if panel == "sidebar" {
-            SIDEBAR_BOUNDS
-        } else {
-            DETAILS_BOUNDS
-        };
+    fn resize_handle(&self, panel: Panel, cx: &mut Context<Self>) -> ResizeHandle<Panel> {
+        let width = self.width_of(panel).width();
         let this = cx.entity().downgrade();
         let reset = this.clone();
-        ResizeHandle::new(panel, side, label, width, bounds)
-            .on_resize(move |width, save, _, cx| {
-                let _ = this.update(cx, |this, cx| {
-                    match panel {
-                        "sidebar" => this.sidebar.set_width(width, save),
-                        _ => this.details.set_width(width, save),
-                    }
-                    cx.notify();
-                });
-            })
-            .on_reset(move |_, cx| {
-                let _ = reset.update(cx, |this, cx| {
-                    match panel {
-                        "sidebar" => this.sidebar.reset(),
-                        _ => this.details.reset(),
-                    }
-                    cx.notify();
-                });
-            })
+        ResizeHandle::new(
+            SharedString::from(format!("resize-{}", panel.name())),
+            panel,
+            panel.side(),
+            panel.label(),
+            width,
+            panel.bounds(),
+        )
+        .on_resize(move |width, save, _, cx| {
+            let _ = this.update(cx, |this, cx| {
+                this.width_of_mut(panel).set_width(width, save);
+                cx.notify();
+            });
+        })
+        .on_reset(move |_, cx| {
+            let _ = reset.update(cx, |this, cx| {
+                this.width_of_mut(panel).reset();
+                cx.notify();
+            });
+        })
     }
 }
 
@@ -490,9 +547,9 @@ impl Render for RepositoryView {
             );
 
         let sidebar_handle =
-            (self.sidebar_open && medium).then(|| self.resize_handle("sidebar", cx));
+            (self.sidebar_open && medium).then(|| self.resize_handle(Panel::Sidebar, cx));
         let details_handle =
-            (self.details_open && large).then(|| self.resize_handle("details", cx));
+            (self.details_open && large).then(|| self.resize_handle(Panel::Details, cx));
         let details = self.details_open.then(|| {
             div()
                 .h_full()
@@ -520,11 +577,11 @@ impl Render for RepositoryView {
                     .min_w_0()
                     .items_stretch()
                     .overflow_hidden()
-                    .on_drag_move(
-                        cx.listener(|this, event: &DragMoveEvent<PanelDrag>, _, cx| {
+                    .on_drag_move(cx.listener(
+                        |this, event: &DragMoveEvent<PanelDrag<Panel>>, _, cx| {
                             this.on_drag_panel(event, cx)
-                        }),
-                    )
+                        },
+                    ))
                     .when(self.sidebar_open, |this| {
                         this.child(
                             div()
