@@ -200,7 +200,6 @@ dependencies = [
  "gitto-ui",
  "gpui-kit",
  "log",
- "regex",
  "serde",
  "serde_json",
  "similar",
@@ -2178,7 +2177,10 @@ dependencies = [
  "gitto-git",
  "indexmap",
  "memchr",
+ "regex",
  "serde_json",
+ "similar",
+ "thiserror 2.0.21",
  "url",
 ]
 

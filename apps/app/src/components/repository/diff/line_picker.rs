@@ -4,7 +4,9 @@
 //! is `line_staging`'s. Ported from `line-picker.tsx`; the viewer draws the selection and the
 //! buttons, and scrolls to what this says to reveal.
 
-use std::rc::Rc;
+use gitto_ui::diff::diff_metadata::Side;
+use gitto_ui::diff::line_staging::{ChangedLine, ChangedRow, SelectedRange, range_of};
+use gitto_ui::diff::viewer_rows::Layout;
 
 use gitto_git::features::staging::schema::LineSelection;
 use gpui_kit::{App, Task};
@@ -417,12 +419,11 @@ fn row_of(layout: &Layout) -> impl Fn(usize, Side) -> Option<usize> + '_ {
 
 #[cfg(test)]
 mod tests {
-    use super::super::diff_metadata::parse_patch_files;
-    use super::super::line_staging::hunk_buttons;
-    use super::super::patch_files::Expanded;
-    use super::super::viewer_rows::{LayoutOptions, Separators, layout};
     use super::*;
-    use crate::state::diff_style::DiffStyle;
+    use gitto_ui::diff::diff_metadata::{FileDiff, parse_patch_files};
+    use gitto_ui::diff::line_staging::hunk_buttons;
+    use gitto_ui::diff::patch_files::Expanded;
+    use gitto_ui::diff::viewer_rows::{LayoutOptions, Separators, layout};
 
     fn diff() -> FileDiff {
         parse_patch_files(
@@ -437,7 +438,7 @@ mod tests {
         layout(
             diff,
             LayoutOptions {
-                style: DiffStyle::Unified,
+                split: false,
                 expanded: &Expanded::new(),
                 separators: Separators::LineInfo,
                 can_load_files: false,

@@ -11,6 +11,7 @@
 use std::fmt;
 use std::sync::{Arc, LazyLock};
 
+use gitto_git::features::diff::hunk_header::parse_hunk_header;
 use regex::Regex;
 
 /// Which file a line is of: the old one, whose lines a patch removes (its *deletions*), or the new
@@ -530,55 +531,6 @@ fn hydrate_hunks(hunks: &[Hunk]) -> Vec<Hunk> {
         .collect()
 }
 
-/// The numbers of a hunk's `@@ -a,b +c,d @@ context` line.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct HunkHeader {
-    deletion_start: usize,
-    deletion_count: usize,
-    addition_start: usize,
-    addition_count: usize,
-    context: Option<String>,
-}
-
-fn parse_hunk_header(line: &str) -> Option<HunkHeader> {
-    let rest = line.strip_prefix("@@ -")?;
-    let (deletion_start, rest) = read_number(rest)?;
-    let (deletion_count, rest) = match rest.strip_prefix(',') {
-        Some(rest) => read_number(rest)?,
-        None => (1, rest),
-    };
-    let rest = rest.strip_prefix(" +")?;
-    let (addition_start, rest) = read_number(rest)?;
-    let (addition_count, rest) = match rest.strip_prefix(',') {
-        Some(rest) => read_number(rest)?,
-        None => (1, rest),
-    };
-    let rest = rest.strip_prefix(" @@")?;
-    let context = rest.strip_prefix(' ').map(|context| {
-        context
-            .strip_suffix("\r\n")
-            .or_else(|| context.strip_suffix('\n'))
-            .unwrap_or(context)
-            .to_owned()
-    });
-    Some(HunkHeader {
-        deletion_start,
-        deletion_count,
-        addition_start,
-        addition_count,
-        context,
-    })
-}
-
-fn read_number(text: &str) -> Option<(usize, &str)> {
-    let digits = text.bytes().take_while(u8::is_ascii_digit).count();
-    if digits == 0 {
-        return None;
-    }
-    let value = text[..digits].parse().ok()?;
-    Some((value, &text[digits..]))
-}
-
 /// `contents` split before each line that starts with `prefix`; what's before the first is a part
 /// of its own.
 fn split_at_line_prefix<'a>(contents: &'a str, prefix: &str) -> Vec<&'a str> {
@@ -752,21 +704,21 @@ fn process_file(
             lines.pop();
         }
         if !is_partial {
-            deletion_line_index = header.deletion_start.saturating_sub(1);
-            addition_line_index = header.addition_start.saturating_sub(1);
+            deletion_line_index = header.old_start.saturating_sub(1);
+            addition_line_index = header.new_start.saturating_sub(1);
         }
         let mut hunk = Hunk {
             collapsed_before: 0,
-            addition_start: header.addition_start,
-            addition_count: header.addition_count,
+            addition_start: header.new_start,
+            addition_count: header.new_count,
             addition_lines: 0,
             addition_line_index,
-            deletion_start: header.deletion_start,
-            deletion_count: header.deletion_count,
+            deletion_start: header.old_start,
+            deletion_count: header.old_count,
             deletion_lines: 0,
             deletion_line_index,
             content: Vec::new(),
-            context: header.context,
+            context: header.context().map(str::to_owned),
             specs: first.to_owned(),
             split_line_start: 0,
             split_line_count: 0,

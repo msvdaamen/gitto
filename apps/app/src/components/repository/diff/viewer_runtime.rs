@@ -13,11 +13,13 @@ use futures::FutureExt as _;
 use futures::future::Shared;
 use gpui_kit::{App, AppContext as _, Global, Task};
 
-use super::diff_metadata::{
-    ChangeType, FileDiff, LoadedSide, Side, diff_from_files, hydrate, parse_patch_files,
+use gitto_ui::diff::diff_metadata::{
+    ChangeType, FileDiff, HydrateError, LoadedSide, Side, diff_from_files, hydrate,
+    parse_patch_files,
 };
+use gitto_ui::diff::patch_files::{FitError, fit_to_patch, has_matching_ends};
+
 use super::highlight::DiffHighlights;
-use super::patch_files::{fit_to_patch, has_matching_ends};
 use crate::data::QueryError;
 
 /// How long a diff waits for its highlighting before it's shown without, until it's

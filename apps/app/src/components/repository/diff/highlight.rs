@@ -12,9 +12,8 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::LazyLock;
 
+use gitto_ui::diff::diff_metadata::{FileDiff, HunkContent, Side};
 use syntect::parsing::{ParseState, Scope, ScopeStack, SyntaxReference, SyntaxSet};
-
-use super::diff_metadata::{FileDiff, HunkContent, Side};
 
 /// Loaded once, on the first highlight: deserializing it takes tens of milliseconds.
 static SYNTAXES: LazyLock<SyntaxSet> = LazyLock::new(two_face::syntax::extra_newlines);
@@ -516,8 +515,8 @@ fn push_run(runs: &mut Vec<Range<u32>>, range: Range<usize>, text: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::diff_metadata::parse_patch_files;
     use super::*;
+    use gitto_ui::diff::diff_metadata::parse_patch_files;
 
     fn names(highlights: &DiffHighlights, diff: &FileDiff, side: Side, ix: usize) -> Vec<String> {
         let line = diff.lines(side).line(ix);

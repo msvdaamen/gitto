@@ -6,6 +6,7 @@ use std::time::Duration;
 use gitto_git::FileStatus;
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::input::RepositoryId;
+use gitto_ui::diff::diff_metadata::Side;
 use gitto_ui::git::changes::{counts_of, has_patch, total_lines, unchanged_reason};
 use gpui_kit::component::button::Button;
 use gpui_kit::component::{Disableable as _, Sizable as _, h_flex, v_flex};
@@ -17,7 +18,6 @@ use gpui_kit::{
 };
 
 use super::conflict_viewer::{ConflictViewer, SaveFile};
-use super::diff_metadata::Side;
 use super::file_staging::{FileStaging, StageFileMutation, StageLinesMutation};
 use super::patch_viewer::{PatchProps, PatchViewer, PatchViewerEvent};
 use super::shown_file::{ShownFile, patch_cache_key};

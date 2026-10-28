@@ -9,6 +9,13 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use gitto_git::features::staging::schema::LineSelection;
+use gitto_ui::diff::diff_metadata::{ChangeType, FileDiff, Side};
+use gitto_ui::diff::line_staging::{ChangedLine, SelectedRange, hunk_buttons, to_selection};
+use gitto_ui::diff::patch_files::{Expanded, carried_expansion};
+use gitto_ui::diff::viewer_rows::{
+    ExpandDirection, Layout, LayoutOptions, LineAt, LineKind, Row, SeparatorButtons, Separators,
+    expand, gap_size, layout,
+};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex};
@@ -20,14 +27,12 @@ use gpui_kit::{
     WeakEntity, Window, combine_highlights, div, font, point, px, rems, uniform_list,
 };
 
-use super::diff_metadata::{ChangeType, FileDiff, Side};
 use super::highlight::{DiffHighlights, highlight_name};
-use super::line_picker::{KeyOutcome, LinePicker, LineStaging, PickerKey, Viewport};
-use super::line_staging::{ChangedLine, SelectedRange, hunk_buttons, to_selection};
-use super::patch_files::{Expanded, carried_expansion};
-use super::viewer_rows::{
-    ExpandDirection, Layout, LayoutOptions, LineAt, LineKind, Row, SeparatorButtons, Separators,
-    expand, gap_size, layout,
+use super::line_picker::{KeyOutcome, LinePicker, LineStaging, PickerKey, StagedAt, Viewport};
+use super::viewer_actions::{
+    ClearSelection, ExtendSelectionDown, ExtendSelectionUp, PATCH_VIEWER, ScrollLeft,
+    ScrollPageDown, ScrollPageUp, ScrollRight, ScrollToBottom, ScrollToTop, SelectDown,
+    SelectNextHunk, SelectPreviousHunk, SelectUp, StageSelection,
 };
 use super::viewer_runtime::{
     HIGHLIGHT_WAIT, LoadFile, SharedHighlights, ViewHighlights, ViewerRuntime, load_files,
@@ -419,7 +424,7 @@ impl PatchViewer {
         self.layout = Rc::new(layout(
             &shown.diff,
             LayoutOptions {
-                style: self.style,
+                split: self.style == DiffStyle::Split,
                 expanded: &self.expanded,
                 separators: if failed {
                     Separators::Simple
@@ -1447,14 +1452,14 @@ mod tests {
     #[test]
     fn measures_lines_in_characters_as_drawn() {
         let patch = "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-\u{e9}\u{e9}\u{e9}\n+\ta\n";
-        let diff = super::super::diff_metadata::parse_patch_files(patch, None).remove(0);
+        let diff = gitto_ui::diff::diff_metadata::parse_patch_files(patch, None).remove(0);
         // Three characters of two bytes each, and a tab drawn as four spaces before a letter.
         assert_eq!(measure(&diff).0, TAB_WIDTH + 1);
         let long = format!(
             "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-a\n+{}\n",
             "\u{e9}".repeat(MAX_DRAWN_LINE)
         );
-        let diff = super::super::diff_metadata::parse_patch_files(&long, None).remove(0);
+        let diff = gitto_ui::diff::diff_metadata::parse_patch_files(&long, None).remove(0);
         // Cut at as many bytes, with an ellipsis.
         assert_eq!(measure(&diff).0, MAX_DRAWN_LINE / 2 + 1);
     }
