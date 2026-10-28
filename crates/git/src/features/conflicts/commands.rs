@@ -455,7 +455,7 @@ mod tests {
     fn refusing_markers_is_send(
         repo: &Repo,
         run: &GitCommand,
-        paths: Option<&[String]>,
+        paths: Option<&[RepoPath]>,
     ) -> impl Send {
         refuse_conflict_markers(repo, run, paths)
     }
