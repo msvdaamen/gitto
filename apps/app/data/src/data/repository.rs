@@ -16,7 +16,6 @@
 //! nor a timer. What never changes, a commit and what's in it, is kept, a few at a time, for
 //! whichever view shows it next.
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -173,8 +172,6 @@ pub struct ChangeState {
 /// way).
 #[must_use = "awaiting it waits for the reloads; drop it not to"]
 pub struct Reloading(Vec<oneshot::Receiver<()>>);
-
-impl Reloading {}
 
 impl std::future::IntoFuture for Reloading {
     type Output = ();
@@ -1121,14 +1118,14 @@ pub fn observe_selected<V: 'static, S: PartialEq + 'static>(
     select: impl Fn(&Repository) -> S + 'static,
     cx: &mut Context<V>,
 ) -> Subscription {
-    let last = RefCell::new(select(repository.read(cx)));
+    let mut last = select(repository.read(cx));
     cx.subscribe(repository, move |_, repository, Changed(changed), cx| {
         if *changed != part {
             return;
         }
         let next = select(repository.read(cx));
-        if *last.borrow() != next {
-            *last.borrow_mut() = next;
+        if last != next {
+            last = next;
             cx.notify();
         }
     })
@@ -1315,12 +1312,7 @@ impl Repositories {
 
     /// The repository `id`, if it's been opened.
     pub fn get(id: &str, cx: &App) -> Option<Entity<Repository>> {
-        let repositories = cx.try_global::<Repositories>()?;
-        repositories
-            .open
-            .iter()
-            .find(|(open, _)| open.as_str() == id)
-            .map(|(_, repository)| repository.clone())
+        cx.try_global::<Repositories>()?.open.get(id).cloned()
     }
 
     /// Loads again what's shown of every repository opened: once git works again, say, for what
@@ -1343,9 +1335,7 @@ impl Repositories {
     /// Forgets the repository `id`, as it was removed from Gitto.
     pub fn close(id: &str, cx: &mut App) {
         if cx.has_global::<Repositories>() {
-            cx.global_mut::<Repositories>()
-                .open
-                .retain(|open, _| open.as_str() != id);
+            cx.global_mut::<Repositories>().open.remove(id);
         }
     }
 }

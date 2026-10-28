@@ -10,6 +10,7 @@
 //! The checks of a feature's own input are its own types: a page of the log is
 //! `history::commands::Page`, lines of a patch `staging::schema::LineRange`.
 
+use std::borrow::Borrow;
 use std::ffi::OsStr;
 use std::fmt;
 use std::ops::Deref;
@@ -79,6 +80,14 @@ macro_rules! checked_string {
 
         impl AsRef<str> for $name {
             fn as_ref(&self) -> &str {
+                &self.0
+            }
+        }
+
+        // It hashes and compares as the string it holds, so a map keyed by it is looked up by
+        // a `&str`.
+        impl Borrow<str> for $name {
+            fn borrow(&self) -> &str {
                 &self.0
             }
         }
@@ -263,6 +272,14 @@ mod tests {
         assert!(matches!(error, Error::InvalidInput(_)), "{error:?}");
         assert_eq!(error.api().code(), "BAD_REQUEST");
         error.to_string()
+    }
+
+    #[test]
+    fn a_map_keyed_by_one_is_looked_up_by_its_string() {
+        let id = "01890a5d-ac96-774b-bcce-b302099a8057";
+        let map = std::collections::HashMap::from([(RepositoryId::parse(id).unwrap(), 1)]);
+        assert_eq!(map.get(id), Some(&1));
+        assert_eq!(map.get("01890a5d-ac96-774b-bcce-b302099a8058"), None);
     }
 
     #[test]

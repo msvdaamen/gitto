@@ -12,7 +12,9 @@ use super::loaded::Loaded;
 /// A view's hold on what it shows of a [`Keyed`]: while it's kept, that's kept, and reloaded as
 /// the repository changes.
 #[derive(Clone)]
-pub struct Hold(#[allow(dead_code)] Rc<()>);
+pub struct Hold {
+    _alive: Rc<()>,
+}
 
 struct Entry<T> {
     loaded: Loaded<T>,
@@ -77,7 +79,7 @@ impl<K: Clone + Eq + Hash, T> Keyed<K, T> {
         let entry = self.entries.get_mut(&key).expect("just made");
         entry.holds.retain(|hold| hold.strong_count() > 0);
         entry.holds.push(Rc::downgrade(&hold));
-        Hold(hold)
+        Hold { _alive: hold }
     }
 
     /// The keys of the entries `pick` picks that something holds, to reload; those nothing holds
