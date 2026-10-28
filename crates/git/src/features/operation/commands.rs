@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::schema::{CommitName, Operation, OperationKind, Steps};
+use super::schema::{CommitName, Operation, OperationAction, OperationKind, Steps};
 use crate::core::errors::{Error, Result};
 use crate::core::git_dirs::git_dirs;
 use crate::core::repo::{GitCommand, Repo, current_branch, has_conflicts, resolve_ref, succeeds};
@@ -216,8 +216,8 @@ async fn commit_name(run: &GitCommand, sha: &str) -> CommitName {
 
 /// The command that continues or aborts `kind`: `git merge --continue`, `git rebase --abort`, and
 /// so on.
-fn operation_args(kind: OperationKind, action: &str) -> [String; 2] {
-    [kind.as_str().to_owned(), format!("--{action}")]
+fn operation_args(kind: OperationKind, action: OperationAction) -> [&'static str; 2] {
+    [kind.as_str(), action.as_flag()]
 }
 
 /// The operation under way in the worktree whose git directory is `git_dir`, if any (see
@@ -271,7 +271,7 @@ pub async fn continue_operation(repo: &Repo, kind: OperationKind) -> Result<()> 
         let continued = go_on(
             &run,
             kind,
-            operation_args(kind, "continue"),
+            operation_args(kind, OperationAction::Continue),
             conflicted,
             &options,
         )
@@ -291,7 +291,13 @@ pub async fn continue_operation(repo: &Repo, kind: OperationKind) -> Result<()> 
         if !empty {
             return Err(error.without_hints());
         }
-        go_on(&run, kind, operation_args(kind, "skip"), false, &options)
+        go_on(
+            &run,
+            kind,
+            operation_args(kind, OperationAction::Skip),
+            false,
+            &options,
+        )
             .await
             .map_err(Error::without_hints)
     })
@@ -302,7 +308,7 @@ pub async fn continue_operation(repo: &Repo, kind: OperationKind) -> Result<()> 
 async fn go_on(
     run: &GitCommand,
     kind: OperationKind,
-    args: [String; 2],
+    args: [&'static str; 2],
     conflicted_before: bool,
     options: &RunOptions,
 ) -> Result<()> {
@@ -385,7 +391,7 @@ pub async fn abort_operation(repo: &Repo, kind: OperationKind) -> Result<()> {
     repo.exclusive(|run| async move {
         check_operation(&git_dirs(repo).await?.git_dir, kind).await?;
         run.run_with(
-            operation_args(kind, "abort"),
+            operation_args(kind, OperationAction::Abort),
             RunOptions::default().rewrites_files(),
         )
         .await
