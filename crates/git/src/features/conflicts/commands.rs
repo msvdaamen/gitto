@@ -18,9 +18,7 @@ use crate::features::diff::limits::MAX_BLOB_BYTES;
 use crate::features::diff::working_tree::{
     decode_utf8, read_working_tree_bytes, scan_working_tree_file,
 };
-
-/// A submodule's mode in the index: its commit, rather than a file.
-const SUBMODULE: &str = "160000";
+use crate::schema::FileMode;
 
 /// Refuses an empty path, as the contract's `z.string().min(1)` did.
 fn check_path(path: &str) -> Result<()> {
@@ -44,9 +42,13 @@ pub async fn read_sides(run: &GitCommand, path: &str) -> Result<ConflictSides> {
             continue;
         }
         let mut fields = info.split(' ');
-        let mode = fields.next().unwrap_or("").to_owned();
-        let oid = fields.next().unwrap_or("").to_owned();
-        let side = Some(ConflictSide { mode, oid });
+        let (Some(Ok(mode)), Some(oid)) = (fields.next().map(str::parse), fields.next()) else {
+            continue;
+        };
+        let side = Some(ConflictSide {
+            mode,
+            oid: oid.to_owned(),
+        });
         match fields.next() {
             Some("1") => sides.base = side,
             Some("2") => sides.ours = side,
@@ -199,7 +201,8 @@ pub async fn keep_side(repo: &Repo, path: &str, side: Side, shown: &ShownConflic
                 )
                 .await?;
             }
-            Some(kept) if kept.mode == SUBMODULE => {
+            // Its commit, rather than a file.
+            Some(kept) if kept.mode == FileMode::Submodule => {
                 let info = format!("{},{},{path}", kept.mode, kept.oid);
                 run.run(["update-index", "--cacheinfo", &info]).await?;
             }
@@ -665,11 +668,8 @@ mod tests {
         git(path, ["rev-parse", spec])
     }
 
-    fn side(mode: &str, oid: String) -> Option<ConflictSide> {
-        Some(ConflictSide {
-            mode: mode.to_owned(),
-            oid,
-        })
+    fn side(mode: FileMode, oid: String) -> Option<ConflictSide> {
+        Some(ConflictSide { mode, oid })
     }
 
     fn read(path: &Path) -> String {
@@ -693,9 +693,9 @@ mod tests {
             assert_eq!(
                 conflict,
                 Conflict {
-                    base: side("100644", oid(&path, ":1:f.txt")),
-                    ours: side("100644", oid(&path, ":2:f.txt")),
-                    theirs: side("100644", oid(&path, ":3:f.txt")),
+                    base: side(FileMode::Regular, oid(&path, ":1:f.txt")),
+                    ours: side(FileMode::Regular, oid(&path, ":2:f.txt")),
+                    theirs: side(FileMode::Regular, oid(&path, ":3:f.txt")),
                     text: Some(ConflictText {
                         contents,
                         version: version.clone(),
@@ -1031,8 +1031,8 @@ mod tests {
             let repo = fx.repos.open("added-by-both").await.unwrap();
             let conflict = get_conflict(&repo, "new.txt").await.unwrap();
             assert_eq!(conflict.base, None);
-            assert_eq!(conflict.ours.unwrap().mode, "100644");
-            assert_eq!(conflict.theirs.unwrap().mode, "100644");
+            assert_eq!(conflict.ours.unwrap().mode, FileMode::Regular);
+            assert_eq!(conflict.theirs.unwrap().mode, FileMode::Regular);
             assert_eq!(
                 conflict.text.unwrap().contents,
                 "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> side\n"
@@ -1156,8 +1156,8 @@ mod tests {
             let repo = fx.repos.open("link-conflict").await.unwrap();
 
             let conflict = get_conflict(&repo, "config").await.unwrap();
-            assert_eq!(conflict.ours.as_ref().unwrap().mode, "120000");
-            assert_eq!(conflict.theirs.as_ref().unwrap().mode, "120000");
+            assert_eq!(conflict.ours.as_ref().unwrap().mode, FileMode::Symlink);
+            assert_eq!(conflict.theirs.as_ref().unwrap().mode, FileMode::Symlink);
             assert_eq!(conflict.text, None);
             assert_eq!(conflict.version, None);
             assert_eq!(conflict.unreadable, None);

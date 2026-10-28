@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use super::schema::{Head, Status, StatusConflict, StatusFile};
+use super::schema::{ConflictKind, Head, Status, StatusConflict, StatusFile};
 use crate::schema::FileStatus;
 
 /// `git status --porcelain=v2 -z --branch`; see "Porcelain Format Version 2" in git-status(1).
@@ -65,16 +65,15 @@ pub fn parse_status(output: &str) -> Status {
             // Unmerged: u <XY> <sub> <m1> <m2> <m3> <mW> <h1> <h2> <h3> <path>
             'u' => {
                 let fields = split_fields(record, 11);
+                let Some(conflict) = conflict(&fields) else {
+                    continue;
+                };
                 files.push(StatusFile {
                     path: field(&fields, 10).to_owned(),
                     orig_path: None,
                     staged: Some(FileStatus::Conflicted),
                     unstaged: Some(FileStatus::Conflicted),
-                    conflict: Some(StatusConflict {
-                        xy: field(&fields, 1).to_owned(),
-                        ours: field(&fields, 4).to_owned(),
-                        theirs: field(&fields, 5).to_owned(),
-                    }),
+                    conflict: Some(conflict),
                 });
             }
             '?' => files.push(StatusFile {
@@ -134,6 +133,15 @@ fn to_head(oid: &str, name: &str) -> Head {
         name: name.to_owned(),
         sha: oid.to_owned(),
     }
+}
+
+/// How an unmerged record's file conflicts; `None` if git wouldn't write its `XY` or modes.
+fn conflict(fields: &[&str]) -> Option<StatusConflict> {
+    Some(StatusConflict {
+        kind: ConflictKind::from_xy(fields.get(1)?)?,
+        ours: fields.get(4)?.parse().ok()?,
+        theirs: fields.get(5)?.parse().ok()?,
+    })
 }
 
 fn file(path: &str, orig_path: Option<String>, xy: &str) -> StatusFile {
@@ -211,6 +219,7 @@ mod tests {
 
     #[test]
     fn reads_changed_renamed_conflicted_and_untracked_files() {
+        use crate::schema::FileMode;
         use FileStatus::*;
         assert_eq!(
             parse_status(&output()).files,
@@ -224,9 +233,9 @@ mod tests {
                     staged: Some(Conflicted),
                     unstaged: Some(Conflicted),
                     conflict: Some(StatusConflict {
-                        xy: "UU".into(),
-                        ours: "100644".into(),
-                        theirs: "100644".into(),
+                        kind: ConflictKind::BothModified,
+                        ours: FileMode::Regular,
+                        theirs: FileMode::Regular,
                     }),
                 },
                 status_file("untracked file.txt", None, None, Some(Untracked)),

@@ -136,9 +136,9 @@ async fn resolved_conflicts(repo: &Repo, files: &[StatusFile]) -> Vec<String> {
         .iter()
         .filter(|file| {
             file.conflict.as_ref().is_some_and(|conflict| {
-                (conflict.xy == "UU" || conflict.xy == "AA")
-                    && is_regular_file(&conflict.ours)
-                    && is_regular_file(&conflict.theirs)
+                conflict.kind.on_both_sides()
+                    && conflict.ours.is_file()
+                    && conflict.theirs.is_file()
             })
         })
         .map(|file| file.path.clone())
@@ -147,11 +147,6 @@ async fn resolved_conflicts(repo: &Repo, files: &[StatusFile]) -> Vec<String> {
         return Vec::new();
     }
     marker_free(repo, &text).await
-}
-
-/// Whether `mode` is a file's, executable or not, rather than a link's or a submodule's.
-fn is_regular_file(mode: &str) -> bool {
-    mode == "100644" || mode == "100755"
 }
 
 /// Past this many characters of paths, the unstaged diff isn't limited to the changed files: the

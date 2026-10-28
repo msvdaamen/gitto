@@ -2,12 +2,14 @@
 
 use serde::{Deserialize, Serialize};
 
-/// One side of a conflicted file, as the index has it while it's unmerged: its mode (`100644`, say,
-/// or `120000` for a symbolic link and `160000` for a submodule) and its object.
+use crate::schema::FileMode;
+
+/// One side of a conflicted file, as the index has it while it's unmerged: its mode (a file's, a
+/// symbolic link's or a submodule's) and its object.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConflictSide {
-    pub mode: String,
+    pub mode: FileMode,
     pub oid: String,
 }
 
