@@ -6,7 +6,7 @@
 //! Router::navigate(Route::Repository(id), cx);
 //! ```
 
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use gitto_git::input::RepositoryId;
 use gpui_kit::{App, AppContext as _, Context, Entity, Global, Task};
@@ -34,14 +34,18 @@ impl Route {
 }
 
 /// What leaving the page waits for: resolves to whether to go on (TS's `useBlocker`), e.g. once a
-/// file's edits are saved.
-pub type Blocker = Rc<dyn Fn(&mut App) -> Task<bool>>;
+/// file's edits are saved. The page that sets it keeps it: the router only holds on to it while
+/// the page does (see [`Router::set_blocker`]).
+pub type Blocker = Rc<BlockerFn>;
+
+/// What a [`Blocker`] calls.
+pub type BlockerFn = dyn Fn(&mut App) -> Task<bool>;
 
 /// The page on show (see the module's doc).
 #[derive(Default)]
 pub struct Router {
     route: Route,
-    blocker: Option<Blocker>,
+    blocker: Option<Weak<BlockerFn>>,
     /// Navigating, once the blocker says it may.
     pending: Option<Task<()>>,
 }
@@ -79,9 +83,12 @@ impl Router {
         Router::global(cx).update(cx, |router, cx| router.go(route, cx));
     }
 
-    /// Has leaving the page wait for `blocker`; `None` lets it go at once.
-    pub fn set_blocker(blocker: Option<Blocker>, cx: &mut App) {
-        Router::global(cx).update(cx, |router, _| router.blocker = blocker);
+    /// Has leaving the page wait for `blocker`, for as long as its owner, the page, keeps it:
+    /// once it's dropped, with the page, the router goes on at once. The blocker set last is the
+    /// one that counts, so a page that's made before the last one's dropped keeps its own.
+    pub fn set_blocker(blocker: &Blocker, cx: &mut App) {
+        let blocker = Rc::downgrade(blocker);
+        Router::global(cx).update(cx, |router, _| router.blocker = Some(blocker));
     }
 
     fn go(&mut self, route: Route, cx: &mut Context<Self>) {
@@ -90,7 +97,7 @@ impl Router {
             self.pending = None;
             return;
         }
-        let Some(blocker) = self.blocker.clone() else {
+        let Some(blocker) = self.blocker.as_ref().and_then(Weak::upgrade) else {
             self.route = route;
             self.pending = None;
             cx.notify();
@@ -121,13 +128,13 @@ mod tests {
         assert_eq!(cx.update(|cx| Router::current(cx)), Route::Settings);
 
         let blocker: Blocker = Rc::new(|cx| cx.background_spawn(async { false }));
-        cx.update(|cx| Router::set_blocker(Some(blocker), cx));
+        cx.update(|cx| Router::set_blocker(&blocker, cx));
         cx.update(|cx| Router::navigate(Route::Home, cx));
         cx.run_until_parked();
         assert_eq!(cx.update(|cx| Router::current(cx)), Route::Settings);
 
         let blocker: Blocker = Rc::new(|cx| cx.background_spawn(async { true }));
-        cx.update(|cx| Router::set_blocker(Some(blocker), cx));
+        cx.update(|cx| Router::set_blocker(&blocker, cx));
         cx.update(|cx| Router::navigate(Route::Home, cx));
         cx.run_until_parked();
         assert_eq!(cx.update(|cx| Router::current(cx)), Route::Home);
@@ -147,10 +154,36 @@ mod tests {
                 }
             })
         });
-        cx.update(|cx| Router::set_blocker(Some(blocker), cx));
+        cx.update(|cx| Router::set_blocker(&blocker, cx));
         cx.update(|cx| Router::navigate(Route::Settings, cx));
         cx.update(|cx| Router::navigate(Route::Home, cx));
         let _ = allow.send(true);
+        cx.run_until_parked();
+        assert_eq!(cx.update(|cx| Router::current(cx)), Route::Home);
+    }
+
+    #[gpui_kit::test]
+    fn goes_at_once_once_the_blockers_owner_drops_it(cx: &mut TestAppContext) {
+        cx.update(|cx| Router::init(Route::Home, cx));
+        let blocker: Blocker = Rc::new(|cx| cx.background_spawn(async { false }));
+        cx.update(|cx| Router::set_blocker(&blocker, cx));
+        drop(blocker);
+
+        cx.update(|cx| Router::navigate(Route::Settings, cx));
+        assert_eq!(cx.update(|cx| Router::current(cx)), Route::Settings);
+    }
+
+    #[gpui_kit::test]
+    fn keeps_the_blocker_set_last(cx: &mut TestAppContext) {
+        cx.update(|cx| Router::init(Route::Home, cx));
+        let first: Blocker = Rc::new(|cx| cx.background_spawn(async { true }));
+        let last: Blocker = Rc::new(|cx| cx.background_spawn(async { false }));
+        cx.update(|cx| Router::set_blocker(&first, cx));
+        cx.update(|cx| Router::set_blocker(&last, cx));
+        // The first page goes after the last one came.
+        drop(first);
+
+        cx.update(|cx| Router::navigate(Route::Settings, cx));
         cx.run_until_parked();
         assert_eq!(cx.update(|cx| Router::current(cx)), Route::Home);
     }

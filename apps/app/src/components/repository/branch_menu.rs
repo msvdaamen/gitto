@@ -268,19 +268,20 @@ impl BranchMenuProvider {
         let worktrees = self.worktrees.data();
         tracks
             && (self.checked_out_here(reference)
-                || worktree_on(worktrees.as_deref(), reference).is_none())
+                || worktree_on(worktrees.as_deref().unwrap_or_default(), reference).is_none())
     }
 
     /// Whether the local branch `reference` is checked out, here or in another worktree.
     fn is_checked_out(&self, reference: &str) -> bool {
         let worktrees = self.worktrees.data();
-        self.checked_out_here(reference) || worktree_on(worktrees.as_deref(), reference).is_some()
+        self.checked_out_here(reference)
+            || worktree_on(worktrees.as_deref().unwrap_or_default(), reference).is_some()
     }
 
     /// The other worktree the branch is checked out in, if one that can be opened is.
     fn worktree_of(&self, branch: &str) -> Option<Worktree> {
         let worktrees = self.worktrees.data();
-        worktree_on(worktrees.as_deref(), branch)
+        worktree_on(worktrees.as_deref().unwrap_or_default(), branch)
             .filter(|worktree| can_open_worktree(worktree))
             .cloned()
     }

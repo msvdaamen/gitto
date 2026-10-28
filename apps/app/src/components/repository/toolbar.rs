@@ -71,7 +71,7 @@ impl BranchChangeKind {
         }
     }
 
-    fn state(self, id: &str, cx: &App) -> OperationState {
+    fn state(self, id: &RepositoryId, cx: &App) -> OperationState {
         match self {
             BranchChangeKind::Merge => merge_branch_state(id, cx),
             BranchChangeKind::Rebase => rebase_branch_state(id, cx),
@@ -286,7 +286,7 @@ impl RepositoryToolbar {
             .unwrap_or_default();
         let failure = self.branch_failure();
         let (title, error) = match &failure {
-            Some((kind, error)) => (kind.title(), Some(error.clone())),
+            Some((kind, error)) => (kind.title(), Some(error.message().into())),
             None => ("Merge", None),
         };
         let dismiss = failure.map(|(kind, _)| kind);
@@ -476,7 +476,7 @@ mod tests {
         set_push_target(
             id,
             gitto_git::features::remote::schema::PushTarget::Blocked {
-                reason: "There's no remote to push to.".into(),
+                reason: gitto_git::PushBlocker::NoRemote,
             },
             cx,
         );

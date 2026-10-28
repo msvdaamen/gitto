@@ -73,7 +73,7 @@ impl BranchButton {
         let source = status
             .as_ref()
             .map_or("HEAD", |status| branch_source(&status.head));
-        let changes = if has_uncommitted_changes(status.as_ref()) {
+        let changes = if status.as_ref().is_some_and(has_uncommitted_changes) {
             ", with your uncommitted changes."
         } else {
             "."
@@ -284,7 +284,7 @@ mod tests {
         assert!(shown.is_busy());
 
         let mut moved = changed(status(), 2);
-        moved.head = Head::Branch {
+        moved.summary.head = Head::Branch {
             name: "feature/new".into(),
             sha: "abc".into(),
         };

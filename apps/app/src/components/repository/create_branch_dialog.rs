@@ -154,7 +154,7 @@ impl CreateBranchDialog {
     pub fn summary(&self) -> String {
         let from = self.from.get().map_or("", String::as_str);
         let status = self.status.data();
-        let changes = if !has_uncommitted_changes(status.as_ref()) {
+        let changes = if !status.as_ref().is_some_and(has_uncommitted_changes) {
             "."
         } else if status
             .as_ref()
@@ -337,7 +337,7 @@ mod tests {
         let _dir = setup(cx);
         let id = repository_id();
         let mut on_main = changed(status(), 1);
-        on_main.head = Head::Branch {
+        on_main.summary.head = Head::Branch {
             name: "main".into(),
             sha: "abc".into(),
         };

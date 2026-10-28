@@ -284,7 +284,7 @@ impl Render for OperationBar {
                     FailurePopover::new(
                         "abort-failure",
                         format!("Abort {name}"),
-                        abort_state.error,
+                        abort_state.error.map(|error| error.message().into()),
                         Button::new("abort")
                             .small()
                             .label("Abort")
@@ -299,7 +299,7 @@ impl Render for OperationBar {
                     FailurePopover::new(
                         "continue-failure",
                         format!("Continue {name}"),
-                        proceed_state.error,
+                        proceed_state.error.map(|error| error.message().into()),
                         Button::new("continue")
                             .primary()
                             .small()
@@ -410,7 +410,7 @@ mod tests {
     fn rebase(step: u64, total: u64) -> Operation {
         Operation::Rebase {
             branch: Some("feature".into()),
-            onto: "main".into(),
+            onto: Some("main".into()),
             steps: Some(Steps { step, total }),
         }
     }

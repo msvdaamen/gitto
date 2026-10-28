@@ -19,17 +19,49 @@ use std::time::{Duration, Instant};
 use crate::core::errors::Error;
 use crate::core::git_dirs::real_path;
 use crate::core::repo::{GitRepos, Repo};
-use crate::core::runner::lock;
+use crate::core::runner::{REPOSITORY_ENV, lock};
+use crate::core::trace::TARGET;
+use crate::input::RepositoryId;
 
 /// Repositories for one test, in a temp directory of its own.
 pub struct Fixture {
     /// Removed when the fixture is dropped.
     _dir: tempfile::TempDir,
     root: PathBuf,
-    /// Repository paths by name, for `repos`.
-    paths: Arc<Mutex<HashMap<String, PathBuf>>>,
+    /// Repository paths by id, for `repos`.
+    paths: Arc<Mutex<HashMap<RepositoryId, PathBuf>>>,
     /// Opens the repositories `create_repo` made (and `add_path` added), by their name.
-    pub repos: GitRepos,
+    pub repos: NamedRepos,
+}
+
+/// `GitRepos` that opens repositories by a name, as tests call them: each name has an id of its
+/// own, which is the name itself if it's a repository id.
+#[derive(Clone)]
+pub struct NamedRepos {
+    repos: GitRepos,
+    ids: Arc<Mutex<HashMap<String, RepositoryId>>>,
+}
+
+impl NamedRepos {
+    /// The repository `name` is (see `GitRepos::open`).
+    pub async fn open(&self, name: &str) -> Result<Repo, Error> {
+        self.repos.open(&self.id(name)).await
+    }
+
+    /// The id of the repository `name` is.
+    pub fn id(&self, name: &str) -> RepositoryId {
+        lock(&self.ids)
+            .entry(name.to_owned())
+            .or_insert_with(|| {
+                RepositoryId::parse(name).unwrap_or_else(|_| RepositoryId::generate())
+            })
+            .clone()
+    }
+
+    /// The `GitRepos` these are, which opens them by their ids.
+    pub fn git_repos(&self) -> GitRepos {
+        self.repos.clone()
+    }
 }
 
 impl Default for Fixture {
@@ -40,7 +72,7 @@ impl Default for Fixture {
 
 impl Fixture {
     pub fn new() -> Self {
-        clear_git_identity();
+        hermetic_env();
         let dir = tempfile::Builder::new()
             .prefix("gitto-git-")
             .tempdir()
@@ -48,9 +80,12 @@ impl Fixture {
         // Where it really is: git lists worktrees by their real paths, and macOS puts the temp
         // folder under a symlink.
         let root = smol::block_on(real_path(dir.path())).expect("the temp directory's real path");
-        let paths = Arc::new(Mutex::new(HashMap::<String, PathBuf>::new()));
+        let paths = Arc::new(Mutex::new(HashMap::<RepositoryId, PathBuf>::new()));
         let lookup = Arc::clone(&paths);
-        let repos = GitRepos::new(move |id: &str| lock(&lookup).get(id).cloned());
+        let repos = NamedRepos {
+            repos: GitRepos::new(move |id: &RepositoryId| lock(&lookup).get(id).cloned()),
+            ids: Arc::default(),
+        };
         Fixture {
             _dir: dir,
             root,
@@ -66,7 +101,7 @@ impl Fixture {
 
     /// Has `repos` open the repository at `path` as `name`, e.g. a linked worktree.
     pub fn add_path(&self, name: &str, path: impl Into<PathBuf>) {
-        lock(&self.paths).insert(name.to_owned(), path.into());
+        lock(&self.paths).insert(self.repos.id(name), path.into());
     }
 
     /// Creates an empty repository on `main`, which `repos` opens as `name`, and returns its path.
@@ -145,22 +180,36 @@ impl Fixture {
     }
 }
 
-/// The tests create real repositories and commits. These variables override the repos' own
-/// `user.name`/`user.email`, so drop them to get the same authors on every machine.
-fn clear_git_identity() {
-    static CLEARED: Once = Once::new();
-    CLEARED.call_once(|| {
-        for key in [
-            "GIT_AUTHOR_NAME",
-            "GIT_AUTHOR_EMAIL",
-            "GIT_AUTHOR_DATE",
-            "GIT_COMMITTER_NAME",
-            "GIT_COMMITTER_EMAIL",
-            "GIT_COMMITTER_DATE",
-        ] {
-            // SAFETY: only tests get here, before their first git command; the standard library
-            // reads the environment (to spawn git) under the same lock that this takes.
-            unsafe { std::env::remove_var(key) };
+/// Makes git in the tests, the runner's and `git`'s, the same on every machine, whoever runs them
+/// and from where, once per test run: without the user's own settings (their global and system
+/// config: `tag.gpgSign`, `core.hooksPath`, `pull.rebase`, …), nor what the environment says
+/// about who commits, or which repository to use (a git hook running `cargo test` sets `GIT_DIR`,
+/// say).
+fn hermetic_env() {
+    static DONE: Once = Once::new();
+    DONE.call_once(|| {
+        // SAFETY: only tests get here, before their first git command; the standard library
+        // reads the environment (to spawn git) under the same lock that this takes.
+        unsafe {
+            std::env::set_var("GIT_CONFIG_NOSYSTEM", "1");
+            std::env::set_var("GIT_CONFIG_GLOBAL", "/dev/null");
+            // These override the repos' own `user.name`/`user.email`.
+            for key in [
+                "GIT_AUTHOR_NAME",
+                "GIT_AUTHOR_EMAIL",
+                "GIT_AUTHOR_DATE",
+                "GIT_COMMITTER_NAME",
+                "GIT_COMMITTER_EMAIL",
+                "GIT_COMMITTER_DATE",
+                "GIT_CONFIG",
+                "GIT_CONFIG_COUNT",
+                "GIT_CONFIG_PARAMETERS",
+            ]
+            .iter()
+            .chain(REPOSITORY_ENV)
+            {
+                std::env::remove_var(key);
+            }
         }
     });
 }
@@ -187,6 +236,38 @@ where
 pub fn valid<T: TryFrom<String, Error = Error>>(value: impl Into<String>) -> T {
     let value = value.into();
     T::try_from(value.clone()).unwrap_or_else(|error| panic!("{value:?} isn't valid: {error}"))
+}
+
+/// Records the warnings the crate logs (see `crate::core::trace::TARGET`) from now on: the function
+/// returned says which have been, by their message. It's every test's, so a test that checks for a
+/// warning has to make it say what only it would.
+pub fn logged_warnings() -> impl Fn() -> Vec<String> {
+    static WARNINGS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    struct Recorder;
+
+    impl log::Log for Recorder {
+        fn enabled(&self, metadata: &log::Metadata) -> bool {
+            metadata.level() <= log::Level::Warn && metadata.target().starts_with(TARGET)
+        }
+
+        fn log(&self, record: &log::Record) {
+            if self.enabled(record.metadata()) {
+                lock(&WARNINGS).push(record.args().to_string());
+            }
+        }
+
+        fn flush(&self) {}
+    }
+
+    static RECORDER: Recorder = Recorder;
+    static INSTALLED: Once = Once::new();
+    INSTALLED.call_once(|| {
+        log::set_logger(&RECORDER).expect("no other logger in the tests");
+        log::set_max_level(log::LevelFilter::Warn);
+    });
+    let from = lock(&WARNINGS).len();
+    move || lock(&WARNINGS)[from..].to_vec()
 }
 
 /// Whether the file system takes a file name that isn't UTF-8, as Linux's do: macOS's APFS
@@ -257,6 +338,18 @@ mod tests {
             git(path, ["status", "--porcelain", "-z"]),
             " M a file.txt\0?? new file.txt\0".trim()
         );
+    }
+
+    #[test]
+    fn git_has_only_the_repositorys_own_settings() {
+        let fx = Fixture::new();
+        let path = fx.create_repo("hermetic");
+        let settings = git(&path, ["config", "--list", "--show-scope"]);
+        assert!(
+            settings.lines().all(|line| line.starts_with("local\t")),
+            "{settings}"
+        );
+        assert_eq!(std::env::var_os("GIT_DIR"), None);
     }
 
     #[test]

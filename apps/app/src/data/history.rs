@@ -214,7 +214,7 @@ impl LogQuery {
         if self.has_more() && !self.query.is_fetching() && !self.more.read(cx).is_pending() {
             let id = self.id.clone();
             self.more.update(cx, |more, cx| {
-                drop(more.mutate(id, cx));
+                more.run(id, cx);
             });
         }
     }
@@ -437,7 +437,9 @@ mod tests {
         for message in ["one", "two", "three"] {
             git(&path, &["commit", "-q", "--allow-empty", "-m", message]);
         }
-        let get = git_log_from(gitto_git::GitApi::new(move |_: &str| Some(path.clone())));
+        let get = git_log_from(gitto_git::GitApi::new(move |_: &RepositoryId| {
+            Some(path.clone())
+        }));
         let page = smol::block_on(get(repository_id(), 1, 1)).unwrap();
         assert_eq!(page.len(), 1);
         assert_eq!(page[0].subject, "two");
