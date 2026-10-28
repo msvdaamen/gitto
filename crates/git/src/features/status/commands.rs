@@ -216,8 +216,13 @@ async fn get_working_tree_files(
         .iter()
         .map(|path| path.encode_utf16().count() + 3)
         .sum();
+    // A name that isn't UTF-8 comes out of git lossily, with U+FFFD in it: handed back to git, it
+    // would name no file, and the diff would leave it out.
+    let lossy = unstaged_paths
+        .iter()
+        .any(|path| path.contains(char::REPLACEMENT_CHARACTER));
     let mut unstaged_args = vec!["diff", "--raw", "--numstat", "-z"];
-    if length <= MAX_PATHSPEC_LENGTH {
+    if length <= MAX_PATHSPEC_LENGTH && !lossy {
         unstaged_args.push("--");
         unstaged_args.extend(&unstaged_paths);
     }
@@ -506,6 +511,39 @@ mod tests {
             ] {
                 assert!(unstaged.contains(&name), "{name} in {unstaged:?}");
             }
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_changed_files_are_the_same_as_full_diffs_with_a_name_that_isnt_utf8() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        if !crate::test_support::non_utf8_names() {
+            return;
+        }
+        let fx = Fixture::new();
+        let path = fx.create_repo("not-utf8");
+        let name = OsStr::from_bytes(b"caf\xe9.txt");
+        fs::write(path.join(name), "one\n").unwrap();
+        fs::write(path.join("plain.txt"), "one\n").unwrap();
+        git(&path, ["add", "."]);
+        git(&path, ["commit", "-q", "-m", "first"]);
+        fs::write(path.join(name), "two\n").unwrap();
+        fs::write(path.join("plain.txt"), "two\n").unwrap();
+        smol::block_on(async {
+            let repo = fx.repos.open("not-utf8").await.unwrap();
+
+            let changes = get_status(&repo).await.unwrap().changes;
+            assert_eq!(changes, full_diffs(&repo).await);
+            assert_eq!(
+                changes.unstaged,
+                [
+                    changed("caf\u{fffd}.txt", FileStatus::Modified, Some(1), Some(1)),
+                    changed("plain.txt", FileStatus::Modified, Some(1), Some(1)),
+                ]
+            );
         });
     }
 
