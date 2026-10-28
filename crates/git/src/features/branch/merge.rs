@@ -1171,7 +1171,8 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("merge-during-pop").await.unwrap();
             let stash = git(&path, ["rev-parse", "refs/stash"]);
-            let _ = pop_stash(&repo, &stash).await;
+            let popped = pop_stash(&repo, &stash).await;
+            assert!(matches!(popped, Err(Error::StashConflict(_))), "{popped:?}");
             let before = snapshot(&path);
 
             let error = merge_branch(&repo, "refs/heads/side", "main")
