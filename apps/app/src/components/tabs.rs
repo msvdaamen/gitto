@@ -315,6 +315,7 @@ impl Tabs {
             None
         };
         let (action, error) = error.unwrap_or(("Remove", None));
+        let error = error.map(|error| SharedString::from(error.message()));
         let name: SharedString = repository.name.clone().into();
         tab_frame(SharedString::from(format!("tab-{id}")), selected, cx)
             .min_w(rems(8.))
@@ -467,7 +468,11 @@ impl Render for Tabs {
                 );
             }
         }
-        let open_error = self.open_repository.read(cx).error().cloned();
+        let open_error = self
+            .open_repository
+            .read(cx)
+            .error()
+            .map(|error| SharedString::from(error.message()));
         let open_repository = self.open_repository.clone();
         h_flex()
             .h_full()
