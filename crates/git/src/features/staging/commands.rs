@@ -6,7 +6,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use super::lines::{LineAction, lines_patch};
-use super::patch_version::patch_version;
+use super::patch_version::PatchVersion;
 use super::schema::LineSelection;
 use crate::core::errors::{Error, Result};
 use crate::core::records::{nul_terminated, raw_entries};
@@ -138,7 +138,7 @@ pub async fn unstage_all(repo: &Repo) -> Result<()> {
 }
 
 /// Stages the lines `selection` picks from a file's unstaged changes, which the user picked them
-/// from in the patch named `version` (see `patch_version`, and `get_unstaged_file_patch`). Fails
+/// from in the patch named `version` (see `PatchVersion`, and `get_unstaged_file_patch`). Fails
 /// with `Error::PatchChanged` if that isn't the file's unstaged changes' patch any more: the lines
 /// picked could be others by now. Resolves to the unstaged changes' patch the lines leave, to show
 /// in its place. `untracked` is whether the file is, as its list has it.
@@ -146,20 +146,11 @@ pub async fn stage_lines(
     repo: &Repo,
     file: &FileInput,
     untracked: bool,
-    version: &str,
+    version: &PatchVersion,
     selection: &LineSelection,
 ) -> Result<String> {
     selection.check()?;
-    apply_lines(
-        repo,
-        version,
-        selection,
-        LineAction::Stage,
-        // In the index once lines of it are staged, an untracked file is compared to that.
-        || get_unstaged_file_patch_bytes(repo, file, untracked),
-        || get_unstaged_file_patch(repo, file, false),
-    )
-    .await
+    apply_lines(repo, file, Side::Unstaged { untracked }, version, selection).await
 }
 
 /// Unstages the lines `selection` picks from a file's staged changes; see `stage_lines`. Resolves
@@ -167,19 +158,11 @@ pub async fn stage_lines(
 pub async fn unstage_lines(
     repo: &Repo,
     file: &FileInput,
-    version: &str,
+    version: &PatchVersion,
     selection: &LineSelection,
 ) -> Result<String> {
     selection.check()?;
-    apply_lines(
-        repo,
-        version,
-        selection,
-        LineAction::Unstage,
-        || get_staged_file_patch_bytes(repo, file),
-        || get_staged_file_patch(repo, file),
-    )
-    .await
+    apply_lines(repo, file, Side::Staged, version, selection).await
 }
 
 /// What `git apply --cached` says of a patch that isn't of the index as it is.
@@ -188,46 +171,63 @@ static INDEX_CHANGED: LazyLock<Regex> = LazyLock::new(|| {
         .expect("a valid regex")
 });
 
-/// `bytes` read as Latin-1, one character per byte, as TS's `binary` read them: the patch is built
-/// from them as text, and goes back to git as the same bytes (see `latin1_bytes`).
-fn latin1(bytes: &[u8]) -> String {
-    bytes.iter().map(|&byte| char::from(byte)).collect()
+/// Which of a file's changes lines are picked from (see `apply_lines`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Side {
+    /// Its unstaged changes, to stage lines of; `untracked` if the file is, as its list has it.
+    Unstaged { untracked: bool },
+    /// Its staged changes, to unstage lines of.
+    Staged,
 }
 
-/// The bytes of `text`, which `latin1` made, with ASCII added: one per character.
-fn latin1_bytes(text: &str) -> Vec<u8> {
-    text.chars()
-        .map(|char| u8::try_from(u32::from(char)).unwrap_or(b'?'))
-        .collect()
+impl Side {
+    fn action(self) -> LineAction {
+        match self {
+            Side::Unstaged { .. } => LineAction::Stage,
+            Side::Staged => LineAction::Unstage,
+        }
+    }
+
+    /// `file`'s patch of these changes, as bytes.
+    async fn read_bytes(self, repo: &Repo, file: &FileInput) -> Result<Vec<u8>> {
+        match self {
+            Side::Unstaged { untracked } => {
+                get_unstaged_file_patch_bytes(repo, file, untracked).await
+            }
+            Side::Staged => get_staged_file_patch_bytes(repo, file).await,
+        }
+    }
+
+    /// `file`'s patch of these changes once lines of them moved, as text.
+    async fn read_text(self, repo: &Repo, file: &FileInput) -> Result<String> {
+        match self {
+            // In the index once lines of it are staged, an untracked file is compared to that.
+            Side::Unstaged { .. } => get_unstaged_file_patch(repo, file, false).await,
+            Side::Staged => get_staged_file_patch(repo, file).await,
+        }
+    }
 }
 
-/// Applies the patch that stages or unstages the lines picked from the patch named `version`,
-/// built from the file's patch as git has it now, `read_bytes`: as one write, so no other one
-/// changes the index in between. The patch is read as bytes, which go back to git as they came,
-/// also for a file that isn't UTF-8: one whose lines don't survive being read as it, as the user's
-/// were; it's named as the UI got it, as text. Resolves to the patch read once they're applied,
-/// as text (`read_text`), which saves the UI asking for it.
-async fn apply_lines<B, BF, T, TF>(
+/// Applies the patch that stages or unstages the lines picked from `file`'s patch named `version`,
+/// on `side`, built from that patch as git has it now: as one write, so no other one changes the
+/// index in between. The patch is read as bytes, which go back to git as they came, also for a
+/// file that isn't UTF-8; it's named as the UI got it, as text. Resolves to the patch read once
+/// they're applied, as text, which saves the UI asking for it.
+async fn apply_lines(
     repo: &Repo,
-    version: &str,
+    file: &FileInput,
+    side: Side,
+    version: &PatchVersion,
     selection: &LineSelection,
-    action: LineAction,
-    read_bytes: B,
-    read_text: T,
-) -> Result<String>
-where
-    B: FnOnce() -> BF,
-    BF: Future<Output = Result<Vec<u8>>>,
-    T: FnOnce() -> TF,
-    TF: Future<Output = Result<String>>,
-{
+) -> Result<String> {
+    let action = side.action();
     let verb = action.verb();
     repo.exclusive(|run| async move {
-        let patch = read_bytes().await?;
-        if patch_version(&String::from_utf8_lossy(&patch)) != version {
+        let patch = side.read_bytes(repo, file).await?;
+        if PatchVersion::of(&String::from_utf8_lossy(&patch)) != *version {
             return Err(Error::PatchChanged { action: verb });
         }
-        let Some(lines) = lines_patch(&latin1(&patch), selection, action)? else {
+        let Some(lines) = lines_patch(&patch, selection, action)? else {
             return Err(Error::LinesNotStageable(format!(
                 "None of the selected lines are changes to be {verb}."
             )));
@@ -247,7 +247,7 @@ where
             .run_bytes_with(
                 args,
                 RunOptions::default()
-                    .stdin(latin1_bytes(&lines))
+                    .stdin(lines)
                     // Unchanged lines have to match the index's exactly, whatever
                     // `apply.ignoreWhitespace` says: they're checked to be the ones the lines were
                     // picked among.
@@ -264,7 +264,7 @@ where
             }
             return Err(error);
         }
-        read_text().await
+        side.read_text(repo, file).await
     })
     .await
 }
@@ -312,7 +312,7 @@ mod tests {
             repo,
             &file(path, orig_path),
             untracked,
-            &patch_version(shown),
+            &PatchVersion::of(shown),
             &selection,
         )
         .await
@@ -330,7 +330,7 @@ mod tests {
         unstage_lines(
             repo,
             &file(path, orig_path),
-            &patch_version(shown),
+            &PatchVersion::of(shown),
             &selection,
         )
         .await
