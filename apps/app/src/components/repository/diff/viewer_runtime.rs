@@ -19,7 +19,7 @@ use gitto_ui::diff::diff_metadata::{
 };
 use gitto_ui::diff::patch_files::{FitError, fit_to_patch, has_matching_ends};
 
-use super::highlight::DiffHighlights;
+use super::highlight::{DiffHighlights, changed_words, side_syntax};
 use crate::data::QueryError;
 
 /// How long a diff waits for its highlighting before it's shown without, until it's
@@ -238,9 +238,25 @@ impl ViewerRuntime {
             runtime.highlights.push(entry);
             return highlights;
         }
-        let computed = Arc::clone(diff);
+        // The sides are parsed at once, and the changed words worked out meanwhile, each a task
+        // of the executor's: a modified file's two sides are two whole files, which parsing one
+        // after the other would take twice as long to color. Dropped, the tasks not yet started
+        // never are.
+        let syntax = |side, cx: &mut App| {
+            let diff = Arc::clone(diff);
+            cx.background_spawn(async move { side_syntax(&diff, side) })
+        };
+        let deletions = syntax(Side::Deletions, cx);
+        let additions = syntax(Side::Additions, cx);
+        let changed = cx.background_spawn({
+            let diff = Arc::clone(diff);
+            async move { changed_words(&diff) }
+        });
         let highlights = cx
-            .background_spawn(async move { Arc::new(DiffHighlights::compute(&computed)) })
+            .background_spawn(async move {
+                let (deletions, additions, changed) = futures::join!(deletions, additions, changed);
+                Arc::new(DiffHighlights::of_parts(deletions, additions, changed))
+            })
             .shared();
         if let Some(key) = &diff.cache_key {
             let runtime = Self::global(cx);
@@ -463,6 +479,25 @@ mod tests {
     }
 
     // parsed
+
+    #[gpui_kit::test]
+    async fn highlights_both_sides_and_the_changed_words_as_tasks_of_their_own(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let diff = Arc::new(
+            parse_patch_files(
+                "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-let a = 1;\n+let total = 2;\n",
+                Some("test"),
+            )
+            .remove(0),
+        );
+        let highlights = cx.update(|cx| ViewerRuntime::highlight(&diff, cx)).await;
+        // As worked out one part after the other.
+        assert_eq!(*highlights, DiffHighlights::compute(&diff));
+        assert!(!highlights.syntax(Side::Deletions, 0).is_empty());
+        assert!(!highlights.syntax(Side::Additions, 0).is_empty());
+        assert!(!highlights.changed(Side::Additions, 0).is_empty());
+    }
 
     #[test]
     fn keeps_a_patch_parsed_lately_so_it_isnt_parsed_again() {
