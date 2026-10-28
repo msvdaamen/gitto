@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use gitto_git::features::history::schema::{CommitRef, CommitRefKind};
+use gitto_git::features::remote::remote_name::remote_of;
 use gitto_git::features::worktree::schema::Worktree;
 use indexmap::IndexMap;
 
@@ -94,7 +95,16 @@ pub fn checkouts(worktrees: &[Worktree]) -> Checkouts {
 /// checked-out branch, other local branches, the other worktrees checked out at the commit with no
 /// branch (`others`), remote-only branches and tags. A branch checked out in another worktree
 /// says which.
-pub fn to_ref_labels(refs: &[CommitRef], sha: &str, others: &Checkouts) -> Vec<RefLabel> {
+///
+/// A remote branch is on the longest of the `remotes` its name starts with, as a remote's name can
+/// have a slash in it; one on none of them, say of a remote that's gone, is taken to be on the
+/// part of its name before the first slash.
+pub fn to_ref_labels<S: AsRef<str>>(
+    refs: &[CommitRef],
+    sha: &str,
+    others: &Checkouts,
+    remotes: &[S],
+) -> Vec<RefLabel> {
     let detached = others.detached.get(sha).map_or(&[][..], Vec::as_slice);
     if refs.is_empty() && detached.is_empty() {
         return Vec::new();
@@ -128,7 +138,10 @@ pub fn to_ref_labels(refs: &[CommitRef], sha: &str, others: &Checkouts) -> Vec<R
 
     for r in refs.iter().filter(|r| r.kind == CommitRefKind::Remote) {
         // `origin/feature/login` is branch `feature/login` on remote `origin`.
-        let split = r.name.split_once('/');
+        let split = match remote_of(remotes, &r.name) {
+            Some(remote) => Some((remote, &r.name[remote.len() + 1..])),
+            None => r.name.split_once('/'),
+        };
         let remotes: Vec<String> = split
             .map(|(remote, _)| vec![remote.to_owned()])
             .unwrap_or_default();
@@ -305,7 +318,7 @@ mod tests {
     }
 
     fn labels(refs: &[CommitRef]) -> Vec<RefLabel> {
-        to_ref_labels(refs, "", &Checkouts::default())
+        to_ref_labels(refs, "", &Checkouts::default(), &["origin", "upstream"])
     }
 
     fn at(name: &str) -> WorktreeAt {
@@ -371,6 +384,30 @@ mod tests {
         }
 
         #[test]
+        fn splits_a_remote_branch_at_the_longest_remote_with_a_slash_in_its_name() {
+            let refs = [
+                local("main"),
+                local("stream/main"),
+                remote("up/stream/main"),
+            ];
+            assert_eq!(
+                to_ref_labels(&refs, "", &Checkouts::default(), &["up", "up/stream"]),
+                [
+                    branch("main", "refs/heads/main", true, &["up/stream"], false),
+                    branch("stream/main", "refs/heads/stream/main", true, &[], false),
+                ]
+            );
+        }
+
+        #[test]
+        fn splits_a_remote_branch_of_a_remote_thats_gone_at_its_first_slash() {
+            assert_eq!(
+                labels(&[local("main"), remote("old/main")]),
+                [branch("main", "refs/heads/main", true, &["old"], false)]
+            );
+        }
+
+        #[test]
         fn keeps_the_whole_name_of_a_remote_ref_without_a_remote_prefix() {
             assert_eq!(
                 labels(&[remote("backup")]),
@@ -426,6 +463,7 @@ mod tests {
                 &[current("main"), local("feature"), remote("origin/feature")],
                 "e5",
                 &others,
+                &["origin"],
             );
             let [main, feature, check] = &labels[..] else {
                 panic!("three labels: {labels:?}")
@@ -440,10 +478,10 @@ mod tests {
             );
             assert_eq!(check, &RefLabel::Worktree(at("repo-check")));
             assert_eq!(
-                to_ref_labels(&[], "a1", &others),
+                to_ref_labels(&[], "a1", &others, &["origin"]),
                 [RefLabel::Worktree(at("repo-old"))]
             );
-            assert_eq!(to_ref_labels(&[], "b2", &others), []);
+            assert_eq!(to_ref_labels(&[], "b2", &others, &["origin"]), []);
         }
 
         #[test]
@@ -461,7 +499,12 @@ mod tests {
 
         #[test]
         fn matches_and_describes_them() {
-            let labels = to_ref_labels(&[current("main"), local("feature")], "e5", &others());
+            let labels = to_ref_labels(
+                &[current("main"), local("feature")],
+                "e5",
+                &others(),
+                &["origin"],
+            );
             let [_, feature, check] = &labels[..] else {
                 panic!("three labels: {labels:?}")
             };

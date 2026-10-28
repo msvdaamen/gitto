@@ -225,13 +225,14 @@ fn history_graph(
 /// Turns a repository's commits and stashes, plus the uncommitted changes if there are any, into
 /// history table rows, each with its row of the history graph, which is laid out for them: the
 /// uncommitted changes are based on `head`. The commits' labels say where the other worktrees are
-/// checked out (`others`).
-pub fn to_history_rows(
+/// checked out (`others`), and which of the `remotes` their remote branches are on.
+pub fn to_history_rows<S: AsRef<str>>(
     repository_id: &RepositoryId,
     entries: &[HistoryEntry<'_>],
     has_changes: bool,
     head: Option<&str>,
     others: &Checkouts,
+    remotes: &[S],
 ) -> Vec<HistoryRow> {
     let mut graph = history_graph(entries, has_changes, head).into_iter();
     let mut rows = Vec::with_capacity(entries.len() + usize::from(has_changes));
@@ -242,9 +243,13 @@ pub fn to_history_rows(
         }));
     }
     rows.extend(entries.iter().map(|entry| match entry {
-        HistoryEntry::Commit(commit) => {
-            HistoryRow::Commit(to_commit_row(repository_id, commit, graph.next(), others))
-        }
+        HistoryEntry::Commit(commit) => HistoryRow::Commit(to_commit_row(
+            repository_id,
+            commit,
+            graph.next(),
+            others,
+            remotes,
+        )),
         HistoryEntry::Stash(stash) => {
             HistoryRow::Stash(to_stash_row(repository_id, stash, graph.next()))
         }
@@ -262,12 +267,14 @@ fn to_stash_row(repository_id: &RepositoryId, stash: &Stash, graph: Option<Graph
     }
 }
 
-/// A commit's row; its labels say where the other worktrees are checked out (`others`).
-pub fn to_commit_row(
+/// A commit's row; its labels say where the other worktrees are checked out (`others`), and which
+/// of the `remotes` its remote branches are on.
+pub fn to_commit_row<S: AsRef<str>>(
     repository_id: &RepositoryId,
     commit: &Commit,
     graph: Option<GraphRow>,
     others: &Checkouts,
+    remotes: &[S],
 ) -> CommitRow {
     CommitRow {
         id: commit.sha.clone(),
@@ -280,7 +287,7 @@ pub fn to_commit_row(
         initials: initials(&commit.author_name),
         avatar_color: avatar_color(&commit.author_email),
         committed_at: commit.committed_at,
-        labels: to_ref_labels(&commit.refs, &commit.sha, others),
+        labels: to_ref_labels(&commit.refs, &commit.sha, others, remotes),
     }
 }
 
@@ -419,6 +426,7 @@ mod tests {
                 true,
                 Some("c"),
                 &Checkouts::default(),
+                &["origin"],
             );
             let ids: Vec<RowId> = rows.iter().map(HistoryRow::id).collect();
             assert_eq!(
@@ -450,7 +458,13 @@ mod tests {
             body: "Details".into(),
             ..commit("1a2b3c4d5e", &[], 1000)
         };
-        let row = to_commit_row(&repository, &commit, None, &Checkouts::default());
+        let row = to_commit_row(
+            &repository,
+            &commit,
+            None,
+            &Checkouts::default(),
+            &["origin"],
+        );
         assert_eq!(row.short_sha, "1a2b3c4");
         assert_eq!(row.initials, "AL");
         assert_eq!(row.description.as_deref(), Some("Details"));
