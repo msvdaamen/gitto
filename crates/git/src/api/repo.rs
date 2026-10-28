@@ -128,250 +128,275 @@ macro_rules! methods {
     };
 }
 
-methods! {
-    // Status and what's in the working tree.
+/// Calls the macro `$callback` with the list of [`GitRepo`]'s methods, each a `fn name(repo,
+/// args…) -> T { body }`, as `methods!` takes it: for another crate to write what it needs of
+/// each from the same list, e.g. the app's `RepositoryGit`, rather than a list of its own. The
+/// types are named as `input` and the features export them, so the caller imports each by the
+/// same name.
+#[macro_export]
+macro_rules! for_each_repo_method {
+    ($callback:ident) => {
+        $callback! {
+            // Status and what's in the working tree.
 
-    /// The uncommitted changes, or that they're unchanged since the version `since`.
-    fn status(repo, since: Option<String>) -> StatusReply {
-        get_status_since(repo, since.as_deref()).await
-    }
+            /// The uncommitted changes, or that they're unchanged since the version `since`.
+            fn status(repo, since: Option<String>) -> StatusReply {
+                get_status_since(repo, since.as_deref()).await
+            }
 
-    /// The file at `path` in the working tree, as the editor shows it.
-    fn working_tree_file(repo, path: String) -> WorkingTreeFile {
-        read_working_tree_file(repo, &path).await
-    }
+            /// The file at `path` in the working tree, as the editor shows it.
+            fn working_tree_file(repo, path: String) -> WorkingTreeFile {
+                read_working_tree_file(repo, &path).await
+            }
 
-    /// Saves `contents` to the file at `path`, if it's still as `expected` says; its new version.
-    fn save_working_tree_file(
-        repo,
-        path: String,
-        contents: String,
-        expected: SaveExpectation,
-    ) -> String {
-        save_working_tree_file(repo, &path, &contents, &expected).await
-    }
+            /// Saves `contents` to the file at `path`, if it's still as `expected` says; its new
+            /// version.
+            fn save_working_tree_file(
+                repo,
+                path: String,
+                contents: String,
+                expected: SaveExpectation,
+            ) -> String {
+                save_working_tree_file(repo, &path, &contents, &expected).await
+            }
 
-    // Staging.
+            // Staging.
 
-    fn stage(repo, paths: Paths) -> () {
-        stage(repo, &paths).await
-    }
+            fn stage(repo, paths: Paths) -> () {
+                stage(repo, &paths).await
+            }
 
-    fn stage_all(repo) -> () {
-        stage_all(repo).await
-    }
+            fn stage_all(repo) -> () {
+                stage_all(repo).await
+            }
 
-    fn unstage(repo, paths: Paths) -> () {
-        unstage(repo, &paths).await
-    }
+            fn unstage(repo, paths: Paths) -> () {
+                unstage(repo, &paths).await
+            }
 
-    fn unstage_all(repo) -> () {
-        unstage_all(repo).await
-    }
+            fn unstage_all(repo) -> () {
+                unstage_all(repo).await
+            }
 
-    /// Stages the lines `selection` picks in `file`'s version `version`; the file's new version.
-    fn stage_lines(
-        repo,
-        file: FileInput,
-        untracked: bool,
-        version: String,
-        selection: LineSelection,
-    ) -> String {
-        stage_lines(repo, &file, untracked, &version, &selection).await
-    }
+            /// Stages the lines `selection` picks in `file`'s version `version`; the file's new
+            /// version.
+            fn stage_lines(
+                repo,
+                file: FileInput,
+                untracked: bool,
+                version: String,
+                selection: LineSelection,
+            ) -> String {
+                stage_lines(repo, &file, untracked, &version, &selection).await
+            }
 
-    /// Unstages the lines `selection` picks in `file`'s version `version`; its new version.
-    fn unstage_lines(repo, file: FileInput, version: String, selection: LineSelection) -> String {
-        unstage_lines(repo, &file, &version, &selection).await
-    }
+            /// Unstages the lines `selection` picks in `file`'s version `version`; its new version.
+            fn unstage_lines(
+                repo,
+                file: FileInput,
+                version: String,
+                selection: LineSelection,
+            ) -> String {
+                unstage_lines(repo, &file, &version, &selection).await
+            }
 
-    fn discard(repo, file: Discarded) -> () {
-        discard(repo, &file).await
-    }
+            fn discard(repo, file: Discarded) -> () {
+                discard(repo, &file).await
+            }
 
-    fn discard_all(repo) -> () {
-        discard_all(repo).await
-    }
+            fn discard_all(repo) -> () {
+                discard_all(repo).await
+            }
 
-    // Diffs.
+            // Diffs.
 
-    fn staged_file_patch(repo, file: FileInput) -> String {
-        get_staged_file_patch(repo, &file).await
-    }
+            fn staged_file_patch(repo, file: FileInput) -> String {
+                get_staged_file_patch(repo, &file).await
+            }
 
-    fn unstaged_file_patch(repo, file: FileInput, untracked: bool) -> String {
-        get_unstaged_file_patch(repo, &file, untracked).await
-    }
+            fn unstaged_file_patch(repo, file: FileInput, untracked: bool) -> String {
+                get_unstaged_file_patch(repo, &file, untracked).await
+            }
 
-    fn commit_files(repo, sha: Sha) -> Vec<ChangedFile> {
-        get_commit_files(repo, &sha).await
-    }
+            fn commit_files(repo, sha: Sha) -> Vec<ChangedFile> {
+                get_commit_files(repo, &sha).await
+            }
 
-    fn commit_file_patch(repo, sha: Sha, file: FileInput) -> String {
-        get_commit_file_patch(repo, &sha, &file).await
-    }
+            fn commit_file_patch(repo, sha: Sha, file: FileInput) -> String {
+                get_commit_file_patch(repo, &sha, &file).await
+            }
 
-    fn blob(repo, oid: FullSha) -> String {
-        get_blob(repo, &oid).await
-    }
+            fn blob(repo, oid: FullSha) -> String {
+                get_blob(repo, &oid).await
+            }
 
-    // History and commits.
+            // History and commits.
 
-    fn log(repo, page: Page) -> Vec<Commit> {
-        get_log(repo, page).await
-    }
+            fn log(repo, page: Page) -> Vec<Commit> {
+                get_log(repo, page).await
+            }
 
-    fn commit(repo, sha: Sha) -> Commit {
-        get_commit(repo, &sha).await
-    }
+            fn commit(repo, sha: Sha) -> Commit {
+                get_commit(repo, &sha).await
+            }
 
-    fn commit_message(repo, sha: Sha) -> String {
-        get_commit_message(repo, &sha).await
-    }
+            fn commit_message(repo, sha: Sha) -> String {
+                get_commit_message(repo, &sha).await
+            }
 
-    /// The remote branch the commit `sha` has been pushed to, if any.
-    fn pushed_to(repo, sha: Sha) -> Option<String> {
-        get_pushed_to(repo, &sha).await
-    }
+            /// The remote branch the commit `sha` has been pushed to, if any.
+            fn pushed_to(repo, sha: Sha) -> Option<String> {
+                get_pushed_to(repo, &sha).await
+            }
 
-    /// Commits what's staged with `message`, or amends the commit `amend` with it.
-    fn create_commit(repo, message: Message, amend: Option<FullSha>) -> () {
-        create_commit(repo, &message, amend.as_ref()).await
-    }
+            /// Commits what's staged with `message`, or amends the commit `amend` with it.
+            fn create_commit(repo, message: Message, amend: Option<FullSha>) -> () {
+                create_commit(repo, &message, amend.as_ref()).await
+            }
 
-    /// Gives the commit `sha` the message `message`; its new SHA.
-    fn reword_commit(repo, sha: FullSha, message: Message) -> String {
-        reword_commit(repo, &sha, &message).await
-    }
+            /// Gives the commit `sha` the message `message`; its new SHA.
+            fn reword_commit(repo, sha: FullSha, message: Message) -> String {
+                reword_commit(repo, &sha, &message).await
+            }
 
-    fn overview(repo) -> Overview {
-        get_overview(repo).await
-    }
+            fn overview(repo) -> Overview {
+                get_overview(repo).await
+            }
 
-    // Branches and refs.
+            // Branches and refs.
 
-    fn refs(repo) -> Vec<Ref> {
-        list_refs(repo).await
-    }
+            fn refs(repo) -> Vec<Ref> {
+                list_refs(repo).await
+            }
 
-    /// Creates the branch `name` from `from`, or from `HEAD`, and switches to it.
-    fn create_branch(repo, name: BranchName, from: Option<BranchRef>) -> () {
-        create_branch(repo, &name, from.as_ref()).await
-    }
+            /// Creates the branch `name` from `from`, or from `HEAD`, and switches to it.
+            fn create_branch(repo, name: BranchName, from: Option<BranchRef>) -> () {
+                create_branch(repo, &name, from.as_ref()).await
+            }
 
-    fn switch_branch(repo, reference: BranchRef) -> () {
-        switch_branch(repo, &reference).await
-    }
+            fn switch_branch(repo, reference: BranchRef) -> () {
+                switch_branch(repo, &reference).await
+            }
 
-    fn delete_branch(repo, reference: BranchRef) -> () {
-        delete_branch(repo, &reference).await
-    }
+            fn delete_branch(repo, reference: BranchRef) -> () {
+                delete_branch(repo, &reference).await
+            }
 
-    /// Merges `reference` into the branch `into`.
-    fn merge_branch(repo, reference: BranchRef, into: NonEmpty) -> MergeOutcome {
-        merge_branch(repo, &reference, &into).await
-    }
+            /// Merges `reference` into the branch `into`.
+            fn merge_branch(repo, reference: BranchRef, into: NonEmpty) -> MergeOutcome {
+                merge_branch(repo, &reference, &into).await
+            }
 
-    /// Rebases the branch `branch` onto `reference`.
-    fn rebase_branch(repo, reference: BranchRef, branch: NonEmpty) -> RebaseOutcome {
-        rebase_branch(repo, &reference, &branch).await
-    }
+            /// Rebases the branch `branch` onto `reference`.
+            fn rebase_branch(repo, reference: BranchRef, branch: NonEmpty) -> RebaseOutcome {
+                rebase_branch(repo, &reference, &branch).await
+            }
 
-    // Remotes.
+            // Remotes.
 
-    fn remotes(repo) -> Vec<String> {
-        list_remotes(&repo.git()).await
-    }
+            fn remotes(repo) -> Vec<String> {
+                list_remotes(&repo.git()).await
+            }
 
-    fn fetch(repo) -> () {
-        fetch_all(repo).await
-    }
+            fn fetch(repo) -> () {
+                fetch_all(repo).await
+            }
 
-    /// Pulls the checked-out branch's upstream, or, with `branch`, that local branch's (see
-    /// [`super::pull`]).
-    fn pull(repo, branch: Option<NonEmpty>) -> () {
-        super::pull(repo, branch.as_ref()).await
-    }
+            /// Pulls the checked-out branch's upstream, or, with `branch`, that local branch's
+            /// (see `api::pull`).
+            fn pull(repo, branch: Option<NonEmpty>) -> () {
+                super::pull(repo, branch.as_ref()).await
+            }
 
-    fn push_target(repo) -> PushTarget {
-        get_push_target(repo).await
-    }
+            fn push_target(repo) -> PushTarget {
+                get_push_target(repo).await
+            }
 
-    fn push(repo, force: bool) -> () {
-        push(repo, force).await
-    }
+            fn push(repo, force: bool) -> () {
+                push(repo, force).await
+            }
 
-    // A merge or rebase under way, and its conflicts.
+            // A merge or rebase under way, and its conflicts.
 
-    fn operation(repo) -> Option<Operation> {
-        get_operation(repo).await
-    }
+            fn operation(repo) -> Option<Operation> {
+                get_operation(repo).await
+            }
 
-    fn continue_operation(repo, kind: OperationKind) -> () {
-        continue_operation(repo, kind).await
-    }
+            fn continue_operation(repo, kind: OperationKind) -> () {
+                continue_operation(repo, kind).await
+            }
 
-    fn abort_operation(repo, kind: OperationKind) -> () {
-        abort_operation(repo, kind).await
-    }
+            fn abort_operation(repo, kind: OperationKind) -> () {
+                abort_operation(repo, kind).await
+            }
 
-    fn conflict(repo, path: NonEmpty) -> Conflict {
-        get_conflict(repo, &path).await
-    }
+            fn conflict(repo, path: NonEmpty) -> Conflict {
+                get_conflict(repo, &path).await
+            }
 
-    /// Resolves the conflict at `path` by keeping `side`, as `shown` showed it.
-    fn keep_side(repo, path: NonEmpty, side: Side, shown: ShownConflict) -> () {
-        keep_side(repo, &path, side, &shown).await
-    }
+            /// Resolves the conflict at `path` by keeping `side`, as `shown` showed it.
+            fn keep_side(repo, path: NonEmpty, side: Side, shown: ShownConflict) -> () {
+                keep_side(repo, &path, side, &shown).await
+            }
 
-    /// Marks the conflict at `path` resolved, if the file's still at `version`.
-    fn mark_resolved(repo, path: NonEmpty, version: Option<String>, with_markers: bool) -> () {
-        mark_resolved(repo, &path, version.as_deref(), with_markers).await
-    }
+            /// Marks the conflict at `path` resolved, if the file's still at `version`.
+            fn mark_resolved(
+                repo,
+                path: NonEmpty,
+                version: Option<String>,
+                with_markers: bool,
+            ) -> () {
+                mark_resolved(repo, &path, version.as_deref(), with_markers).await
+            }
 
-    // Stashes.
+            // Stashes.
 
-    fn stashes(repo) -> Vec<Stash> {
-        list_stashes(repo).await
-    }
+            fn stashes(repo) -> Vec<Stash> {
+                list_stashes(repo).await
+            }
 
-    fn stash_files(repo, sha: FullSha) -> Vec<ChangedFile> {
-        get_stash_files(repo, &sha).await
-    }
+            fn stash_files(repo, sha: FullSha) -> Vec<ChangedFile> {
+                get_stash_files(repo, &sha).await
+            }
 
-    fn stash_file_patch(repo, sha: FullSha, file: FileInput) -> String {
-        get_stash_file_patch(repo, &sha, &file).await
-    }
+            fn stash_file_patch(repo, sha: FullSha, file: FileInput) -> String {
+                get_stash_file_patch(repo, &sha, &file).await
+            }
 
-    fn push_stash(repo) -> () {
-        push_stash(repo).await
-    }
+            fn push_stash(repo) -> () {
+                push_stash(repo).await
+            }
 
-    fn pop_stash(repo, sha: FullSha) -> () {
-        pop_stash(repo, &sha).await
-    }
+            fn pop_stash(repo, sha: FullSha) -> () {
+                pop_stash(repo, &sha).await
+            }
 
-    fn drop_stash(repo, sha: FullSha) -> () {
-        drop_stash(repo, &sha).await
-    }
+            fn drop_stash(repo, sha: FullSha) -> () {
+                drop_stash(repo, &sha).await
+            }
 
-    // Worktrees.
+            // Worktrees.
 
-    fn worktrees(repo) -> Vec<Worktree> {
-        list_worktrees(repo).await
-    }
+            fn worktrees(repo) -> Vec<Worktree> {
+                list_worktrees(repo).await
+            }
 
-    /// Checks `branch` out in a new worktree at `folder`, as the new branch `new_branch` if given.
-    fn add_worktree(
-        repo,
-        folder: Folder,
-        branch: BranchRef,
-        new_branch: Option<BranchName>,
-    ) -> () {
-        add_worktree(repo, &folder, &branch, new_branch.as_ref()).await
-    }
+            /// Checks `branch` out in a new worktree at `folder`, as the new branch `new_branch`
+            /// if given.
+            fn add_worktree(
+                repo,
+                folder: Folder,
+                branch: BranchRef,
+                new_branch: Option<BranchName>,
+            ) -> () {
+                add_worktree(repo, &folder, &branch, new_branch.as_ref()).await
+            }
 
-    fn remove_worktree(repo, path: String) -> () {
-        remove_worktree(repo, &path).await
-    }
+            fn remove_worktree(repo, path: String) -> () {
+                remove_worktree(repo, &path).await
+            }
+        }
+    };
 }
+
+for_each_repo_method!(methods);

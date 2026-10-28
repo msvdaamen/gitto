@@ -31,12 +31,13 @@ use super::error::DataError;
 /// What git does, and answers, as a future that runs on the background executor.
 pub type GitTask<T> = BoxFuture<'static, Result<T, DataError>>;
 
-/// Writes [`RepositoryGit`], with a method for each `fn`: each `GitRepo`'s method of that name,
-/// which [`GitRepository`] runs, and which fails by default, for tests.
+/// Writes [`RepositoryGit`], with a method for each of `GitRepo`'s, as gitto-git lists them
+/// (`for_each_repo_method!`, whose bodies are gitto-git's own): which [`GitRepository`] runs, and
+/// which fails by default, for tests.
 macro_rules! repository_git {
     ($(
         $(#[$attr:meta])*
-        fn $name:ident($($arg:ident: $ty:ty),* $(,)?) -> $out:ty;
+        fn $name:ident($repo:ident $(, $arg:ident: $ty:ty)* $(,)?) -> $out:ty $body:block
     )*) => {
         /// A repository's git (see the module's doc).
         pub trait RepositoryGit {
@@ -89,66 +90,7 @@ impl GitRepository {
     }
 }
 
-repository_git! {
-    fn status(since: Option<String>) -> StatusReply;
-    fn working_tree_file(path: String) -> WorkingTreeFile;
-    fn save_working_tree_file(
-        path: String,
-        contents: String,
-        expected: SaveExpectation,
-    ) -> String;
-    fn stage(paths: Paths) -> ();
-    fn stage_all() -> ();
-    fn unstage(paths: Paths) -> ();
-    fn unstage_all() -> ();
-    fn stage_lines(
-        file: FileInput,
-        untracked: bool,
-        version: String,
-        selection: LineSelection,
-    ) -> String;
-    fn unstage_lines(file: FileInput, version: String, selection: LineSelection) -> String;
-    fn discard(file: Discarded) -> ();
-    fn discard_all() -> ();
-    fn staged_file_patch(file: FileInput) -> String;
-    fn unstaged_file_patch(file: FileInput, untracked: bool) -> String;
-    fn commit_files(sha: Sha) -> Vec<ChangedFile>;
-    fn commit_file_patch(sha: Sha, file: FileInput) -> String;
-    fn blob(oid: FullSha) -> String;
-    fn log(page: Page) -> Vec<Commit>;
-    fn commit(sha: Sha) -> Commit;
-    fn commit_message(sha: Sha) -> String;
-    fn pushed_to(sha: Sha) -> Option<String>;
-    fn create_commit(message: Message, amend: Option<FullSha>) -> ();
-    fn reword_commit(sha: FullSha, message: Message) -> String;
-    fn overview() -> Overview;
-    fn refs() -> Vec<Ref>;
-    fn create_branch(name: BranchName, from: Option<BranchRef>) -> ();
-    fn switch_branch(reference: BranchRef) -> ();
-    fn delete_branch(reference: BranchRef) -> ();
-    fn merge_branch(reference: BranchRef, into: NonEmpty) -> MergeOutcome;
-    fn rebase_branch(reference: BranchRef, branch: NonEmpty) -> RebaseOutcome;
-    fn remotes() -> Vec<String>;
-    fn fetch() -> ();
-    fn pull(branch: Option<NonEmpty>) -> ();
-    fn push_target() -> PushTarget;
-    fn push(force: bool) -> ();
-    fn operation() -> Option<Operation>;
-    fn continue_operation(kind: OperationKind) -> ();
-    fn abort_operation(kind: OperationKind) -> ();
-    fn conflict(path: NonEmpty) -> Conflict;
-    fn keep_side(path: NonEmpty, side: Side, shown: ShownConflict) -> ();
-    fn mark_resolved(path: NonEmpty, version: Option<String>, with_markers: bool) -> ();
-    fn stashes() -> Vec<Stash>;
-    fn stash_files(sha: FullSha) -> Vec<ChangedFile>;
-    fn stash_file_patch(sha: FullSha, file: FileInput) -> String;
-    fn push_stash() -> ();
-    fn pop_stash(sha: FullSha) -> ();
-    fn drop_stash(sha: FullSha) -> ();
-    fn worktrees() -> Vec<Worktree>;
-    fn add_worktree(folder: Folder, branch: BranchRef, new_branch: Option<BranchName>) -> ();
-    fn remove_worktree(path: String) -> ();
-}
+gitto_git::for_each_repo_method!(repository_git);
 
 /// A test's git that does nothing: every method fails.
 pub struct NoGit;
