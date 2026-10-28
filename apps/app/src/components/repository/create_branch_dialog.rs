@@ -132,7 +132,7 @@ impl CreateBranchDialog {
                     BranchForm::new(summary, &name)
                         // `run` does nothing while a switch or a merge is running.
                         .disabled(disabled)
-                        .on_submit(move |_, window, cx| {
+                        .on_submit(move |window, cx| {
                             let _ = submit.update(cx, |this, cx| this.submit(window, cx));
                         }),
                 )

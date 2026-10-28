@@ -169,11 +169,11 @@ impl Render for BranchButton {
                 div()
                     .w(rems(18.67))
                     .when_some(shown, |this, (summary, name)| {
-                        this.child(BranchForm::new(summary, &name).on_submit(
-                            move |_, window, cx| {
+                        this.child(
+                            BranchForm::new(summary, &name).on_submit(move |window, cx| {
                                 let _ = form.update(cx, |this, cx| this.submit(window, cx));
-                            },
-                        ))
+                            }),
+                        )
                     })
             })
             .into_any_element()
