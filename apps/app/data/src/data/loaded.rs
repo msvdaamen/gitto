@@ -20,6 +20,11 @@ pub struct Loaded<T> {
     /// Whether it's to be loaded again when it's next shown: the repository changed while it
     /// wasn't, say.
     stale: bool,
+    /// Counts the times it went out of date, so a load that started before the last of them
+    /// doesn't settle as up to date.
+    revision: u64,
+    /// The `revision` the load under way, or the last one, started at.
+    load_revision: u64,
     /// How many times it's been loaded or set, equal data or not.
     updates: u64,
 }
@@ -32,6 +37,8 @@ impl<T> Default for Loaded<T> {
             load: None,
             waiters: Vec::new(),
             stale: false,
+            revision: 0,
+            load_revision: 0,
             updates: 0,
         }
     }
@@ -98,9 +105,17 @@ impl<T> Loaded<T> {
         self.data.is_some() || self.error.is_some() || self.load.is_some()
     }
 
-    /// Marks it out of date, to be loaded again when it's next shown.
+    /// Whether it's to be loaded now, for a view about to show it: it's out of date, and not
+    /// loading, or loading what was there before it went out of date.
+    pub fn wants_load(&self) -> bool {
+        self.is_stale() && (self.load.is_none() || self.revision != self.load_revision)
+    }
+
+    /// Marks it out of date, to be loaded again when it's next shown; a load under way, which
+    /// started before, settles out of date too.
     pub fn mark_stale(&mut self) {
         self.stale = true;
+        self.revision += 1;
     }
 
     /// Sets its data, as if it had loaded it; whether that changed it.
@@ -121,6 +136,7 @@ impl<T> Loaded<T> {
     /// Starts `load`, the task loading it, in place of (and so cancelling) one under way.
     pub(crate) fn start(&mut self, load: Task<()>) {
         self.load = Some(load);
+        self.load_revision = self.revision;
     }
 
     /// A receiver told once the load under way is done; `None` if none is.
@@ -132,7 +148,8 @@ impl<T> Loaded<T> {
     }
 
     /// Takes what a load brought: the data (kept as it was if it's equal), or why it failed (with
-    /// what was there before kept).
+    /// what was there before kept). Data a load read before it went out of date stays out of
+    /// date.
     pub(crate) fn settle(&mut self, result: Result<T, DataError>)
     where
         T: PartialEq,
@@ -140,6 +157,7 @@ impl<T> Loaded<T> {
         match result {
             Ok(data) => {
                 self.set(data);
+                self.stale = self.revision != self.load_revision;
             }
             Err(error) => self.error = Some(error),
         }
@@ -168,6 +186,7 @@ pub trait LoadState {
     fn is_stale(&self) -> bool;
     fn is_fetching(&self) -> bool;
     fn is_used(&self) -> bool;
+    fn wants_load(&self) -> bool;
 }
 
 impl<T> LoadState for Loaded<T> {
@@ -181,6 +200,10 @@ impl<T> LoadState for Loaded<T> {
 
     fn is_used(&self) -> bool {
         Loaded::is_used(self)
+    }
+
+    fn wants_load(&self) -> bool {
+        Loaded::wants_load(self)
     }
 }
 
@@ -207,6 +230,23 @@ mod tests {
         assert!(!loaded.is_success());
         loaded.settle(Ok(1));
         assert!(loaded.error().is_none());
+    }
+
+    #[test]
+    fn stays_out_of_date_when_a_load_started_before_it_went_so() {
+        let mut loaded = Loaded::with(1);
+        loaded.start(Task::ready(()));
+        assert!(!loaded.wants_load());
+        loaded.mark_stale();
+        // Loading what was there before: it's to be loaded again.
+        assert!(loaded.wants_load());
+        loaded.settle(Ok(2));
+        assert_eq!(loaded.data(), Some(&2));
+        assert!(loaded.is_stale());
+
+        loaded.start(Task::ready(()));
+        loaded.settle(Ok(3));
+        assert!(!loaded.is_stale());
     }
 
     #[test]

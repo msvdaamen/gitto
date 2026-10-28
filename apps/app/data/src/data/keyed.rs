@@ -81,10 +81,19 @@ impl<K: Clone + Eq + Hash, T> Keyed<K, T> {
     }
 
     /// The keys of the entries `pick` picks that something holds, to reload; those nothing holds
-    /// are dropped, as they're out of date.
+    /// are dropped, as they're out of date, or marked so if they're loading (a patch loaded ahead,
+    /// say), so what they load is loaded again once they're asked for.
     pub fn held_and_drop_rest(&mut self, pick: impl Fn(&K) -> bool) -> Vec<K> {
-        self.entries
-            .retain(|key, entry| !pick(key) || entry.is_held() || entry.loaded.is_fetching());
+        self.entries.retain(|key, entry| {
+            if !pick(key) || entry.is_held() {
+                return true;
+            }
+            if entry.loaded.is_fetching() {
+                entry.loaded.mark_stale();
+                return true;
+            }
+            false
+        });
         self.entries
             .iter()
             .filter(|(key, entry)| pick(key) && entry.is_held())

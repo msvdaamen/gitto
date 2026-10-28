@@ -307,7 +307,7 @@ impl Repository {
     /// Loads `field` unless it's loaded, or loading: for a view about to show it.
     pub fn show(&mut self, field: Field, cx: &mut Context<Self>) {
         let state = self.state(field);
-        if state.is_stale() && !state.is_fetching() {
+        if state.wants_load() {
             drop(self.reload(field, cx));
         }
     }
@@ -566,7 +566,7 @@ impl Repository {
     pub fn hold_pushed_to(&mut self, sha: &str, cx: &mut Context<Self>) -> Hold {
         let hold = self.pushed_to.hold(sha.to_owned());
         let loaded = self.pushed_to.entry(sha.to_owned());
-        if loaded.is_stale() && !loaded.is_fetching() {
+        if loaded.wants_load() {
             drop(self.load_pushed_to(sha.to_owned(), cx));
         }
         hold
@@ -606,7 +606,7 @@ impl Repository {
         let key = (source.clone(), file.path.clone());
         let hold = self.patches.hold(key.clone());
         let loaded = self.patches.entry(key);
-        if loaded.is_stale() && !loaded.is_fetching() {
+        if loaded.wants_load() {
             drop(self.load_patch(source.clone(), file.clone(), cx));
         }
         hold
@@ -623,10 +623,10 @@ impl Repository {
         let key = (source.clone(), file.path.clone());
         let wait = {
             let loaded = self.patches.entry(key.clone());
-            if loaded.is_fetching() {
-                loaded.wait()
-            } else if loaded.is_stale() {
+            if loaded.wants_load() {
                 self.load_patch(source.clone(), file.clone(), cx)
+            } else if loaded.is_fetching() {
+                loaded.wait()
             } else {
                 None
             }
@@ -693,7 +693,7 @@ impl Repository {
     pub fn hold_conflict(&mut self, path: &str, cx: &mut Context<Self>) -> Hold {
         let hold = self.conflicts.hold(path.to_owned());
         let loaded = self.conflicts.entry(path.to_owned());
-        if loaded.is_stale() && !loaded.is_fetching() {
+        if loaded.wants_load() {
             drop(self.load_conflict(path.to_owned(), cx));
         }
         hold
@@ -718,10 +718,10 @@ impl Repository {
         let path = path.to_owned();
         let wait = {
             let loaded = self.conflicts.entry(path.clone());
-            if loaded.is_fetching() {
-                loaded.wait()
-            } else if loaded.is_stale() {
+            if loaded.wants_load() {
                 self.load_conflict(path.clone(), cx)
+            } else if loaded.is_fetching() {
+                loaded.wait()
             } else {
                 None
             }
@@ -1553,6 +1553,44 @@ mod tests {
         // As it started loading, and as it was done.
         assert_eq!(*said.borrow(), [Part::Refs, Part::Refs]);
         assert_eq!(notified.get(), 0);
+    }
+
+    #[gpui_kit::test]
+    fn loads_again_a_patch_read_before_the_uncommitted_changes_changed(cx: &mut TestAppContext) {
+        /// Answers each patch asked for when the test says.
+        #[derive(Default)]
+        struct Patches(RefCell<Vec<oneshot::Sender<String>>>);
+
+        impl RepositoryGit for Patches {
+            fn unstaged_file_patch(&self, _: FileInput, _: bool) -> GitTask<String> {
+                let (answer, answered) = oneshot::channel();
+                self.0.borrow_mut().push(answer);
+                async move { Ok(answered.await.unwrap()) }.boxed()
+            }
+        }
+
+        let git = Rc::new(Patches::default());
+        let shared: Rc<dyn RepositoryGit> = git.clone();
+        let repository = cx.new(|_| Repository::new(repository_id(), shared));
+        let file = uncommitted().changes.unstaged[0].clone();
+        // Loaded ahead, as the pointer rests on the file.
+        drop(repository.update(cx, |repository, cx| {
+            repository.fetch_patch(&DiffSource::Unstaged, &file, cx)
+        }));
+        cx.run_until_parked();
+        // The file changes as it loads.
+        repository.update(cx, |repository, cx| drop(repository.reload_uncommitted(cx)));
+        git.0.borrow_mut().remove(0).send("before".into()).unwrap();
+        cx.run_until_parked();
+
+        let opened = repository.update(cx, |repository, cx| {
+            repository.fetch_patch(&DiffSource::Unstaged, &file, cx)
+        });
+        cx.run_until_parked();
+        git.0.borrow_mut().remove(0).send("after".into()).unwrap();
+        cx.run_until_parked();
+        let patch = opened.now_or_never().unwrap().unwrap();
+        assert_eq!(&*patch.patch, "after");
     }
 
     // `git/queries/history.test.ts`.
