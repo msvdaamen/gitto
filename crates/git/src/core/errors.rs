@@ -474,6 +474,13 @@ pub enum Error {
     #[error("The last commit changed before it could be amended, so nothing was amended.")]
     HeadMoved,
 
+    /// A later page of the log was asked for, but the pages before it, read without git sorting
+    /// them, had a commit above one of its children: skipping on from them would repeat commits
+    /// and leave others out. The log is sorted from now on, so it's for reading again from its
+    /// first page.
+    #[error("The history's order changed as more of it was read. Reload it.")]
+    LogOrderChanged,
+
     /// A file too large to be read whole, e.g. to show more of it around its changes.
     #[error("This file is {} MB, too large to show more of it.", to_fixed(megabytes(*.bytes), 1))]
     FileTooLarge { bytes: u64 },
@@ -638,6 +645,7 @@ impl Error {
             | Error::ChangesStashed(_)
             | Error::RepositoryChanged(_)
             | Error::HeadMoved
+            | Error::LogOrderChanged
             | Error::FileChangedOnDisk { .. }
             | Error::PatchChanged { .. }
             | Error::ConflictChanged { .. }
