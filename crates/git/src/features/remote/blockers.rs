@@ -124,7 +124,8 @@ impl fmt::Display for PullBlocker {
             PullBlocker::InUse { branch, using } => write!(
                 f,
                 "{branch} {}, so it wasn't pulled. {}",
-                using.state, using.fix
+                using.state(),
+                using.fix()
             ),
             PullBlocker::Diverged { branch, upstream } => write!(
                 f,

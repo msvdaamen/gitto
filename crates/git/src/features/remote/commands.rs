@@ -1,12 +1,15 @@
 //! Listing remotes, fetching them, and pulling a branch's upstream into it.
 
-use std::future::Future;
+use std::future::{Future, poll_fn};
 use std::path::{Path, PathBuf};
+use std::pin::pin;
+
+use futures::channel::oneshot;
 
 use super::blockers::PullBlocker;
 use super::config::{PullFf, PullRebase, RemoteConfig, read_config};
-use super::progress::{in_progress, interruption, progress};
-use crate::core::errors::{Error, GitError, GitErrorKind, Result};
+use super::progress::{interruption, progress};
+use crate::core::errors::{Error, GitError, GitErrorKind, Integration, Result};
 use crate::core::git_dirs::git_dirs;
 use crate::core::repo::{GitCommand, Repo, current_branch, ref_exists, resolve_ref, succeeds};
 use crate::core::runner::{RunOptions, spawn_detached};
@@ -31,28 +34,41 @@ pub async fn fetch_all(repo: &Repo) -> Result<()> {
     git_fetch(&repo.fetcher(), &["--all", "--prune", "--no-progress"], &[]).await
 }
 
-/// Fetches `remotes` and prunes, as `fetch_all` does, once a pull has merged: not waited for, so
-/// a remote that's slow to answer doesn't hold up the pull, and one that can't be reached doesn't
-/// fail it (that's for the Fetch button to explain; it's traced). The watcher picks up the
-/// branches it changes.
-fn fetch_after_pull(repo: &Repo, remotes: Vec<String>) {
+/// Fetches `remotes` and prunes, as `fetch_all` does, once a pull has merged: in the background,
+/// so a remote that's slow to answer doesn't hold up the pull, and one that can't be reached
+/// doesn't fail it (that's for the Fetch button to explain; it's traced). Waits only until the
+/// fetch has its place in line, which it takes as it's first polled, so a fetch started after the
+/// pull returns waits for this one. The watcher picks up the branches it changes.
+async fn fetch_after_pull(repo: &Repo, remotes: Vec<String>) {
     if remotes.is_empty() {
         return;
     }
     let mut args = vec!["--multiple", "--prune", "--no-progress", "--"];
     args.extend(remotes.iter().map(String::as_str));
-    // Queued (as fetches are) before the pull returns, so a fetch started after it waits for this.
     let fetch = git_fetch(&repo.fetcher(), &args, &[]);
+    let (in_line, queued) = oneshot::channel();
     spawn_detached(async move {
-        if let Err(error) = fetch.await {
+        let mut fetch = pin!(fetch);
+        let mut in_line = Some(in_line);
+        let fetched = poll_fn(|cx| {
+            let polled = fetch.as_mut().poll(cx);
+            if let Some(in_line) = in_line.take() {
+                let _ = in_line.send(());
+            }
+            polled
+        })
+        .await;
+        if let Err(error) = fetched {
             trace(format_args!("fetch after pull failed: {error}"));
         }
     });
+    // Only dropped unsent with the task, as the executor stops.
+    let _ = queued.await;
 }
 
 /// `git fetch` with `args`, through `run` (`repo.fetcher()`, or the command of `repo.fetching`),
-/// with the `-c` settings `settings`. The command is asked for now (taking its place in line, for
-/// `fetcher()`), and run when the future is polled.
+/// with the `-c` settings `settings`. The command is asked for now, and takes its place in line
+/// (for `fetcher()`) and runs when the future is first polled.
 fn git_fetch(
     run: &GitCommand,
     args: &[&str],
@@ -106,7 +122,7 @@ pub async fn pull(repo: &Repo) -> Result<()> {
 
     let integrated = integrate(repo, &git_dir, &branch, &upstream, fetched).await;
     // Also after a merge that stopped at conflicts, say: the remotes are fetched all the same.
-    fetch_after_pull(repo, settings.remotes_to_fetch(&upstream.remote));
+    fetch_after_pull(repo, settings.remotes_to_fetch(&upstream.remote)).await;
     integrated
 }
 
@@ -134,7 +150,7 @@ pub async fn pull_branch(repo: &Repo, branch: &str) -> Result<()> {
     fetch_upstream(repo, &git_dir, &upstream, false).await?;
 
     let forwarded = fast_forward(repo, branch, &upstream).await;
-    fetch_after_pull(repo, config.remotes_to_fetch(&upstream.remote));
+    fetch_after_pull(repo, config.remotes_to_fetch(&upstream.remote)).await;
     forwarded
 }
 
@@ -270,9 +286,22 @@ async fn integrate(
         };
         // Git won't merge or rebase over a merge, rebase or conflicts that were already there,
         // and says so; those aren't the pull's to explain.
-        if !in_progress(&before)
-            && let Some(interrupted) =
-                interruption(&run, &git_dir, args.as_slice(), &tracking, failure.as_ref()).await?
+        let integration = if args.first().is_some_and(|arg| arg == "rebase") {
+            Integration::Rebase
+        } else {
+            Integration::Merge
+        };
+        let merged = args.last().map_or("", String::as_str);
+        if !before.in_progress()
+            && let Some(interrupted) = interruption(
+                &run,
+                &git_dir,
+                integration,
+                merged,
+                &tracking,
+                failure.as_ref(),
+            )
+            .await?
         {
             return Err(interrupted);
         }

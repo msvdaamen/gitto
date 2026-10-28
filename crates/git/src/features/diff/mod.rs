@@ -4,6 +4,6 @@
 
 pub mod commands;
 pub mod limits;
-pub mod parse;
+pub(crate) mod parse;
 pub mod schema;
 pub mod working_tree;

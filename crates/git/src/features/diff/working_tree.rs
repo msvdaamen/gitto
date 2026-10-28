@@ -4,7 +4,6 @@
 use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::fs::{File, Metadata, OpenOptions};
-use std::future::Future;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -87,7 +86,7 @@ fn is_not_found(error: &io::Error) -> bool {
 /// as file systems on macOS and Windows don't tell `.GIT` from it.
 fn is_plain(path: &str) -> bool {
     path.split(['\\', '/'])
-        .all(|part| part != ".." && part.to_lowercase() != ".git")
+        .all(|part| part != ".." && !part.eq_ignore_ascii_case(".git"))
 }
 
 /// A file in the working tree as it was read, and `version`, which names its bytes.
@@ -144,7 +143,7 @@ const SCAN_CHUNK_BYTES: u64 = 1024 * 1024;
 pub async fn scan_working_tree_file(
     repo: &Repo,
     path: &str,
-    mut on_chunk: impl FnMut(&[u8]),
+    on_chunk: impl FnMut(&[u8]),
     max_bytes: u64,
 ) -> Result<Option<String>> {
     let Some(resolved) = resolve_file(repo, path).await? else {
@@ -166,19 +165,36 @@ pub async fn scan_working_tree_file(
             bytes: metadata.len(),
         });
     }
-    let mut file = async_fs::File::from(file);
+    let file = async_fs::File::from(file);
+    let buffer = vec![0; SCAN_CHUNK_BYTES.min(metadata.len().max(1)) as usize];
+    scan(file, buffer, max_bytes, on_chunk).await.map(Some)
+}
+
+/// Reads `reader` to its end into `buffer` a piece at a time, as `scan_working_tree_file` does;
+/// fails with `Error::FileTooLarge` once it's read more than `max_bytes`, which a file still being
+/// written can have grown past since its size was checked.
+async fn scan(
+    mut reader: impl futures_lite::AsyncRead + Unpin,
+    mut buffer: Vec<u8>,
+    max_bytes: u64,
+    mut on_chunk: impl FnMut(&[u8]),
+) -> Result<String> {
     let mut hash = sha1_smol::Sha1::new();
-    let mut buffer = vec![0; SCAN_CHUNK_BYTES.min(metadata.len().max(1)) as usize];
+    let mut total: u64 = 0;
     loop {
-        let read = file.read(&mut buffer).await?;
+        let read = reader.read(&mut buffer).await?;
         if read == 0 {
             break;
+        }
+        total += read as u64;
+        if total > max_bytes {
+            return Err(Error::FileTooLarge { bytes: total });
         }
         let chunk = &buffer[..read];
         hash.update(chunk);
         on_chunk(chunk);
     }
-    Ok(Some(hash.digest().to_string()))
+    Ok(hash.digest().to_string())
 }
 
 /// Where the file at `path` is on disk (see `resolve_working_tree_path`); `None` if none is.
@@ -238,14 +254,28 @@ async fn read_file(resolved: PathBuf, path: &str, max_bytes: u64) -> Result<File
                 bytes: metadata.len(),
             });
         }
-        let mut bytes = Vec::with_capacity(metadata.len() as usize);
-        file.read_to_end(&mut bytes)?;
         Ok(FileBytes {
-            bytes,
+            bytes: read_at_most(&mut file, metadata.len(), max_bytes)?,
             mode: mode_of(&metadata),
         })
     })
     .await
+}
+
+/// All of `reader`, which is `len` bytes long as far as is known; fails with `Error::FileTooLarge`
+/// past `max_bytes`, which a file still being written can have grown past since its size was
+/// checked.
+fn read_at_most(reader: impl Read, len: u64, max_bytes: u64) -> Result<Vec<u8>> {
+    let mut bytes = Vec::with_capacity(len.min(max_bytes) as usize);
+    reader
+        .take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(Error::FileTooLarge {
+            bytes: bytes.len() as u64,
+        });
+    }
+    Ok(bytes)
 }
 
 /// Names `bytes`, the contents of a file in the working tree: what a save checks it still has.
@@ -253,9 +283,12 @@ pub fn version_of(bytes: &[u8]) -> String {
     sha1_smol::Sha1::from(bytes).hexdigest()
 }
 
-/// Saves to the same file, one after the other: a later one checks the file an earlier one wrote.
+/// Saves to the repository's files, one after the other: a later one checks the file an earlier
+/// one wrote. One line for all of them, rather than one per file: a file has more than one path
+/// (`a.txt`, `./a.txt`, or through a linked folder), and which file a path leads to is only known
+/// once it's been looked up on disk, which a later save could do sooner than an earlier one.
 #[derive(Default)]
-struct Saves(WriteQueue<String>);
+struct Saves(WriteQueue<()>);
 
 /// The version a file was at when Gitto last saved over it, and the one it saved.
 #[derive(Debug, Clone)]
@@ -314,62 +347,66 @@ pub struct SaveExpectation {
 /// it, then put in its place, so it's never found half written. A link isn't saved through, nor is
 /// a file that isn't UTF-8. Resolves to the saved file's version.
 ///
-/// Its place in line, after the saves to the same path asked for before it, is taken when it's
-/// called, not when it's first polled.
-pub fn save_working_tree_file(
+/// Its place in line, after the saves to the repository's files before it, is taken when it's
+/// first polled (see `Saves`).
+pub async fn save_working_tree_file(
     repo: &Repo,
     path: &str,
     contents: &str,
     expected: &SaveExpectation,
-) -> impl Future<Output = Result<String>> + Send + 'static + use<> {
+) -> Result<String> {
     let saved_versions = repo.keep::<SavedVersions>();
     let saves = repo.keep::<Saves>();
     let repo = repo.clone();
     let path = path.to_owned();
     let contents = contents.to_owned();
     let expected = expected.clone();
-    // In the order they're asked for, by the path they're asked for.
-    saves.0.run(path.clone(), async move {
-        // Not following a link at its end, which is refused below.
-        let target = confine(&repo, &path, false).await?;
-        let before = read_existing(target.clone(), &path).await?;
-        let mut text = String::new();
-        if let Some(before) = &before {
-            text = decode_utf8(&before.bytes)?;
-            let version = version_of(&before.bytes);
-            let saved = saved_versions.get(&target);
-            let unchanged = version == expected.version
-                || saved.is_some_and(|saved| saved.from == expected.version && saved.to == version);
-            if !expected.overwrite && !unchanged {
+    // One after the other, in the order they're first polled (see `Saves`).
+    saves
+        .0
+        .run((), async move {
+            // Not following a link at its end, which is refused below.
+            let target = confine(&repo, &path, false).await?;
+            let before = read_existing(target.clone(), &path).await?;
+            let mut text = String::new();
+            if let Some(before) = &before {
+                text = decode_utf8(&before.bytes)?;
+                let version = version_of(&before.bytes);
+                let saved = saved_versions.get(&target);
+                let unchanged = version == expected.version
+                    || saved
+                        .is_some_and(|saved| saved.from == expected.version && saved.to == version);
+                if !expected.overwrite && !unchanged {
+                    return Err(Error::FileChangedOnDisk {
+                        path,
+                        how: DiskChange::Changed,
+                    });
+                }
+            } else if !expected.overwrite {
                 return Err(Error::FileChangedOnDisk {
                     path,
-                    how: DiskChange::Changed,
+                    how: DiskChange::Deleted,
                 });
             }
-        } else if !expected.overwrite {
-            return Err(Error::FileChangedOnDisk {
-                path,
-                how: DiskChange::Deleted,
-            });
-        }
-        let bytes = if has_crlf_line_ends(&text) {
-            to_crlf(&contents)
-        } else {
-            contents
-        }
-        .into_bytes();
-        let written = version_of(&bytes);
-        let mode = before.and_then(|before| before.mode);
-        replace_file(target.clone(), bytes, mode).await?;
-        saved_versions.set(
-            target,
-            SavedVersion {
-                from: expected.version,
-                to: written.clone(),
-            },
-        );
-        Ok(written)
-    })
+            let bytes = if has_crlf_line_ends(&text) {
+                to_crlf(&contents)
+            } else {
+                contents
+            }
+            .into_bytes();
+            let written = version_of(&bytes);
+            let mode = before.and_then(|before| before.mode);
+            replace_file(target.clone(), bytes, mode).await?;
+            saved_versions.set(
+                target,
+                SavedVersion {
+                    from: expected.version,
+                    to: written.clone(),
+                },
+            );
+            Ok(written)
+        })
+        .await
 }
 
 /// The bytes and permissions of the file at `target` (the path `path` leads to); `None` if
@@ -461,4 +498,33 @@ pub fn decode_utf8(bytes: &[u8]) -> Result<String> {
     std::str::from_utf8(bytes)
         .map(str::to_owned)
         .map_err(|_| Error::NotUtf8)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_no_more_than_the_limit_of_a_file_thats_grown() {
+        // A file that was 3 bytes when its size was checked.
+        let grown = b"abcdef".as_slice();
+        assert_eq!(read_at_most(grown, 3, 6).unwrap(), b"abcdef");
+        let error = read_at_most(grown, 3, 5).unwrap_err();
+        assert!(
+            matches!(error, Error::FileTooLarge { bytes: 6 }),
+            "{error:?}"
+        );
+
+        smol::block_on(async {
+            let mut chunks = Vec::new();
+            let scanned = scan(grown, vec![0; 2], 6, |chunk| chunks.push(chunk.to_vec())).await;
+            assert_eq!(scanned.unwrap(), version_of(grown));
+            assert_eq!(chunks, [b"ab", b"cd", b"ef"]);
+            let error = scan(grown, vec![0; 2], 5, |_| {}).await.unwrap_err();
+            assert!(
+                matches!(error, Error::FileTooLarge { bytes: 6 }),
+                "{error:?}"
+            );
+        });
+    }
 }

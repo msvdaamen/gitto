@@ -37,3 +37,20 @@ pub struct Ref {
     pub ahead: u64,
     pub behind: u64,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spells_each_kind_as_its_json_does() {
+        use RefKind::*;
+        // Doesn't compile once there's another kind, until it's listed here too.
+        let _listed = |kind| match kind {
+            Local | Remote | Tag => (),
+        };
+        for kind in [Local, Remote, Tag] {
+            assert_eq!(serde_json::to_value(kind).unwrap(), kind.as_str());
+        }
+    }
+}
