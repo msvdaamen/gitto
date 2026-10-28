@@ -34,7 +34,7 @@ use super::file_editing::{EditSession, FileVersion};
 use super::highlight::DiffHighlights;
 use super::patch_viewer::{
     DrawnLine, FONT_REMS, ROW_REMS, Scroll, code_char_width, scroll_list, scroll_list_to,
-    widest_line,
+    widest_line, width_check,
 };
 use super::viewer_actions::{
     CONFLICT_VIEWER, ScrollDown, ScrollLeft, ScrollPageDown, ScrollPageUp, ScrollRight,
@@ -786,21 +786,15 @@ impl ConflictViewer {
         let font_size = rems(FONT_REMS).to_pixels(rem);
         let row_height = rems(ROW_REMS).to_pixels(rem);
         let char_width = self.char_width(font_size, window, cx);
+        // Until the list is laid out (the first frame) the window's width stands in for its own,
+        // which puts what's aligned to the rows' right out of sight: drawn again once the list's
+        // width is known, or has changed (see `width_check`).
         let viewport_width = self
             .scroll
             .0
             .borrow()
             .last_item_size
             .map_or(window.viewport_size().width, |size| size.item.width);
-        // Until the list is laid out (the first frame) the window's width stands in for its own,
-        // which puts what's aligned to the rows' right out of sight: drawn again once the list's
-        // width is known (after this frame's drawn), or has changed.
-        cx.defer_in(window, move |this, _, cx| {
-            let measured = this.scroll.0.borrow().last_item_size;
-            if measured.is_some_and(|size| size.item.width != viewport_width) {
-                cx.notify();
-            }
-        });
         let highest = state.ours().len().max(state.theirs().len()).max(1);
         let digits = highest.ilog10() as f32 + 1.;
         let gutter_width = char_width * digits + rem * 1.2;
@@ -816,6 +810,7 @@ impl ConflictViewer {
             current: self.current,
             enabled: self.is_resolvable(),
             row_width,
+            viewport_width,
             gutter_width,
             row_height,
             font_size,
@@ -863,6 +858,8 @@ struct Frame {
     /// Whether the conflicts' buttons are on.
     enabled: bool,
     row_width: Pixels,
+    /// How wide the list was taken to be.
+    viewport_width: Pixels,
     gutter_width: Pixels,
     row_height: Pixels,
     font_size: Pixels,
@@ -956,6 +953,11 @@ impl Render for ConflictViewer {
                     .size_full(),
                 )
                 .child(Scrollbar::new(&self.scroll))
+                .child(width_check(
+                    &self.scroll,
+                    frame.viewport_width,
+                    cx.entity().downgrade(),
+                ))
             })
             // The focus ring, inside: the view fills its panel.
             .when(focused, |this| {
@@ -1374,6 +1376,41 @@ mod tests {
         assert_eq!(top(cx), px(0.));
         opened.press("down", cx);
         assert!(top(cx) > px(0.) && top(cx) < page);
+    }
+
+    #[gpui_kit::test]
+    fn is_drawn_again_once_its_list_is_resized_and_only_then(cx: &mut TestAppContext) {
+        let _dir = init(cx);
+        let opened = open_conflict(&two_conflicts(), cx);
+        let viewer = viewer(&opened, cx);
+        let notified = Rc::new(std::cell::Cell::new(0));
+        let _observing = cx.update(|cx| {
+            let notified = Rc::clone(&notified);
+            cx.observe(&viewer, move |_, _| notified.set(notified.get() + 1))
+        });
+        let drawn = |cx: &mut TestAppContext| {
+            opened.has("conflicts", cx);
+            cx.run_until_parked();
+        };
+        drawn(cx);
+        let settled = notified.get();
+        drawn(cx);
+        assert_eq!(notified.get(), settled);
+
+        cx.simulate_window_resize(opened.window, gpui_kit::size(px(700.), px(800.)));
+        drawn(cx);
+        assert!(notified.get() > settled);
+        let width = cx.update(|cx| {
+            let viewer = viewer.read(cx);
+            let list = viewer
+                .scroll
+                .0
+                .borrow()
+                .last_item_size
+                .map(|size| size.item.width);
+            list.expect("laid out")
+        });
+        assert!(width < px(800.));
     }
 
     #[gpui_kit::test]

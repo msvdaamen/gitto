@@ -1204,10 +1204,10 @@ impl Render for PatchViewer {
 /// drawn; if it isn't (before its first layout, or once it's resized), `viewer` draws them again,
 /// once this frame's drawn (it can't be told to while it is). After the list, so it's laid out
 /// by then: nothing's put off but when its width changed.
-fn width_check(
+pub(super) fn width_check<V: 'static>(
     scroll: &UniformListScrollHandle,
     drawn_for: Pixels,
-    viewer: WeakEntity<PatchViewer>,
+    viewer: WeakEntity<V>,
 ) -> impl IntoElement {
     let scroll = scroll.clone();
     canvas(
