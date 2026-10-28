@@ -54,6 +54,77 @@ const MAX_DRAWN_LINE: usize = 4000;
 /// The spaces a tab is drawn as.
 const TAB_WIDTH: usize = 4;
 
+/// Rows kept in sight above and below a line the view scrolls to, as moving through a list does.
+const REVEAL_MARGIN_ROWS: f32 = 3.;
+
+/// Which way the keyboard scrolls the view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Scroll {
+    LineDown,
+    LineUp,
+    Left,
+    Right,
+    PageDown,
+    PageUp,
+    Top,
+    Bottom,
+}
+
+/// How far a list is scrolled, and how large its view and its contents were when it was last laid
+/// out. The one place the viewer reads GPUI's scroll state by hand, as its handle scrolls to a row,
+/// but neither by an amount nor with rows in sight on both sides of it.
+struct ListScroll {
+    /// How far it's scrolled down and right.
+    top: Pixels,
+    left: Pixels,
+    /// `None` until it's laid out.
+    view: Option<Size<Pixels>>,
+    contents_width: Pixels,
+}
+
+impl ListScroll {
+    fn of(scroll: &UniformListScrollHandle) -> Self {
+        let state = scroll.0.borrow();
+        let offset = state.base_handle.offset();
+        ListScroll {
+            top: -offset.y,
+            left: -offset.x,
+            view: state.last_item_size.map(|size| size.item),
+            contents_width: state
+                .last_item_size
+                .map_or(px(0.), |size| size.contents.width),
+        }
+    }
+
+    /// The view's height, or nothing before it's laid out.
+    fn height(&self) -> Pixels {
+        self.view.map_or(px(0.), |view| view.height)
+    }
+}
+
+/// Scrolls the list `scroll` tracks to `left` and `top`, as they are: within its contents.
+fn scroll_list_to(scroll: &UniformListScrollHandle, left: Pixels, top: Pixels) {
+    scroll.0.borrow().base_handle.set_offset(point(-left, -top));
+}
+
+/// Scrolls the list `scroll` tracks, of `rows` rows `row_height` high, by `down` pixels (up, if
+/// negative) and `across` right, within its contents.
+fn scroll_list_by(
+    scroll: &UniformListScrollHandle,
+    rows: usize,
+    down: Pixels,
+    across: Pixels,
+    row_height: Pixels,
+) {
+    let at = ListScroll::of(scroll);
+    let width = at.view.map_or(px(0.), |view| view.width);
+    let bottom = (row_height * rows as f32 - at.height()).max(px(0.));
+    let right = (at.contents_width - width).max(px(0.));
+    let top = (at.top + down).clamp(px(0.), bottom);
+    let left = (at.left + across).clamp(px(0.), right);
+    scroll_list_to(scroll, left, top);
+}
+
 /// What the viewer tells the file's view.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PatchViewerEvent {
@@ -365,11 +436,7 @@ impl PatchViewer {
     ) {
         // Another file starts at its top.
         if self.shown.is_some() && !same_file {
-            self.scroll
-                .0
-                .borrow()
-                .base_handle
-                .set_offset(point(px(0.), px(0.)));
+            scroll_list_to(&self.scroll, px(0.), px(0.));
         }
         if same_file
             && let Some(shown) = &self.shown
@@ -588,12 +655,10 @@ impl PatchViewer {
 
     /// The rows in view.
     fn viewport(&self, row_height: Pixels) -> Viewport {
-        let state = self.scroll.0.borrow();
-        let top = -state.base_handle.offset().y;
-        let height = state.last_item_size.map_or(px(0.), |size| size.item.height);
+        let at = ListScroll::of(&self.scroll);
         Viewport {
-            top: top / row_height,
-            rows: height / row_height,
+            top: at.top / row_height,
+            rows: at.height() / row_height,
         }
     }
 
@@ -603,54 +668,34 @@ impl PatchViewer {
         let Some(row) = self.layout.row_of(line.line_number, line.side) else {
             return;
         };
-        let state = self.scroll.0.borrow();
-        let Some(size) = state.last_item_size else {
+        let at = ListScroll::of(&self.scroll);
+        let Some(view) = at.view else {
             // Not laid out yet: from the top.
-            drop(state);
-            self.scroll
-                .scroll_to_item_with_offset(row, gpui_kit::ScrollStrategy::Top, 3);
+            self.scroll.scroll_to_item_with_offset(
+                row,
+                ScrollStrategy::Top,
+                REVEAL_MARGIN_ROWS as usize,
+            );
             return;
         };
         let row_height = self.row_height;
         let top = row_height * row as f32;
-        let margin = row_height * 3.;
-        let offset = state.base_handle.offset();
-        let scroll_top = -offset.y;
-        let target = if top - margin < scroll_top {
+        let margin = row_height * REVEAL_MARGIN_ROWS;
+        let target = if top - margin < at.top {
             Some((top - margin).max(px(0.)))
-        } else if top + row_height + margin > scroll_top + size.item.height {
-            Some(top + row_height + margin - size.item.height)
+        } else if top + row_height + margin > at.top + view.height {
+            Some(top + row_height + margin - view.height)
         } else {
             None
         };
-        if let Some(y) = target {
-            state.base_handle.set_offset(point(offset.x, -y));
+        if let Some(top) = target {
+            scroll_list_to(&self.scroll, at.left, top);
         }
     }
 
-    /// Scrolls by `delta` pixels down (or up, if negative) and `across` right.
-    fn scroll_by(&self, delta: Pixels, across: Pixels, row_height: Pixels) {
-        let state = self.scroll.0.borrow();
-        let handle = &state.base_handle;
-        let offset = handle.offset();
-        let height = state.last_item_size.map_or(px(0.), |size| size.item.height);
-        let width = state.last_item_size.map_or(px(0.), |size| size.item.width);
-        let content = state
-            .last_item_size
-            .map_or(px(0.), |size| size.contents.width);
-        let bottom = (row_height * self.layout.rows.len() as f32 - height).max(px(0.));
-        let right = (content - width).max(px(0.));
-        let y = (-offset.y + delta).clamp(px(0.), bottom);
-        let x = (-offset.x + across).clamp(px(0.), right);
-        handle.set_offset(point(-x, -y));
-    }
-
-    fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let keystroke = &event.keystroke;
-        let modifiers = &keystroke.modifiers;
-        if modifiers.alt || modifiers.control || modifiers.platform {
-            return;
-        }
+    /// Picks lines with `key` (see the viewer's actions, `viewer_actions`), if they can be picked
+    /// now; whether it did.
+    fn pick(&mut self, key: PickerKey, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let row_height = rems(ROW_REMS).to_pixels(window.rem_size());
         let picker_key = match keystroke.key.as_str() {
             "down" => Some(PickerKey::Down {
@@ -818,12 +863,9 @@ impl PatchViewer {
         let row_height = rems(ROW_REMS).to_pixels(rem);
         self.row_height = row_height;
         let char_width = self.char_width(font_size, window, cx);
-        let viewport_width = self
-            .scroll
-            .0
-            .borrow()
-            .last_item_size
-            .map_or(window.viewport_size().width, |size| size.item.width);
+        let viewport_width = ListScroll::of(&self.scroll)
+            .view
+            .map_or(window.viewport_size().width, |view| view.width);
         let digits = highest.max(1).ilog10() as f32 + 1.;
         let gutter_width = char_width * digits + rem * 1.2;
         let code_padding = rem * 1.2;
