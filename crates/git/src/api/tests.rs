@@ -50,7 +50,7 @@ fn api_error(error: ApiError) -> (&'static str, String) {
 
 /// The API over `fx`'s repositories, with the installed git.
 fn api(fx: &Fixture) -> GitApi {
-    GitApi::with(fx.repos.clone(), GitVersion::new())
+    GitApi::with(fx.repos.git_repos(), GitVersion::new())
 }
 
 /// The repository with some history (see `create_history_repo`), as `HISTORY`.
@@ -145,7 +145,7 @@ fn runs_nothing_with_a_git_gitto_doesnt_support() {
         let output = read.lock().unwrap().clone();
         async move { output }
     });
-    let outdated = GitApi::with(fx.repos.clone(), version);
+    let outdated = GitApi::with(fx.repos.git_repos(), version);
     smol::block_on(async {
         history(&fx).await;
         let ran = Arc::new(AtomicBool::new(false));
@@ -398,7 +398,7 @@ struct Locked(Arc<AtomicUsize>);
 impl RepositoryLookup for Locked {
     fn repository_path<'a>(
         &'a self,
-        _: &'a str,
+        _: &'a RepositoryId,
     ) -> BoxFuture<'a, Result<Option<PathBuf>, RepositoryListError>> {
         self.0.fetch_add(1, Ordering::SeqCst);
         let locked = std::io::Error::other("database is locked");

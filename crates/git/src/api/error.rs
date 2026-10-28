@@ -123,7 +123,7 @@ mod tests {
     fn says_what_went_wrong_with_the_errors_code() {
         assert_eq!(
             shown(Error::RepositoryNotFound {
-                repository_id: "x".into()
+                repository_id: crate::input::RepositoryId::generate()
             }),
             ("NOT_FOUND", "Repository not found.".into(), false)
         );
