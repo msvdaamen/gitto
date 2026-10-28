@@ -25,10 +25,9 @@ use crate::features::staging::commands::stage;
 use crate::features::stash::commands::pop_stash;
 use crate::features::status::commands::get_status_since;
 use crate::features::status::schema::{Head, StatusReply};
-use crate::features::version::check;
 use crate::features::watch::schema::GitDirChange;
 use crate::input::{BranchRef, BranchShortName, FullSha, Paths, RepositoryId, Sha};
-use crate::schema::Version;
+use crate::schema::ContentVersion;
 use crate::test_support::{Fixture, git, valid};
 
 /// Procedures only take UUIDv7 repository ids.
@@ -158,7 +157,7 @@ fn runs_nothing_with_a_git_gitto_doesnt_support() {
             })
         };
 
-        let install = check(outdated.version()).await;
+        let install = outdated.version().check().await;
         assert_eq!(install.version.as_deref(), Some("2.39.3"));
         assert_eq!(install.required, "2.41");
         assert!(!install.supported);
@@ -186,9 +185,9 @@ fn runs_nothing_with_a_git_gitto_doesnt_support() {
             panic!("expected a full status");
         };
         assert!(
-            matches!(&status.head, Head::Branch { name, .. } if name == "main"),
+            matches!(&status.summary.head, Head::Branch { name, .. } if name == "main"),
             "{:?}",
-            status.head
+            status.summary.head
         );
     });
 }
@@ -238,13 +237,11 @@ fn merges_a_branch_saying_what_it_did_or_why_it_didnt() {
         assert_eq!(code, "BAD_REQUEST");
         let (code, _) = api_error(merge("refs/heads/side", "").await.unwrap_err());
         assert_eq!(code, "BAD_REQUEST");
-        // Past the input's check, but not a branch: a link to the remote's default one.
+        // Past the input's check, but not a branch: a link to the remote's default one. Refused
+        // as input too, which the UI shouldn't have sent.
         assert_eq!(
             api_error(merge("refs/remotes/origin/HEAD", "main").await.unwrap_err()),
-            (
-                "PRECONDITION_FAILED",
-                "refs/remotes/origin/HEAD isn't a branch.".to_owned()
-            )
+            ("BAD_REQUEST", "Input validation failed".to_owned())
         );
     });
 }
@@ -255,7 +252,7 @@ fn skips_a_status_the_caller_already_has() {
     let api = api(&fx);
     smol::block_on(async {
         history(&fx).await;
-        let status = |since: Option<Version>| {
+        let status = |since: Option<ContentVersion>| {
             api.call("status.get", &id(HISTORY), |repo| async move {
                 get_status_since(&repo, since.as_ref()).await
             })
