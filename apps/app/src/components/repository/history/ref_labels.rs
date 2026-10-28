@@ -179,6 +179,17 @@ fn pill(color: Hsla, palette: &Palette) -> gpui_kit::Div {
         .text_color(palette.text_soft)
 }
 
+/// What tells a label apart from its row's others, for its element's id: the full ref name of a
+/// branch or a tag, `HEAD`, or a worktree's path. Not what it shows, which changes with it.
+fn label_key(label: &RefLabel) -> String {
+    match label {
+        RefLabel::Branch(branch) => branch.full_name.clone(),
+        RefLabel::Tag { name } => format!("refs/tags/{name}"),
+        RefLabel::Head => "HEAD".to_owned(),
+        RefLabel::Worktree(worktree) => worktree.path.clone(),
+    }
+}
+
 fn ref_pill(
     row: &ElementId,
     label: RefLabel,
@@ -196,10 +207,7 @@ fn ref_pill(
         .is_some_and(|branch| actions.menu_open_for.as_deref() == Some(branch.full_name.as_str()));
     let title: SharedString = label_title(&label).into();
     let name: SharedString = label.name().to_owned().into();
-    let key = match &branch {
-        Some(branch) => branch.full_name.clone(),
-        None => format!("{label:?}"),
-    };
+    let key = label_key(&label);
     let icon = |name: IconName| Icon::new(name).size(LABEL_ICON).flex_none();
     let target = label_target(&label);
     let actions = actions.clone();
@@ -363,7 +371,7 @@ impl RenderOnce for MoreCount {
 #[cfg(test)]
 mod tests {
     use gitto_git::features::history::schema::{CommitRef, CommitRefKind};
-    use gitto_ui::git::ref_labels::{Checkouts, to_ref_labels};
+    use gitto_ui::git::ref_labels::{Checkouts, WorktreeAt, to_ref_labels};
 
     use super::*;
 
@@ -434,6 +442,22 @@ mod tests {
         assert_eq!(names(""), ["main", "v1"]);
         assert_eq!(names("v1"), ["v1", "main"]);
         assert_eq!(names("nothing"), ["main", "v1"]);
+    }
+
+    #[test]
+    fn tells_labels_apart_by_their_ref_or_worktree() {
+        let labels = labels(&[
+            (CommitRefKind::Local, "main", "refs/heads/main"),
+            (CommitRefKind::Tag, "v1", "refs/tags/v1"),
+        ]);
+        let keys: Vec<String> = labels.iter().map(label_key).collect();
+        assert_eq!(keys, ["refs/heads/main", "refs/tags/v1"]);
+        assert_eq!(label_key(&RefLabel::Head), "HEAD");
+        let worktree = RefLabel::Worktree(WorktreeAt {
+            name: "side".into(),
+            path: "/work/side".into(),
+        });
+        assert_eq!(label_key(&worktree), "/work/side");
     }
 
     #[test]
