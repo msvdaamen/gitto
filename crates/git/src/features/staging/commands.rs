@@ -9,6 +9,7 @@ use super::lines::{LineAction, lines_patch};
 use super::patch_version::patch_version;
 use super::schema::LineSelection;
 use crate::core::errors::{Error, Result};
+use crate::core::records::{nul_terminated, raw_entries};
 use crate::core::repo::Repo;
 use crate::core::runner::RunOptions;
 use crate::features::conflicts::commands::refuse_conflict_markers;
@@ -41,7 +42,7 @@ pub async fn stage(repo: &Repo, paths: &[String]) -> Result<()> {
         refuse_conflict_markers(repo, &run, Some(paths)).await?;
         let mut args = vec!["add"];
         args.extend(PATHS_FROM_STDIN);
-        run.run_with(args, RunOptions::default().stdin(nul_separated(paths)))
+        run.run_with(args, RunOptions::default().stdin(nul_terminated(paths)))
             .await?;
         Ok(())
     })
@@ -52,7 +53,7 @@ pub async fn stage(repo: &Repo, paths: &[String]) -> Result<()> {
 pub async fn unstage(repo: &Repo, paths: &[String]) -> Result<()> {
     check_paths(paths)?;
     let args = unstage_args(repo.has_head().await);
-    repo.write_with(args, RunOptions::default().stdin(nul_separated(paths)))
+    repo.write_with(args, RunOptions::default().stdin(nul_terminated(paths)))
         .await?;
     Ok(())
 }
@@ -67,14 +68,6 @@ pub fn unstage_args(has_head: bool) -> Vec<&'static str> {
     };
     args.extend(PATHS_FROM_STDIN);
     args
-}
-
-/// `paths`, each ended by a NUL, for git's stdin (see `PATHS_FROM_STDIN`).
-pub fn nul_separated<S: AsRef<str>>(paths: &[S]) -> String {
-    paths
-        .iter()
-        .map(|path| format!("{}\0", path.as_ref()))
-        .collect()
 }
 
 /// Stages every change, untracked files included; conflicts too, unless markers are left (see
@@ -116,23 +109,21 @@ pub async fn unstage_all(repo: &Repo) -> Result<()> {
                 "--diff-filter=u",
             ])
             .await?;
-        // `:<mode in HEAD> <mode> <object in HEAD> <object> <status>`, then the path.
-        let fields: Vec<&[u8]> = staged.split(|&byte| byte == 0).collect();
         let mut entries = Vec::new();
-        let mut i = 0;
-        while i + 1 < fields.len() {
-            let info = fields[i].get(1..).unwrap_or_default();
-            let mut parts = info.split(|&byte| byte == b' ');
-            let mode = parts.next().unwrap_or_default();
-            let object = parts.nth(1).unwrap_or_default();
-            // A file that isn't in HEAD has mode 0 there, which takes it out of the index.
-            entries.extend_from_slice(mode);
-            entries.push(b' ');
-            entries.extend_from_slice(object);
-            entries.push(b'\t');
-            entries.extend_from_slice(fields[i + 1]);
-            entries.push(0);
-            i += 2;
+        for entry in raw_entries(&staged) {
+            let entry = entry?;
+            // As HEAD has it: a file that isn't in HEAD has mode 0 there, which takes it out of
+            // the index.
+            for part in [
+                entry.old_mode,
+                b" ",
+                entry.old_object,
+                b"\t",
+                entry.path,
+                b"\0",
+            ] {
+                entries.extend_from_slice(part);
+            }
         }
         if !entries.is_empty() {
             run.run_bytes_with(

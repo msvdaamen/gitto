@@ -6,9 +6,10 @@ use std::path::{Path, PathBuf};
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 
-use super::commands::{PATHS_FROM_STDIN, nul_separated, unstage_args};
+use super::commands::{PATHS_FROM_STDIN, unstage_args};
 use crate::core::errors::{Error, Result};
 use crate::core::git_dirs::git_dirs;
+use crate::core::records::{nul_terminated, raw_entries};
 use crate::core::repo::{GitCommand, Repo, has_conflicts, ref_exists, succeeds};
 use crate::core::runner::RunOptions;
 use crate::features::operation::commands::operation_under_way;
@@ -152,7 +153,7 @@ pub async fn discard(repo: &Repo, file: &Discarded) -> Result<()> {
         if side == DiscardSide::Staged {
             run.run_with(
                 unstage_args(has_head),
-                RunOptions::default().stdin(nul_separated(paths)),
+                RunOptions::default().stdin(nul_terminated(paths)),
             )
             .await?;
         }
@@ -181,7 +182,7 @@ pub async fn discard(repo: &Repo, file: &Discarded) -> Result<()> {
             run.run_with(
                 args,
                 RunOptions::default()
-                    .stdin(nul_separated(&kept_paths))
+                    .stdin(nul_terminated(&kept_paths))
                     .rewrites_files(),
             )
             .await?;
@@ -264,16 +265,13 @@ async fn head_entries(run: &GitCommand, paths: &[&str]) -> Result<Vec<Entry>> {
 async fn intent_to_add(run: &GitCommand, paths: &[&str]) -> Result<HashSet<String>> {
     let mut args = vec!["diff-files", "--raw", "-z", "--"];
     args.extend(paths);
-    let output = run.run(args).await?;
-    let fields: Vec<&str> = output.split('\0').collect();
+    let output = run.run_bytes(args).await?;
     let mut added = HashSet::new();
-    // `:<old mode> <new mode> <old object> <new object> <status>`, then the path.
-    let mut i = 0;
-    while i + 1 < fields.len() {
-        if fields[i].ends_with(" A") {
-            added.insert(fields[i + 1].to_owned());
+    for entry in raw_entries(&output) {
+        let entry = entry?;
+        if entry.status == b"A" {
+            added.insert(String::from_utf8_lossy(entry.path).into_owned());
         }
-        i += 2;
     }
     Ok(added)
 }

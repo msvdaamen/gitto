@@ -4,6 +4,7 @@
 
 pub mod errors;
 pub mod git_dirs;
+pub mod records;
 pub mod repo;
 pub mod runner;
 pub mod trace;
