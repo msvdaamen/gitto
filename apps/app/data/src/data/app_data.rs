@@ -1,6 +1,7 @@
 //! What the app loads that isn't a repository's: the repositories added to Gitto, the installed
 //! git, and the name the user commits with. [`AppData`] holds them, as a repository's entity holds
-//! its data (see `super::repository`), in a global; views subscribe to [`AppChanged`].
+//! its data (see `super::repository`), in a global; views subscribe to [`AppChanged`], the one way
+//! they hear of a change (it never notifies).
 //!
 //! Unlike a repository's, which only the watcher reloads, these load again when the window gets
 //! focus ([`AppData::window_focused`]), each as it needs: the list of repositories always (it's
@@ -124,7 +125,8 @@ impl AppData {
         }
     }
 
-    /// Loads, with `fetch`, what `at` finds, in place of a load under way.
+    /// Loads, with `fetch`, what `at` finds, in place of a load under way. Says it changed as it
+    /// starts loading, unless it was loading already, and as it's done.
     fn start<T: PartialEq + Send + 'static>(
         &mut self,
         part: AppPart,
@@ -133,16 +135,17 @@ impl AppData {
         cx: &mut Context<Self>,
     ) -> Option<oneshot::Receiver<()>> {
         let fetch = cx.background_spawn(fetch);
+        let was_loading = at(self).is_fetching();
         at(self).start(cx.spawn(async move |this, cx| {
             let result: Result<T, DataError> = fetch.await;
             let _ = this.update(cx, |data, cx| {
                 at(data).settle(result);
                 cx.emit(AppChanged(part));
-                cx.notify();
             });
         }));
-        cx.emit(AppChanged(part));
-        cx.notify();
+        if !was_loading {
+            cx.emit(AppChanged(part));
+        }
         at(self).wait()
     }
 

@@ -5,7 +5,9 @@
 //!
 //! A view reads the fields in `render`, and subscribes to [`Changed`] for the [`Part`]s it shows,
 //! to render again when they change, and only then: a load that brings the same data keeps it, and
-//! changes nothing. It asks for what it shows with [`Repository::show`] (and `hold_*` for what's
+//! says nothing changed but that it's done loading. That's the one way a view hears of a change:
+//! the entity never notifies, which would render again every view that read it, whatever it
+//! read of it. It asks for what it shows with [`Repository::show`] (and `hold_*` for what's
 //! loaded by key), which loads it unless it's loaded. Git runs on the background executor, through
 //! [`RepositoryGit`]; loading something again drops the load under way, which cancels it.
 //!
@@ -394,7 +396,8 @@ impl Repository {
     }
 
     /// Loads, with `fetch`, what `at` finds, in place of a load under way; a receiver told once
-    /// it's done. Says it `Changed` as it starts, and as it's done.
+    /// it's done. Says it `Changed` as it starts loading, unless it was loading already, and as
+    /// it's done.
     fn start<T: PartialEq + Send + 'static>(
         &mut self,
         part: Part,
@@ -411,15 +414,16 @@ impl Repository {
                 if let Some(loaded) = settle(repo) {
                     loaded.settle(result);
                     cx.emit(Changed(part));
-                    cx.notify();
                 }
             });
         });
         let loaded = at(self)?;
+        let was_loading = loaded.is_fetching();
         loaded.start(task);
         let wait = loaded.wait();
-        cx.emit(Changed(part));
-        cx.notify();
+        if !was_loading {
+            cx.emit(Changed(part));
+        }
         wait
     }
 
@@ -545,11 +549,9 @@ impl Repository {
                     Err(error) => repo.more.error = Some(error),
                 }
                 cx.emit(Changed(Part::More));
-                cx.notify();
             });
         }));
         cx.emit(Changed(Part::More));
-        cx.notify();
     }
 
     // What's loaded by key.
@@ -988,9 +990,9 @@ impl Repository {
         self.changed(Part::Commits, cx);
     }
 
+    /// Says `part` changed (see the module's doc).
     fn changed(&mut self, part: Part, cx: &mut Context<Self>) {
         cx.emit(Changed(part));
-        cx.notify();
     }
 
     // Changes: their state.
@@ -1525,6 +1527,32 @@ mod tests {
         repository.update(cx, |repository, cx| repository.show(Field::Overview, cx));
         cx.run_until_parked();
         assert_eq!(git.overviews.get(), 2);
+    }
+
+    #[gpui_kit::test]
+    fn says_what_changed_and_never_notifies(cx: &mut TestAppContext) {
+        let git = Rc::new(Git::default());
+        let repository = open(&git, cx);
+        let notified = Rc::new(Cell::new(0));
+        let said = Rc::new(RefCell::new(Vec::new()));
+        let _subscriptions = cx.update(|cx| {
+            let (notified, said) = (Rc::clone(&notified), Rc::clone(&said));
+            [
+                cx.observe(&repository, move |_, _| notified.set(notified.get() + 1)),
+                cx.subscribe(&repository, move |_, Changed(part), _| {
+                    said.borrow_mut().push(*part)
+                }),
+            ]
+        });
+        repository.update(cx, |repository, cx| {
+            drop(repository.reload(Field::Refs, cx));
+            // Loading again, in place of the load under way, isn't a change.
+            drop(repository.reload(Field::Refs, cx));
+        });
+        cx.run_until_parked();
+        // As it started loading, and as it was done.
+        assert_eq!(*said.borrow(), [Part::Refs, Part::Refs]);
+        assert_eq!(notified.get(), 0);
     }
 
     // `git/queries/history.test.ts`.

@@ -99,8 +99,8 @@ pub struct ShownFile {
     _changes: Subscription,
 }
 
-/// What a file's view shows of the repository: the lists, and the patch.
-const PARTS: &[Part] = &[Part::Status, Part::Commits, Part::Patches];
+/// What a file's view shows of the repository: the lists, and the patch, or the conflicted file.
+const PARTS: &[Part] = &[Part::Status, Part::Commits, Part::Patches, Part::Conflicts];
 
 impl ShownFile {
     pub fn new<V: 'static>(

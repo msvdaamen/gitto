@@ -816,7 +816,6 @@ impl Repository {
         let shown = has_hunks(patch) && self.replace_patch(&source, path, patch);
         drop(self.reload_uncommitted_but(shown.then_some((source, path.to_owned())), cx));
         cx.emit(Changed(Part::Patches));
-        cx.notify();
     }
 
     // Resolving conflicts: a view's own change.
