@@ -279,6 +279,50 @@ where
     Box::pin(run(cwd.as_ref().to_owned(), os_args(args), options))
 }
 
+/// What `read_output` read.
+#[derive(Debug, Default)]
+struct Output {
+    bytes: Vec<u8>,
+    /// Over the most it was to keep, so none of it was kept.
+    too_large: bool,
+    /// Why it couldn't be read to its end, if it couldn't.
+    failed: Option<std::io::Error>,
+}
+
+/// Reads `pipe` to its end, or until it fails. Past `max` bytes it keeps none of them, and calls
+/// `too_large` once: it says whether to read on (to git's end, which it stops) or stop reading.
+async fn read_output(
+    pipe: &mut (impl futures_lite::AsyncRead + Unpin),
+    max: Option<usize>,
+    mut too_large: impl FnMut() -> bool,
+) -> Output {
+    let mut output = Output::default();
+    let mut buffer = vec![0; 64 * 1024];
+    loop {
+        let read = match pipe.read(&mut buffer).await {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(error) => {
+                output.failed = Some(error);
+                break;
+            }
+        };
+        if output.too_large {
+            continue;
+        }
+        if max.is_some_and(|max| output.bytes.len() + read > max) {
+            output.too_large = true;
+            output.bytes = Vec::new();
+            if !too_large() {
+                break;
+            }
+            continue;
+        }
+        output.bytes.extend_from_slice(&buffer[..read]);
+    }
+    output
+}
+
 /// `git` with `args`, to run in `cwd` with `options`, in a session of its own (see `run_git_bytes`).
 fn git_command(cwd: &Path, args: &[OsString], options: &RunOptions) -> std::process::Command {
     let mut command = std::process::Command::new("git");
@@ -365,44 +409,39 @@ async fn run(cwd: PathBuf, args: Vec<OsString>, options: RunOptions) -> Result<V
         drop(stdin.take());
     };
     let read_stdout = async {
-        let mut out = Vec::new();
-        let mut too_large = false;
-        if let Some(pipe) = stdout.as_mut() {
-            let mut buffer = vec![0; 64 * 1024];
-            loop {
-                let read = match pipe.read(&mut buffer).await {
-                    Ok(0) | Err(_) => break,
-                    Ok(read) => read,
-                };
-                if too_large {
-                    continue;
-                }
-                if max_output.is_some_and(|max| out.len() + read > max) {
-                    too_large = true;
-                    out = Vec::new();
+        let output = match stdout.as_mut() {
+            Some(pipe) => {
+                read_output(pipe, max_output, || {
                     // With what it started, like a textconv filter, as when it's cancelled.
                     #[cfg(unix)]
                     stop_group(group.id);
                     // Without groups, git is stopped once its output is no longer read.
-                    #[cfg(not(unix))]
-                    break;
-                    #[cfg(unix)]
-                    continue;
-                }
-                out.extend_from_slice(&buffer[..read]);
+                    cfg!(unix)
+                })
+                .await
             }
-        }
+            None => Output::default(),
+        };
         drop(stdout.take());
-        (out, too_large)
+        output
     };
     let read_stderr = async {
         let mut err = Vec::new();
-        if let Some(pipe) = stderr.as_mut() {
-            let _ = pipe.read_to_end(&mut err).await;
+        let mut failed = None;
+        if let Some(pipe) = stderr.as_mut()
+            && let Err(error) = pipe.read_to_end(&mut err).await
+        {
+            failed = Some(error);
         }
-        err
+        drop(stderr.take());
+        (err, failed)
     };
-    let ((), (out, too_large), err) = futures::join!(write_stdin, read_stdout, read_stderr);
+    let ((), output, (err, stderr_failed)) = futures::join!(write_stdin, read_stdout, read_stderr);
+    let Output {
+        bytes: out,
+        too_large,
+        failed: stdout_failed,
+    } = output;
 
     #[cfg(not(unix))]
     if too_large {
@@ -435,6 +474,10 @@ async fn run(cwd: PathBuf, args: Vec<OsString>, options: RunOptions) -> Result<V
     }
     if too_large && let Some(max) = options.max_output {
         return Err(max.error);
+    }
+    // What git said was cut off, so it can't be taken for all it said, nor why it failed.
+    if let Some(error) = stdout_failed.or(stderr_failed) {
+        return Err(error.into());
     }
     if code == Some(0) {
         return Ok(out);
@@ -537,6 +580,38 @@ mod tests {
             let small = run_git(&path, ["rev-parse", "HEAD:"], options).await;
             assert!(small.unwrap_err().is_exit(128));
         });
+    }
+
+    #[test]
+    fn says_why_output_couldnt_be_read_to_its_end() {
+        /// Says `partial`, then fails.
+        struct Failing(bool);
+
+        impl futures_lite::AsyncRead for Failing {
+            fn poll_read(
+                mut self: std::pin::Pin<&mut Self>,
+                _: &mut std::task::Context<'_>,
+                buffer: &mut [u8],
+            ) -> std::task::Poll<std::io::Result<usize>> {
+                if std::mem::replace(&mut self.0, true) {
+                    return std::task::Poll::Ready(Err(std::io::Error::other("read failed")));
+                }
+                buffer[..7].copy_from_slice(b"partial");
+                std::task::Poll::Ready(Ok(7))
+            }
+        }
+
+        let output = smol::block_on(read_output(&mut Failing(false), None, || true));
+        assert_eq!(output.bytes, b"partial");
+        assert_eq!(output.failed.unwrap().to_string(), "read failed");
+
+        let mut stopped = 0;
+        let output = smol::block_on(read_output(&mut Failing(false), Some(3), || {
+            stopped += 1;
+            false
+        }));
+        assert!(output.too_large && output.bytes.is_empty() && output.failed.is_none());
+        assert_eq!(stopped, 1);
     }
 
     #[test]
