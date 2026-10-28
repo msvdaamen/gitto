@@ -1,8 +1,6 @@
 //! Committing, amending and rewording. Ported from `commit/commands.ts`; the input check of
 //! `commit/contract.ts` is [`Message`], in `crate::input`.
 
-use std::future::Future;
-
 use crate::core::errors::{Error, Result};
 use crate::core::repo::{GitCommand, Repo, current_branch, resolve_ref};
 use crate::core::runner::RunOptions;
@@ -16,11 +14,7 @@ use crate::input::{FullSha, Sha};
 /// an empty one can be reworded.
 ///
 /// Its place in the repository's writes is taken when it's first polled (see `Repo::exclusive`).
-pub fn create_commit(
-    repo: &Repo,
-    message: &Message,
-    amend: Option<&FullSha>,
-) -> impl Future<Output = Result<()>> + Send + 'static + use<> {
+pub async fn create_commit(repo: &Repo, message: &Message, amend: Option<&FullSha>) -> Result<()> {
     let message = message.as_str().to_owned();
     let amend = amend.map(|sha| sha.as_str().to_owned());
     repo.exclusive(move |run| async move {
@@ -36,6 +30,7 @@ pub fn create_commit(
         .await?;
         Ok(())
     })
+    .await
 }
 
 /// Rewrites the message of HEAD's commit, `sha`, to `message` as it's written, as long as HEAD is
@@ -45,11 +40,7 @@ pub fn create_commit(
 ///
 /// Its own function, rather than an option of `create_commit`, for that SHA, which committing
 /// doesn't look up. Its place in the repository's writes is taken when it's first polled.
-pub fn reword_commit(
-    repo: &Repo,
-    sha: &FullSha,
-    message: &Message,
-) -> impl Future<Output = Result<String>> + Send + 'static + use<> {
+pub async fn reword_commit(repo: &Repo, sha: &FullSha, message: &Message) -> Result<String> {
     let sha = sha.as_str().to_owned();
     let message = message.as_str().to_owned();
     // One write, so no other commit of Gitto's can land before the rewritten one's SHA is read.
@@ -61,6 +52,7 @@ pub fn reword_commit(
             .await?
             .ok_or_else(|| Error::Bug("HEAD has no commit after a commit.".to_owned()))
     })
+    .await
 }
 
 /// Replaces HEAD's commit, `sha`, with one of `message`, and what's staged unless `args` say
@@ -272,7 +264,8 @@ mod tests {
         let path = committed(&fx);
         smol::block_on(async {
             let repo = fx.repos.open("empty").await.unwrap();
-            let amending = create_commit(&repo, &message("Amended first"), Some(&head(&path)));
+            let (amended_message, amended) = (message("Amended first"), head(&path));
+            let amending = create_commit(&repo, &amended_message, Some(&amended));
             let other = repo.write(["commit", "-q", "--allow-empty", "-m", "Queued after"]);
             let (amended, committed) = futures::join!(amending, other);
             amended.unwrap();

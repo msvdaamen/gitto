@@ -4,7 +4,6 @@
 use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::fs::{File, Metadata, OpenOptions};
-use std::future::Future;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -350,12 +349,12 @@ pub struct SaveExpectation {
 ///
 /// Its place in line, after the saves to the repository's files before it, is taken when it's
 /// first polled (see `Saves`).
-pub fn save_working_tree_file(
+pub async fn save_working_tree_file(
     repo: &Repo,
     path: &str,
     contents: &str,
     expected: &SaveExpectation,
-) -> impl Future<Output = Result<String>> + Send + 'static + use<> {
+) -> Result<String> {
     let saved_versions = repo.keep::<SavedVersions>();
     let saves = repo.keep::<Saves>();
     let repo = repo.clone();
@@ -363,47 +362,51 @@ pub fn save_working_tree_file(
     let contents = contents.to_owned();
     let expected = expected.clone();
     // One after the other, in the order they're first polled (see `Saves`).
-    saves.0.run((), async move {
-        // Not following a link at its end, which is refused below.
-        let target = confine(&repo, &path, false).await?;
-        let before = read_existing(target.clone(), &path).await?;
-        let mut text = String::new();
-        if let Some(before) = &before {
-            text = decode_utf8(&before.bytes)?;
-            let version = version_of(&before.bytes);
-            let saved = saved_versions.get(&target);
-            let unchanged = version == expected.version
-                || saved.is_some_and(|saved| saved.from == expected.version && saved.to == version);
-            if !expected.overwrite && !unchanged {
+    saves
+        .0
+        .run((), async move {
+            // Not following a link at its end, which is refused below.
+            let target = confine(&repo, &path, false).await?;
+            let before = read_existing(target.clone(), &path).await?;
+            let mut text = String::new();
+            if let Some(before) = &before {
+                text = decode_utf8(&before.bytes)?;
+                let version = version_of(&before.bytes);
+                let saved = saved_versions.get(&target);
+                let unchanged = version == expected.version
+                    || saved
+                        .is_some_and(|saved| saved.from == expected.version && saved.to == version);
+                if !expected.overwrite && !unchanged {
+                    return Err(Error::FileChangedOnDisk {
+                        path,
+                        how: DiskChange::Changed,
+                    });
+                }
+            } else if !expected.overwrite {
                 return Err(Error::FileChangedOnDisk {
                     path,
-                    how: DiskChange::Changed,
+                    how: DiskChange::Deleted,
                 });
             }
-        } else if !expected.overwrite {
-            return Err(Error::FileChangedOnDisk {
-                path,
-                how: DiskChange::Deleted,
-            });
-        }
-        let bytes = if has_crlf_line_ends(&text) {
-            to_crlf(&contents)
-        } else {
-            contents
-        }
-        .into_bytes();
-        let written = version_of(&bytes);
-        let mode = before.and_then(|before| before.mode);
-        replace_file(target.clone(), bytes, mode).await?;
-        saved_versions.set(
-            target,
-            SavedVersion {
-                from: expected.version,
-                to: written.clone(),
-            },
-        );
-        Ok(written)
-    })
+            let bytes = if has_crlf_line_ends(&text) {
+                to_crlf(&contents)
+            } else {
+                contents
+            }
+            .into_bytes();
+            let written = version_of(&bytes);
+            let mode = before.and_then(|before| before.mode);
+            replace_file(target.clone(), bytes, mode).await?;
+            saved_versions.set(
+                target,
+                SavedVersion {
+                    from: expected.version,
+                    to: written.clone(),
+                },
+            );
+            Ok(written)
+        })
+        .await
 }
 
 /// The bytes and permissions of the file at `target` (the path `path` leads to); `None` if

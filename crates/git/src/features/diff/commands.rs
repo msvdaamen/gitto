@@ -38,11 +38,7 @@ pub async fn get_commit_files(repo: &Repo, sha: &Sha) -> Result<Vec<ChangedFile>
 /// The patch of one file a commit changed, compared to its first parent like `get_commit_files`,
 /// so its lines are the ones counted there. A renamed file needs its old path too, to be found as
 /// one. With full object names on its `index` line, which `get_blob` reads the whole file by.
-pub fn get_commit_file_patch(
-    repo: &Repo,
-    sha: &Sha,
-    file: &FileInput,
-) -> BoxFuture<'static, Result<String>> {
+pub async fn get_commit_file_patch(repo: &Repo, sha: &Sha, file: &FileInput) -> Result<String> {
     let mut args = vec![
         "diff-tree",
         "-p",
@@ -57,7 +53,7 @@ pub fn get_commit_file_patch(
         "--",
     ];
     args.extend(file_paths(file));
-    read_patch(&repo.git(), args)
+    read_patch(&repo.git(), args).await
 }
 
 /// The patch of one file's unstaged changes: the working tree compared to the index, as in the
@@ -911,7 +907,8 @@ mod tests {
             let path = repo.path();
             symlink(path.join("c.txt"), path.join("link"));
             fs::write(path.join("latin1.txt"), [0x63, 0x61, 0x66, 0xe9]).unwrap();
-            let save = |name: &str| save_working_tree_file(&repo, name, "x\n", &expected("", true));
+            let overwrite = expected("", true);
+            let save = |name: &'static str| save_working_tree_file(&repo, name, "x\n", &overwrite);
 
             assert!(is_outside(&save("link").await.unwrap_err()));
             assert!(is_outside(&save("../outside.txt").await.unwrap_err()));
@@ -935,9 +932,10 @@ mod tests {
                 .unwrap()
                 .version;
             // Both sent before either's done, as the last edits are when the window closes.
+            let unchanged = expected(&version, false);
             let (first, second) = futures::join!(
-                save_working_tree_file(&repo, "a file.txt", "first\n", &expected(&version, false)),
-                save_working_tree_file(&repo, "a file.txt", "second\n", &expected(&version, false)),
+                save_working_tree_file(&repo, "a file.txt", "first\n", &unchanged),
+                save_working_tree_file(&repo, "a file.txt", "second\n", &unchanged),
             );
             first.unwrap();
             second.unwrap();
