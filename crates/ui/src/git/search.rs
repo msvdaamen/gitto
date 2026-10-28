@@ -13,14 +13,14 @@ pub fn search_needle(search: &str) -> String {
 /// what their row says.
 pub fn matches_search(row: &HistoryRow, needle: &str) -> bool {
     match row {
-        HistoryRow::Wip(_) => WIP_MESSAGE.to_lowercase().contains(needle),
-        HistoryRow::Stash(row) => format!("{} {}", row.message, row.sha)
-            .to_lowercase()
-            .contains(needle),
+        HistoryRow::Wip(_) => contains_lowercase(WIP_MESSAGE.chars(), needle),
+        HistoryRow::Stash(row) => contains_lowercase(
+            row.message.chars().chain([' ']).chain(row.sha.chars()),
+            needle,
+        ),
         HistoryRow::Commit(row) => {
-            format!("{} {} {}", row.message, row.author, row.id)
-                .to_lowercase()
-                .contains(needle)
+            let text = row.message.chars().chain([' ']).chain(row.author.chars());
+            contains_lowercase(text.chain([' ']).chain(row.id.chars()), needle)
                 || row
                     .labels
                     .iter()
@@ -29,9 +29,27 @@ pub fn matches_search(row: &HistoryRow, needle: &str) -> bool {
     }
 }
 
+/// Whether the text `haystack`, lowercased, contains `needle`, which is lowercase. The text isn't
+/// lowercased into a string of its own: the search runs on every row at each keystroke.
+pub(crate) fn contains_lowercase<I>(haystack: I, needle: &str) -> bool
+where
+    I: Iterator<Item = char> + Clone,
+{
+    let mut rest = haystack.flat_map(char::to_lowercase);
+    loop {
+        let mut candidate = rest.clone();
+        if needle.chars().all(|c| candidate.next() == Some(c)) {
+            return true;
+        }
+        if rest.next().is_none() {
+            return false;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use gitto_git::input::RepositoryId;
 
     use super::*;
     use crate::git::ref_labels::{BranchLabel, RefLabel};
@@ -40,7 +58,7 @@ mod tests {
     fn commit() -> HistoryRow {
         HistoryRow::Commit(CommitRow {
             id: "a1b2c3d4e5".into(),
-            repository_id: Arc::from("repo"),
+            repository_id: RepositoryId::generate(),
             short_sha: "a1b2c3d".into(),
             graph: None,
             message: "Fix the parser".into(),
@@ -62,9 +80,8 @@ mod tests {
 
     fn stash() -> HistoryRow {
         HistoryRow::Stash(StashRow {
-            id: "stash:f00dfeed".into(),
             sha: "f00dfeed".into(),
-            repository_id: Arc::from("repo"),
+            repository_id: RepositoryId::generate(),
             graph: None,
             message: "WIP on main: a1b2c3d Fix the parser".into(),
             created_at: 0,
@@ -73,7 +90,7 @@ mod tests {
 
     fn wip() -> HistoryRow {
         HistoryRow::Wip(WipRow {
-            repository_id: Arc::from("repo"),
+            repository_id: RepositoryId::generate(),
             graph: None,
         })
     }
@@ -105,5 +122,17 @@ mod tests {
             assert!(matches_search(&wip, &search_needle("uncommitted")));
             assert!(!matches_search(&wip, &search_needle("parser")));
         }
+    }
+
+    #[test]
+    fn finds_lowercase_text_in_any_case_as_lowercasing_it_would() {
+        assert!(contains_lowercase("Fix the Parser".chars(), "the parser"));
+        assert!(contains_lowercase("ÉMILE".chars(), "émile"));
+        // `İ` lowercases to two characters, `i` and a combining dot.
+        assert!(contains_lowercase("İX".chars(), "\u{307}x"));
+        assert!(contains_lowercase("abc".chars(), ""));
+        assert!(contains_lowercase("".chars(), ""));
+        assert!(!contains_lowercase("".chars(), "a"));
+        assert!(!contains_lowercase("Parse".chars(), "parser"));
     }
 }

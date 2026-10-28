@@ -16,17 +16,17 @@ use super::branch_button::BranchButton;
 use super::pull_button::PullButton;
 use super::push_button::PushButton;
 use super::stash_buttons::StashButtons;
-use super::toolbar_button::{HideBelow, SMALL, ToolbarButton};
+use super::toolbar_button::{HideBelow, ToolbarButton};
 use crate::components::ui::{Divider, FailurePopover, Icon, IconButton, IconName, TextInput};
 use crate::data::branch::{
     self, delete_branch_state, merge_branch_state, rebase_branch_state, switch_branch_state,
 };
-use crate::data::remote::{self, fetch_mutation, pull_branch_state};
+use crate::data::remote::{self, fetch_operation, pull_branch_state};
 use crate::data::repositories::{find, repositories_query};
 use crate::data::status::status_query;
-use crate::data::{Mutation, Opaque, OperationState, Operations, Query, QueryError};
+use crate::data::{Opaque, OperationState, Operations, Query, QueryError, RepositoryOperation};
 use crate::theme::PaletteExt as _;
-use crate::views::repository::MEDIUM;
+use crate::theme::breakpoints::{MEDIUM, SMALL};
 
 /// The toolbar's height (TS's grid row, 49px).
 pub const TOOLBAR_HEIGHT: f32 = 3.25;
@@ -71,7 +71,7 @@ impl BranchChangeKind {
         }
     }
 
-    fn state(self, id: &str, cx: &App) -> OperationState {
+    fn state(self, id: &RepositoryId, cx: &App) -> OperationState {
         match self {
             BranchChangeKind::Merge => merge_branch_state(id, cx),
             BranchChangeKind::Rebase => rebase_branch_state(id, cx),
@@ -157,8 +157,8 @@ pub struct RepositoryToolbar {
     details_open: bool,
     status: Query<Opaque<Uncommitted>, StatusSummary>,
     repositories: Query<Vec<Repository>>,
-    /// Fetching every remote of a repository, whose id is its input.
-    fetch: Entity<Mutation<RepositoryId>>,
+    /// Fetching every remote of the repository.
+    fetch: RepositoryOperation<()>,
     failures: FailureOrder,
     pull: Entity<PullButton>,
     push: Entity<PushButton>,
@@ -171,14 +171,13 @@ impl EventEmitter<ToolbarEvent> for RepositoryToolbar {}
 
 impl RepositoryToolbar {
     pub fn new(repository_id: RepositoryId, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let fetch = fetch_mutation(cx);
-        RepositoryToolbar::with_fetch(repository_id, fetch, window, cx)
+        RepositoryToolbar::with_fetch(repository_id, fetch_operation(), window, cx)
     }
 
     /// With `fetch` fetching: a test's.
     pub(crate) fn with_fetch(
         repository_id: RepositoryId,
-        fetch: Entity<Mutation<RepositoryId>>,
+        fetch: RepositoryOperation<()>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -190,7 +189,6 @@ impl RepositoryToolbar {
                     cx.emit(ToolbarEvent::Search(value));
                 }
             }),
-            cx.observe(&fetch, |_, _, cx| cx.notify()),
             cx.observe_global::<Operations>(|this, cx| {
                 this.update_failures(cx);
                 cx.notify();
@@ -220,31 +218,12 @@ impl RepositoryToolbar {
         &self.repository_id
     }
 
-    /// Shows another repository's.
-    pub fn set_repository(
-        &mut self,
-        repository_id: RepositoryId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.repository_id == repository_id {
-            return;
-        }
-        self.status = status_query(&repository_id, cx);
-        self.repository_id = repository_id.clone();
-        let id = &repository_id;
-        self.pull
-            .update(cx, |button, cx| button.set_repository(id.clone(), cx));
-        self.push.update(cx, |button, cx| {
-            button.set_repository(id.clone(), window, cx)
-        });
-        self.branch.update(cx, |button, cx| {
-            button.set_repository(id.clone(), window, cx)
-        });
-        self.stash
-            .update(cx, |button, cx| button.set_repository(id.clone(), cx));
-        self.update_failures(cx);
-        cx.notify();
+    /// Puts `search` in the search box: the history's search, as the toolbar of the repository
+    /// on show before had it.
+    pub fn set_search(&mut self, search: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let search = SharedString::from(search.to_owned());
+        self.search
+            .update(cx, |input, cx| input.set_value(search, window, cx));
     }
 
     /// Which panels are open, for the toggles to show.
@@ -273,29 +252,23 @@ impl RepositoryToolbar {
         self.failures.shown()
     }
 
-    /// Fetch, as it is now: spinning while it runs, red with the reason once it failed. The last
-    /// fetch is shown if it was of this repository; one of another stays with that repository.
+    /// Fetch, as it is now: spinning while it runs, red with the reason once it failed. Both
+    /// are the repository's: a fetch of another stays with that one.
     pub fn fetch_button(&self, cx: &App) -> ToolbarButton {
-        let fetch = self.fetch.read(cx);
-        let current = fetch.input() == Some(&self.repository_id);
-        let pending = current && fetch.is_pending();
-        let error = fetch.error().filter(|_| current).cloned();
-        let title = match &error {
+        let state = self.fetch.state(&self.repository_id, cx);
+        let title = match &state.error {
             Some(error) => format!("Fetch failed: {}", error.message()),
             None => "Fetch all remotes".to_owned(),
         };
-        let mutation = self.fetch.clone();
+        let fetch = self.fetch.clone();
         let id = self.repository_id.clone();
         ToolbarButton::new("fetch", IconName::RefreshCw, "Fetch")
             .hide_below(HideBelow::Small)
             .title(title)
-            .disabled(pending)
-            .danger(error.is_some())
-            .busy(pending)
-            .on_click(move |_, _, cx| {
-                let id = id.clone();
-                mutation.update(cx, |fetch, cx| drop(fetch.mutate(id, cx)));
-            })
+            .disabled(state.running)
+            .danger(state.error.is_some())
+            .busy(state.running)
+            .on_click(move |_, _, cx| drop(fetch.run(&id, (), cx)))
     }
 
     fn render_current_branch(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -313,7 +286,7 @@ impl RepositoryToolbar {
             .unwrap_or_default();
         let failure = self.branch_failure();
         let (title, error) = match &failure {
-            Some((kind, error)) => (kind.title(), Some(error.clone())),
+            Some((kind, error)) => (kind.title(), Some(error.message().into())),
             None => ("Merge", None),
         };
         let dismiss = failure.map(|(kind, _)| kind);
@@ -446,14 +419,7 @@ impl Render for RepositoryToolbar {
                 h_flex()
                     .flex_none()
                     .gap_0p5()
-                    .child(
-                        ToolbarButton::new("undo", IconName::Undo2, "Undo")
-                            .hide_below(HideBelow::Large),
-                    )
-                    .child(
-                        ToolbarButton::new("redo", IconName::Redo2, "Redo")
-                            .hide_below(HideBelow::Large),
-                    )
+                    .children(undo_and_redo())
                     .child(Divider::new().tall())
                     .child(self.pull.clone())
                     .child(self.push.clone())
@@ -479,6 +445,15 @@ impl Render for RepositoryToolbar {
     }
 }
 
+/// Undo and Redo, which don't do anything yet: disabled, saying so.
+fn undo_and_redo() -> [ToolbarButton; 2] {
+    [
+        ToolbarButton::new("undo", IconName::Undo2, "Undo").title("Undo (coming soon)"),
+        ToolbarButton::new("redo", IconName::Redo2, "Redo").title("Redo (coming soon)"),
+    ]
+    .map(|button| button.hide_below(HideBelow::Large).disabled(true))
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
@@ -490,10 +465,9 @@ mod tests {
 
     use super::*;
     use crate::components::repository::test_support::{
-        Repositories, repository, repository_id, set_operation, set_push_target, set_refs,
-        set_remotes, set_stashes, set_status, set_worktrees, setup_with, status,
+        Repositories, click_label, repository, repository_id, set_operation, set_push_target,
+        set_refs, set_remotes, set_stashes, set_status, set_worktrees, setup_with, status,
     };
-    use crate::data::RepositoryOperation;
 
     /// Gives `id` what the toolbar's buttons show, so none of them loads from git.
     fn seed(id: &RepositoryId, cx: &mut TestAppContext) {
@@ -502,7 +476,7 @@ mod tests {
         set_push_target(
             id,
             gitto_git::features::remote::schema::PushTarget::Blocked {
-                reason: "There's no remote to push to.".into(),
+                reason: gitto_git::PushBlocker::NoRemote,
             },
             cx,
         );
@@ -540,45 +514,37 @@ mod tests {
         seed(&a, cx);
         seed(&b, cx);
         let fetches = Rc::new(Fetches::default());
-        let shown = a.clone();
-        let (window, toolbar) = crate::test_support::open(cx, {
-            let fetches = Rc::clone(&fetches);
-            move |window, cx| {
-                let fetch = Mutation::new(
-                    move |id: RepositoryId, cx: &mut App| {
-                        fetches.calls.borrow_mut().push(id);
-                        let (settle, settled) = oneshot::channel();
-                        *fetches.settle.borrow_mut() = Some(settle);
-                        cx.background_spawn(async move {
-                            settled.await.unwrap_or(Err(QueryError::msg("dropped")))
-                        })
-                    },
-                    cx,
-                );
-                RepositoryToolbar::with_fetch(shown, fetch, window, cx)
-            }
+        let (window, toolbar) = switch(&a, &fetches, cx);
+        (dir, a, b, fetches, window, toolbar)
+    }
+
+    /// The toolbar of the repository `id`, fetching into `fetches`, as the page makes it when
+    /// that repository comes on show.
+    fn switch(
+        id: &RepositoryId,
+        fetches: &Rc<Fetches>,
+        cx: &mut TestAppContext,
+    ) -> (AnyWindowHandle, Entity<RepositoryToolbar>) {
+        let shown = id.clone();
+        let fetches = Rc::clone(fetches);
+        let opened = crate::test_support::open(cx, move |window, cx| {
+            let fetch =
+                RepositoryOperation::new("fetch", move |id: RepositoryId, (), cx: &mut App| {
+                    fetches.calls.borrow_mut().push(id);
+                    let (settle, settled) = oneshot::channel();
+                    *fetches.settle.borrow_mut() = Some(settle);
+                    cx.background_spawn(async move {
+                        settled.await.unwrap_or(Err(QueryError::msg("dropped")))
+                    })
+                });
+            RepositoryToolbar::with_fetch(shown, fetch, window, cx)
         });
         cx.run_until_parked();
-        (dir, a, b, fetches, window, toolbar)
+        opened
     }
 
     fn fetch_button(toolbar: &Entity<RepositoryToolbar>, cx: &mut TestAppContext) -> ToolbarButton {
         toolbar.read_with(cx, |toolbar, cx| toolbar.fetch_button(cx))
-    }
-
-    fn switch(
-        toolbar: &Entity<RepositoryToolbar>,
-        id: &RepositoryId,
-        window: AnyWindowHandle,
-        cx: &mut TestAppContext,
-    ) {
-        cx.update_window(window, |_, window, cx| {
-            toolbar.update(cx, |toolbar, cx| {
-                toolbar.set_repository(id.clone(), window, cx)
-            })
-        })
-        .unwrap();
-        cx.run_until_parked();
     }
 
     #[gpui_kit::test]
@@ -596,9 +562,9 @@ mod tests {
         assert!(shown.is_busy());
 
         // Another repository's fetch is its own.
-        switch(&toolbar, &b, window, cx);
-        assert!(!fetch_button(&toolbar, cx).is_busy());
-        switch(&toolbar, &a, window, cx);
+        let (_, other) = switch(&b, &fetches, cx);
+        assert!(!fetch_button(&other, cx).is_busy());
+        let (window, toolbar) = switch(&a, &fetches, cx);
         assert!(fetch_button(&toolbar, cx).is_busy());
 
         let settle = fetches.settle.borrow_mut().take().unwrap();
@@ -627,6 +593,32 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn keeps_a_repositorys_fetch_failure_while_another_is_fetched(cx: &mut TestAppContext) {
+        let (_dir, a, b, fetches, window, _) = render(cx);
+        let settle = |result: Result<(), QueryError>, cx: &mut TestAppContext| {
+            let settle = fetches.settle.borrow_mut().take().unwrap();
+            settle.send(result).unwrap();
+            cx.run_until_parked();
+        };
+
+        cx.update_window(window, |_, window, cx| window.click("fetch", cx))
+            .unwrap();
+        settle(Err(QueryError::msg("Could not resolve host.")), cx);
+        let (window, toolbar) = switch(&b, &fetches, cx);
+        assert_eq!(fetch_button(&toolbar, cx).tooltip(), "Fetch all remotes");
+        cx.update_window(window, |_, window, cx| window.click("fetch", cx))
+            .unwrap();
+        settle(Ok(()), cx);
+        assert_eq!(*fetches.calls.borrow(), [a.clone(), b.clone()]);
+
+        let (_, toolbar) = switch(&a, &fetches, cx);
+        assert_eq!(
+            fetch_button(&toolbar, cx).tooltip(),
+            "Fetch failed: Could not resolve host."
+        );
+    }
+
+    #[gpui_kit::test]
     fn shows_the_last_change_of_the_branches_to_fail(cx: &mut TestAppContext) {
         let (_dir, a, _, _, _, toolbar) = render(cx);
         let fail = |name: &'static str, message: &'static str, cx: &mut TestAppContext| {
@@ -651,6 +643,40 @@ mod tests {
             .read_with(cx, |toolbar, _| toolbar.branch_failure())
             .unwrap();
         assert_eq!(kind.title(), "Merge");
+    }
+
+    #[gpui_kit::test]
+    fn dismisses_the_failure_shown_from_its_popover(cx: &mut TestAppContext) {
+        let (_dir, a, _, _, window, toolbar) = render(cx);
+        let merge = RepositoryOperation::new("merge", |_, (), cx: &mut App| {
+            cx.background_spawn(async { Err::<(), _>(QueryError::msg("Merge conflict.")) })
+        });
+        cx.update(|cx| drop(merge.run(&a, (), cx)));
+        cx.run_until_parked();
+        assert!(
+            toolbar
+                .read_with(cx, |toolbar, _| toolbar.branch_failure())
+                .is_some()
+        );
+
+        click_label(window, "Dismiss", cx);
+        assert!(
+            toolbar
+                .read_with(cx, |toolbar, _| toolbar.branch_failure())
+                .is_none()
+        );
+        assert!(cx.update(|cx| merge.state(&a, cx)).error.is_none());
+    }
+
+    #[test]
+    fn says_undo_and_redo_are_still_to_come() {
+        for button in undo_and_redo() {
+            assert!(button.is_disabled());
+            assert_eq!(
+                button.tooltip().as_ref(),
+                format!("{} (coming soon)", button.label())
+            );
+        }
     }
 
     #[test]

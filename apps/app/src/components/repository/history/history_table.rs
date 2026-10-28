@@ -15,7 +15,7 @@ use gitto_git::features::stash::schema::Stash;
 use gitto_git::features::worktree::schema::Worktree;
 use gitto_git::input::RepositoryId;
 use gitto_ui::git::ref_labels::checkouts;
-use gitto_ui::git::rows::{HistoryRow, history_graph, stash_sha, to_history_rows, with_stashes};
+use gitto_ui::git::rows::{HistoryRow, RowId, to_history_rows, with_stashes};
 use gitto_ui::git::search::{matches_search, search_needle};
 use gitto_ui::git::status::head_label;
 use gpui_kit::base::actions::{
@@ -80,9 +80,8 @@ pub fn bind_keys(cx: &mut App) {
 /// What the history asks of the page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HistoryEvent {
-    /// A row was selected, by its id: the uncommitted changes' (`gitto_ui::git::rows::WIP_ID`),
-    /// a stash's or a commit's.
-    Select(String),
+    /// A row was selected, by its id: the uncommitted changes', a stash's or a commit's.
+    Select(RowId),
 }
 
 /// What the history runs: git, or a test's.
@@ -115,9 +114,10 @@ struct Layout {
     worktrees: Arc<[Worktree]>,
     has_changes: bool,
     head: Option<String>,
+    remotes: Vec<String>,
     rows: Rc<[HistoryRow]>,
     /// Each row's place among them, by its id.
-    places: HashMap<String, usize>,
+    places: HashMap<RowId, usize>,
     /// The most lanes a row's graph uses, which the graph's column is sized to.
     lanes: usize,
     /// Whether more of the log was asked for since the rows were laid out (see
@@ -142,7 +142,7 @@ struct Filtered {
 /// Whether the rest of a row's labels are listed (see `ref_labels::MoreLabels`).
 #[derive(Default)]
 struct MoreLabelsState {
-    /// The row whose count is hovered, or whose labels are listed.
+    /// The commit whose count is hovered, or whose labels are listed, by its SHA.
     row: Option<String>,
     open: bool,
     /// How many of the count and the list the pointer is on. Not a flag: moving from one onto
@@ -163,16 +163,16 @@ pub struct HistoryTable {
     history: History,
     search: SharedString,
     needle: String,
-    selected_id: Option<String>,
+    selected_id: Option<RowId>,
     /// The row the details show: the selected one, once the selection stops moving quickly.
-    details_id: Option<String>,
+    details_id: Option<RowId>,
     /// The selected row the table last fell back from, as it was gone, and the one it fell back
     /// to.
-    fell_back: Option<(Option<String>, String)>,
+    fell_back: Option<(Option<RowId>, RowId)>,
     layout: Layout,
     filtered: Filtered,
     /// The files of the row the details show, for its line totals.
-    totals: Option<(String, Query<ChangedFiles, ShownFiles>)>,
+    totals: Option<(RowId, Query<ChangedFiles, ShownFiles>)>,
     /// The log is reloaded whenever a branch or tag changes, which takes a while in a big
     /// repository; and more of it loads as its end comes near.
     updating: Entity<Delayed>,
@@ -255,6 +255,7 @@ impl HistoryTable {
             worktrees: Arc::from(Vec::new()),
             has_changes: false,
             head: None,
+            remotes: Vec::new(),
             rows: Rc::from(Vec::new()),
             places: HashMap::new(),
             lanes: 1,
@@ -305,6 +306,7 @@ impl HistoryTable {
             cx.observe(history.status().entry(), |this, _, cx| this.sync(cx)),
             cx.observe(history.stashes().entry(), |this, _, cx| this.sync(cx)),
             cx.observe(history.worktrees().entry(), |this, _, cx| this.sync(cx)),
+            cx.observe(history.remotes().entry(), |this, _, cx| this.sync(cx)),
         ];
     }
 
@@ -348,8 +350,8 @@ impl HistoryTable {
 
     pub fn set_selection(
         &mut self,
-        selected_id: Option<String>,
-        details_id: Option<String>,
+        selected_id: Option<RowId>,
+        details_id: Option<RowId>,
         cx: &mut Context<Self>,
     ) {
         if (&self.selected_id, &self.details_id) != (&selected_id, &details_id) {
@@ -395,7 +397,7 @@ impl HistoryTable {
     /// The selected row's place among all the rows (see [`selected`](Self::selected)).
     fn selected_row_ix(&self) -> Option<usize> {
         self.selected_id
-            .as_deref()
+            .as_ref()
             .and_then(|id| self.layout.places.get(id).copied())
             .or_else(|| (!self.layout.rows.is_empty()).then_some(0))
     }
@@ -410,8 +412,8 @@ impl HistoryTable {
     }
 
     /// Whose files the line totals are of, if any: the selected row's, once the details show it.
-    pub fn totals_of(&self) -> Option<&str> {
-        self.totals.as_ref().map(|(id, _)| id.as_str())
+    pub fn totals_of(&self) -> Option<&RowId> {
+        self.totals.as_ref().map(|(id, _)| id)
     }
 
     /// The commit menu, and its dialog.
@@ -441,10 +443,10 @@ impl HistoryTable {
         let fallback = self
             .selected()
             .filter(|row| {
-                row.repository_id().as_ref() == self.repository_id.as_str()
-                    && Some(row.id()) != self.selected_id.as_deref()
+                *row.repository_id() == self.repository_id
+                    && !self.selected_id.as_ref().is_some_and(|id| row.is(id))
             })
-            .map(|row| row.id().to_owned());
+            .map(HistoryRow::id);
         if let Some(to) = fallback {
             self.fell_back = Some((self.selected_id.clone(), to.clone()));
             self.selected_id = Some(to.clone());
@@ -470,6 +472,7 @@ impl HistoryTable {
         let worktrees = self.history.shown_worktrees();
         let has_changes = self.history.has_changes();
         let head = self.history.head();
+        let remotes = self.history.shown_remotes();
         let layout = &self.layout;
         let unchanged = layout.repository_id == self.repository_id
             && match (&layout.commits, &commits) {
@@ -480,17 +483,23 @@ impl HistoryTable {
             && same(&layout.stashes, &stashes)
             && same(&layout.worktrees, &worktrees)
             && layout.has_changes == has_changes
-            && layout.head == head;
+            && layout.head == head
+            && layout.remotes == remotes;
         if unchanged {
             return;
         }
         let rows: Vec<HistoryRow> = match &log {
             Some(log) => {
                 let entries = with_stashes(&log.commits, &stashes);
-                let graph = history_graph(&entries, has_changes, head.as_deref());
                 let others = checkouts(&worktrees);
-                let repository_id: Arc<str> = log.repository_id.as_str().into();
-                to_history_rows(&repository_id, &entries, has_changes, graph, &others)
+                to_history_rows(
+                    &log.repository_id,
+                    &entries,
+                    has_changes,
+                    head.as_deref(),
+                    &others,
+                    &remotes,
+                )
             }
             None => Vec::new(),
         };
@@ -503,7 +512,7 @@ impl HistoryTable {
         let places = rows
             .iter()
             .enumerate()
-            .map(|(ix, row)| (row.id().to_owned(), ix))
+            .map(|(ix, row)| (row.id(), ix))
             .collect();
         self.layout = Layout {
             repository_id: self.repository_id.clone(),
@@ -512,6 +521,7 @@ impl HistoryTable {
             worktrees,
             has_changes,
             head,
+            remotes,
             rows: rows.into(),
             places,
             lanes,
@@ -546,17 +556,19 @@ impl HistoryTable {
     fn sync_totals(&mut self, cx: &mut Context<Self>) {
         let wanted = self
             .selected()
-            .filter(|row| self.details_id.as_deref() == Some(row.id()))
+            .filter(|row| self.details_id.as_ref().is_some_and(|id| row.is(id)))
             .and_then(|row| match row {
-                HistoryRow::Commit(commit) => Some((commit.id.clone(), FilesOf::Commit)),
-                HistoryRow::Stash(stash) => Some((stash.id.clone(), FilesOf::Stash)),
+                HistoryRow::Commit(commit) => {
+                    Some((RowId::Commit(commit.id.clone()), FilesOf::Commit))
+                }
+                HistoryRow::Stash(stash) => Some((RowId::Stash(stash.sha.clone()), FilesOf::Stash)),
                 HistoryRow::Wip(_) => None,
             });
         match wanted {
             None => self.totals = None,
             Some((id, of)) => {
-                if self.totals_of() != Some(id.as_str()) {
-                    let sha = stash_sha(&id).unwrap_or(&id).to_owned();
+                if self.totals_of() != Some(&id) {
+                    let sha = id.sha().unwrap_or_default().to_owned();
                     let query = changed_files_query(&self.repository_id, &sha, of, cx);
                     self.totals = Some((id, query));
                 }
@@ -565,28 +577,29 @@ impl HistoryTable {
     }
 
     /// The selected row's line totals, once its files have loaded.
-    fn totals(&self) -> Option<(String, LineCounts)> {
+    fn totals(&self) -> Option<(RowId, LineCounts)> {
         let (id, query) = self.totals.as_ref()?;
         let shown = query.data()?;
-        let sha = stash_sha(id).unwrap_or(id);
-        (shown.shown_sha == sha).then(|| (id.clone(), shown.totals))
+        (Some(shown.shown_sha.as_str()) == id.sha()).then(|| (id.clone(), shown.totals))
     }
 
     /// Selects the commit `to` in place of `from` if that one's selected: it was rewritten as
     /// `to`, e.g. reworded. Also once the table has fallen back from `from` to another row, which
     /// it does as soon as the history reloads without it, before it's told of `to`.
     fn replace_selected(&mut self, from: &str, to: &str, cx: &mut Context<Self>) {
-        let selected = self.selected_id.as_deref();
-        let fell_back_from = self.fell_back.as_ref().is_some_and(|(was, now)| {
-            was.as_deref() == Some(from) && Some(now.as_str()) == selected
-        });
-        if selected == Some(from) || fell_back_from {
-            self.select(to.to_owned(), cx);
+        let from = RowId::Commit(from.to_owned());
+        let selected = self.selected_id.as_ref();
+        let fell_back_from = self
+            .fell_back
+            .as_ref()
+            .is_some_and(|(was, now)| was.as_ref() == Some(&from) && Some(now) == selected);
+        if selected == Some(&from) || fell_back_from {
+            self.select(RowId::Commit(to.to_owned()), cx);
         }
     }
 
     /// Selects the row `id`, telling the page.
-    fn select(&mut self, id: String, cx: &mut Context<Self>) {
+    fn select(&mut self, id: RowId, cx: &mut Context<Self>) {
         self.selected_id = Some(id.clone());
         cx.emit(HistoryEvent::Select(id));
         self.sync(cx);
@@ -595,10 +608,10 @@ impl HistoryTable {
     /// A row was clicked: it's selected, and the list takes the focus, which is what the keyboard
     /// moves through. The rows come and go as the list scrolls, and would take the focus with
     /// them.
-    fn click_row(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+    fn click_row(&mut self, id: RowId, window: &mut Window, cx: &mut Context<Self>) {
         self.keyboard = false;
         self.focus.focus(window, cx);
-        if self.selected().map(HistoryRow::id) != Some(id.as_str()) {
+        if !self.selected().is_some_and(|row| row.is(&id)) {
             self.select(id, cx);
         }
         cx.notify();
@@ -624,7 +637,7 @@ impl HistoryTable {
         let ix = target.clamp(0, count as isize - 1) as usize;
         self.keyboard = true;
         if Some(ix) != self.selected_ix()
-            && let Some(id) = self.shown_row(ix).map(|row| row.id().to_owned())
+            && let Some(id) = self.shown_row(ix).map(HistoryRow::id)
         {
             self.select(id, cx);
         }
@@ -829,7 +842,7 @@ impl HistoryTable {
     fn render_rows(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let count = self.shown_count();
         let graph = graph_width(self.layout.lanes);
-        let selected = self.selected().map(|row| row.id().to_owned());
+        let selected = self.selected().map(HistoryRow::id);
         let focused = self.focus.is_focused(window);
         let table = cx.entity().downgrade();
         let switch = self.sources.switch.clone();
@@ -891,11 +904,11 @@ struct RowsContext {
     table: WeakEntity<HistoryTable>,
     rows: Rc<[HistoryRow]>,
     shown: Option<Rc<[usize]>>,
-    selected: Option<String>,
+    selected: Option<RowId>,
     outlined: bool,
     graph: Rems,
     needle: SharedString,
-    totals: Option<(String, LineCounts)>,
+    totals: Option<(RowId, LineCounts)>,
     wip: WipSummary,
     labels: LabelActions,
     commit_menu: Entity<CommitMenu>,
@@ -926,8 +939,8 @@ impl RowsContext {
             None => self.rows.get(ix)?,
             Some(shown) => &self.rows[*shown.get(ix)?],
         };
-        let id = row.id().to_owned();
-        let selected = self.selected.as_deref() == Some(id.as_str());
+        let id = row.id();
+        let selected = self.selected.as_ref() == Some(&id);
         let table = self.table.clone();
         let select_id = id.clone();
         let props = RowProps {
@@ -955,10 +968,10 @@ impl RowsContext {
             }
             HistoryRow::Commit(commit) => {
                 let has_more = commit.labels.len() > 1;
-                let more = has_more.then(|| self.more_labels(&id));
-                let menu_open = self.commit_menu_open.as_deref() == Some(id.as_str());
+                let more = has_more.then(|| self.more_labels(&commit.id));
+                let menu_open = self.commit_menu_open.as_deref() == Some(commit.id.as_str());
                 let commit_menu = self.commit_menu.clone();
-                let sha: SharedString = id.clone().into();
+                let sha: SharedString = commit.id.clone().into();
                 // The menu's built when the row's right-clicked: it says then whether the commit
                 // has one.
                 let menu: MenuBuilder = Rc::new(move |menu, _, cx| {

@@ -26,11 +26,13 @@ mod tests {
     use super::*;
     use crate::test_support::Fixture;
 
-    /// Runs git with its global config in `home`.
+    /// Runs git with its global config in `home`: named outright, as the tests' git is run with
+    /// none (see `test_support::hermetic_env`).
     fn at_home(home: &Path) -> RunOptions {
         RunOptions::default()
             .env("HOME", home)
             .env("XDG_CONFIG_HOME", home.join(".config"))
+            .env("GIT_CONFIG_GLOBAL", home.join(".gitconfig"))
     }
 
     #[test]

@@ -23,7 +23,7 @@ use crate::theme::{PaletteExt as _, base_px};
 /// How long the pointer rests on a file before it's taken for one about to be opened.
 pub const HOVER: Duration = Duration::from_millis(80);
 
-/// Height of a file's row, and of it with the space below it.
+/// Height of a file's row (42px of the 15px base), and of it with the space below it (2px).
 pub const ROW_HEIGHT: Rems = base_px(42.);
 pub const ROW_PITCH: Rems = base_px(44.);
 

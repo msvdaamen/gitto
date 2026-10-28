@@ -4,16 +4,29 @@ use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants as _};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::prelude::*;
-use gpui_kit::{App, FontWeight, Window, div};
+use gpui_kit::{App, FontWeight, SharedString, Window, div};
 
 use crate::components::ui::{Icon, IconName};
 use crate::state::router::{Route, Router};
 use crate::theme::{AppTheme, PaletteExt as _};
+use crate::util::format;
 
 /// The user's avatar, which opens a menu of what's Gitto's own rather than a repository's: the
-/// theme, and the settings. (Its initials are TS's, which hard-coded them.)
+/// theme, and the settings. It shows the initials of the name the user commits with, or a person
+/// without one. (TS hard-coded its initials.)
 #[derive(IntoElement, Default)]
-pub struct Profile;
+pub struct Profile {
+    initials: Option<SharedString>,
+}
+
+impl Profile {
+    /// The avatar of the user named `name`, if they've set one.
+    pub fn new(name: Option<&str>) -> Self {
+        Profile {
+            initials: name.map(|name| format::initials(name).into()),
+        }
+    }
+}
 
 impl RenderOnce for Profile {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
@@ -37,7 +50,10 @@ impl RenderOnce for Profile {
                     .text_xs()
                     .font_weight(FontWeight::BOLD)
                     .text_color(palette.avatar_text)
-                    .child("MV"),
+                    .map(|this| match self.initials {
+                        Some(initials) => this.child(initials),
+                        None => this.child(Icon::new(IconName::User).size_4()),
+                    }),
             )
             .dropdown_menu(|menu, window, cx| {
                 let dark = cx.app_theme() == AppTheme::Dark;
@@ -54,5 +70,19 @@ impl RenderOnce for Profile {
                             .on_click(|_, _, cx| Router::navigate(Route::Settings, cx)),
                     )
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shows_the_initials_of_the_users_name() {
+        assert_eq!(
+            Profile::new(Some("Ada Lovelace")).initials.as_deref(),
+            Some("AL")
+        );
+        assert_eq!(Profile::new(None).initials, None);
     }
 }

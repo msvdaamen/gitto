@@ -34,9 +34,9 @@ pub struct CommitRef {
     pub name: String,
     /// Full name, e.g. `refs/heads/main`, `refs/remotes/origin/main`; `HEAD` for a detached head.
     pub full_name: String,
-    /// Whether it's the checked-out branch. Left out (TS's `undefined`) unless it is.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub current: Option<bool>,
+    /// Whether it's the checked-out branch. Left out of the JSON (TS's `undefined`) unless it is.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub current: bool,
 }
 
 /// A commit, as the history lists it.

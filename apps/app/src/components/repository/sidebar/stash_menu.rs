@@ -44,7 +44,7 @@ impl StashMenu {
     }
 
     /// Whether a stash is being popped or deleted from the sidebar on the repository `id`.
-    pub fn is_busy(&self, id: &str, cx: &App) -> bool {
+    pub fn is_busy(&self, id: &RepositoryId, cx: &App) -> bool {
         self.actions.pop_picked.state(id, cx).running || self.actions.drop.state(id, cx).running
     }
 

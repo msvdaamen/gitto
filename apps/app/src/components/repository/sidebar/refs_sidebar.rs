@@ -142,15 +142,11 @@ impl RefsSidebar {
                 .child(
                     SegmentedControl::new(
                         "sidebar-mode",
-                        self.mode.label(),
-                        MODES.iter().map(|mode| mode.label()),
+                        self.mode,
+                        MODES.iter().map(|mode| (*mode, mode.label())),
                     )
-                    .on_change(move |label, _, cx| {
-                        if let Some(mode) = MODES.iter().find(|mode| mode.label() == label.as_ref())
-                        {
-                            let mode = *mode;
-                            let _ = this.update(cx, |sidebar, cx| sidebar.set_mode(mode, cx));
-                        }
+                    .on_change(move |mode, _, cx| {
+                        let _ = this.update(cx, |sidebar, cx| sidebar.set_mode(mode, cx));
                     }),
                 )
                 .into_any_element();

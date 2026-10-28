@@ -14,25 +14,20 @@ pub fn initials(name: &str) -> String {
     letters.to_uppercase()
 }
 
-/// TS's avatar colours, as `0xRRGGBB`.
-const AVATAR_COLORS: [u32; 6] = [0x7c5ce7, 0x38bda9, 0xa978dd, 0xe2a646, 0x5b9be6, 0xe0707a];
+/// The avatar colours, as `0xRRGGBB`.
+pub const AVATAR_COLORS: [u32; 6] = [0x7c5ce7, 0x38bda9, 0xa978dd, 0xe2a646, 0x5b9be6, 0xe0707a];
 
-/// An avatar colour picked by `key` (e.g. an email address), the same one every time, as
-/// `0xRRGGBB`.
+/// An avatar colour, as `0xRRGGBB`, picked by `key` (e.g. an email address), whatever its case,
+/// the same one every time: by the 32-bit FNV-1a hash of its lowercase UTF-8.
 pub fn avatar_color(key: &str) -> u32 {
-    let mut hash: i32 = 0;
-    for c in key.to_lowercase().chars() {
-        // `charCodeAt(0)` of the character: its first UTF-16 code unit.
-        let code = u32::from(c);
-        let unit = if code > 0xffff {
-            ((code - 0x1_0000) >> 10) + 0xd800
-        } else {
-            code
-        };
-        hash = hash.wrapping_mul(31).wrapping_add(unit as i32);
+    let mut hash: u32 = 0x811c_9dc5;
+    let mut utf8 = [0; 4];
+    for c in key.chars().flat_map(char::to_lowercase) {
+        for byte in c.encode_utf8(&mut utf8).bytes() {
+            hash = (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193);
+        }
     }
-    let index = i64::from(hash).unsigned_abs() % AVATAR_COLORS.len() as u64;
-    AVATAR_COLORS[index as usize]
+    AVATAR_COLORS[hash as usize % AVATAR_COLORS.len()]
 }
 
 const MINUTE: i64 = 60 * 1000;
@@ -201,13 +196,17 @@ mod tests {
     }
 
     #[test]
-    fn avatar_colors_are_picked_as_in_ts() {
-        // `avatarColor` in TS: "" hashes to 0, "a" to 97.
-        assert_eq!(avatar_color(""), 0x7c5ce7);
-        assert_eq!(avatar_color("A"), AVATAR_COLORS[97 % 6]);
+    fn picks_avatar_colors_by_the_fnv_1a_hash_of_the_lowercase_key() {
+        // FNV-1a: "" hashes to 0x811c9dc5, "a" to 0xe40c292c.
+        assert_eq!(avatar_color(""), AVATAR_COLORS[0x811c_9dc5 % 6]);
+        assert_eq!(avatar_color("A"), AVATAR_COLORS[0xe40c_292c % 6]);
         assert_eq!(
             avatar_color("ada@example.com"),
             avatar_color("Ada@Example.com")
+        );
+        assert_eq!(
+            avatar_color("ÉMILE@example.com"),
+            avatar_color("émile@example.com")
         );
     }
 }

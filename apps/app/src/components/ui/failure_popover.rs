@@ -10,21 +10,21 @@ use gpui_kit::prelude::*;
 use gpui_kit::{Anchor, App, ElementId, FontWeight, SharedString, Window, div};
 
 use super::icons::{Icon, IconName};
-use crate::data::QueryError;
 use crate::theme::PaletteExt as _;
 
 type OnDismiss = Rc<dyn Fn(&mut Window, &mut App) + 'static>;
 
 /// A button (or anything else that starts an action, and can show it's open), with a popover
 /// under it that says why the action failed until dismissed: e.g. the toolbar's Pull, or a tab's
-/// Remove. Dismissed by its close button, Escape, or a click outside; it doesn't take focus from
+/// Remove. It's given what to say (an error's message), not the error. Dismissed by its close button, Escape, or a click outside; it doesn't take focus from
 /// where the user is typing, as the action can fail meanwhile.
 #[derive(IntoElement)]
 pub struct FailurePopover<T: Selectable + IntoElement + 'static> {
     id: ElementId,
     /// The action, e.g. "Pull".
     title: SharedString,
-    error: Option<QueryError>,
+    /// Why it failed; `None` while it hasn't.
+    error: Option<SharedString>,
     on_dismiss: Option<OnDismiss>,
     trigger: T,
 }
@@ -33,7 +33,7 @@ impl<T: Selectable + IntoElement + 'static> FailurePopover<T> {
     pub fn new(
         id: impl Into<ElementId>,
         title: impl Into<SharedString>,
-        error: Option<QueryError>,
+        error: Option<SharedString>,
         trigger: T,
     ) -> Self {
         FailurePopover {
@@ -54,11 +54,7 @@ impl<T: Selectable + IntoElement + 'static> FailurePopover<T> {
 impl<T: Selectable + IntoElement + 'static> RenderOnce for FailurePopover<T> {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         let open = self.error.is_some();
-        let message: SharedString = self
-            .error
-            .as_ref()
-            .map(|error| error.message().into())
-            .unwrap_or_default();
+        let message = self.error.unwrap_or_default();
         let title = self.title;
         let on_dismiss = self.on_dismiss;
         let dismiss = on_dismiss.clone();

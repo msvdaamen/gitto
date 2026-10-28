@@ -186,14 +186,15 @@ impl RenderOnce for HistoryCommitRow {
 
 #[cfg(test)]
 mod tests {
-    use gitto_ui::format::avatar_color;
+    use gitto_ui::format::AVATAR_COLORS;
 
     use super::*;
     use crate::theme::palette;
 
     #[test]
     fn colours_authors_with_the_avatars_colours() {
-        // "" hashes to the first.
-        assert_eq!(author_color(avatar_color("")), palette::avatar_color(0));
+        for (index, color) in AVATAR_COLORS.into_iter().enumerate() {
+            assert_eq!(author_color(color), palette::avatar_color(index));
+        }
     }
 }

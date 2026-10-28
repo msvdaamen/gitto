@@ -386,10 +386,10 @@ mod tests {
                 kind: *kind,
                 name: (*name).into(),
                 full_name: (*full_name).into(),
-                current: None,
+                current: false,
             })
             .collect();
-        to_ref_labels(&refs, "e5", &Checkouts::default())
+        to_ref_labels(&refs, "e5", &Checkouts::default(), &["origin"])
     }
 
     // `ref-labels.test.tsx`: what double-clicking a label switches to.

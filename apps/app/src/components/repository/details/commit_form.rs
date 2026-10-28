@@ -25,6 +25,13 @@ const SHORTCUT: &str = if cfg!(target_os = "macos") {
     "Ctrl ↵"
 };
 
+/// HEAD's commit, told apart from the same commit in another repository, e.g. another worktree.
+#[derive(Debug, Clone, PartialEq)]
+struct Head {
+    repository: RepositoryId,
+    sha: String,
+}
+
 /// Commits what's staged in the repository, or amends the last commit with it. The new commit's
 /// message and the amended one are kept apart, so switching between them loses neither. Its owner
 /// tells it how many files are staged and which commit HEAD is ([`set_head`](Self::set_head)).
@@ -38,18 +45,16 @@ pub struct CommitForm {
     /// The commit being amended (as [`head`](Self::head)). Amending stops once HEAD moves to
     /// another commit: after the amend, or when one is made or checked out elsewhere, so a stale
     /// message is never amended onto it.
-    amending: Option<String>,
+    amending: Option<Head>,
     draft: CommitMessage,
     /// Edits to the amended message, kept for the commit they were made to while amending is
     /// toggled.
-    edits: Option<(String, CommitMessage)>,
+    edits: Option<(Head, CommitMessage)>,
     /// The last commit's message and where it was pushed, loaded while amending it.
     last_message: Query<String>,
     pushed_to: Query<Option<String>>,
     editor: Entity<CommitMessageEditor>,
     _subscriptions: Vec<Subscription>,
-    /// Shows the last commit's message once it's loaded (see [`show`](Self::show)).
-    _loading: Subscription,
 }
 
 impl CommitForm {
@@ -63,16 +68,20 @@ impl CommitForm {
         let editor = cx.new(|cx| CommitMessageEditor::new(3, window, cx));
         let subscriptions = vec![
             cx.observe(&commit, |_, _, cx| cx.notify()),
-            cx.subscribe_in(&editor, window, |this, _, event, window, cx| match event {
+            // Whatever changes the message on show notifies it: amending turned on or off, the
+            // last commit's message loaded, a commit made, HEAD moved.
+            cx.observe_in(&cx.entity(), window, |this, _, window, cx| {
+                this.show(window, cx)
+            }),
+            cx.subscribe(&editor, |this, _, event, cx| match event {
                 CommitMessageEvent::Edited(message) => this.edit(message.clone(), cx),
-                CommitMessageEvent::Submit => this.submit(window, cx),
+                CommitMessageEvent::Submit => this.submit(cx),
             }),
         ];
         let last_message = Query::new(
             data.commit_message(&repository_id, "", cx).enabled(false),
             cx,
         );
-        let loading = CommitForm::observe_loading(&last_message, window, cx);
         let pushed_to = Query::new(data.pushed_to(&repository_id, "", cx).enabled(false), cx);
         CommitForm {
             repository_id,
@@ -87,20 +96,7 @@ impl CommitForm {
             pushed_to,
             editor,
             _subscriptions: subscriptions,
-            _loading: loading,
         }
-    }
-
-    /// Shows `last_message` in the fields once it's loaded: after the query has seen it, as it
-    /// was observed first.
-    fn observe_loading(
-        last_message: &Query<String>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Subscription {
-        cx.observe_in(last_message.entry(), window, |this, _, window, cx| {
-            this.show(window, cx)
-        })
     }
 
     /// How many files are staged, and HEAD's commit (`None` before the first), in the repository
@@ -111,7 +107,6 @@ impl CommitForm {
         repository_id: RepositoryId,
         staged_count: usize,
         last_commit: Option<String>,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let moved = self.repository_id != repository_id || self.last_commit != last_commit;
@@ -129,28 +124,33 @@ impl CommitForm {
                 .commit_message(&self.repository_id, &sha, cx)
                 .enabled(false);
             self.last_message.set_options(message, cx);
-            self._loading = CommitForm::observe_loading(&self.last_message, window, cx);
             let pushed_to = self
                 .data
                 .pushed_to(&self.repository_id, &sha, cx)
                 .enabled(false);
             self.pushed_to.set_options(pushed_to, cx);
-            self.show(window, cx);
         }
         cx.notify();
     }
 
-    /// HEAD, told apart from the same commit in another repository, e.g. another worktree.
-    fn head(&self) -> Option<String> {
-        self.last_commit
-            .as_ref()
-            .map(|sha| format!("{} {sha}", self.repository_id))
+    fn head(&self) -> Option<Head> {
+        Some(Head {
+            repository: self.repository_id.clone(),
+            sha: self.last_commit.clone()?,
+        })
+    }
+
+    /// Whether `head` is HEAD.
+    fn is_head(&self, head: &Head) -> bool {
+        head.repository == self.repository_id && self.last_commit.as_ref() == Some(&head.sha)
     }
 
     /// Whether it's amending HEAD: checked against HEAD too, as amending is only reset once HEAD
     /// is seen to move.
     pub fn is_amending(&self) -> bool {
-        self.amending.is_some() && self.amending == self.head()
+        self.amending
+            .as_ref()
+            .is_some_and(|head| self.is_head(head))
     }
 
     /// The last commit's message, split, once loaded.
@@ -170,10 +170,9 @@ impl CommitForm {
     }
 
     fn amend_edits(&self) -> Option<CommitMessage> {
-        let head = self.head()?;
         self.edits
             .as_ref()
-            .filter(|(edited, _)| *edited == head)
+            .filter(|(edited, _)| self.is_head(edited))
             .map(|(_, message)| message.clone())
     }
 
@@ -201,13 +200,12 @@ impl CommitForm {
     }
 
     /// Turns amending on or off; either way, the last commit's failure is forgotten.
-    pub fn toggle_amend(&mut self, checked: bool, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn toggle_amend(&mut self, checked: bool, cx: &mut Context<Self>) {
         self.amending = if checked { self.head() } else { None };
         let amend = self.is_amending();
         self.last_message.set_enabled(amend, cx);
         self.pushed_to.set_enabled(amend, cx);
         self.commit.update(cx, |commit, cx| commit.reset(cx));
-        self.show(window, cx);
         cx.notify();
     }
 
@@ -240,7 +238,7 @@ impl CommitForm {
     }
 
     /// Commits, or amends, if it can.
-    pub fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn submit(&mut self, cx: &mut Context<Self>) {
         if !self.can_commit(cx) {
             return;
         }
@@ -259,16 +257,15 @@ impl CommitForm {
         let done = self
             .commit
             .update(cx, |commit, cx| commit.mutate(input, cx));
-        cx.spawn_in(window, async move |this, cx| {
+        cx.spawn(async move |this, cx| {
             if let Ok(Ok(())) = done.await {
-                let _ = this.update_in(cx, |this, window, cx| {
+                let _ = this.update(cx, |this, cx| {
                     if amended.is_none() {
                         this.draft = CommitMessage::default();
                     } else {
                         this.amending = None;
                         this.edits = None;
                     }
-                    this.show(window, cx);
                     cx.notify();
                 });
             }
@@ -308,7 +305,7 @@ impl CommitForm {
     }
 
     /// Puts the message on show in the fields once it changed other than by typing (amending
-    /// turned on or off, the last message loaded, a commit made, HEAD moved on), and says in the
+    /// turned on or off, the last message loaded, a commit made, HEAD moved), and says in the
     /// summary's placeholder when the last commit's message is loading.
     fn show(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let message = self.message();
@@ -342,8 +339,8 @@ impl Render for CommitForm {
                         .label("Amend last commit")
                         .checked(amend)
                         .disabled(self.last_commit.is_none() || pending)
-                        .on_click(cx.listener(|this, checked: &bool, window, cx| {
-                            this.toggle_amend(*checked, window, cx)
+                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                            this.toggle_amend(*checked, cx)
                         })),
                 ),
             )
@@ -372,7 +369,7 @@ impl Render for CommitForm {
                     .accessibility_label(SharedString::from(format!("{label} {SHORTCUT}")))
                     .font_weight(FontWeight::BOLD)
                     .disabled(!can_commit)
-                    .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx)))
+                    .on_click(cx.listener(|this, _, _, cx| this.submit(cx)))
                     // The shortcut, quietly, in the button's text color (TS's borderless `Kbd`).
                     .child(
                         div()
@@ -423,7 +420,7 @@ mod tests {
         let last_commit = last_commit.map(str::to_owned);
         let (dir, window, form) = open(cx, move |window, cx| {
             let mut form = CommitForm::new(repository_id(), data, window, cx);
-            form.set_head(repository_id(), staged, last_commit, window, cx);
+            form.set_head(repository_id(), staged, last_commit, cx);
             form
         });
         Form {
@@ -478,12 +475,8 @@ mod tests {
             cx: &mut TestAppContext,
         ) {
             let sha = sha.map(str::to_owned);
-            cx.update_window(self.window, |_, window, cx| {
-                self.form.update(cx, |form, cx| {
-                    form.set_head(repository_id, staged, sha, window, cx)
-                })
-            })
-            .unwrap();
+            self.form
+                .update(cx, |form, cx| form.set_head(repository_id, staged, sha, cx));
             cx.run_until_parked();
         }
 
@@ -570,6 +563,44 @@ mod tests {
         form.click("commit", cx);
         assert_eq!(form.committed(), [amended("Reworded\n\nIts body\n", "a1")]);
         assert!(!form.is_amend_checked(cx));
+    }
+
+    /// Holds the form without rendering it.
+    struct Unrendered {
+        form: Entity<CommitForm>,
+    }
+
+    impl Render for Unrendered {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    #[gpui_kit::test]
+    fn puts_the_last_commits_message_in_the_fields_without_being_rendered(cx: &mut TestAppContext) {
+        let fakes = Fakes::new();
+        let data = fakes.data();
+        let _dir = crate::test_support::init(cx, |services| services);
+        let (_, host) = crate::test_support::open(cx, move |window, cx| Unrendered {
+            form: cx.new(|cx| {
+                let mut form = CommitForm::new(repository_id(), data, window, cx);
+                form.set_head(repository_id(), 0, Some("a1".to_owned()), cx);
+                form
+            }),
+        });
+        let form = host.read_with(cx, |host, _| host.form.clone());
+        form.update(cx, |form, cx| form.toggle_amend(true, cx));
+        cx.run_until_parked();
+        assert_eq!(
+            form.read_with(cx, |form, cx| {
+                let editor = form.editor.read(cx);
+                (
+                    editor.summary().read(cx).value().to_string(),
+                    editor.description().read(cx).value().to_string(),
+                )
+            }),
+            ("Commit a1".to_owned(), "Its body".to_owned())
+        );
     }
 
     #[gpui_kit::test]

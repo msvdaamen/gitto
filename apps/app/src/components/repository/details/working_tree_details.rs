@@ -174,7 +174,7 @@ impl WorkingTreeDetails {
             .and_then(|summary| head_sha(&summary.head).map(str::to_owned));
         let repository_id = self.repository_id.clone();
         self.form.update(cx, |form, cx| {
-            form.set_head(repository_id, staged, last_commit, window, cx)
+            form.set_head(repository_id, staged, last_commit, cx)
         });
         let refetching = self.status.is_refetching();
         self.updating
@@ -495,7 +495,7 @@ impl WorkingTreeDetails {
         if side == Side::Unstaged
             && let Some(lists) = lists.as_ref()
         {
-            list = list.marker_free(Opaque::new(lists.marker_free().clone()));
+            list = list.marker_free(lists.marker_free().clone());
         }
 
         let header =

@@ -572,7 +572,7 @@ impl RefList {
     /// switch running, and why it failed; the worktrees' section, opening the worktree.
     pub fn activate_branch(&mut self, reference: &str, cx: &mut Context<Self>) {
         let others = self.other_worktrees();
-        match worktree_on(Some(&others), reference) {
+        match worktree_on(&others, reference) {
             None => {
                 let _ = self
                     .actions
@@ -676,9 +676,11 @@ impl RefList {
         else {
             return menu;
         };
-        let poppable = can_pop(
-            this.status.data().as_ref().map(|status| &status.counts),
-            stashes.as_deref(),
+        // Not until both have loaded.
+        let status = this.status.data();
+        let poppable = matches!(
+            (&status, &stashes),
+            (Some(status), Some(stashes)) if can_pop(&status.counts, stashes)
         );
         let id = this.repository_id.clone();
         let actions = this.actions.stash.clone();
@@ -1050,7 +1052,7 @@ fn tree_row(line: &TreeLine, rows: &RowContext) -> AnyElement {
 /// checked out in another worktree has a folder after its name, and says which in its tooltip.
 fn branch_row(branch: &Ref, label: &SharedString, depth: usize, rows: &RowContext) -> AnyElement {
     let full_name = SharedString::from(branch.full_name.clone());
-    let worktree = worktree_on(Some(&rows.other_worktrees), &branch.full_name);
+    let worktree = worktree_on(&rows.other_worktrees, &branch.full_name);
     let tag = worktree.map(|worktree| RowTag {
         icon: IconName::FolderGit2,
         label: format!("Checked out in {}", worktree.name).into(),
@@ -1370,7 +1372,7 @@ mod tests {
         }
 
         fn stash_actions(&self) -> StashActions {
-            let busy = |id: &str, cx: &App| StashActions::is_pending(id, cx);
+            let busy = |id: &RepositoryId, cx: &App| StashActions::is_pending(id, cx);
             let unused = RepositoryOperation::new("unused", |_, _: String, cx: &mut App| {
                 cx.background_spawn(async { Ok::<_, QueryError>(()) })
             });
@@ -1386,7 +1388,7 @@ mod tests {
         }
 
         fn worktree_actions(&self) -> WorktreeActions {
-            let busy = |id: &str, cx: &App| WorktreeActions::is_pending(id, cx);
+            let busy = |id: &RepositoryId, cx: &App| WorktreeActions::is_pending(id, cx);
             WorktreeActions {
                 add: self
                     .add
@@ -1489,7 +1491,7 @@ mod tests {
             name: "main".into(),
             sha: "abc".into(),
         });
-        status.counts = StatusCounts {
+        status.summary.counts = StatusCounts {
             files: 1,
             staged: 0,
             unstaged: 1,
@@ -1554,7 +1556,7 @@ mod tests {
         set_push_target(
             id,
             gitto_git::features::remote::schema::PushTarget::Blocked {
-                reason: "There's no remote to push to.".into(),
+                reason: gitto_git::PushBlocker::NoRemote,
             },
             cx,
         );
@@ -1753,14 +1755,17 @@ mod tests {
         fn show(&self, id: &RepositoryId, cx: &mut TestAppContext) {
             let list = self.list(cx);
             let provider = self.provider(cx);
-            let toolbar = self.host.read_with(cx, |host, _| host.toolbar.clone());
+            let host = self.host.clone();
             let id = id.clone();
             self.in_window(cx, |window, cx| {
                 provider.update(cx, |provider, cx| {
                     provider.set_repository(id.clone(), window, cx)
                 });
-                toolbar.update(cx, |toolbar, cx| {
-                    toolbar.set_repository(id.clone(), window, cx)
+                // The page makes another toolbar for another repository.
+                let toolbar = cx.new(|cx| RepositoryToolbar::new(id.clone(), window, cx));
+                host.update(cx, |host, cx| {
+                    host.toolbar = toolbar;
+                    cx.notify();
                 });
                 list.update(cx, |list, cx| list.set_repository(id, window, cx));
             });
@@ -2453,7 +2458,7 @@ mod tests {
     fn isnt_offered_while_conflicts_are_left_to_resolve(cx: &mut TestAppContext) {
         let f = render_with(cx, |id, cx| {
             let mut conflicted = status();
-            conflicted.counts.conflicted = 1;
+            conflicted.summary.counts.conflicted = 1;
             set_status(id, conflicted, cx);
         });
         f.open_menu(FEATURE, cx);
@@ -2679,7 +2684,7 @@ mod tests {
         let f = render_with(cx, |id, cx| {
             with_stashes(id, cx);
             let mut conflicted = status();
-            conflicted.counts.conflicted = 1;
+            conflicted.summary.counts.conflicted = 1;
             set_status(id, conflicted, cx);
         });
         f.expand(Section::Stashes, cx);

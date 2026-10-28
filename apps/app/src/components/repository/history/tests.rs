@@ -18,7 +18,7 @@ use gitto_git::features::stash::schema::Stash;
 use gitto_git::features::status::schema::{Head, Uncommitted};
 use gitto_git::features::worktree::schema::Worktree;
 use gitto_git::input::RepositoryId;
-use gitto_ui::git::rows::{WIP_ID, stash_row_id};
+use gitto_ui::git::rows::RowId;
 use gpui_kit::base::actions::{SelectFirst, SelectLast, SelectUp};
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _};
@@ -86,8 +86,13 @@ fn commit_ref(kind: CommitRefKind, full_name: &str, current: bool) -> CommitRef 
         kind,
         name,
         full_name: full_name.into(),
-        current: current.then_some(true),
+        current,
     }
+}
+
+/// The id of the row of the commit `sha`.
+fn commit_id(sha: &str) -> RowId {
+    RowId::Commit(sha.into())
 }
 
 /// On main, at `sha`, with `staged` files staged.
@@ -96,9 +101,9 @@ fn on_main(sha: &str, staged: u64) -> Uncommitted {
         name: "main".into(),
         sha: sha.into(),
     });
-    status.counts.staged = staged;
-    status.counts.files = staged;
-    status.version = uuid::Uuid::now_v7().to_string();
+    status.summary.counts.staged = staged;
+    status.summary.counts.files = staged;
+    status.version = uuid::Uuid::now_v7().to_string().into();
     status
 }
 
@@ -170,14 +175,20 @@ fn reword_mutation(
                 .borrow_mut()
                 .take()
                 .unwrap_or_else(|| Err(QueryError::msg("Not in this test.")));
+            // The repository reloads before the rewording is done, as it does after git's.
+            let mut reloading = None;
             let result = result.map(|(sha, log, status)| {
-                // The repository reloads before the rewording is done.
                 *repository.log.borrow_mut() = log;
                 set_status_in(&id, status, cx);
-                let _ = QueryClient::invalidate(&keys::log(&id), cx);
+                reloading = Some(QueryClient::invalidate(&keys::log(&id), cx));
                 sha
             });
-            cx.background_spawn(async move { result })
+            cx.background_spawn(async move {
+                if let Some(reloading) = reloading {
+                    reloading.await;
+                }
+                result
+            })
         },
         cx,
     )
@@ -229,7 +240,7 @@ fn branch_actions(calls: &Rc<Calls>) -> BranchActions {
 struct Host {
     table: Entity<HistoryTable>,
     provider: Entity<BranchMenuProvider>,
-    selections: Rc<RefCell<Vec<String>>>,
+    selections: Rc<RefCell<Vec<RowId>>>,
     _subscription: Subscription,
 }
 
@@ -258,7 +269,7 @@ struct Start {
     stashes: Vec<Stash>,
     worktrees: Vec<Worktree>,
     refs: Vec<Ref>,
-    selected: Option<String>,
+    selected: Option<RowId>,
     details_follow: bool,
 }
 
@@ -364,13 +375,12 @@ fn render(cx: &mut TestAppContext, start: Start) -> Rendered {
 }
 
 impl Rendered {
-    fn selected(&self, cx: &mut TestAppContext) -> Option<String> {
-        self.table.read_with(cx, |table, _| {
-            table.selected().map(|row| row.id().to_owned())
-        })
+    fn selected(&self, cx: &mut TestAppContext) -> Option<RowId> {
+        self.table
+            .read_with(cx, |table, _| table.selected().map(|row| row.id()))
     }
 
-    fn selections(&self, cx: &mut TestAppContext) -> Vec<String> {
+    fn selections(&self, cx: &mut TestAppContext) -> Vec<RowId> {
         self.host
             .read_with(cx, |host, _| host.selections.borrow().clone())
     }
@@ -525,19 +535,19 @@ impl Rendered {
 #[gpui_kit::test]
 fn selects_the_next_and_the_previous_row_with_the_arrow_keys(cx: &mut TestAppContext) {
     let history = render(cx, Start::default());
-    assert_eq!(history.selected(cx).as_deref(), Some("e5"));
+    assert_eq!(history.selected(cx), Some(commit_id("e5")));
     history.focus(cx);
     let options = history.options(cx);
     assert_eq!(options[0], ("Commit e5, by Ada Lovelace".into(), true));
 
     history.press("down", cx);
     history.press("down", cx);
-    assert_eq!(history.selected(cx).as_deref(), Some("c3"));
+    assert_eq!(history.selected(cx), Some(commit_id("c3")));
     let options = history.options(cx);
     assert!(options.contains(&("Commit c3, by Ada Lovelace".into(), true)));
 
     history.press("up", cx);
-    assert_eq!(history.selected(cx).as_deref(), Some("d4"));
+    assert_eq!(history.selected(cx), Some(commit_id("d4")));
     // The list keeps the focus, whichever row is selected.
     assert!(history.is_list_focused(cx));
 }
@@ -556,30 +566,30 @@ fn only_loads_the_files_of_the_row_the_details_show_not_of_every_row_passed(
     }
     let table = history.table.clone();
     table.update(cx, |table, cx| {
-        table.set_selection(Some("e5".into()), Some("e5".into()), cx)
+        table.set_selection(Some(commit_id("e5")), Some(commit_id("e5")), cx)
     });
     assert_eq!(
-        table.read_with(cx, |table, _| table.totals_of().map(str::to_owned)),
-        Some("e5".into())
+        table.read_with(cx, |table, _| table.totals_of().cloned()),
+        Some(commit_id("e5"))
     );
 
     history.focus(cx);
     history.press("down", cx);
     history.press("down", cx);
     history.press("down", cx);
-    assert_eq!(history.selected(cx).as_deref(), Some("b2"));
+    assert_eq!(history.selected(cx), Some(commit_id("b2")));
     // The details still show e5: no other row's files load.
     assert_eq!(
-        table.read_with(cx, |table, _| table.totals_of().map(str::to_owned)),
+        table.read_with(cx, |table, _| table.totals_of().cloned()),
         None
     );
 
     table.update(cx, |table, cx| {
-        table.set_selection(Some("b2".into()), Some("b2".into()), cx)
+        table.set_selection(Some(commit_id("b2")), Some(commit_id("b2")), cx)
     });
     assert_eq!(
-        table.read_with(cx, |table, _| table.totals_of().map(str::to_owned)),
-        Some("b2".into())
+        table.read_with(cx, |table, _| table.totals_of().cloned()),
+        Some(commit_id("b2"))
     );
 }
 
@@ -589,13 +599,13 @@ fn stops_at_the_first_and_the_last_row(cx: &mut TestAppContext) {
     history.focus(cx);
 
     history.press("up", cx);
-    assert_eq!(history.selected(cx).as_deref(), Some("e5"));
+    assert_eq!(history.selected(cx), Some(commit_id("e5")));
     history.press("end", cx);
-    assert_eq!(history.selected(cx).as_deref(), Some("a1"));
+    assert_eq!(history.selected(cx), Some(commit_id("a1")));
     history.press("down", cx);
-    assert_eq!(history.selected(cx).as_deref(), Some("a1"));
+    assert_eq!(history.selected(cx), Some(commit_id("a1")));
     history.press("home", cx);
-    assert_eq!(history.selected(cx).as_deref(), Some("e5"));
+    assert_eq!(history.selected(cx), Some(commit_id("e5")));
 }
 
 #[gpui_kit::test]
@@ -611,11 +621,11 @@ fn moves_the_selection_with_the_actions_its_keys_are_bound_to(cx: &mut TestAppCo
     };
 
     dispatch(Box::new(SelectLast), cx);
-    assert_eq!(history.selected(cx).as_deref(), Some("a1"));
+    assert_eq!(history.selected(cx), Some(commit_id("a1")));
     dispatch(Box::new(SelectUp), cx);
-    assert_eq!(history.selected(cx).as_deref(), Some("b2"));
+    assert_eq!(history.selected(cx), Some(commit_id("b2")));
     dispatch(Box::new(SelectFirst), cx);
-    assert_eq!(history.selected(cx).as_deref(), Some("e5"));
+    assert_eq!(history.selected(cx), Some(commit_id("e5")));
 }
 
 #[gpui_kit::test]
@@ -644,9 +654,9 @@ fn moves_a_page_at_a_time_with_page_down_and_page_up(cx: &mut TestAppContext) {
     assert!(page > 10, "{page}");
 
     history.press("pagedown", cx);
-    assert_eq!(history.selected(cx), Some(format!("c{page}")));
+    assert_eq!(history.selected(cx), Some(commit_id(&format!("c{page}"))));
     history.press("pageup", cx);
-    assert_eq!(history.selected(cx).as_deref(), Some("c0"));
+    assert_eq!(history.selected(cx), Some(commit_id("c0")));
 }
 
 #[gpui_kit::test]
@@ -666,7 +676,7 @@ fn starts_at_the_first_row_thats_on_show_when_the_search_hides_the_selected_one(
 
     history.focus(cx);
     history.press("down", cx);
-    assert_eq!(history.selected(cx).as_deref(), Some("c3"));
+    assert_eq!(history.selected(cx), Some(commit_id("c3")));
 }
 
 #[gpui_kit::test]
@@ -678,10 +688,10 @@ fn hands_the_focus_to_the_list_when_a_row_is_clicked(cx: &mut TestAppContext) {
     })
     .unwrap();
     cx.run_until_parked();
-    assert_eq!(history.selected(cx).as_deref(), Some("b2"));
+    assert_eq!(history.selected(cx), Some(commit_id("b2")));
     assert!(history.is_list_focused(cx));
     history.press("down", cx);
-    assert_eq!(history.selected(cx).as_deref(), Some("a1"));
+    assert_eq!(history.selected(cx), Some(commit_id("a1")));
 }
 
 // --- history-paging.test.tsx -----------------------------------------------------------------
@@ -847,7 +857,7 @@ fn two_commits(staged: u64) -> Start {
             commit("d4", "Commit d4", &[], vec![]),
         ],
         status: on_main("e5", staged),
-        selected: Some("e5".into()),
+        selected: Some(commit_id("e5")),
         ..Start::default()
     }
 }
@@ -952,7 +962,7 @@ fn edits_the_last_commits_message_keeping_the_rewritten_commit_selected(cx: &mut
         }]
     );
     assert!(!history.has_dialog(cx));
-    assert_eq!(history.selected(cx).as_deref(), Some("f6"));
+    assert_eq!(history.selected(cx), Some(commit_id("f6")));
 }
 
 #[gpui_kit::test]
@@ -962,10 +972,8 @@ fn keeps_the_rewritten_commit_selected_rather_than_the_uncommitted_changes(
     let history = render(cx, two_commits(1));
     // The history has a row for the changes, above the commit.
     assert_eq!(
-        history
-            .table
-            .read_with(cx, |table, _| table.rows()[0].id().to_owned()),
-        WIP_ID
+        history.table.read_with(cx, |table, _| table.rows()[0].id()),
+        RowId::Wip
     );
     set_message(&history, "e5", "Commit e5\n\nWhy it was made\n", None, cx);
     *history.reword.borrow_mut() = Some(Ok(reworded_to_f6(1)));
@@ -973,9 +981,9 @@ fn keeps_the_rewritten_commit_selected_rather_than_the_uncommitted_changes(
     history.edit_message_of("e5", cx);
     history.type_text("!", cx);
     history.press("enter", cx);
-    assert_eq!(history.selected(cx).as_deref(), Some("f6"));
+    assert_eq!(history.selected(cx), Some(commit_id("f6")));
     // The history fell back to the changes once the commit was gone, before it was told of f6.
-    assert_eq!(history.selections(cx), [WIP_ID, "f6"]);
+    assert_eq!(history.selections(cx), [RowId::Wip, commit_id("f6")]);
 }
 
 #[gpui_kit::test]
@@ -1157,7 +1165,7 @@ fn branches(worktrees: Vec<Worktree>) -> Start {
             remote("origin/release"),
         ],
         worktrees,
-        selected: Some("e5".into()),
+        selected: Some(commit_id("e5")),
         ..Start::default()
     }
 }
@@ -1520,8 +1528,8 @@ fn doesnt_show_the_tooltip_of_a_node_the_pointer_only_passed_over(cx: &mut TestA
 #[gpui_kit::test]
 fn lists_the_uncommitted_changes_then_the_stashes_among_the_commits(cx: &mut TestAppContext) {
     let mut status = on_main("b1", 0);
-    status.counts.unstaged = 1;
-    status.counts.files = 1;
+    status.summary.counts.unstaged = 1;
+    status.summary.counts.files = 1;
     let mut second = commit("b1", "Second", &["a1"], vec![]);
     second.committed_at = 2000;
     let mut first = commit("a1", "First", &[], vec![]);
@@ -1574,11 +1582,11 @@ fn lists_the_uncommitted_changes_then_the_stashes_among_the_commits(cx: &mut Tes
         .unwrap();
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
 
-    // A stash's row is selected by its id.
+    // A stash's row is selected by its SHA.
     cx.update_window(history.window, |_, window, cx| {
-        window.click(keyed("stash", stash_row_id(&"c".repeat(40))), cx)
+        window.click(keyed("stash", "c".repeat(40)), cx)
     })
     .unwrap();
     cx.run_until_parked();
-    assert_eq!(history.selected(cx), Some(stash_row_id(&"c".repeat(40))));
+    assert_eq!(history.selected(cx), Some(RowId::Stash("c".repeat(40))));
 }

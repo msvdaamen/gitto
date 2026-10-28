@@ -14,6 +14,5 @@ pub mod staging;
 pub mod stash;
 pub mod status;
 pub mod user;
-pub mod version;
 pub mod watch;
 pub mod worktree;

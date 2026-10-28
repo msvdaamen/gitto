@@ -58,13 +58,8 @@ impl Services {
     /// The services on `db`, with `system` and `storage`: for tests, an in-memory database.
     pub fn with(paths: AppPaths, db: Db, system: SystemContext, storage: Rc<LocalStorage>) -> Self {
         let repositories = RepositoryService::new(RepositoryStore::new(db.clone()));
-        let git = GitApi::new(repositories.clone()).on_bug(|error, procedure| {
-            log::error!(
-                "[bug] {procedure} failed ({}): {}",
-                error.code().code(),
-                error.error()
-            );
-        });
+        // `GitApi` logs what fails itself, a bug as an error.
+        let git = GitApi::new(repositories.clone());
         Services {
             paths,
             db,
