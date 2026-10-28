@@ -463,8 +463,8 @@ mod tests {
 
     use super::*;
     use crate::components::repository::test_support::{
-        Repositories, repository, repository_id, set_operation, set_push_target, set_refs,
-        set_remotes, set_stashes, set_status, set_worktrees, setup_with, status,
+        Repositories, click_label, repository, repository_id, set_operation, set_push_target,
+        set_refs, set_remotes, set_stashes, set_status, set_worktrees, setup_with, status,
     };
 
     /// Gives `id` what the toolbar's buttons show, so none of them loads from git.
@@ -641,6 +641,29 @@ mod tests {
             .read_with(cx, |toolbar, _| toolbar.branch_failure())
             .unwrap();
         assert_eq!(kind.title(), "Merge");
+    }
+
+    #[gpui_kit::test]
+    fn dismisses_the_failure_shown_from_its_popover(cx: &mut TestAppContext) {
+        let (_dir, a, _, _, window, toolbar) = render(cx);
+        let merge = RepositoryOperation::new("merge", |_, (), cx: &mut App| {
+            cx.background_spawn(async { Err::<(), _>(QueryError::msg("Merge conflict.")) })
+        });
+        cx.update(|cx| drop(merge.run(&a, (), cx)));
+        cx.run_until_parked();
+        assert!(
+            toolbar
+                .read_with(cx, |toolbar, _| toolbar.branch_failure())
+                .is_some()
+        );
+
+        click_label(window, "Dismiss", cx);
+        assert!(
+            toolbar
+                .read_with(cx, |toolbar, _| toolbar.branch_failure())
+                .is_none()
+        );
+        assert!(cx.update(|cx| merge.state(&a, cx)).error.is_none());
     }
 
     #[test]

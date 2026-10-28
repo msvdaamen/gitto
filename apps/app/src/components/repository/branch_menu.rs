@@ -902,6 +902,43 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn forgets_its_menu_and_closes_its_dialogs_for_another_repository(cx: &mut TestAppContext) {
+        let calls = Rc::new(Calls::default());
+        let (_dir, id, window, host) = render(cx, &calls);
+        let provider = host.read_with(cx, |host, _| host.provider.clone());
+        let other = repository_id();
+        set_status(&other, status(), cx);
+        set_operation(&other, None, cx);
+        set_refs(&other, Vec::new(), cx);
+        set_worktrees(&other, Vec::new(), cx);
+        set_remotes(&other, &[], cx);
+        let switch = |to: RepositoryId, cx: &mut TestAppContext| {
+            cx.update_window(window, |_, window, cx| {
+                provider.update(cx, |provider, cx| provider.set_repository(to, window, cx))
+            })
+            .unwrap();
+            cx.run_until_parked();
+        };
+
+        open_menu(window, "row-refs/heads/topic", cx);
+        switch(other.clone(), cx);
+        assert_eq!(
+            provider.read_with(cx, |provider, _| provider.open_for().cloned()),
+            None
+        );
+
+        switch(id, cx);
+        open_menu(window, "row-refs/heads/topic", cx);
+        choose(window, "Create branch…", cx);
+        assert!(has_dialog(window, cx));
+        switch(other, cx);
+        assert!(!has_dialog(window, cx));
+        assert!(!provider.read_with(cx, |provider, cx| {
+            provider.create_dialog().read(cx).is_open()
+        }));
+    }
+
+    #[gpui_kit::test]
     fn doesnt_merge_the_checked_out_branch_into_itself_nor_delete_it(cx: &mut TestAppContext) {
         let calls = Rc::new(Calls::default());
         let (_dir, _, window, _) = render(cx, &calls);

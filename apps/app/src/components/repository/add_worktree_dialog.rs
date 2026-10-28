@@ -402,7 +402,7 @@ mod tests {
 
     use super::*;
     use crate::components::repository::test_support::{
-        Repositories, repository, repository_id, set_refs, set_worktrees, setup_with,
+        Repositories, has_dialog, repository, repository_id, set_refs, set_worktrees, setup_with,
     };
     use crate::data::{QueryError, RepositoryOperation};
 
@@ -563,6 +563,35 @@ mod tests {
         })
         .unwrap();
         assert!(dialog.read_with(cx, |dialog, cx| dialog.is_valid(cx)));
+    }
+
+    #[gpui_kit::test]
+    fn closes_and_forgets_the_folder_and_name_for_another_repository(cx: &mut TestAppContext) {
+        let adds = Rc::new(RefCell::new(Vec::new()));
+        let (_dir, window, dialog) = render(cx, &adds);
+        open(window, &dialog, "refs/remotes/origin/main", cx);
+        let (folder, new_branch) = dialog.read_with(cx, |dialog, _| {
+            (dialog.folder.clone(), dialog.new_branch.clone())
+        });
+        cx.update_window(window, |_, window, cx| {
+            new_branch.update(cx, |input, cx| input.set_value("hotfix", window, cx))
+        })
+        .unwrap();
+        assert_ne!(value(&folder, cx), "");
+
+        let other = repository_id();
+        set_worktrees(&other, Vec::new(), cx);
+        set_refs(&other, Vec::new(), cx);
+        cx.update_window(window, |_, window, cx| {
+            dialog.update(cx, |dialog, cx| dialog.set_repository(other, window, cx))
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert!(!dialog.read_with(cx, |dialog, _| dialog.is_open()));
+        assert!(!has_dialog(window, cx));
+        assert_eq!(value(&folder, cx), "");
+        assert_eq!(value(&new_branch, cx), "");
+        assert!(adds.borrow().is_empty());
     }
 
     #[gpui_kit::test]

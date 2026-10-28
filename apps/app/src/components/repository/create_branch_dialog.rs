@@ -215,7 +215,7 @@ mod tests {
 
     use super::*;
     use crate::components::repository::test_support::{
-        changed, repository_id, set_status, setup, status,
+        changed, has_dialog, repository_id, set_status, setup, status,
     };
     use crate::data::{QueryError, RepositoryOperation};
 
@@ -294,6 +294,42 @@ mod tests {
             dialog.read_with(cx, |dialog, cx| dialog.name.read(cx).value().to_string()),
             ""
         );
+    }
+
+    #[gpui_kit::test]
+    fn closes_and_forgets_the_name_for_another_repository(cx: &mut TestAppContext) {
+        let _dir = setup(cx);
+        let id = repository_id();
+        set_status(&id, status(), cx);
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let (window, dialog) = render(cx, &id, &calls);
+        cx.update_window(window, |_, window, cx| {
+            dialog.update(cx, |dialog, cx| {
+                dialog.open("refs/heads/main".into(), window, cx)
+            });
+            window.input("topic", cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert_eq!(
+            dialog.read_with(cx, |dialog, cx| dialog.name.read(cx).value().to_string()),
+            "topic"
+        );
+
+        let other = repository_id();
+        set_status(&other, status(), cx);
+        cx.update_window(window, |_, window, cx| {
+            dialog.update(cx, |dialog, cx| dialog.set_repository(other, window, cx))
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert!(!dialog.read_with(cx, |dialog, _| dialog.is_open()));
+        assert!(!has_dialog(window, cx));
+        assert_eq!(
+            dialog.read_with(cx, |dialog, cx| dialog.name.read(cx).value().to_string()),
+            ""
+        );
+        assert!(calls.borrow().is_empty());
     }
 
     #[gpui_kit::test]
