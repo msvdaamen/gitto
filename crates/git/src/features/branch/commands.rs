@@ -26,10 +26,18 @@ pub(crate) fn no_ref_syntax_advice() -> RunOptions {
     RunOptions::default().config("advice.refSyntax=false")
 }
 
-/// `ref`'s kind and short name, if it's a branch, local or remote; `None` for a tag or anything
-/// else.
-pub(crate) fn branch_name(reference: &str) -> Option<RefName> {
-    parse_ref_name(reference).filter(|target| target.kind != RefKind::Tag)
+/// `ref`'s kind and short name, if it's a branch, local or remote; fails with
+/// `Error::InvalidInput` for a tag or anything else (see `not_a_branch`).
+pub(crate) fn branch_target(reference: &str) -> Result<RefName> {
+    parse_ref_name(reference)
+        .filter(|target| target.kind != RefKind::Tag)
+        .ok_or_else(|| not_a_branch(reference))
+}
+
+/// That `ref` isn't the full name of a local or remote branch that's there: input that isn't
+/// valid, as what the UI asks about is a branch it listed.
+pub(crate) fn not_a_branch(reference: &str) -> Error {
+    Error::InvalidInput(format!("{reference} isn't a branch."))
 }
 
 /// Creates the branch `name` and switches to it: at HEAD, or at the branch `from` (a full ref name),
@@ -41,7 +49,8 @@ pub(crate) fn branch_name(reference: &str) -> Option<RefName> {
 /// pulling it doesn't pull that one's commits into it. Git refuses a name that's taken or not a
 /// valid branch name, and to switch in the middle of a merge or rebase, saying so.
 ///
-/// Fails with `Error::InvalidInput` if `name` is only whitespace, as the UI's input is checked.
+/// Fails with `Error::InvalidInput` if `name` is only whitespace, or `from` isn't a branch that's
+/// there, as the UI's input is checked.
 pub async fn create_branch(repo: &Repo, name: &str, from: Option<&str>) -> Result<()> {
     if !has_non_space(name) {
         return Err(Error::InvalidInput("The name is empty.".to_owned()));
@@ -53,15 +62,13 @@ pub async fn create_branch(repo: &Repo, name: &str, from: Option<&str>) -> Resul
         repo.write_with(args, no_ref_syntax_advice()).await?;
         return Ok(());
     };
-    if branch_name(from).is_none() {
-        return Err(Error::Bug(format!("{from} isn't a branch.")));
-    }
+    branch_target(from)?;
     let root = repo.path().to_owned();
     // One write, so nothing else changes the branches, the stashes or the working tree halfway.
     repo.exclusive(|run| async move {
         // That ref itself, rather than git reading `from` as a revision, like `refs/heads/main~3`.
         if !is_ref(&run, from).await? {
-            return Err(Error::Bug(format!("{from} isn't a branch.")));
+            return Err(not_a_branch(from));
         }
         let mut args = args;
         args.extend(["--".to_owned(), from.to_owned()]);
@@ -74,6 +81,25 @@ pub async fn create_branch(repo: &Repo, name: &str, from: Option<&str>) -> Resul
 pub async fn is_ref(run: &GitCommand, reference: &str) -> Result<bool> {
     // Exits with 1, saying nothing, when there's no such ref.
     succeeds(run, ["show-ref", "--verify", "--quiet", reference]).await
+}
+
+/// What the ref `ref`, by its full name, points at; `None` if there's no such ref. That ref itself,
+/// rather than git reading `ref` as a revision, like `refs/heads/main~3`.
+pub async fn ref_sha(run: &GitCommand, reference: &str) -> Result<Option<String>> {
+    match run.run(["show-ref", "--verify", "--hash", reference]).await {
+        Ok(sha) => Ok(Some(sha.trim().to_owned())),
+        // Without `--quiet`, which would leave the SHA out too, it says so when there's no such
+        // ref.
+        Err(error)
+            if error.is_exit(128)
+                && error
+                    .as_git()
+                    .is_some_and(|git| git.stderr.contains("- not a valid ref")) =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// What git says when it won't switch as it'd lose uncommitted changes or untracked files: ones the
@@ -93,10 +119,10 @@ static WOULD_LOSE: LazyLock<Regex> = LazyLock::new(|| {
 /// stashed, the branch switched to, and the stash popped there; if it wouldn't pop without
 /// conflicts, it's kept, and that's returned as an `Error::ChangesStashed`. Git refuses to switch in
 /// the middle of a merge or rebase, saying so.
+///
+/// Fails with `Error::InvalidInput` if `ref` isn't a branch, as the UI's input is checked.
 pub async fn switch_branch(repo: &Repo, reference: &str) -> Result<()> {
-    let Some(target) = branch_name(reference) else {
-        return Err(Error::Bug(format!("{reference} isn't a branch.")));
-    };
+    let target = branch_target(reference)?;
     let root = repo.path().to_owned();
     // One write, so nothing else changes the branches, the stashes or the working tree halfway.
     repo.exclusive(|run| async move {
@@ -127,28 +153,51 @@ async fn switch_taking_changes(
     };
 
     let stash = stash_to_switch(run, name, refused).await?;
-    let from = head_position(run).await?;
+    // From here until they're popped, the changes are in the stash, which every failure says.
+    let from = head_position(run).await.map_err(in_the_stash)?;
     let mut failed = None;
     if let Err(error) = run.run_with(&args, switching).await {
         // Back as they were, on the branch they were made on, when it didn't switch.
-        if head_position(run).await? == from {
-            pop_newest(run).await?;
+        if head_position(run).await.map_err(in_the_stash)? == from {
+            pop_newest(run).await.map_err(in_the_stash)?;
             return Err(error);
         }
         // It switched, but failed after, at a post-checkout hook, say: returned once they're back.
         failed = Some(error);
     }
-    if !pops_cleanly(run, root, &stash).await? {
-        let branch = current_branch(run).await?;
-        return Err(Error::ChangesStashed(format!(
+    if !pops_cleanly(run, root, &stash)
+        .await
+        .map_err(in_the_stash)?
+    {
+        let branch = current_branch(run).await.ok().flatten();
+        let mut message = format!(
             "Switched to {}, but your uncommitted changes conflict with it, so they're kept in the stash.",
             branch.as_deref().unwrap_or("the branch")
-        )));
+        );
+        if let Some(failed) = failed {
+            message.push_str(&format!(
+                " Git also failed after switching:\n{}",
+                failed.without_hints()
+            ));
+        }
+        return Err(Error::ChangesStashed(message));
     }
-    pop_newest(run).await?;
+    pop_newest(run).await.map_err(in_the_stash)?;
     match failed {
         Some(error) => Err(error),
         None => Ok(()),
+    }
+}
+
+/// `error`, which came up while the uncommitted changes were in the stash, saying they're kept
+/// there: as an `Error::ChangesStashed`, unless popping them conflicted, which says so itself.
+fn in_the_stash(error: Error) -> Error {
+    match error {
+        Error::ChangesStashed(_) | Error::StashConflict(_) => error,
+        error => Error::ChangesStashed(format!(
+            "{}\nYour uncommitted changes are kept in the stash.",
+            error.without_hints()
+        )),
     }
 }
 
@@ -189,10 +238,9 @@ pub async fn tracking_branch(run: &GitCommand, reference: &str, name: &str) -> R
     let (tracking, remotes) =
         futures::try_join!(tracking_locals(run, reference), list_remotes(run))?;
     // Without the remote, or (the remote's gone, its branches left) the name's first part.
-    let local = match remote_of(&remotes, name) {
-        Some(remote) => &name[remote.len() + 1..],
-        None => name.find('/').map_or(name, |slash| &name[slash + 1..]),
-    };
+    let local = remote_of(&remotes, name)
+        .and_then(|remote| name.strip_prefix(remote)?.strip_prefix('/'))
+        .unwrap_or_else(|| name.split_once('/').map_or(name, |(_, rest)| rest));
     let branch = tracking
         .iter()
         .find(|candidate| candidate.current)
@@ -742,6 +790,51 @@ mod tests {
     }
 
     #[test]
+    fn says_a_hook_failed_after_it_switched_when_the_changes_are_kept_in_the_stash() {
+        let fx = Fixture::new();
+        let path = create_branched_repo(&fx, "switch-hook-conflict");
+        write_script(
+            &path.join(".git").join("hooks").join("post-checkout"),
+            "#!/bin/sh\necho hook failed >&2\nexit 1\n",
+        );
+        fs::write(path.join("a.txt"), "mine\n").unwrap();
+
+        smol::block_on(async {
+            let repo = fx.repos.open("switch-hook-conflict").await.unwrap();
+            let error = switch_branch(&repo, "refs/heads/other").await.unwrap_err();
+            assert!(matches!(error, Error::ChangesStashed(_)), "{error:?}");
+            let message = error.to_string();
+            assert!(
+                message.starts_with(
+                    "Switched to other, but your uncommitted changes conflict with it, so they're kept in the stash. Git also failed after switching:\n"
+                ),
+                "{message}"
+            );
+            assert!(message.ends_with("\nhook failed"), "{message}");
+        });
+        assert_eq!(git(&path, ["symbolic-ref", "--short", "HEAD"]), "other");
+        assert!(
+            git(&path, ["stash", "list"]).contains("Uncommitted changes when switching to other")
+        );
+    }
+
+    #[test]
+    fn says_the_changes_are_in_the_stash_when_it_fails_once_theyre_stashed() {
+        let error = in_the_stash(Error::Bug("Git failed.".to_owned()));
+        assert!(matches!(error, Error::ChangesStashed(_)), "{error:?}");
+        assert_eq!(
+            error.to_string(),
+            "Git failed.\nYour uncommitted changes are kept in the stash."
+        );
+        // Popping them, which says so itself.
+        let conflict = Error::StashConflict("Popping the stash caused conflicts.".to_owned());
+        assert_eq!(
+            in_the_stash(conflict).to_string(),
+            "Popping the stash caused conflicts."
+        );
+    }
+
+    #[test]
     fn names_a_branch_made_from_a_remote_one_after_it_without_the_remote_slashes_and_all() {
         let fx = Fixture::new();
         let origin = create_branched_repo(&fx, "switch-slash-origin");
@@ -916,10 +1009,8 @@ mod tests {
 
             for from in ["refs/heads/other~1", "refs/heads/missing", "refs/tags/v1"] {
                 let error = create_branch(&repo, "topic", Some(from)).await.unwrap_err();
-                assert!(
-                    message(&error).contains(&format!("{from} isn't a branch.")),
-                    "{error}"
-                );
+                assert!(matches!(error, Error::InvalidInput(_)), "{error:?}");
+                assert_eq!(error.to_string(), format!("{from} isn't a branch."));
             }
         });
         assert_eq!(git(&path, ["symbolic-ref", "--short", "HEAD"]), "main");

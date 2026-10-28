@@ -1,6 +1,6 @@
 //! Reading `git worktree list`. Ported from `parse.ts`.
 
-use super::schema::Worktree;
+use super::schema::{Lock, Worktree};
 
 /// How `worktree list --porcelain -z` is read: every line ends in a NUL, and an empty line ends
 /// each worktree.
@@ -42,7 +42,9 @@ pub fn parse_worktree_list(output: &str) -> Vec<Worktree> {
             main: worktrees.is_empty(),
             bare: attribute("bare").is_some(),
             current: false,
-            locked: attribute("locked"),
+            locked: attribute("locked").map(|reason| Lock {
+                reason: (!reason.is_empty()).then_some(reason),
+            }),
             prunable: attribute("prunable"),
         });
     }
@@ -116,12 +118,17 @@ mod tests {
         let [locked, bare, prunable] = &worktrees[..] else {
             panic!("{worktrees:?}");
         };
-        assert_eq!(locked.locked.as_deref(), Some("busy now"));
+        assert_eq!(
+            locked.locked,
+            Some(Lock {
+                reason: Some("busy now".to_owned())
+            })
+        );
         assert_eq!(locked.prunable, None);
         assert!(bare.bare);
         assert_eq!(bare.head, None);
         assert_eq!(bare.branch, None);
-        assert_eq!(prunable.locked.as_deref(), Some(""));
+        assert_eq!(prunable.locked, Some(Lock { reason: None }));
         assert_eq!(
             prunable.prunable.as_deref(),
             Some("gitdir file points to non-existent location")

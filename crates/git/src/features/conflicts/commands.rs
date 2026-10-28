@@ -503,6 +503,7 @@ mod tests {
     use crate::features::staging;
     use crate::features::staging::commands::stage_all;
     use crate::features::status::commands::get_status;
+    use crate::schema::FileStatus;
     use crate::test_support::conflicts::{Files, Sides, files, text_conflict, try_git};
     use crate::test_support::status::{rows, status_files};
     use crate::test_support::{Fixture, git};
@@ -623,7 +624,11 @@ mod tests {
             assert_eq!(status_marker_free(&repo).await, ["f.txt"]);
             assert_eq!(
                 status_files(&repo).await,
-                rows(&[("f.txt", Some("conflicted"), Some("conflicted"))])
+                rows(&[(
+                    "f.txt",
+                    Some(FileStatus::Conflicted),
+                    Some(FileStatus::Conflicted)
+                )])
             );
 
             mark_resolved(&repo, "f.txt", Some(&version), false)
@@ -631,7 +636,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 status_files(&repo).await,
-                rows(&[("f.txt", Some("modified"), None)])
+                rows(&[("f.txt", Some(FileStatus::Modified), None)])
             );
             assert_eq!(git(&path, ["show", ":f.txt"]), "one\nours\ntheirs\nthree");
             // Marking it again, once it isn't conflicted, does nothing.
@@ -654,7 +659,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 status_files(&repo).await,
-                rows(&[("f.txt", Some("modified"), None)])
+                rows(&[("f.txt", Some(FileStatus::Modified), None)])
             );
             assert!(git(&path, ["show", ":f.txt"]).contains("<<<<<<< HEAD"));
         });
@@ -696,7 +701,11 @@ mod tests {
             );
             assert_eq!(
                 status_files(&repo).await,
-                rows(&[("f.txt", Some("conflicted"), Some("conflicted"))])
+                rows(&[(
+                    "f.txt",
+                    Some(FileStatus::Conflicted),
+                    Some(FileStatus::Conflicted)
+                )])
             );
         });
     }
@@ -721,8 +730,12 @@ mod tests {
             assert_eq!(
                 status_files(&repo).await,
                 rows(&[
-                    ("README", None, Some("modified")),
-                    ("f.txt", Some("conflicted"), Some("conflicted")),
+                    ("README", None, Some(FileStatus::Modified)),
+                    (
+                        "f.txt",
+                        Some(FileStatus::Conflicted),
+                        Some(FileStatus::Conflicted)
+                    ),
                 ])
             );
 
@@ -731,8 +744,12 @@ mod tests {
             assert_eq!(
                 status_files(&repo).await,
                 rows(&[
-                    ("README", Some("modified"), None),
-                    ("f.txt", Some("conflicted"), Some("conflicted")),
+                    ("README", Some(FileStatus::Modified), None),
+                    (
+                        "f.txt",
+                        Some(FileStatus::Conflicted),
+                        Some(FileStatus::Conflicted)
+                    ),
                 ])
             );
         });
@@ -749,7 +766,7 @@ mod tests {
             stage_all(&repo).await.unwrap();
             assert_eq!(
                 status_files(&repo).await,
-                rows(&[("f.txt", Some("modified"), None)])
+                rows(&[("f.txt", Some(FileStatus::Modified), None)])
             );
         });
     }
@@ -768,7 +785,7 @@ mod tests {
             assert_eq!(read(&path.join("f.txt")), "one\ntheirs\nthree\n");
             assert_eq!(
                 status_files(&repo).await,
-                rows(&[("f.txt", Some("modified"), None)])
+                rows(&[("f.txt", Some(FileStatus::Modified), None)])
             );
         });
     }
@@ -840,7 +857,7 @@ mod tests {
             assert!(!path.join("f.txt").exists());
             assert_eq!(
                 status_files(&repo).await,
-                rows(&[("f.txt", Some("deleted"), None)])
+                rows(&[("f.txt", Some(FileStatus::Deleted), None)])
             );
 
             fx.create_merge_conflict("modify-kept", None, &deleted_by_them());
@@ -877,7 +894,7 @@ mod tests {
             assert_eq!(read(&path.join("f.txt")), "one\ntheirs\n");
             assert_eq!(
                 status_files(&repo).await,
-                rows(&[("f.txt", Some("added"), None)])
+                rows(&[("f.txt", Some(FileStatus::Added), None)])
             );
         });
     }
@@ -945,7 +962,7 @@ mod tests {
             assert_eq!(fs::read(path.join("b.bin")).unwrap(), [0, 1, 4]);
             assert_eq!(
                 status_files(&repo).await,
-                rows(&[("b.bin", Some("modified"), None)])
+                rows(&[("b.bin", Some(FileStatus::Modified), None)])
             );
         });
     }
@@ -1036,7 +1053,7 @@ mod tests {
             );
             assert_eq!(
                 status_files(&repo).await,
-                rows(&[("config", Some("modified"), None)])
+                rows(&[("config", Some(FileStatus::Modified), None)])
             );
         });
     }
