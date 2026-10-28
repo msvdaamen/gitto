@@ -21,10 +21,10 @@ use crate::components::ui::{Divider, FailurePopover, Icon, IconButton, IconName,
 use crate::data::branch::{
     self, delete_branch_state, merge_branch_state, rebase_branch_state, switch_branch_state,
 };
-use crate::data::remote::{self, fetch_mutation, pull_branch_state};
+use crate::data::remote::{self, fetch_operation, pull_branch_state};
 use crate::data::repositories::{find, repositories_query};
 use crate::data::status::status_query;
-use crate::data::{Mutation, Opaque, OperationState, Operations, Query, QueryError};
+use crate::data::{Opaque, OperationState, Operations, Query, QueryError, RepositoryOperation};
 use crate::theme::PaletteExt as _;
 use crate::theme::breakpoints::{MEDIUM, SMALL};
 
@@ -157,8 +157,8 @@ pub struct RepositoryToolbar {
     details_open: bool,
     status: Query<Opaque<Uncommitted>, StatusSummary>,
     repositories: Query<Vec<Repository>>,
-    /// Fetching every remote of a repository, whose id is its input.
-    fetch: Entity<Mutation<RepositoryId>>,
+    /// Fetching every remote of the repository.
+    fetch: RepositoryOperation<()>,
     failures: FailureOrder,
     pull: Entity<PullButton>,
     push: Entity<PushButton>,
@@ -171,14 +171,13 @@ impl EventEmitter<ToolbarEvent> for RepositoryToolbar {}
 
 impl RepositoryToolbar {
     pub fn new(repository_id: RepositoryId, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let fetch = fetch_mutation(cx);
-        RepositoryToolbar::with_fetch(repository_id, fetch, window, cx)
+        RepositoryToolbar::with_fetch(repository_id, fetch_operation(), window, cx)
     }
 
     /// With `fetch` fetching: a test's.
     pub(crate) fn with_fetch(
         repository_id: RepositoryId,
-        fetch: Entity<Mutation<RepositoryId>>,
+        fetch: RepositoryOperation<()>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -190,7 +189,6 @@ impl RepositoryToolbar {
                     cx.emit(ToolbarEvent::Search(value));
                 }
             }),
-            cx.observe(&fetch, |_, _, cx| cx.notify()),
             cx.observe_global::<Operations>(|this, cx| {
                 this.update_failures(cx);
                 cx.notify();
@@ -273,29 +271,23 @@ impl RepositoryToolbar {
         self.failures.shown()
     }
 
-    /// Fetch, as it is now: spinning while it runs, red with the reason once it failed. The last
-    /// fetch is shown if it was of this repository; one of another stays with that repository.
+    /// Fetch, as it is now: spinning while it runs, red with the reason once it failed. Both
+    /// are the repository's: a fetch of another stays with that one.
     pub fn fetch_button(&self, cx: &App) -> ToolbarButton {
-        let fetch = self.fetch.read(cx);
-        let current = fetch.input() == Some(&self.repository_id);
-        let pending = current && fetch.is_pending();
-        let error = fetch.error().filter(|_| current).cloned();
-        let title = match &error {
+        let state = self.fetch.state(&self.repository_id, cx);
+        let title = match &state.error {
             Some(error) => format!("Fetch failed: {}", error.message()),
             None => "Fetch all remotes".to_owned(),
         };
-        let mutation = self.fetch.clone();
+        let fetch = self.fetch.clone();
         let id = self.repository_id.clone();
         ToolbarButton::new("fetch", IconName::RefreshCw, "Fetch")
             .hide_below(HideBelow::Small)
             .title(title)
-            .disabled(pending)
-            .danger(error.is_some())
-            .busy(pending)
-            .on_click(move |_, _, cx| {
-                let id = id.clone();
-                mutation.update(cx, |fetch, cx| drop(fetch.mutate(id, cx)));
-            })
+            .disabled(state.running)
+            .danger(state.error.is_some())
+            .busy(state.running)
+            .on_click(move |_, _, cx| drop(fetch.run(&id, (), cx)))
     }
 
     fn render_current_branch(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -493,7 +485,6 @@ mod tests {
         Repositories, repository, repository_id, set_operation, set_push_target, set_refs,
         set_remotes, set_stashes, set_status, set_worktrees, setup_with, status,
     };
-    use crate::data::RepositoryOperation;
 
     /// Gives `id` what the toolbar's buttons show, so none of them loads from git.
     fn seed(id: &RepositoryId, cx: &mut TestAppContext) {
@@ -544,17 +535,15 @@ mod tests {
         let (window, toolbar) = crate::test_support::open(cx, {
             let fetches = Rc::clone(&fetches);
             move |window, cx| {
-                let fetch = Mutation::new(
-                    move |id: RepositoryId, cx: &mut App| {
+                let fetch =
+                    RepositoryOperation::new("fetch", move |id: RepositoryId, (), cx: &mut App| {
                         fetches.calls.borrow_mut().push(id);
                         let (settle, settled) = oneshot::channel();
                         *fetches.settle.borrow_mut() = Some(settle);
                         cx.background_spawn(async move {
                             settled.await.unwrap_or(Err(QueryError::msg("dropped")))
                         })
-                    },
-                    cx,
-                );
+                    });
                 RepositoryToolbar::with_fetch(shown, fetch, window, cx)
             }
         });
@@ -624,6 +613,32 @@ mod tests {
         let shown = fetch_button(&toolbar, cx);
         assert!(!shown.is_busy());
         assert_eq!(shown.tooltip(), "Fetch all remotes");
+    }
+
+    #[gpui_kit::test]
+    fn keeps_a_repositorys_fetch_failure_while_another_is_fetched(cx: &mut TestAppContext) {
+        let (_dir, a, b, fetches, window, toolbar) = render(cx);
+        let settle = |result: Result<(), QueryError>, cx: &mut TestAppContext| {
+            let settle = fetches.settle.borrow_mut().take().unwrap();
+            settle.send(result).unwrap();
+            cx.run_until_parked();
+        };
+
+        cx.update_window(window, |_, window, cx| window.click("fetch", cx))
+            .unwrap();
+        settle(Err(QueryError::msg("Could not resolve host.")), cx);
+        switch(&toolbar, &b, window, cx);
+        assert_eq!(fetch_button(&toolbar, cx).tooltip(), "Fetch all remotes");
+        cx.update_window(window, |_, window, cx| window.click("fetch", cx))
+            .unwrap();
+        settle(Ok(()), cx);
+        assert_eq!(*fetches.calls.borrow(), [a.clone(), b.clone()]);
+
+        switch(&toolbar, &a, window, cx);
+        assert_eq!(
+            fetch_button(&toolbar, cx).tooltip(),
+            "Fetch failed: Could not resolve host."
+        );
     }
 
     #[gpui_kit::test]
