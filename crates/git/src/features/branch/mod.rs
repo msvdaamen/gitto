@@ -7,4 +7,5 @@ pub mod delete;
 pub mod in_use;
 pub mod merge;
 pub mod rebase;
+pub mod refusal;
 pub mod schema;

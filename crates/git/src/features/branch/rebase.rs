@@ -1,7 +1,7 @@
 //! Rebasing the checked-out branch onto another. Ported from `rebase.ts`.
 
 use super::commands::{branch_name, is_ref};
-use super::merge::{
+use super::refusal::{
     RefusalKind, Wording, list, nul_separated, parse_refusal, refusal_message, staged_files,
 };
 use super::schema::RebaseOutcome;
