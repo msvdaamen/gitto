@@ -2,8 +2,10 @@
 //! ([`repo`]), and the errors it all returns ([`errors`]). Ported from `packages/git/src/core/`.
 //! The oRPC middleware isn't ported: the UI calls the features directly.
 
+mod caches;
 pub mod errors;
 pub mod git_dirs;
+mod queue;
 pub mod repo;
 pub mod runner;
 pub mod trace;
