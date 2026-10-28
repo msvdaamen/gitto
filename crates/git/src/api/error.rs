@@ -7,7 +7,9 @@ use crate::core::errors::{ApiCode, Error};
 
 /// An error as the UI shows it: its [`code`](Self::code), a [`message`](Self::message) for the
 /// user, and whether it's a bug, to report rather than only tell the user ([`is_bug`]). Made from
-/// an [`Error`], which it keeps for logs and bug reports ([`error`](Self::error)).
+/// an [`Error`], which it keeps for logs and bug reports ([`error`](Self::error)), by
+/// `GitApi::fail` (or `GitApi::call`), which logs it and reports it if it's a bug: there's no
+/// other way to make one, so none goes unreported.
 ///
 /// The message is the error's own, but for errors the Electron app never told the renderer about:
 /// - `Error::Bug` and `Error::Io` (TS's plain errors, and Node's), which say "Internal server
@@ -26,6 +28,27 @@ pub struct ApiError {
 }
 
 impl ApiError {
+    /// `error` as the UI shows it, neither logged nor reported: only `GitApi::fail` makes one.
+    pub(crate) fn new(error: Error) -> Self {
+        let (code, message) = match &error {
+            // Not TS's `ApiFailure`s: oRPC made them an INTERNAL_SERVER_ERROR without their message.
+            Error::Bug(_) | Error::Io(_) => (
+                ApiCode::InternalServerError,
+                "Internal server error".to_owned(),
+            ),
+            // Refused by zod, before the procedure: oRPC's BAD_REQUEST.
+            Error::InvalidInput(_) => (ApiCode::BadRequest, "Input validation failed".to_owned()),
+            // `RepositoryListError` was an INTERNAL_SERVER_ERROR with its message, as the
+            // repository router made it; the others are as they say.
+            error => (error.api(), error.to_string()),
+        };
+        ApiError {
+            code,
+            message,
+            error: Box::new(error),
+        }
+    }
+
     /// The kind of failure, e.g. `ApiCode::Conflict`; `code().code()` is the renderer's
     /// `CONFLICT`.
     pub fn code(&self) -> ApiCode {
@@ -57,27 +80,12 @@ impl ApiError {
     pub fn into_error(self) -> Error {
         *self.error
     }
-}
 
-impl From<Error> for ApiError {
-    fn from(error: Error) -> Self {
-        let (code, message) = match &error {
-            // Not TS's `ApiFailure`s: oRPC made them an INTERNAL_SERVER_ERROR without their message.
-            Error::Bug(_) | Error::Io(_) => (
-                ApiCode::InternalServerError,
-                "Internal server error".to_owned(),
-            ),
-            // Refused by zod, before the procedure: oRPC's BAD_REQUEST.
-            Error::InvalidInput(_) => (ApiCode::BadRequest, "Input validation failed".to_owned()),
-            // `RepositoryListError` was an INTERNAL_SERVER_ERROR with its message, as the
-            // repository router made it; the others are as they say.
-            error => (error.api(), error.to_string()),
-        };
-        ApiError {
-            code,
-            message,
-            error: Box::new(error),
-        }
+    /// `error` as the UI shows it, but neither logged nor reported, as `GitApi::fail` would: for
+    /// fakes in tests, which have no `GitApi`.
+    #[cfg(feature = "test-support")]
+    pub fn unreported(error: Error) -> Self {
+        ApiError::new(error)
     }
 }
 
@@ -104,7 +112,7 @@ mod tests {
     /// What the UI gets of `error`: the code as the renderer knew it, the message, and whether
     /// it's a bug.
     fn shown(error: Error) -> (&'static str, String, bool) {
-        let error = ApiError::from(error);
+        let error = ApiError::new(error);
         (
             error.code().code(),
             error.message().to_owned(),
@@ -193,14 +201,14 @@ mod tests {
 
     #[test]
     fn gives_a_push_it_can_force_a_code_of_its_own() {
-        let rewritten = ApiError::from(Error::PushRejected {
+        let rewritten = ApiError::new(Error::PushRejected {
             message: "Rewritten.".into(),
             forcible: true,
         });
         assert_eq!(rewritten.code().code(), "PUSH_REWRITTEN");
         assert_eq!(rewritten.status(), 409);
         assert!(!rewritten.is_bug());
-        let behind = ApiError::from(Error::PushRejected {
+        let behind = ApiError::new(Error::PushRejected {
             message: "Behind.".into(),
             forcible: false,
         });
@@ -223,7 +231,7 @@ mod tests {
 
     #[test]
     fn hides_what_gittos_own_bugs_say_from_the_user() {
-        let bug = ApiError::from(Error::Bug("Unexpected output: x".into()));
+        let bug = ApiError::new(Error::Bug("Unexpected output: x".into()));
         assert_eq!(
             (bug.code().code(), bug.message(), bug.is_bug(), bug.status()),
             ("INTERNAL_SERVER_ERROR", "Internal server error", true, 500)
@@ -243,7 +251,7 @@ mod tests {
 
     #[test]
     fn reports_input_the_ui_shouldnt_have_sent_as_its_bug() {
-        let error = ApiError::from(Error::InvalidInput("Not a branch. (\"x\")".into()));
+        let error = ApiError::new(Error::InvalidInput("Not a branch. (\"x\")".into()));
         assert_eq!(
             (error.code().code(), error.message(), error.is_bug()),
             ("BAD_REQUEST", "Input validation failed", true)
@@ -270,7 +278,7 @@ mod tests {
     fn is_an_error_with_the_message_and_the_original_as_its_source() {
         use std::error::Error as _;
 
-        let error = ApiError::from(Error::HeadMoved);
+        let error = ApiError::new(Error::HeadMoved);
         assert_eq!(
             error.to_string(),
             "The last commit changed before it could be amended, so nothing was amended."

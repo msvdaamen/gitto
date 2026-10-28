@@ -132,7 +132,7 @@ impl GitApi {
     /// `error` as the UI shows it, having failed `procedure`: logged, and reported if it's a bug
     /// (`onError` in `server.ts`). For an error that didn't come through [`call`](Self::call).
     pub fn fail(&self, procedure: &str, error: Error) -> ApiError {
-        let error = ApiError::from(error);
+        let error = ApiError::new(error);
         eprintln!("{}", log_line(procedure, &error));
         if error.is_bug()
             && let Some(report) = &self.report_bug

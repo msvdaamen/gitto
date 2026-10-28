@@ -311,7 +311,7 @@ fn tells_the_renderer_a_push_it_can_force_apart_from_other_failures() {
 #[test]
 fn takes_only_uuid_v7_repository_ids() {
     let error = RepositoryId::parse("history").unwrap_err();
-    assert_eq!(ApiError::from(error).code().code(), "BAD_REQUEST");
+    assert_eq!(ApiError::new(error).code().code(), "BAD_REQUEST");
 }
 
 #[test]
@@ -523,12 +523,12 @@ fn logs_a_failure_with_the_command_git_ran() {
         "fatal: bad object 0123\n",
     );
     assert_eq!(
-        super::log_line("diff.commitFiles", &ApiError::from(Error::Git(error))),
+        super::log_line("diff.commitFiles", &ApiError::new(Error::Git(error))),
         "[git] diff.commitFiles failed (INTERNAL_SERVER_ERROR): fatal: bad object 0123\n  \
          git diff-tree 0123 (exit code 128)"
     );
     assert_eq!(
-        super::log_line("commit.create", &ApiError::from(Error::HeadMoved)),
+        super::log_line("commit.create", &ApiError::new(Error::HeadMoved)),
         "[git] commit.create failed (CONFLICT): The last commit changed before it could be \
          amended, so nothing was amended."
     );
