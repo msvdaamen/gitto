@@ -1159,4 +1159,207 @@ mod tests {
         assert_eq!(diff.hunks[0].deletion_lines, 1);
         assert_eq!(diff.hunks[0].addition_lines, 1);
     }
+
+    fn lines(lines: &Lines) -> Vec<&str> {
+        lines.iter().collect()
+    }
+
+    /// A hunk's numbers: where it starts on each side, and how many lines it covers there.
+    fn numbers(hunk: &Hunk) -> [usize; 4] {
+        [
+            hunk.deletion_start,
+            hunk.deletion_count,
+            hunk.addition_start,
+            hunk.addition_count,
+        ]
+    }
+
+    const HEADER: &str =
+        "diff --git a/f.txt b/f.txt\nindex 1111111..2222222 100644\n--- a/f.txt\n+++ b/f.txt\n";
+
+    #[test]
+    fn takes_a_hunks_numbers_from_its_lines_when_its_header_says_otherwise() {
+        /// A hunk, its numbers once read, its old lines and its new lines.
+        type Case = (
+            &'static str,
+            [usize; 4],
+            &'static [&'static str],
+            &'static [&'static str],
+        );
+        let cases: [Case; 4] = [
+            // Fewer lines than the header says.
+            (
+                "@@ -1,3 +1,3 @@\n a\n-b\n+B\n",
+                [1, 2, 1, 2],
+                &["a\n", "b\n"],
+                &["a\n", "B\n"],
+            ),
+            // More: the hunk's lines go on to the end of its changes.
+            (
+                "@@ -1,1 +1,1 @@\n a\n-b\n+B\n",
+                [1, 2, 1, 2],
+                &["a\n", "b\n"],
+                &["a\n", "B\n"],
+            ),
+            // Only added lines, though the header says one was removed.
+            (
+                "@@ -4,1 +4,2 @@\n+x\n+y\n",
+                [3, 0, 4, 2],
+                &[],
+                &["x\n", "y\n"],
+            ),
+            // As the header says.
+            (
+                "@@ -2,2 +2,2 @@\n-b\n+B\n c\n",
+                [2, 2, 2, 2],
+                &["b\n", "c\n"],
+                &["B\n", "c\n"],
+            ),
+        ];
+        for (hunk, expected, old, new) in cases {
+            let diff = parse(&format!("{HEADER}{hunk}"));
+            assert_eq!(numbers(&diff.hunks[0]), expected, "{hunk:?}");
+            assert_eq!(lines(&diff.deletion_lines), old, "{hunk:?}");
+            assert_eq!(lines(&diff.addition_lines), new, "{hunk:?}");
+        }
+    }
+
+    #[test]
+    fn keeps_crlf_line_ends_in_the_lines_and_out_of_the_context() {
+        let diff = parse(&format!(
+            "{HEADER}@@ -1,2 +1,2 @@ fn main()\r\n one\r\n-two\r\n+TWO\r\n"
+        ));
+        assert_eq!(diff.hunks[0].context.as_deref(), Some("fn main()"));
+        assert_eq!(numbers(&diff.hunks[0]), [1, 2, 1, 2]);
+        assert_eq!(lines(&diff.deletion_lines), ["one\r\n", "two\r\n"]);
+        assert_eq!(lines(&diff.addition_lines), ["one\r\n", "TWO\r\n"]);
+    }
+
+    #[test]
+    fn leaves_the_line_end_off_the_side_without_one_only() {
+        let added = parse(&format!(
+            "{HEADER}@@ -1 +1 @@\n-a\n+b\n\\ No newline at end of file\n"
+        ));
+        assert_eq!(lines(&added.deletion_lines), ["a\n"]);
+        assert_eq!(lines(&added.addition_lines), ["b"]);
+        assert!(!added.hunks[0].no_eof_newline_deletions);
+        assert!(added.hunks[0].no_eof_newline_additions);
+
+        let removed = parse(&format!(
+            "{HEADER}@@ -1 +1 @@\n-a\n\\ No newline at end of file\n+b\n"
+        ));
+        assert_eq!(lines(&removed.deletion_lines), ["a"]);
+        assert_eq!(lines(&removed.addition_lines), ["b\n"]);
+        assert!(removed.hunks[0].no_eof_newline_deletions);
+        assert!(!removed.hunks[0].no_eof_newline_additions);
+
+        let crlf = parse(&format!(
+            "{HEADER}@@ -1 +1 @@\n a\r\n\\ No newline at end of file\n"
+        ));
+        assert_eq!(lines(&crlf.deletion_lines), ["a"]);
+        assert_eq!(lines(&crlf.addition_lines), ["a"]);
+    }
+
+    #[test]
+    fn ends_a_patch_from_format_patch_at_its_signature() {
+        let diff = parse(&format!(
+            "From 1234 Mon Sep 17 00:00:00 2001\nSubject: [PATCH] Change\n\n---\n f.txt | 2 +-\n\n{HEADER}@@ -1 +1 @@\n-a\n+b\n-- \n2.41.0\n\n"
+        ));
+        assert_eq!(numbers(&diff.hunks[0]), [1, 1, 1, 1]);
+        assert_eq!(lines(&diff.deletion_lines), ["a\n"]);
+        assert_eq!(lines(&diff.addition_lines), ["b\n"]);
+    }
+
+    #[test]
+    fn reads_a_patch_that_isnt_gits() {
+        let changed = parse_patch_files(
+            "--- f.txt\t2026-10-01 10:00:00\n+++ f.txt\t2026-10-02 10:00:00\n@@ -1 +1 @@\n-a\n+b\n",
+            None,
+        );
+        assert_eq!(changed.len(), 1);
+        assert_eq!(changed[0].name, "f.txt");
+        assert_eq!(changed[0].prev_name, None);
+        assert_eq!(changed[0].kind, ChangeType::Change);
+        assert!(changed[0].is_partial);
+
+        let moved = parse_patch_files("--- a.txt\n+++ b.txt\n@@ -1 +1 @@\n-a\n+b\n", None);
+        assert_eq!(moved[0].name, "b.txt");
+        assert_eq!(moved[0].prev_name.as_deref(), Some("a.txt"));
+        assert_eq!(moved[0].kind, ChangeType::RenameChanged);
+
+        // Without both names, it isn't a patch.
+        assert!(parse_patch_files("--- a.txt\n@@ -1 +1 @@\n-a\n+b\n", None).is_empty());
+        assert!(parse_patch_files("Just text.\n", None).is_empty());
+    }
+
+    #[test]
+    fn reads_a_file_without_hunks_by_its_header() {
+        let mode = parse("diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n");
+        assert_eq!(mode.name, "run.sh");
+        assert_eq!(mode.kind, ChangeType::Change);
+        assert!(mode.hunks.is_empty());
+        assert_eq!(mode.prev_mode.as_deref(), Some("100644"));
+        assert_eq!(mode.mode.as_deref(), Some("100755"));
+
+        let binary = parse(
+            "diff --git a/i.png b/i.png\nindex 1111111..2222222 100644\nBinary files a/i.png and b/i.png differ\n",
+        );
+        assert!(binary.hunks.is_empty());
+        assert_eq!(binary.prev_object_id.as_deref(), Some("1111111"));
+        assert_eq!(binary.new_object_id.as_deref(), Some("2222222"));
+        assert_eq!(binary.mode.as_deref(), Some("100644"));
+
+        let deleted = parse(
+            "diff --git a/gone.txt b/gone.txt\ndeleted file mode 100644\nindex 1111111..0000000\n",
+        );
+        assert_eq!(deleted.kind, ChangeType::Deleted);
+        assert_eq!(deleted.mode.as_deref(), Some("100644"));
+
+        let moved = parse(
+            "diff --git a/old.txt b/new.txt\nsimilarity index 100%\nrename from old.txt\nrename to new.txt\n",
+        );
+        assert_eq!(moved.kind, ChangeType::RenamePure);
+        assert_eq!(moved.prev_name.as_deref(), Some("old.txt"));
+        assert_eq!(moved.name, "new.txt");
+    }
+
+    #[test]
+    fn reads_each_file_of_a_patch_after_what_comes_before_them() {
+        let files = parse_patch_files(
+            "commit 1234\n\n    A message\n\ndiff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-a\n+A\ndiff --git \"a/with space\" \"b/with space\"\nnew file mode 100644\n--- /dev/null\n+++ \"b/with space\"\n@@ -0,0 +1 @@\n+x\n",
+            Some("key"),
+        );
+        let names: Vec<_> = files.iter().map(|file| file.name.as_str()).collect();
+        assert_eq!(names, ["a.txt", "with space"]);
+        assert_eq!(files[1].kind, ChangeType::New);
+        assert_eq!(files[0].cache_key.as_deref(), Some("key:0"));
+        assert_eq!(files[1].cache_key.as_deref(), Some("key:1"));
+    }
+
+    #[test]
+    fn finds_where_a_line_is_among_the_rows() {
+        // Lines 1-4 hidden, then a hunk of an unchanged line, a change, and an unchanged line.
+        let diff = parse(&format!("{HEADER}@@ -5,3 +5,4 @@\n e\n-f\n+F\n+G\n h\n"));
+        let hunk = &diff.hunks[0];
+        assert_eq!((hunk.unified_line_start, hunk.split_line_start), (4, 4));
+        // (line number, side, (row in one column, row side by side))
+        let cases = [
+            (1, Side::Additions, Some((0, 0))),
+            (5, Side::Additions, Some((4, 4))),
+            (5, Side::Deletions, Some((4, 4))),
+            (6, Side::Deletions, Some((5, 5))),
+            // Added lines come after the removed ones in one column, beside them side by side.
+            (6, Side::Additions, Some((6, 5))),
+            (7, Side::Additions, Some((7, 6))),
+            (8, Side::Additions, Some((8, 7))),
+            (7, Side::Deletions, Some((8, 7))),
+            // After the last hunk: counted on from its end.
+            (10, Side::Additions, Some((10, 9))),
+        ];
+        for (number, side, expected) in cases {
+            assert_eq!(diff.line_index(number, side), expected, "{number} {side:?}");
+        }
+        let empty = parse("diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n");
+        assert_eq!(empty.line_index(1, Side::Additions), None);
+    }
 }
