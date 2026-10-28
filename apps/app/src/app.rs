@@ -33,6 +33,9 @@ pub const MIN_HEIGHT: f32 = 400.;
 /// opens the window again when it's launched again, from the Dock say (`activate`).
 pub fn run() {
     logger::init();
+    // Git runs with the PATH the user's shell has, as from a terminal, not only the one a Dock or
+    // a launcher gave Gitto.
+    gitto_git::use_path_from_shell();
     let application = gpui_kit::application().with_assets(AppAssets);
     application.on_reopen(|cx| {
         if cx.windows().is_empty() && cx.has_global::<Services>() {

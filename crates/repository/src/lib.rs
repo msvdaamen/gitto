@@ -16,7 +16,7 @@ mod service;
 mod store;
 mod types;
 
-pub use crate::errors::{Error, ListAction, Result, reason};
+pub use crate::errors::{Error, ListAction, ListError, Result};
 pub use crate::service::{RepositoryService, resolve};
 pub use crate::store::RepositoryStore;
 pub use crate::types::Repository;

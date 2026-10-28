@@ -234,7 +234,9 @@ pub fn staged_files(staged: &[ChangedFile]) -> Vec<ChangedFile> {
 
 #[cfg(test)]
 mod tests {
-    use gitto_git::features::status::schema::{Head, StatusCounts, WorkingTreeFiles};
+    use gitto_git::features::status::schema::{
+        Head, StatusCounts, StatusSummary, WorkingTreeFiles,
+    };
 
     use super::*;
 
@@ -282,18 +284,20 @@ mod tests {
     #[test]
     fn shares_the_unstaged_files_with_the_status() {
         let status = Opaque::new(Uncommitted {
-            head: Head::Branch {
-                name: "main".into(),
-                sha: "abc".into(),
-            },
-            upstream: None,
-            ahead: 0,
-            behind: 0,
-            counts: StatusCounts {
-                files: 2,
-                staged: 1,
-                unstaged: 1,
-                conflicted: 0,
+            summary: StatusSummary {
+                head: Head::Branch {
+                    name: "main".into(),
+                    sha: "abc".into(),
+                },
+                upstream: None,
+                ahead: 0,
+                behind: 0,
+                counts: StatusCounts {
+                    files: 2,
+                    staged: 1,
+                    unstaged: 1,
+                    conflicted: 0,
+                },
             },
             changes: WorkingTreeFiles {
                 staged: vec![file("a.txt", FileStatus::Added)],

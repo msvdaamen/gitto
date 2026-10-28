@@ -66,7 +66,7 @@ pub struct StashActions {
 
 impl StashActions {
     /// Whether any of them is running on the repository `id`.
-    pub fn is_pending(id: &str, cx: &App) -> bool {
+    pub fn is_pending(id: &RepositoryId, cx: &App) -> bool {
         [STASH, POP, POP_PICKED, DROP]
             .iter()
             .any(|name| Operations::state(name, id, cx).running)
@@ -82,7 +82,7 @@ pub fn stash_actions() -> StashActions {
         });
         cx.spawn(async move |cx| reloading(&id, action, cx).await)
     };
-    let busy = |id: &str, cx: &App| StashActions::is_pending(id, cx);
+    let busy = |id: &RepositoryId, cx: &App| StashActions::is_pending(id, cx);
     StashActions {
         stash: RepositoryOperation::new(STASH, |id, (), cx: &mut App| {
             let action = call(cx, "stash.push", &id, |repo| async move {

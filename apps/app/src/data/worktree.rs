@@ -63,8 +63,7 @@ pub fn open_worktree_operation() -> RepositoryOperation<String> {
             let repository = adding.await?;
             cx.update(|cx| QueryClient::invalidate(&keys::repositories(), cx))
                 .await;
-            let id = RepositoryId::parse(repository.id)?;
-            cx.update(|cx| Router::navigate(Route::Repository(id), cx));
+            cx.update(|cx| Router::navigate(Route::Repository(repository.id), cx));
             Ok(())
         })
     })
@@ -89,7 +88,7 @@ pub struct WorktreeActions {
 
 impl WorktreeActions {
     /// Whether any of them is running on the repository `id`.
-    pub fn is_pending(id: &str, cx: &App) -> bool {
+    pub fn is_pending(id: &RepositoryId, cx: &App) -> bool {
         [ADD_WORKTREE, REMOVE, OPEN]
             .iter()
             .any(|name| Operations::state(name, id, cx).running)
@@ -97,14 +96,14 @@ impl WorktreeActions {
 
     /// Whether adding one can't run on the repository `id` now: one of them is running, or a
     /// change of the branches is.
-    pub fn add_is_blocked(id: &str, cx: &App) -> bool {
+    pub fn add_is_blocked(id: &RepositoryId, cx: &App) -> bool {
         WorktreeActions::is_pending(id, cx) || branches_changing(id, cx)
     }
 }
 
 /// The operations of [`WorktreeActions`].
 pub fn worktree_actions() -> WorktreeActions {
-    let busy = |id: &str, cx: &App| WorktreeActions::is_pending(id, cx);
+    let busy = |id: &RepositoryId, cx: &App| WorktreeActions::is_pending(id, cx);
     WorktreeActions {
         add: RepositoryOperation::new(ADD_WORKTREE, |id, input: AddWorktreeInput, cx: &mut App| {
             let action = call(cx, "worktree.add", &id, move |repo| async move {
@@ -141,7 +140,7 @@ pub fn worktree_actions() -> WorktreeActions {
                     else {
                         return Ok(());
                     };
-                    source.remove(parse(opened.id)?).await?;
+                    source.remove(opened.id).await?;
                     cx.update(|cx| QueryClient::invalidate(&keys::repositories(), cx))
                         .await;
                     Ok::<_, QueryError>(())

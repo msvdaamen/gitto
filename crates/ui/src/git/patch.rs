@@ -1,5 +1,6 @@
 //! Ported from `git/patch.ts`: what a file's patch, as git gives it, says about its changes.
 
+use gitto_git::FileMode;
 use memchr::memmem;
 
 /// What a file's patch, as git gives it, says about its changes.
@@ -58,17 +59,11 @@ pub fn summarize_patch(patch: &str) -> PatchSummary {
     }
 }
 
-/// The lines of `text` as a JavaScript regex's `m` flag has them: split on `\n`, `\r`, and the
-/// Unicode line and paragraph separators.
-fn js_lines(text: &str) -> impl Iterator<Item = &str> {
-    text.split(['\n', '\r', '\u{2028}', '\u{2029}'])
-}
-
 /// Whether a patch without hunks is of a binary file.
 fn is_binary(header: &str) -> bool {
     const BINARY: &str = "Binary files ";
     const DIFFER: &str = " differ";
-    js_lines(header).any(|line| {
+    header.split('\n').any(|line| {
         line == "GIT binary patch"
             || (line.len() >= BINARY.len() + DIFFER.len()
                 && line.starts_with(BINARY)
@@ -84,13 +79,22 @@ pub fn has_hunks(patch: &str) -> bool {
 /// Whether `patch`'s lines can only be staged all at once: a link's, whose contents are the path it
 /// points to, a submodule's, or a file's that changed type, which git has as two files.
 pub fn staged_whole(patch: &str) -> bool {
-    js_lines(patch_header(patch)).any(|line| line.ends_with(" 120000") || line.ends_with(" 160000"))
-        || patch.contains("\ndiff --git ")
+    patch_header(patch).split('\n').any(|line| {
+        ends_with_mode(line, FileMode::Symlink) || ends_with_mode(line, FileMode::Submodule)
+    }) || patch.contains("\ndiff --git ")
 }
 
 /// Whether `patch` is of a symbolic link, whose contents are the path it points to.
 pub fn is_link(patch: &str) -> bool {
-    js_lines(patch_header(patch)).any(|line| line.ends_with(" 120000"))
+    patch_header(patch)
+        .split('\n')
+        .any(|line| ends_with_mode(line, FileMode::Symlink))
+}
+
+/// Whether the header line `line` ends with the file mode `mode`, as in `new file mode 120000`.
+fn ends_with_mode(line: &str, mode: FileMode) -> bool {
+    line.strip_suffix(mode.as_str())
+        .is_some_and(|rest| rest.ends_with(' '))
 }
 
 /// `patch` up to its first hunk: the whole of it when it has none.
@@ -224,6 +228,10 @@ mod tests {
             assert!(is_link(&link()));
             assert!(!is_link(SUBMODULE));
             assert!(!is_link(&format!("{HEADER}\n@@ -1 +1 @@\n-a\n+ 120000\n")));
+            // Git ends its lines with `\n` only: a `\r` is part of a path.
+            assert!(!is_link(
+                "diff --git a/x 120000\r b/x 120000\r\nnew file mode 100644\n"
+            ));
         }
     }
 }

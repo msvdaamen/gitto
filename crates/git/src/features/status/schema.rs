@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::features::diff::schema::ChangedFile;
-use crate::schema::FileStatus;
+use crate::schema::{ContentVersion, FileMode, FileStatus};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -20,14 +20,61 @@ pub struct StatusFile {
     pub conflict: Option<StatusConflict>,
 }
 
-/// How a conflicted file conflicts, as `git status` says: `UU` both modified, `AA` both added,
-/// `UD` and `DU` deleted by them and by us, `AU` and `UA` added by us and by them only, `DD`
-/// deleted by both; with the modes ours and theirs have (`000000` where it's not there).
+/// How a conflicted file conflicts, as `git status` says, with the modes ours and theirs have
+/// (`FileMode::Absent` where it's not there).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatusConflict {
-    pub xy: String,
-    pub ours: String,
-    pub theirs: String,
+    pub kind: ConflictKind,
+    pub ours: FileMode,
+    pub theirs: FileMode,
+}
+
+/// What each side did to a conflicted file: an unmerged entry's `XY` in `git status`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ConflictKind {
+    /// `UU`
+    #[serde(rename = "UU")]
+    BothModified,
+    /// `AA`, without a common ancestor's.
+    #[serde(rename = "AA")]
+    BothAdded,
+    /// `DD`
+    #[serde(rename = "DD")]
+    BothDeleted,
+    /// `UD`: changed by us.
+    #[serde(rename = "UD")]
+    DeletedByThem,
+    /// `DU`: changed by them.
+    #[serde(rename = "DU")]
+    DeletedByUs,
+    /// `AU`
+    #[serde(rename = "AU")]
+    AddedByUs,
+    /// `UA`
+    #[serde(rename = "UA")]
+    AddedByThem,
+}
+
+impl ConflictKind {
+    /// From its `XY`, e.g. `UU`; `None` if that isn't a conflict's.
+    pub fn from_xy(xy: &str) -> Option<ConflictKind> {
+        Some(match xy {
+            "UU" => ConflictKind::BothModified,
+            "AA" => ConflictKind::BothAdded,
+            "DD" => ConflictKind::BothDeleted,
+            "UD" => ConflictKind::DeletedByThem,
+            "DU" => ConflictKind::DeletedByUs,
+            "AU" => ConflictKind::AddedByUs,
+            "UA" => ConflictKind::AddedByThem,
+            _ => return None,
+        })
+    }
+
+    /// Whether both sides have the file, changed or added: the conflicts git writes markers into,
+    /// if it's text.
+    pub fn on_both_sides(self) -> bool {
+        matches!(self, ConflictKind::BothModified | ConflictKind::BothAdded)
+    }
 }
 
 /// What HEAD points at.
@@ -93,27 +140,11 @@ pub struct StatusSummary {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Uncommitted {
-    pub head: Head,
-    pub upstream: Option<String>,
-    pub ahead: u64,
-    pub behind: u64,
-    pub counts: StatusCounts,
+    #[serde(flatten)]
+    pub summary: StatusSummary,
     pub changes: WorkingTreeFiles,
     /// Changes whenever anything above does, so a caller can ask to skip a status it already has.
-    pub version: String,
-}
-
-impl Uncommitted {
-    /// The summary alone, without the changed files.
-    pub fn summary(&self) -> StatusSummary {
-        StatusSummary {
-            head: self.head.clone(),
-            upstream: self.upstream.clone(),
-            ahead: self.ahead,
-            behind: self.behind,
-            counts: self.counts,
-        }
-    }
+    pub version: ContentVersion,
 }
 
 /// What `status.get` answers (the contract's output): `{ unchanged: true }` when the caller

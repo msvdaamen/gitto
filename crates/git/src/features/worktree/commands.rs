@@ -1,16 +1,15 @@
 //! Listing, adding and removing worktrees. Ported from `commands.ts`.
 
-use std::cmp::Ordering;
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 
 use super::parse::{WORKTREE_LIST_ARGS, parse_worktree_list};
 use super::schema::Worktree;
-use crate::core::errors::{Error, Result};
+use crate::core::errors::{Error, Result, WorktreeRemovalBlocker};
 use crate::core::git_dirs::real_path;
 use crate::core::repo::{GitCommand, Repo};
 use crate::features::branch::commands::{
-    Tracking, branch_name, is_ref, no_ref_syntax_advice, tracking_branch,
+    Tracking, branch_target, is_ref, no_ref_syntax_advice, not_a_branch, tracking_branch,
 };
 use crate::features::refs::schema::RefKind;
 use crate::input::{BranchName, BranchRef, Folder};
@@ -28,6 +27,9 @@ pub async fn list_worktrees(repo: &Repo) -> Result<Vec<Worktree>> {
 /// or a new one that does, named after it without the remote (see `tracking_branch`). Git refuses
 /// a branch that's checked out in a worktree already, the main one included, and a folder that's
 /// in use, saying so.
+///
+/// Fails with `Error::InvalidInput` if `branch` isn't a branch that's there, as the UI's input is
+/// checked.
 pub async fn add_worktree(
     repo: &Repo,
     folder: &Folder,
@@ -36,16 +38,14 @@ pub async fn add_worktree(
 ) -> Result<()> {
     let (folder, branch) = (folder.as_str(), branch.as_str());
     let new_branch = new_branch.map(BranchName::as_str);
-    let Some(target) = branch_name(branch) else {
-        return Err(Error::Bug(format!("{branch} isn't a branch.")));
-    };
+    let target = branch_target(branch)?;
     let path = resolve(repo.path(), folder);
     // One write, so nothing else changes the branches halfway.
     repo.exclusive(|run| async move {
         // That ref itself, rather than git reading `branch` as a revision, like
         // `refs/heads/main~3`.
         if !is_ref(&run, branch).await? {
-            return Err(Error::Bug(format!("{branch} isn't a branch.")));
+            return Err(not_a_branch(branch));
         }
         let add = |args: Vec<OsString>| {
             let mut all: Vec<OsString> = ["worktree", "add", "--quiet"]
@@ -112,14 +112,11 @@ pub async fn remove_worktree(repo: &Repo, path: &str) -> Result<()> {
             ));
         };
         if worktree.main {
-            return Err(Error::WorktreeRemovalBlocked(
-                "The main worktree can't be removed.".to_owned(),
-            ));
+            return Err(Error::WorktreeRemovalBlocked(WorktreeRemovalBlocker::Main));
         }
         if worktree.current {
             return Err(Error::WorktreeRemovalBlocked(
-                "This worktree is the one open here, so it can't be removed from here. Open another one, and remove it from there."
-                    .to_owned(),
+                WorktreeRemovalBlocker::Current,
             ));
         }
         run.run(["worktree", "remove", "--force", "--", &worktree.path])
@@ -150,7 +147,7 @@ async fn listed(root: &Path, run: &GitCommand) -> Result<(Vec<Worktree>, Vec<Pat
         return Ok((Vec::new(), Vec::new()));
     }
     // Git lists the linked ones as it finds their folders, in no set order.
-    worktrees[1..].sort_by(|a, b| locale_compare(&a.path, &b.path));
+    worktrees[1..].sort_by_cached_key(|worktree| locale_key(&worktree.path));
     let (here, paths) = futures::join!(
         real_path_or_itself(root),
         futures::future::join_all(
@@ -165,26 +162,21 @@ async fn listed(root: &Path, run: &GitCommand) -> Result<(Vec<Worktree>, Vec<Pat
     Ok((worktrees, paths))
 }
 
-/// Orders `a` and `b` roughly as JavaScript's `localeCompare` does: by their letters regardless of
+/// What orders paths roughly as JavaScript's `localeCompare` does: by their letters regardless of
 /// case first, then lowercase before uppercase. Punctuation is ordered by code point, where ICU has
 /// an order of its own (`a-b`, `a.b`, `a_b` here; `a_b`, `a-b`, `a.b` in TS), which only moves a
 /// worktree about in the list.
-fn locale_compare(a: &str, b: &str) -> Ordering {
+fn locale_key(path: &str) -> (String, String) {
     // Lowercase first, as ICU's tertiary strength has it.
-    let swap_case = |text: &str| -> String {
-        text.chars()
-            .flat_map(|c| {
-                if c.is_uppercase() {
-                    c.to_lowercase().collect::<Vec<_>>()
-                } else {
-                    c.to_uppercase().collect::<Vec<_>>()
-                }
-            })
-            .collect()
-    };
-    a.to_lowercase()
-        .cmp(&b.to_lowercase())
-        .then_with(|| swap_case(a).cmp(&swap_case(b)))
+    let mut swapped_case = String::with_capacity(path.len());
+    for c in path.chars() {
+        if c.is_uppercase() {
+            swapped_case.extend(c.to_lowercase());
+        } else {
+            swapped_case.extend(c.to_uppercase());
+        }
+    }
+    (path.to_lowercase(), swapped_case)
 }
 
 /// Where `path` really is, symlinks resolved; `path` itself if it's gone.
@@ -305,7 +297,10 @@ mod tests {
             );
             let repo = fx.repos.open("linked").await.unwrap();
             let check = list_worktrees(&repo).await.unwrap().remove(1);
-            assert_eq!(check.locked.as_deref(), Some("busy"));
+            assert_eq!(
+                check.locked.and_then(|lock| lock.reason).as_deref(),
+                Some("busy")
+            );
             assert_eq!(check.head, Some(git(&path, ["rev-parse", "HEAD"])));
         });
     }
@@ -507,12 +502,8 @@ mod tests {
             let error = add_worktree(&repo, &valid(s(&x)), &valid("refs/heads/gone"), None)
                 .await
                 .unwrap_err();
-            assert!(
-                error
-                    .to_string()
-                    .contains("refs/heads/gone isn't a branch."),
-                "{error}"
-            );
+            assert!(matches!(error, Error::InvalidInput(_)), "{error:?}");
+            assert_eq!(error.to_string(), "refs/heads/gone isn't a branch.");
             let error = add_worktree(
                 &repo,
                 &valid(s(&x)),
@@ -629,7 +620,7 @@ mod tests {
     #[test]
     fn orders_paths_regardless_of_case_then_lowercase_first() {
         let mut paths = ["/r/b", "/r/A", "/r/a", "/r/B", "/r/ab"];
-        paths.sort_by(|a, b| locale_compare(a, b));
+        paths.sort_by_cached_key(|path| locale_key(path));
         assert_eq!(paths, ["/r/a", "/r/A", "/r/ab", "/r/b", "/r/B"]);
     }
 

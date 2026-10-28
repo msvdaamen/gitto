@@ -12,16 +12,6 @@ pub enum DiffSource {
 }
 
 impl DiffSource {
-    /// As TS spells its `kind`, e.g. `unstaged`.
-    pub fn kind(&self) -> &'static str {
-        match self {
-            DiffSource::Commit { .. } => "commit",
-            DiffSource::Stash { .. } => "stash",
-            DiffSource::Unstaged => "unstaged",
-            DiffSource::Staged => "staged",
-        }
-    }
-
     /// The commit's or stash's SHA; `None` for the uncommitted changes.
     pub fn sha(&self) -> Option<&str> {
         match self {
@@ -36,15 +26,21 @@ pub fn is_uncommitted(source: &DiffSource) -> bool {
     matches!(source, DiffSource::Unstaged | DiffSource::Staged)
 }
 
-/// Names a file in `source`, to tell whether it's the one on show: the same path can be both in the
-/// staged and the unstaged changes.
-pub fn diff_file_key(source: &DiffSource, path: &str) -> String {
-    format!("{}:{}:{path}", source.kind(), source.sha().unwrap_or(""))
+/// A file by its path in its source, e.g. to key what's kept of it: the same path can be both in
+/// the staged and the unstaged changes.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DiffFileKey {
+    pub source: DiffSource,
+    pub path: String,
 }
 
-/// Whether `a` and `b` are the same commit, stash, or side of the uncommitted changes.
-pub fn is_same_source(a: &DiffSource, b: &DiffSource) -> bool {
-    a == b
+impl DiffFileKey {
+    pub fn new(source: &DiffSource, path: &str) -> Self {
+        Self {
+            source: source.clone(),
+            path: path.to_owned(),
+        }
+    }
 }
 
 /// The file whose changes are on show: its path, in its source.
@@ -60,7 +56,7 @@ pub struct ShownFile {
 /// The path of the file on show, if it's one of `source`'s, for its list to mark it.
 pub fn shown_path_in<'a>(shown: Option<&'a ShownFile>, source: &DiffSource) -> Option<&'a str> {
     shown
-        .filter(|shown| is_same_source(&shown.source, source))
+        .filter(|shown| shown.source == *source)
         .map(|shown| shown.path.as_str())
 }
 
@@ -85,14 +81,17 @@ mod tests {
         #[test]
         fn tell_the_same_path_in_the_staged_and_the_unstaged_changes_apart() {
             assert_ne!(
-                diff_file_key(&DiffSource::Staged, "a.txt"),
-                diff_file_key(&DiffSource::Unstaged, "a.txt")
+                DiffFileKey::new(&DiffSource::Staged, "a.txt"),
+                DiffFileKey::new(&DiffSource::Unstaged, "a.txt")
             );
-            assert!(is_same_source(&stash("a1"), &stash("a1")));
-            assert!(!is_same_source(
-                &stash("a1"),
-                &DiffSource::Commit { sha: "a1".into() }
-            ));
+            assert_eq!(
+                DiffFileKey::new(&stash("a1"), "a.txt"),
+                DiffFileKey::new(&stash("a1"), "a.txt")
+            );
+            assert_ne!(
+                DiffFileKey::new(&stash("a1"), "a.txt"),
+                DiffFileKey::new(&DiffSource::Commit { sha: "a1".into() }, "a.txt")
+            );
         }
 
         #[test]
@@ -103,13 +102,16 @@ mod tests {
                 Some("a.txt")
             );
             assert_eq!(shown_path_in(Some(&shown), &DiffSource::Unstaged), None);
+            let in_a_stash = ShownFile {
+                source: stash("a1"),
+                ..shown.clone()
+            };
+            assert_eq!(
+                shown_path_in(Some(&in_a_stash), &stash("a1")),
+                Some("a.txt")
+            );
+            assert_eq!(shown_path_in(Some(&in_a_stash), &stash("b2")), None);
             assert_eq!(shown_path_in(None, &DiffSource::Staged), None);
         }
-    }
-
-    #[test]
-    fn keys_files_as_ts_did() {
-        assert_eq!(diff_file_key(&stash("a1"), "b.txt"), "stash:a1:b.txt");
-        assert_eq!(diff_file_key(&DiffSource::Staged, "b.txt"), "staged::b.txt");
     }
 }

@@ -5,18 +5,19 @@ use std::sync::Arc;
 
 use futures::FutureExt as _;
 use futures::future::BoxFuture;
+use gitto_git::PatchVersion;
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::features::staging::commands::{
     stage, stage_all, stage_lines, unstage, unstage_all, unstage_lines,
 };
 use gitto_git::features::staging::discard::{DiscardSide, Discarded, discard, discard_all};
 use gitto_git::features::staging::schema::LineSelection;
-use gitto_git::input::{FileInput, Paths, RepositoryId};
+use gitto_git::input::{FileInput, Paths, RepoPath, RepositoryId};
 use gitto_git::schema::FileStatus;
 use gitto_git::{ApiError, GitApi};
 use gpui_kit::{App, AppContext as _, Entity};
 
-use super::call::{call, git};
+use super::call::{call, git, parse};
 use super::client::QueryClient;
 use super::file_diff::FilePatch;
 use super::keys::{self, UncommittedSide};
@@ -178,13 +179,13 @@ pub fn stage_file_mutation(cx: &mut App) -> Entity<Mutation<FileToStage>> {
 }
 
 /// Lines of a file's changes to stage or unstage, picked from its patch on show, named by its
-/// `version` (see `patch_version`).
+/// `version` (see `PatchVersion`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct LinesToStage {
     pub repository_id: RepositoryId,
     pub action: StageAction,
     pub file: ChangedFile,
-    pub version: String,
+    pub version: PatchVersion,
     pub lines: LineSelection,
 }
 
@@ -212,8 +213,8 @@ pub fn stage_lines_mutation(cx: &mut App) -> Entity<Mutation<LinesToStage, Strin
                 };
                 call(cx, procedure, &id, move |repo| async move {
                     let input = FileInput {
-                        path: file.path,
-                        orig_path: file.orig_path,
+                        path: parse::<RepoPath>(file.path)?,
+                        orig_path: file.orig_path.map(parse::<RepoPath>).transpose()?,
                     };
                     match action {
                         StageAction::Stage => {
@@ -245,7 +246,7 @@ pub fn stage_lines_mutation(cx: &mut App) -> Entity<Mutation<LinesToStage, Strin
 /// Shows `patch`, what staging or unstaging lines of the file at `path` left of its changes, in
 /// place of the patch they were picked from, if it has changes left; and reloads the rest of the
 /// uncommitted changes, without waiting for them.
-fn show_patch_left(id: &str, action: StageAction, path: &str, patch: &str, cx: &mut App) {
+fn show_patch_left(id: &RepositoryId, action: StageAction, path: &str, patch: &str, cx: &mut App) {
     let side = match action {
         StageAction::Stage => UncommittedSide::Unstaged,
         StageAction::Unstage => UncommittedSide::Staged,
