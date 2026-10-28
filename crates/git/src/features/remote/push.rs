@@ -155,18 +155,13 @@ pub async fn get_push_target(repo: &Repo) -> Result<PushTarget> {
 pub async fn push(repo: &Repo, force: bool) -> Result<()> {
     let plan = plan_push(repo).await?;
     let local = format!("refs/heads/{}", plan.branch);
-    let mut args = vec![
-        "push".to_owned(),
-        // What happened to the ref, on stdout, to tell a rejection from other failures.
-        "--porcelain".to_owned(),
-    ];
+    let refspec = format!("{local}:{}", plan.reference);
+    // What happened to the ref, on stdout, to tell a rejection from other failures.
+    let mut args = vec!["push", "--porcelain"];
     if force {
-        args.push("--force-with-lease".to_owned());
-        args.push("--force-if-includes".to_owned());
+        args.extend(["--force-with-lease", "--force-if-includes"]);
     }
-    args.push("--".to_owned());
-    args.push(plan.remote.clone());
-    args.push(format!("{local}:{}", plan.reference));
+    args.extend(["--", &plan.remote, &refspec]);
     // Queued with fetches rather than writes: it waits on the network, and only updates the
     // remote-tracking branch, which writes don't touch. Stopped if Gitto exits, as a fetch is:
     // the remote takes a ref's update whole or not at all, and pushing again finishes it.
