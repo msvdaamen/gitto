@@ -126,11 +126,17 @@ enum Body {
 /// ([`set_file`](Self::set_file)): going to another file, the last one stays on show, header and
 /// all, until the new one's changes are in. The page asks it, before closing it or opening
 /// another, whether it may ([`may_leave`](Self::may_leave)).
+///
+/// What it shows changes as it's notified: by what it shows of the repository (its queries), its
+/// staging, its viewer, and the layout of diffs. Each time, before it renders, it's brought up to
+/// date with all of that ([`sync`](Self::sync)), so rendering it only reads.
 pub struct FileDiffView {
     pub(super) view: ShownFile,
     pub(super) staging: FileStaging,
     focus: FocusHandle,
     viewer: Option<Entity<PatchViewer>>,
+    /// What the viewer tells the view, for as long as it's kept.
+    viewer_events: Option<Subscription>,
     /// The patch last given to the viewer, which it says is on show.
     viewer_patch: Option<PreparedPatch>,
     /// Why a file's patch couldn't be shown, and its key: another file is tried afresh.
@@ -193,16 +199,20 @@ impl FileDiffView {
         // otherwise.
         let opener = window.focused(cx);
         window.focus(&focus, cx);
+        let this = cx.entity();
         let subscriptions = vec![
             cx.observe_global::<DiffStyleSetting>(|_, cx| cx.notify()),
             cx.observe(view.busy(), |_, _, cx| cx.notify()),
             cx.on_release(|this: &mut Self, cx| this.give_focus_back(cx)),
+            // Notified, what it shows may have changed: it's synced before it renders again.
+            cx.observe_in(&this, window, |this, _, window, cx| this.sync(window, cx)),
         ];
-        FileDiffView {
+        let mut view = FileDiffView {
             view,
             staging,
             focus,
             viewer: None,
+            viewer_events: None,
             viewer_patch: None,
             viewer_error: None,
             conflict: None,
@@ -210,7 +220,9 @@ impl FileDiffView {
             opener,
             window: window.window_handle(),
             _subscriptions: subscriptions,
-        }
+        };
+        view.sync(window, cx);
+        view
     }
 
     pub fn repository_id(&self) -> &RepositoryId {
@@ -317,13 +329,14 @@ impl FileDiffView {
 
     /// Brings the view up to date with what's loaded: the file's place in its list, the viewer
     /// (made while the patch is on show, given what to show), the conflicts' viewer, and the
-    /// files a step away, loaded ahead.
+    /// files a step away, loaded ahead. Run as the view's notified (see the type's doc).
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.view.sync(cx);
         let body = self.body();
         if body == Body::Patch {
             self.show_patch(cx);
         } else if self.viewer.take().is_some() {
+            self.viewer_events = None;
             self.viewer_patch = None;
             self.view.patch_left(cx);
         }
@@ -358,9 +371,9 @@ impl FileDiffView {
         let viewer = match &self.viewer {
             Some(viewer) => viewer.clone(),
             None => {
-                let viewer = cx.new(|cx| PatchViewer::new(self.load_file(&data), cx));
-                self._subscriptions
-                    .push(cx.subscribe(&viewer, |this, _, event, cx| this.on_viewer(event, cx)));
+                let viewer = cx.new(|cx| PatchViewer::new(self.load_file(&prepared.data), cx));
+                self.viewer_events =
+                    Some(cx.subscribe(&viewer, |this, _, event, cx| this.on_viewer(event, cx)));
                 self.viewer = Some(viewer.clone());
                 viewer
             }
@@ -460,7 +473,6 @@ impl FileDiffView {
 
 impl Render for FileDiffView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.sync(window, cx);
         let palette = *cx.palette();
         let key = self.view.file_key();
         let staging_error = self.staging.error_for(&key).map(SharedString::from);
