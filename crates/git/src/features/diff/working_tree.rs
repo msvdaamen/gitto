@@ -144,7 +144,7 @@ const SCAN_CHUNK_BYTES: u64 = 1024 * 1024;
 pub async fn scan_working_tree_file(
     repo: &Repo,
     path: &str,
-    mut on_chunk: impl FnMut(&[u8]),
+    on_chunk: impl FnMut(&[u8]),
     max_bytes: u64,
 ) -> Result<Option<String>> {
     let Some(resolved) = resolve_file(repo, path).await? else {
@@ -166,19 +166,36 @@ pub async fn scan_working_tree_file(
             bytes: metadata.len(),
         });
     }
-    let mut file = async_fs::File::from(file);
+    let file = async_fs::File::from(file);
+    let buffer = vec![0; SCAN_CHUNK_BYTES.min(metadata.len().max(1)) as usize];
+    scan(file, buffer, max_bytes, on_chunk).await.map(Some)
+}
+
+/// Reads `reader` to its end into `buffer` a piece at a time, as `scan_working_tree_file` does;
+/// fails with `Error::FileTooLarge` once it's read more than `max_bytes`, which a file still being
+/// written can have grown past since its size was checked.
+async fn scan(
+    mut reader: impl futures_lite::AsyncRead + Unpin,
+    mut buffer: Vec<u8>,
+    max_bytes: u64,
+    mut on_chunk: impl FnMut(&[u8]),
+) -> Result<String> {
     let mut hash = sha1_smol::Sha1::new();
-    let mut buffer = vec![0; SCAN_CHUNK_BYTES.min(metadata.len().max(1)) as usize];
+    let mut total: u64 = 0;
     loop {
-        let read = file.read(&mut buffer).await?;
+        let read = reader.read(&mut buffer).await?;
         if read == 0 {
             break;
+        }
+        total += read as u64;
+        if total > max_bytes {
+            return Err(Error::FileTooLarge { bytes: total });
         }
         let chunk = &buffer[..read];
         hash.update(chunk);
         on_chunk(chunk);
     }
-    Ok(Some(hash.digest().to_string()))
+    Ok(hash.digest().to_string())
 }
 
 /// Where the file at `path` is on disk (see `resolve_working_tree_path`); `None` if none is.
@@ -238,14 +255,28 @@ async fn read_file(resolved: PathBuf, path: &str, max_bytes: u64) -> Result<File
                 bytes: metadata.len(),
             });
         }
-        let mut bytes = Vec::with_capacity(metadata.len() as usize);
-        file.read_to_end(&mut bytes)?;
         Ok(FileBytes {
-            bytes,
+            bytes: read_at_most(&mut file, metadata.len(), max_bytes)?,
             mode: mode_of(&metadata),
         })
     })
     .await
+}
+
+/// All of `reader`, which is `len` bytes long as far as is known; fails with `Error::FileTooLarge`
+/// past `max_bytes`, which a file still being written can have grown past since its size was
+/// checked.
+fn read_at_most(reader: impl Read, len: u64, max_bytes: u64) -> Result<Vec<u8>> {
+    let mut bytes = Vec::with_capacity(len.min(max_bytes) as usize);
+    reader
+        .take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(Error::FileTooLarge {
+            bytes: bytes.len() as u64,
+        });
+    }
+    Ok(bytes)
 }
 
 /// Names `bytes`, the contents of a file in the working tree: what a save checks it still has.
@@ -461,4 +492,33 @@ pub fn decode_utf8(bytes: &[u8]) -> Result<String> {
     std::str::from_utf8(bytes)
         .map(str::to_owned)
         .map_err(|_| Error::NotUtf8)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_no_more_than_the_limit_of_a_file_thats_grown() {
+        // A file that was 3 bytes when its size was checked.
+        let grown = b"abcdef".as_slice();
+        assert_eq!(read_at_most(grown, 3, 6).unwrap(), b"abcdef");
+        let error = read_at_most(grown, 3, 5).unwrap_err();
+        assert!(
+            matches!(error, Error::FileTooLarge { bytes: 6 }),
+            "{error:?}"
+        );
+
+        smol::block_on(async {
+            let mut chunks = Vec::new();
+            let scanned = scan(grown, vec![0; 2], 6, |chunk| chunks.push(chunk.to_vec())).await;
+            assert_eq!(scanned.unwrap(), version_of(grown));
+            assert_eq!(chunks, [b"ab", b"cd", b"ef"]);
+            let error = scan(grown, vec![0; 2], 5, |_| {}).await.unwrap_err();
+            assert!(
+                matches!(error, Error::FileTooLarge { bytes: 6 }),
+                "{error:?}"
+            );
+        });
+    }
 }
