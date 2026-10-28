@@ -70,6 +70,11 @@ impl CommitForm {
         });
         let subscriptions = vec![
             cx.observe(&commit, |_, _, cx| cx.notify()),
+            // Whatever changes the message on show notifies it: amending turned on or off, the
+            // last commit's message loaded, a commit made, HEAD moved.
+            cx.observe_in(&cx.entity(), window, |this, _, window, cx| {
+                this.sync_fields(window, cx)
+            }),
             cx.subscribe(&summary, |this, input, event, cx| match event {
                 InputEvent::Change => {
                     let summary = input.read(cx).value().to_string();
@@ -334,8 +339,8 @@ impl CommitForm {
 
     /// Puts the message on show in the fields once it changed other than by typing (amending
     /// turned on, the last message loaded, a commit made): only then, as what's typed reaches the
-    /// message after the field has it, through its events, and a render can come in between. And
-    /// the summary's placeholder, which says when the last commit's message is loading.
+    /// message after the field has it, through its events, and it can be notified in between.
+    /// And the summary's placeholder, which says when the last commit's message is loading.
     fn sync_fields(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let message = self.message();
         let changed = message != self.synced;
@@ -365,8 +370,7 @@ impl CommitForm {
 }
 
 impl Render for CommitForm {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.sync_fields(window, cx);
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = *cx.palette();
         let amend = self.is_amending();
         let locked = self.is_locked(cx);
@@ -613,6 +617,41 @@ mod tests {
         form.click("commit", cx);
         assert_eq!(form.committed(), [amended("Reworded\n\nIts body\n", "a1")]);
         assert!(!form.is_amend_checked(cx));
+    }
+
+    /// Holds the form without rendering it.
+    struct Unrendered {
+        form: Entity<CommitForm>,
+    }
+
+    impl Render for Unrendered {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    #[gpui_kit::test]
+    fn puts_the_last_commits_message_in_the_fields_without_being_rendered(cx: &mut TestAppContext) {
+        let fakes = Fakes::new();
+        let data = fakes.data();
+        let _dir = crate::test_support::init(cx, |services| services);
+        let (_, host) = crate::test_support::open(cx, move |window, cx| Unrendered {
+            form: cx.new(|cx| {
+                let mut form = CommitForm::new(repository_id(), data, window, cx);
+                form.set_head(repository_id(), 0, Some("a1".to_owned()), cx);
+                form
+            }),
+        });
+        let form = host.read_with(cx, |host, _| host.form.clone());
+        form.update(cx, |form, cx| form.toggle_amend(true, cx));
+        cx.run_until_parked();
+        assert_eq!(
+            form.read_with(cx, |form, cx| (
+                form.summary.read(cx).value().to_string(),
+                form.description.read(cx).value().to_string(),
+            )),
+            ("Commit a1".to_owned(), "Its body".to_owned())
+        );
     }
 
     #[gpui_kit::test]

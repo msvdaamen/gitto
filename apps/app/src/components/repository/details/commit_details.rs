@@ -327,7 +327,7 @@ pub struct SelectedCommit {
     hover: Entity<HoverIntent>,
     /// Whether the SHA was just copied, until the timer's done.
     copied: Option<Task<()>>,
-    _clock: Subscription,
+    _subscriptions: [Subscription; 2],
 }
 
 impl EventEmitter<CommitDetailsEvent> for SelectedCommit {}
@@ -346,7 +346,7 @@ impl SelectedCommit {
             cx,
         );
         let clock = Clock::global(cx);
-        SelectedCommit {
+        let mut commit = SelectedCommit {
             repository_id,
             sha: sha.to_owned(),
             data,
@@ -357,8 +357,15 @@ impl SelectedCommit {
             list: DetailsList::new(),
             hover: cx.new(|_| HoverIntent::default()),
             copied: None,
-            _clock: cx.observe(&clock, |_, _, cx| cx.notify()),
-        }
+            _subscriptions: [
+                cx.observe(&clock, |_, _, cx| cx.notify()),
+                // The commit's queries notify it as they load.
+                cx.observe_self(|this, _| this.update_shown()),
+            ],
+        };
+        // Either may be loaded already.
+        commit.update_shown();
+        commit
     }
 
     /// Shows the commit `sha` instead; the one on show stays until it's loaded.
@@ -413,7 +420,6 @@ impl SelectedCommit {
 
 impl Render for SelectedCommit {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.update_shown();
         let error = self.details.error().or_else(|| self.changes.error());
         let files = self
             .shown
@@ -725,6 +731,36 @@ mod tests {
             details
                 .details
                 .read_with(cx, |details, _| details.body.is_none())
+        );
+    }
+
+    /// Holds a view without rendering it.
+    struct Unrendered<V: 'static> {
+        view: Entity<V>,
+    }
+
+    impl<V: 'static> Render for Unrendered<V> {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    #[gpui_kit::test]
+    fn takes_a_commit_on_show_once_loaded_without_being_rendered(cx: &mut TestAppContext) {
+        let fakes = Fakes::new();
+        let data = fakes.data();
+        let _dir = crate::test_support::init(cx, |services| services);
+        let (_, host) = crate::test_support::open(cx, move |_, cx| Unrendered {
+            view: cx.new(|cx| SelectedCommit::new(repository_id(), "a1", data, cx)),
+        });
+        cx.run_until_parked();
+        let commit = host.read_with(cx, |host, _| host.view.clone());
+        assert_eq!(
+            commit
+                .read_with(cx, |commit, _| commit.shown.as_ref().map(
+                    |(commit, files)| (commit.sha.clone(), files.shown_sha.clone())
+                )),
+            Some(("a1".to_owned(), "a1".to_owned()))
         );
     }
 
