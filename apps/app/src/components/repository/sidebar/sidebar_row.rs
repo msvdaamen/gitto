@@ -3,17 +3,18 @@
 
 use std::rc::Rc;
 
+use gpui_kit::base::POPUP_PRIORITY;
 use gpui_kit::component::h_flex;
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    App, Context, ElementId, Rems, Role, SharedString, TestSupportExt as _, Window, div,
+    App, Context, ElementId, Entity, Rems, Role, SharedString, TestSupportExt as _, Window,
+    anchored, deferred, div, px,
 };
 
-use super::base_px;
-use crate::components::ui::{Icon, IconName, Tone};
-use crate::theme::PaletteExt as _;
+use crate::components::ui::{Icon, IconName};
+use crate::theme::{PaletteExt as _, base_px};
 
 /// Space below every row in a section.
 const ROW_GAP: f32 = 1.;
@@ -34,10 +35,12 @@ pub type RowAction = Rc<dyn Fn(&mut Window, &mut App) + 'static>;
 pub type RowMenuBuilder =
     Rc<dyn Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static>;
 
-/// A row's clickable frame: full width, its own height, rounded, muted until hovered.
+/// A row's clickable frame: full width, its own height, rounded, muted until hovered. Outlined,
+/// it's the row the keyboard's on (see `RefList`).
 fn row_frame(
     id: ElementId,
     padding_left: Rems,
+    outlined: bool,
     cx: &App,
 ) -> impl Styled + ParentElement + StatefulInteractiveElement + IntoElement + 'static {
     let palette = *cx.palette();
@@ -45,6 +48,7 @@ fn row_frame(
         .id(id)
         .test_support()
         .role(Role::Button)
+        .relative()
         .w_full()
         .h(ROW_BOX)
         .gap(COLUMN_GAP)
@@ -53,6 +57,18 @@ fn row_frame(
         .rounded_md()
         .text_color(palette.muted)
         .hover(|style| style.bg(palette.panel_hover).text_color(palette.text_soft))
+        .when(outlined, |row| {
+            row.child(
+                div()
+                    .id("keyboard-outline")
+                    .test_support()
+                    .absolute()
+                    .inset_0()
+                    .rounded_md()
+                    .border_2()
+                    .border_color(palette.primary),
+            )
+        })
 }
 
 /// A folder in a ref tree, which collapses the refs below it: a chevron, a folder (open while
@@ -64,6 +80,7 @@ pub struct SidebarFolder {
     count: usize,
     depth: usize,
     collapsed: bool,
+    outlined: bool,
     on_toggle: Option<RowAction>,
 }
 
@@ -81,8 +98,15 @@ impl SidebarFolder {
             count,
             depth,
             collapsed,
+            outlined: false,
             on_toggle: None,
         }
+    }
+
+    /// Outlined as the row the keyboard's on.
+    pub fn outlined(mut self, outlined: bool) -> Self {
+        self.outlined = outlined;
+        self
     }
 
     pub fn on_toggle(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
@@ -96,7 +120,7 @@ impl RenderOnce for SidebarFolder {
         let palette = *cx.palette();
         let padding = base_px(8. + self.depth as f32 * DEPTH_INDENT);
         let name = self.name.clone();
-        row_frame(self.id, padding, cx)
+        row_frame(self.id, padding, self.outlined, cx)
             .aria_label(self.name.clone())
             .aria_expanded(!self.collapsed)
             .tooltip(move |window, cx| Tooltip::new(name.clone()).build(window, cx))
@@ -146,9 +170,12 @@ pub struct RowTag {
 }
 
 /// An item in a section: a ref, a stash or a worktree. Its icon, its label, then whichever of a
-/// tag, a meta (a branch's ahead count, say) and a count it has: the label takes the space left,
-/// and the meta what it needs, up to half the row, as a worktree's branch can be long. Its tooltip is its `title`, or its label. Active, it stands out; highlighted (its menu
-/// open), it shows as if hovered; faded (a worktree whose folder is gone), it's dimmed.
+/// tag and a meta (a branch's ahead count, say) it has: the label takes the space left, and the
+/// meta what it needs, up to half the row, as a worktree's branch can be long. Its tooltip is its
+/// `title`, or its label. Active, it stands out; highlighted (its menu open), it shows as if
+/// hovered; faded (a worktree whose folder is gone), it's dimmed; outlined, it's the row the
+/// keyboard's on. Its menu opens when it's right-clicked, or below it when the keyboard opens it
+/// ([`keyboard_menu`](Self::keyboard_menu)).
 #[derive(IntoElement)]
 pub struct SidebarRow {
     id: ElementId,
@@ -159,11 +186,13 @@ pub struct SidebarRow {
     active: bool,
     highlighted: bool,
     tag: Option<RowTag>,
-    count: Option<u64>,
     meta: Option<SharedString>,
     faded: bool,
+    outlined: bool,
+    on_click: Option<RowAction>,
     on_double_click: Option<RowAction>,
     menu: Option<RowMenuBuilder>,
+    keyboard_menu: Option<Entity<PopupMenu>>,
 }
 
 impl SidebarRow {
@@ -177,11 +206,13 @@ impl SidebarRow {
             active: false,
             highlighted: false,
             tag: None,
-            count: None,
             meta: None,
             faded: false,
+            outlined: false,
+            on_click: None,
             on_double_click: None,
             menu: None,
+            keyboard_menu: None,
         }
     }
 
@@ -214,11 +245,6 @@ impl SidebarRow {
         self
     }
 
-    pub fn count(mut self, count: Option<u64>) -> Self {
-        self.count = count;
-        self
-    }
-
     pub fn meta(mut self, meta: Option<SharedString>) -> Self {
         self.meta = meta;
         self
@@ -227,6 +253,18 @@ impl SidebarRow {
     /// Dimmed, e.g. a worktree whose folder is gone.
     pub fn faded(mut self, faded: bool) -> Self {
         self.faded = faded;
+        self
+    }
+
+    /// Outlined as the row the keyboard's on.
+    pub fn outlined(mut self, outlined: bool) -> Self {
+        self.outlined = outlined;
+        self
+    }
+
+    /// What every click of it does, the second of a double-click too.
+    pub fn on_click(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
+        self.on_click = Some(Rc::new(handler));
         self
     }
 
@@ -244,23 +282,25 @@ impl SidebarRow {
         self
     }
 
-    /// What its tooltip says.
-    pub fn tooltip(&self) -> &SharedString {
-        self.title.as_ref().unwrap_or(&self.label)
+    /// Its menu, opened from the keyboard: shown below it, until it's dismissed.
+    pub fn keyboard_menu(mut self, menu: Option<Entity<PopupMenu>>) -> Self {
+        self.keyboard_menu = menu;
+        self
     }
 }
 
 impl RenderOnce for SidebarRow {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let palette = *cx.palette();
-        let tooltip = self.tooltip().clone();
+        let tooltip = self.title.clone().unwrap_or_else(|| self.label.clone());
         let padding = base_px(25. + self.depth as f32 * DEPTH_INDENT);
-        let (count_bg, count_text) = Tone::Neutral.colors(&palette);
         let icon = Icon::new(self.icon)
             .size(base_px(13.))
             .flex_none()
             .when(self.active, |icon| icon.text_color(palette.primary_strong));
-        let row = row_frame(self.id, padding, cx)
+        let on_click = self.on_click;
+        let on_double_click = self.on_double_click;
+        let row = row_frame(self.id, padding, self.outlined, cx)
             .aria_label(self.label.clone())
             .aria_selected(self.active)
             // The active one stands out already.
@@ -275,9 +315,14 @@ impl RenderOnce for SidebarRow {
             .when(!self.highlighted, |row| {
                 row.tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
             })
-            .when_some(self.on_double_click, |row, on_double_click| {
+            .when(on_click.is_some() || on_double_click.is_some(), |row| {
                 row.on_click(move |event, window, cx| {
-                    if event.click_count() == 2 {
+                    if let Some(on_click) = &on_click {
+                        on_click(window, cx);
+                    }
+                    if let Some(on_double_click) = &on_double_click
+                        && event.click_count() == 2
+                    {
                         on_double_click(window, cx);
                     }
                 })
@@ -315,19 +360,13 @@ impl RenderOnce for SidebarRow {
                         .child(meta),
                 )
             })
-            .when_some(self.count, |row, count| {
+            .when_some(self.keyboard_menu, |row, menu| {
+                // Below the row, where its left edge starts.
                 row.child(
-                    div()
-                        .flex_none()
-                        .min_w(base_px(17.))
-                        .px_1()
-                        .py_0p5()
-                        .rounded_lg()
-                        .bg(count_bg)
-                        .text_color(count_text)
-                        .text_center()
-                        .text_size(base_px(10.5))
-                        .child(count.to_string()),
+                    div().absolute().left_0().bottom_0().size_0().child(
+                        deferred(anchored().snap_to_window_with_margin(px(8.)).child(menu))
+                            .with_priority(POPUP_PRIORITY),
+                    ),
                 )
             });
         match self.menu {

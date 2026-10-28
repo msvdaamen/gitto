@@ -109,7 +109,8 @@ impl RepositoryView {
         let toolbar = cx.new(|cx| RepositoryToolbar::new(id.clone(), window, cx));
         let operation_bar = cx.new(|cx| OperationBar::new(id.clone(), window, cx));
         let branch_menu = cx.new(|cx| BranchMenuProvider::new(id.clone(), window, cx));
-        let refs_sidebar = cx.new(|cx| RefsSidebar::new(id.clone(), window, cx));
+        let refs_sidebar =
+            cx.new(|cx| RefsSidebar::new(id.clone(), branch_menu.clone(), window, cx));
         let history = cx.new(|cx| HistoryTable::new(id.clone(), window, cx));
         let commit_details = cx.new(|cx| CommitDetails::new(id.clone(), window, cx));
         let settled = cx.new(|_| Settled::new(None, SETTLE_AFTER));

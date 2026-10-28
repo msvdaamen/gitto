@@ -4,13 +4,13 @@ use gitto_git::input::RepositoryId;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{Selectable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{Context, Entity, SharedString, Window, div};
+use gpui_kit::{Context, Entity, SharedString, Subscription, Window, div};
 
 use super::agent_placeholder::AgentPlaceholder;
-use super::base_px;
 use super::ref_list::RefList;
+use crate::components::repository::branch_menu::BranchMenuProvider;
 use crate::components::ui::{Icon, IconName, SegmentedControl};
-use crate::theme::PaletteExt as _;
+use crate::theme::{PaletteExt as _, base_px};
 use crate::views::repository::MEDIUM;
 
 /// What the sidebar shows: the refs, or the agents.
@@ -46,20 +46,53 @@ const FOOTER_HEIGHT: f32 = 34.;
 /// The repository's local branches, remotes, tags, stashes and worktrees, in collapsible
 /// sections (see [`RefList`]); below 900px a rail of icons, each opening its section in a
 /// popover. Along the bottom, a button to configure it (which does nothing yet). An entity: it
-/// keeps the list, and which view is on show. The page tells it whether it's open
-/// ([`set_open`](Self::set_open)), fading it out while it's not; its width is the page's.
+/// keeps the list, and which view is on show, and decides whether it's a rail, as the window's
+/// width changes. The page tells it whether it's open ([`set_open`](Self::set_open)), fading it
+/// out while it's not; its width is the page's.
 pub struct RefsSidebar {
     list: Entity<RefList>,
     mode: SidebarMode,
     open: bool,
+    rail: bool,
+    _subscriptions: Vec<Subscription>,
+}
+
+/// Whether the sidebar is a rail in `window`: below 900px.
+fn is_rail(window: &Window) -> bool {
+    f32::from(window.viewport_size().width) < MEDIUM
 }
 
 impl RefsSidebar {
-    pub fn new(repository_id: RepositoryId, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    /// The sidebar of the repository `repository_id`, whose branches' menus are `branch_menu`'s.
+    pub fn new(
+        repository_id: RepositoryId,
+        branch_menu: Entity<BranchMenuProvider>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let rail = is_rail(window);
+        let list = cx.new(|cx| {
+            let mut list = RefList::new(repository_id, branch_menu, window, cx);
+            list.set_rail(rail, cx);
+            list
+        });
+        let subscriptions = vec![cx.observe_window_bounds(window, |sidebar, window, cx| {
+            sidebar.set_rail(is_rail(window), cx)
+        })];
         RefsSidebar {
-            list: cx.new(|cx| RefList::new(repository_id, window, cx)),
+            list,
             mode: SidebarMode::List,
             open: true,
+            rail,
+            _subscriptions: subscriptions,
+        }
+    }
+
+    fn set_rail(&mut self, rail: bool, cx: &mut Context<Self>) {
+        if self.rail != rail {
+            self.rail = rail;
+            self.list.update(cx, |list, cx| list.set_rail(rail, cx));
+            cx.notify();
         }
     }
 
@@ -148,9 +181,9 @@ impl RefsSidebar {
 }
 
 impl Render for RefsSidebar {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = *cx.palette();
-        let rail = f32::from(window.viewport_size().width) < MEDIUM;
+        let rail = self.rail;
         let content = match self.mode {
             SidebarMode::List => div()
                 .flex_1()
@@ -206,7 +239,8 @@ mod tests {
 
     use super::*;
     use crate::components::repository::test_support::{
-        repository_id, set_refs, set_stashes, set_status, set_worktrees, setup, status,
+        repository_id, set_operation, set_refs, set_remotes, set_stashes, set_status,
+        set_worktrees, setup, status,
     };
 
     fn local(name: &str, current: bool) -> Ref {
@@ -232,8 +266,13 @@ mod tests {
         set_refs(&id, vec![local("main", true), local("feature", false)], cx);
         set_stashes(&id, vec![], cx);
         set_worktrees(&id, vec![], cx);
-        let (window, sidebar) =
-            crate::test_support::open(cx, move |window, cx| RefsSidebar::new(id, window, cx));
+        // What the branch menus show.
+        set_operation(&id, None, cx);
+        set_remotes(&id, &[], cx);
+        let (window, sidebar) = crate::test_support::open(cx, move |window, cx| {
+            let branch_menu = cx.new(|cx| BranchMenuProvider::new(id.clone(), window, cx));
+            RefsSidebar::new(id, branch_menu, window, cx)
+        });
         (dir, window, sidebar)
     }
 

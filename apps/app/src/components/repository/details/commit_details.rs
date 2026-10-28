@@ -28,7 +28,7 @@ use crate::data::{Opaque, Query};
 use crate::git::diff_source::DiffSource;
 use crate::git::rows::WIP_ID;
 use crate::state::clock::{Clock, relative_time};
-use crate::theme::PaletteExt as _;
+use crate::theme::{PaletteExt as _, base_px};
 use crate::util::format::{avatar_color, initials};
 
 /// What the details ask of the page (TS's `FileOpener`); each part of the details emits them too,
@@ -278,14 +278,14 @@ impl Render for CommitDetails {
         v_flex()
             .id("details")
             .size_full()
-            .min_w(rems(18.67))
+            .min_w(base_px(280.))
             .child(
                 h_flex()
                     .flex_none()
-                    .h(rems(2.533))
+                    .h(base_px(38.))
                     .justify_between()
-                    .pl(rems(0.867))
-                    .pr(rems(0.6))
+                    .pl(base_px(13.))
+                    .pr(base_px(9.))
                     .border_b_1()
                     .border_color(palette.border)
                     .child(
@@ -511,7 +511,7 @@ impl RenderOnce for CommitSummary {
             .border_color(palette.border)
             .child(
                 h_flex()
-                    .gap(rems(0.6))
+                    .gap(base_px(9.))
                     .child(
                         Avatar::new(initials(&commit.author_name))
                             .color(avatar_color(&commit.author_email))
@@ -537,7 +537,7 @@ impl RenderOnce for CommitSummary {
             )
             .child(
                 div()
-                    .mt(rems(0.933))
+                    .mt(base_px(14.))
                     .mb_1p5()
                     .text_sm()
                     .line_height(rems(1.25))
@@ -551,7 +551,7 @@ impl RenderOnce for CommitSummary {
                 this.child(
                     div()
                         .id("description")
-                        .max_h(rems(7.4))
+                        .max_h(base_px(111.))
                         .overflow_y_scroll()
                         .text_xs()
                         .line_height(rems(1.24))
@@ -564,12 +564,12 @@ impl RenderOnce for CommitSummary {
                 h_flex().mt_3().child(
                     h_flex()
                         .overflow_hidden()
-                        .rounded(rems(0.333))
+                        .rounded(base_px(5.))
                         .border_1()
                         .border_color(palette.border_soft)
                         .child(
                             div()
-                                .px(rems(0.467))
+                                .px(base_px(7.))
                                 .py_1()
                                 .bg(palette.bg)
                                 .font_family(cx.theme().mono_font_family.clone())
@@ -589,8 +589,8 @@ impl RenderOnce for CommitSummary {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .h(rems(1.533))
-                                .w(rems(1.6))
+                                .h(base_px(23.))
+                                .w(base_px(24.))
                                 .border_l_1()
                                 .border_color(palette.border_soft)
                                 .bg(palette.panel_raised)

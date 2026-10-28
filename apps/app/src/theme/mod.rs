@@ -20,7 +20,7 @@ pub mod palette;
 use std::rc::Rc;
 
 use gpui_kit::component::{Colorize as _, Theme, ThemeConfig, ThemeMode};
-use gpui_kit::{App, Global, Hsla};
+use gpui_kit::{App, Global, Hsla, Rems};
 
 pub use self::palette::Palette;
 use crate::services::LocalStorage;
@@ -31,6 +31,13 @@ pub const STORAGE_KEY: &str = "gitto-theme";
 /// The base font size: the rem every size is relative to (see the module's doc).
 pub const FONT_SIZE: f32 = 15.;
 pub const MONO_FONT_SIZE: f32 = 13.;
+
+/// `px` pixels of the TS app at the [`FONT_SIZE`] base, in rems: for the measures ported pixel
+/// for pixel that fall between the rem scale's steps, kept as rems so they follow the app's zoom.
+pub const fn base_px(px: f32) -> Rems {
+    Rems(px / FONT_SIZE)
+}
+
 /// Controls' corners (`rounded-[7px]`), and large surfaces' (`rounded-[11px]`).
 pub const RADIUS: usize = 7;
 pub const RADIUS_LG: usize = 11;
