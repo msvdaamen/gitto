@@ -631,16 +631,15 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("delete-other-refs").await.unwrap();
 
-            // A tag is refused as the input's parsed: `delete_branch` takes a `BranchRef`.
+            // A tag, or a link to the remote's default branch, is refused as the input's parsed:
+            // `delete_branch` takes a `BranchRef`.
             assert!(BranchRef::parse("refs/tags/v1").is_err());
-            let error = delete_branch(&repo, &valid("refs/remotes/origin/HEAD"))
+            assert!(BranchRef::parse("refs/remotes/origin/HEAD").is_err());
+            // A branch named like the tag, which isn't there, leaves the tag alone.
+            let error = delete_branch(&repo, &valid("refs/heads/v1"))
                 .await
                 .unwrap_err();
-            assert!(matches!(error, Error::InvalidInput(_)), "{error:?}");
-            assert_eq!(
-                error.to_string(),
-                "refs/remotes/origin/HEAD isn't a branch."
-            );
+            assert!(error.to_string().contains("not found"), "{error}");
         });
         assert_eq!(refs(&path, "refs/tags/"), strs(&["refs/tags/v1"]));
     }

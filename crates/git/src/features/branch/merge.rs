@@ -1064,19 +1064,16 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("merge-not-branch").await.unwrap();
-            // A tag, or no branch to merge into, is refused as the input's parsed: `merge_branch`
-            // takes a `BranchRef` and a `BranchShortName`.
+            // A tag, a link to the remote's default branch, or no branch to merge into, is refused
+            // as the input's parsed: `merge_branch` takes a `BranchRef` and a `BranchShortName`.
             assert!(BranchRef::parse("refs/tags/v1").is_err());
+            assert!(BranchRef::parse("refs/remotes/origin/HEAD").is_err());
             assert!(BranchShortName::parse("").is_err());
-            // Past the input's check, but not a branch: a link to the remote's default one.
-            let error = merge_branch(&repo, &valid("refs/remotes/origin/HEAD"), &valid("main"))
+            // Past the input's check, but not there.
+            let error = merge_branch(&repo, &valid("refs/heads/gone"), &valid("main"))
                 .await
                 .unwrap_err();
-            assert!(matches!(error, Error::InvalidInput(_)), "{error:?}");
-            assert_eq!(
-                error.to_string(),
-                "refs/remotes/origin/HEAD isn't a branch."
-            );
+            assert_blocked(&error, "gone no longer exists.");
         });
     }
 

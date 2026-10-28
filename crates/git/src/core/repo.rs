@@ -91,8 +91,8 @@ impl GitRepos {
     /// (`Error::RepositoryNotFound`, `Error::FolderNotFound`), and so is any if the list of
     /// repositories couldn't be read (`Error::RepositoryList`). What's kept for it is made once.
     ///
-    /// The UI opens repositories with `GitApi::open`, which also checks the installed git.
-    pub async fn open(&self, repository_id: &RepositoryId) -> Result<Repo> {
+    /// The UI opens repositories through `GitApi::call`, which also checks the installed git.
+    pub(crate) async fn open(&self, repository_id: &RepositoryId) -> Result<Repo> {
         let Some(path) = self.inner.lookup.repository_path(repository_id).await? else {
             return Err(Error::RepositoryNotFound {
                 repository_id: repository_id.clone(),
