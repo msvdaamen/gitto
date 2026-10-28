@@ -41,6 +41,7 @@ use super::add_worktree_dialog::AddWorktreeDialog;
 use super::create_branch_dialog::CreateBranchDialog;
 use super::delete_branch_dialog::{BranchDeletion, Unpushed, open_delete_branch_dialog};
 use super::row_menu::RowMenu;
+use super::sidebar::worktree_menu::WorktreeMenu;
 use gitto_app_data::data::Change;
 use gitto_app_data::data::branch::{Merge, Rebase};
 use gitto_app_data::data::status::{first_to_resolve, select_conflicted};
@@ -167,9 +168,7 @@ impl BranchMenuProvider {
     /// to open the worktree the branch is checked out in, rather than switching to it, which git
     /// refuses. The worktrees' section in the sidebar shows it running, and why it failed.
     pub fn open_worktree(&mut self, path: String, cx: &mut Context<Self>) {
-        self.repository.update(cx, |repository, cx| {
-            drop(repository.open_worktree(path, cx))
-        });
+        WorktreeMenu::open_at(self.repository.entity(), path, cx);
     }
 
     /// Whether a worktree is being opened.

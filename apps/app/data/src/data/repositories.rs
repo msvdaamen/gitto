@@ -8,13 +8,12 @@ use futures::FutureExt as _;
 use futures::future::BoxFuture;
 use gitto_git::input::RepositoryId;
 use gitto_repository::{Repository, RepositoryService};
-use gpui_kit::{App, AppContext as _, Context, Entity, Task};
+use gpui_kit::{App, AppContext as _, Context, Entity, EventEmitter, Task};
 
 use super::app_data::{AppData, AppPart};
 use super::error::DataError;
 use super::repository::Repositories;
 use crate::services::{Services, SystemContext};
-use crate::state::router::{Route, Router};
 
 /// Where the list of repositories is kept: `RepositoryService` (the database), or a test's.
 pub trait RepositorySource {
@@ -111,15 +110,21 @@ fn reload_list(cx: &mut App) {
     AppData::global(cx).update(cx, |data, cx| drop(data.reload(AppPart::Repositories, cx)));
 }
 
-/// Asks for a folder, adds the repository in it (see [`add_repository`]), and opens it; with why
-/// that last failed (the folder isn't a repository, say), until it's dismissed or tried again
-/// (`useOpenRepository`). Each place that offers it keeps its own: the tabs' `+`, the home page's
-/// button.
+/// Asks for a folder, adds the repository in it (see [`add_repository`]), and says it's
+/// [`Opened`], for the view to show it; with why that last failed (the folder isn't a repository,
+/// say), until it's dismissed or tried again (`useOpenRepository`). Each place that offers it
+/// keeps its own: the tabs' `+`, the home page's button.
 #[derive(Default)]
 pub struct OpenRepository {
     error: Option<DataError>,
     task: Option<Task<()>>,
 }
+
+/// What [`OpenRepository`] says once it's added a repository, or found it added already: its id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Opened(pub RepositoryId);
+
+impl EventEmitter<Opened> for OpenRepository {}
 
 impl OpenRepository {
     pub fn new(cx: &mut App) -> Entity<OpenRepository> {
@@ -137,12 +142,13 @@ impl OpenRepository {
             let result = adding.await;
             let _ = this.update(cx, |this, cx| {
                 match result {
-                    Ok(Some(repository)) => {
-                        this.error = None;
-                        if let Ok(id) = RepositoryId::parse(repository.id) {
-                            Router::navigate(Route::Repository(id), cx);
+                    Ok(Some(repository)) => match RepositoryId::parse(repository.id) {
+                        Ok(id) => {
+                            this.error = None;
+                            cx.emit(Opened(id));
                         }
-                    }
+                        Err(error) => this.error = Some(error.into()),
+                    },
                     Ok(None) => this.error = None,
                     Err(error) => this.error = Some(error),
                 }

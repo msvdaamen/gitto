@@ -13,7 +13,9 @@ use gpui_kit::{
 };
 
 use super::remove_repository_dialog::open_remove_repository_dialog;
-use gitto_app_data::data::repositories::{OpenRepository, remove_repository, reorder_repositories};
+use gitto_app_data::data::repositories::{
+    OpenRepository, Opened, remove_repository, reorder_repositories,
+};
 use gitto_app_data::data::{AppChanged, AppData, AppPart, DataError};
 use gitto_app_data::state::router::{Route, Router};
 use gitto_app_kit::theme::PaletteExt as _;
@@ -108,6 +110,9 @@ impl Tabs {
         let subscriptions = vec![
             cx.observe(&Router::global(cx), |_, _, cx| cx.notify()),
             cx.observe(&open_repository, |_, _, cx| cx.notify()),
+            cx.subscribe(&open_repository, |_, _, Opened(id), cx| {
+                Router::navigate(Route::Repository(id.clone()), cx);
+            }),
             cx.subscribe(&data, |tabs, _, AppChanged(part), cx| {
                 if *part == AppPart::Repositories {
                     tabs.forget_saved_order(cx);

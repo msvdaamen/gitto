@@ -23,6 +23,7 @@ use gitto_app_data::data::git::{GitTask, RepositoryGit};
 use gitto_app_data::data::repositories::RepositorySource;
 use gitto_app_data::data::worktree::AddWorktreeInput;
 use gitto_app_data::data::{Change, PopFrom};
+use gitto_app_data::state::router::{Route, Router};
 use gitto_git::features::status::schema::Uncommitted;
 use gitto_git::input::{BranchName, BranchRef, Folder, FullSha, NonEmpty};
 use gitto_repository::Repository;
@@ -172,6 +173,11 @@ impl RepositoryGit for Fakes {
     }
 }
 
+/// The id the worktree opened gets, added to Gitto as a repository of its own.
+fn worktree_id() -> RepositoryId {
+    RepositoryId::parse("01890a5d-ac96-774b-bcce-b302099a8058").unwrap()
+}
+
 /// The repositories added to Gitto; opening a worktree adds it, as `open` answers.
 struct Source {
     list: RefCell<Vec<Repository>>,
@@ -186,7 +192,7 @@ impl RepositorySource for Source {
 
     fn add(&self, path: PathBuf) -> BoxFuture<'static, Result<Repository, DataError>> {
         let path = path.to_string_lossy().into_owned();
-        let opened = repository(&repository_id(), &path);
+        let opened = repository(&worktree_id(), &path);
         self.open
             .run(path, ())
             .map(move |result| result.map(|()| opened))
@@ -1399,6 +1405,11 @@ fn opens_a_worktree_thats_double_clicked_as_a_repository_of_its_own_showing_it_r
     f.fakes.open.finish(());
     cx.run_until_parked();
     assert!(!f.is_section_busy(WORKTREES, cx));
+    // The view that opened it shows it.
+    assert_eq!(
+        cx.update(|cx| Router::current(cx)),
+        Route::Repository(worktree_id())
+    );
 }
 
 #[gpui_kit::test]

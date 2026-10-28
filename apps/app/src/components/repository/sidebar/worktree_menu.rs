@@ -16,6 +16,7 @@ use gpui_kit::{App, Entity, Window};
 use super::sidebar_section::SectionFailure;
 use gitto_app_data::data::Change;
 use gitto_app_data::data::Repository;
+use gitto_app_data::state::router::{Route, Router};
 use gitto_app_kit::ui::{IconName, context_menu_item};
 
 /// The menu of what can be done with a worktree. Opening it adds it to Gitto's repositories, as a
@@ -60,11 +61,23 @@ impl WorktreeMenu {
     /// Opens `worktree` in Gitto, e.g. the one whose row was double-clicked, if it can be.
     pub fn open(repository: &Entity<Repository>, worktree: &Worktree, cx: &mut App) {
         if can_open_worktree(worktree) {
-            let path = worktree.path.clone();
-            repository.update(cx, |repository, cx| {
-                drop(repository.open_worktree(path, cx))
-            });
+            Self::open_at(repository, worktree.path.clone(), cx);
         }
+    }
+
+    /// Opens the worktree of `repository` at `path` in Gitto, and shows it once it's opened, as
+    /// a repository of its own: from its row, or a branch checked out in it.
+    pub fn open_at(repository: &Entity<Repository>, path: String, cx: &mut App) {
+        let opening = repository.update(cx, |repository, cx| repository.open_worktree(path, cx));
+        let Some(opening) = opening else {
+            return;
+        };
+        cx.spawn(async move |cx| {
+            if let Ok(Ok(id)) = opening.await {
+                cx.update(|cx| Router::navigate(Route::Repository(id), cx));
+            }
+        })
+        .detach();
     }
 
     /// Removes `worktree` from `repository`, once that's confirmed: not while another worktree

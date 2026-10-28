@@ -32,7 +32,6 @@ use super::repository::{Changed, Part, Repository};
 use super::staging::{DiscardTarget, StageAction, StagingTarget};
 use super::worktree::AddWorktreeInput;
 use crate::services::Services;
-use crate::state::router::{Route, Router};
 use gitto_ui_logic::git::diff_source::DiffSource;
 use gitto_ui_logic::git::patch::has_hunks;
 use gitto_ui_logic::git::status::{branch_name, is_checked_out};
@@ -543,9 +542,10 @@ impl Repository {
     }
 
     /// Opens a worktree of the repository, by its path: adds it to Gitto's repositories, as one of
-    /// its own, or finds it there, and shows it (`useOpenWorktree`). Whether that's running, and
-    /// why it last failed, wherever it was started from (a worktree's menu, or a branch's).
-    pub fn open_worktree(&mut self, path: String, cx: &mut Context<Self>) -> Done {
+    /// its own, or finds it there; resolves to its id, once the list's reloaded, for the view that
+    /// opened it to show it (`useOpenWorktree`). Whether that's running, and why it last failed,
+    /// wherever it was started from (a worktree's menu, or a branch's).
+    pub fn open_worktree(&mut self, path: String, cx: &mut Context<Self>) -> Done<RepositoryId> {
         if self.worktrees_changing() {
             return None;
         }
@@ -564,9 +564,7 @@ impl Repository {
                     if let Some(reloaded) = reloaded {
                         let _ = reloaded.await;
                     }
-                    let id = RepositoryId::parse(repository.id)?;
-                    cx.update(|cx| Router::navigate(Route::Repository(id), cx));
-                    Ok(())
+                    Ok(RepositoryId::parse(repository.id)?)
                 })
             },
             cx,

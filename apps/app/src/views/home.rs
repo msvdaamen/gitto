@@ -10,9 +10,10 @@ use crate::components::home::recent_activity::RecentActivity;
 use crate::components::home::repository_list::RepositoryList;
 use crate::components::home::summaries::RepositorySummaries;
 use crate::components::home::welcome_hero::WelcomeHero;
-use gitto_app_data::data::repositories::OpenRepository;
+use gitto_app_data::data::repositories::{OpenRepository, Opened};
 use gitto_app_data::data::{AppChanged, AppData, AppPart};
 use gitto_app_data::state::clock::Clock;
+use gitto_app_data::state::router::{Route, Router};
 use gitto_app_kit::theme::PaletteExt as _;
 
 /// The widest the page's content gets (`max-w-322.5`, 1290px), in rems.
@@ -56,6 +57,9 @@ impl HomeView {
                 AppPart::GitVersion => {}
             }),
             cx.observe(&open_repository, |_, _, cx| cx.notify()),
+            cx.subscribe(&open_repository, |_, _, Opened(id), cx| {
+                Router::navigate(Route::Repository(id.clone()), cx);
+            }),
             // The list is filtered as the search is typed.
             cx.subscribe(&search, |_, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
