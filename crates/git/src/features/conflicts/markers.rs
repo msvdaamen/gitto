@@ -83,15 +83,16 @@ impl ConflictCounter {
             };
             // Only a line that starts with a marker's character is looked at closer.
             if matches!(text[start], b'<' | b'=' | b'>') {
-                match marker_kind(text, start, end) {
-                    Some(Marker::Start) => self.open.push(false),
-                    Some(Marker::Separator) => {
+                match classify_marker(&text[start..end]) {
+                    Some(MarkerKind::Start) => self.open.push(false),
+                    Some(MarkerKind::Separator) => {
                         if let Some(open) = self.open.last_mut() {
                             *open = true;
                         }
                     }
-                    Some(Marker::End) if self.open.pop() == Some(true) => self.count += 1,
-                    Some(Marker::End) | None => {}
+                    Some(MarkerKind::End) if self.open.pop() == Some(true) => self.count += 1,
+                    // The base's marker says nothing of where a conflict starts or ends.
+                    Some(MarkerKind::End | MarkerKind::Base) | None => {}
                 }
             }
             start = end + 1;
@@ -99,41 +100,45 @@ impl ConflictCounter {
     }
 }
 
+/// A conflict marker's kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Marker {
+pub enum MarkerKind {
+    /// `<<<<<<< HEAD`, before ours.
     Start,
+    /// `||||||| base`, before the base's lines (diff3 and zdiff3).
+    Base,
+    /// `=======`, between the sides.
     Separator,
+    /// `>>>>>>> feature`, after theirs.
     End,
 }
 
-/// Which marker the line from `start` to `end` (its newline) is, if it's one.
-fn marker_kind(text: &[u8], start: usize, end: usize) -> Option<Marker> {
-    // Without the line's CR, for a file with CRLF line ends.
-    let last = if end > 0 && text.get(end - 1) == Some(&b'\r') {
-        end - 1
-    } else {
-        end
+/// Which conflict marker `line` is, if it's one, its line end (LF or CRLF) left on or off: seven
+/// or more of the same marker character, then whitespace or nothing; nothing at all after `=`. The
+/// one grammar of markers, for counting a file's conflicts here and for reading them in the app's
+/// viewer, so the two can't disagree on which lines are markers.
+pub fn classify_marker(line: &[u8]) -> Option<MarkerKind> {
+    let line = line.strip_suffix(b"\n").unwrap_or(line);
+    let line = line.strip_suffix(b"\r").unwrap_or(line);
+    let char = *line.first()?;
+    let kind = match char {
+        b'<' => MarkerKind::Start,
+        b'|' => MarkerKind::Base,
+        b'=' => MarkerKind::Separator,
+        b'>' => MarkerKind::End,
+        _ => return None,
     };
-    let char = text[start];
-    let mut run = start;
-    while run < last && text[run] == char {
-        run += 1;
-    }
-    if run - start < 7 {
+    let run = line.iter().take_while(|byte| **byte == char).count();
+    if run < 7 {
         return None;
     }
-    if char == b'=' {
-        return (run == last).then_some(Marker::Separator);
-    }
-    // A label may follow, after a space: `<<<<<<< HEAD`.
-    if run != last && !is_space(text[run]) {
-        return None;
-    }
-    Some(if char == b'<' {
-        Marker::Start
-    } else {
-        Marker::End
-    })
+    let rest = &line[run..];
+    let marker = match kind {
+        MarkerKind::Separator => rest.is_empty(),
+        // A label may follow, after a space: `<<<<<<< HEAD`.
+        _ => rest.first().is_none_or(|byte| is_space(*byte)),
+    };
+    marker.then_some(kind)
 }
 
 /// Whether `byte`, as a Latin-1 character, is whitespace as JavaScript's `\s` has it.
@@ -218,6 +223,50 @@ mod tests {
         counter.push("=".repeat(10_000).as_bytes());
         counter.push(b"\ntheirs\n>>>>>>> side\n");
         assert_eq!(counter.end(), 0);
+    }
+
+    #[test]
+    fn tells_each_marker_with_its_line_end_or_without() {
+        assert_eq!(classify_marker(b"<<<<<<< HEAD\n"), Some(MarkerKind::Start));
+        assert_eq!(classify_marker(b"<<<<<<<\r\n"), Some(MarkerKind::Start));
+        assert_eq!(classify_marker(b"<<<<<<<<<< x"), Some(MarkerKind::Start));
+        assert_eq!(classify_marker(b"||||||| base\n"), Some(MarkerKind::Base));
+        assert_eq!(classify_marker(b"=======\r\n"), Some(MarkerKind::Separator));
+        assert_eq!(classify_marker(b"==========="), Some(MarkerKind::Separator));
+        assert_eq!(classify_marker(b">>>>>>> side"), Some(MarkerKind::End));
+        assert_eq!(classify_marker(b">>>>>>>\tside"), Some(MarkerKind::End));
+        assert_eq!(classify_marker(b">>>>>>>\x0bside"), Some(MarkerKind::End));
+        // A no-break space, as a Latin-1 file has it.
+        assert_eq!(classify_marker(b">>>>>>>\xa0side"), Some(MarkerKind::End));
+    }
+
+    #[test]
+    fn doesnt_take_a_line_that_only_looks_like_one_for_a_marker() {
+        for line in [
+            &b""[..],
+            b"\n",
+            b"<<<<<< short",
+            b"<<<<<<<HEAD",
+            b"======= x",
+            b"=======x",
+            b"-------",
+            b"<<<<<<<>>>",
+            b" <<<<<<< HEAD",
+        ] {
+            assert_eq!(
+                classify_marker(line),
+                None,
+                "{:?}",
+                String::from_utf8_lossy(line)
+            );
+        }
+    }
+
+    #[test]
+    fn counts_a_conflict_with_the_bases_lines_once_whatever_they_look_like() {
+        let base =
+            "<<<<<<< HEAD\nours\n||||||| base\n||||||| more\n=======\ntheirs\n>>>>>>> side\n";
+        assert_eq!(count_conflicts(base), 1);
     }
 
     #[test]
