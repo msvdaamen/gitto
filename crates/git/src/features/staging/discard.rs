@@ -7,13 +7,13 @@ use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 
 use super::commands::{PATHS_FROM_STDIN, unstage_args};
-use crate::core::errors::{Error, Result};
+use crate::core::errors::{DiscardBlocker, Error, Result};
 use crate::core::git_dirs::git_dirs;
 use crate::core::records::{nul_terminated, raw_entries};
 use crate::core::repo::{GitCommand, Repo, has_conflicts, ref_exists, succeeds};
 use crate::core::runner::RunOptions;
 use crate::features::operation::commands::operation_under_way;
-use crate::schema::FileStatus;
+use crate::schema::{FileMode, FileStatus};
 
 /// Which of a file's changes are discarded: the ones in the index, or in the working tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,18 +38,14 @@ pub struct Discarded {
 #[derive(Debug, Clone)]
 struct Entry {
     path: String,
-    /// Its mode, e.g. `0o100644`; `SUBMODULE` for a submodule.
-    mode: u32,
+    mode: FileMode,
     /// Its stage in the index: other than 0 for a conflicted file's sides.
     stage: u8,
 }
 
-/// The mode git gives a submodule, a commit in the tree.
-const SUBMODULE: u32 = 0o160000;
-
-/// The mode on a line of `ls-files --stage` or `ls-tree`, in octal.
-fn parse_mode(mode: &str) -> Result<u32> {
-    u32::from_str_radix(mode, 8)
+/// The mode on a line of `ls-files --stage` or `ls-tree -r`.
+fn parse_mode(mode: &str) -> Result<FileMode> {
+    mode.parse()
         .map_err(|_| Error::Bug(format!("Unexpected mode of a file: {mode}")))
 }
 
@@ -76,10 +72,9 @@ pub async fn discard(repo: &Repo, file: &Discarded) -> Result<()> {
     let side = file.side;
     // Git lists a repository inside this one as an untracked folder.
     if file.path.ends_with('/') {
-        return Err(Error::DiscardBlocked(format!(
-            "{} is a repository of its own, so its changes weren't discarded.",
-            file.path
-        )));
+        return Err(Error::DiscardBlocked(DiscardBlocker::Repository {
+            path: file.path.clone(),
+        }));
     }
     let orig_path = match (&file.status, file.orig_path.as_deref()) {
         (FileStatus::Renamed, Some(orig_path)) if !orig_path.is_empty() => Some(orig_path),
@@ -112,16 +107,18 @@ pub async fn discard(repo: &Repo, file: &Discarded) -> Result<()> {
             },
         )?;
         if index.iter().any(|entry| entry.stage != 0) {
-            return Err(Error::DiscardBlocked(format!(
-                "{} has conflicts, so its changes weren't discarded. Resolve them, or abort what's under way.",
-                file.path
-            )));
+            return Err(Error::DiscardBlocked(DiscardBlocker::Conflicted {
+                path: file.path.clone(),
+            }));
         }
-        if index.iter().chain(&head).any(|entry| entry.mode == SUBMODULE) {
-            return Err(Error::DiscardBlocked(format!(
-                "{} is a submodule, so its changes weren't discarded. Discard them in the submodule itself.",
-                file.path
-            )));
+        if index
+            .iter()
+            .chain(&head)
+            .any(|entry| entry.mode == FileMode::Submodule)
+        {
+            return Err(Error::DiscardBlocked(DiscardBlocker::Submodule {
+                path: file.path.clone(),
+            }));
         }
         // What the files are put back as: HEAD's for the staged changes, the index's for the
         // unstaged ones, but for a placeholder of a file only marked to be added. Any path without
@@ -152,10 +149,10 @@ pub async fn discard(repo: &Repo, file: &Discarded) -> Result<()> {
         let in_index: HashSet<&str> = index.iter().map(|entry| entry.path.as_str()).collect();
         let deleted_set: HashSet<&str> = deleted.iter().copied().collect();
         if let Some(blocker) = in_the_way(repo.path(), &kept, &in_index, &deleted_set).await {
-            return Err(Error::DiscardBlocked(format!(
-                "{}'s changes weren't discarded: putting it back would also lose {blocker}.",
-                file.path
-            )));
+            return Err(Error::DiscardBlocked(DiscardBlocker::WouldLose {
+                path: file.path.clone(),
+                lost: blocker,
+            }));
         }
 
         // Once it's unstaged, the index has the file as HEAD does, which discarding its unstaged
@@ -368,20 +365,15 @@ pub async fn discard_all(repo: &Repo) -> Result<()> {
             ref_exists(&run, "HEAD"),
         )?;
         if let Some(operation) = operation {
-            return Err(Error::DiscardBlocked(format!(
-                "A {} is under way. Finish or abort it, then discard all changes.",
-                operation.name()
-            )));
+            return Err(Error::DiscardBlocked(DiscardBlocker::OperationUnderWay {
+                operation: operation.name().to_owned(),
+            }));
         }
         if conflicted {
-            return Err(Error::DiscardBlocked(
-                "Some files have conflicts. Resolve them, then discard all changes.".to_owned(),
-            ));
+            return Err(Error::DiscardBlocked(DiscardBlocker::Conflicts));
         }
         if !has_discardable_changes(&run, has_head).await? {
-            return Err(Error::DiscardBlocked(
-                "There's nothing here to discard. A submodule's changes, or those of a repository inside this one, are discarded in it.".to_owned(),
-            ));
+            return Err(Error::DiscardBlocked(DiscardBlocker::NothingToDiscard));
         }
         // Not `reset --hard`, which would also end a merge git left under way in a terminal, say,
         // nor `restore`, which writes every file again, changed or not: in a big repository that's

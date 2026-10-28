@@ -5,7 +5,7 @@ use std::path::{Component, Path, PathBuf};
 
 use super::parse::{WORKTREE_LIST_ARGS, parse_worktree_list};
 use super::schema::Worktree;
-use crate::core::errors::{Error, Result};
+use crate::core::errors::{Error, Result, WorktreeRemovalBlocker};
 use crate::core::git_dirs::real_path;
 use crate::core::repo::{GitCommand, Repo};
 use crate::features::branch::commands::{
@@ -116,14 +116,11 @@ pub async fn remove_worktree(repo: &Repo, path: &str) -> Result<()> {
             ));
         };
         if worktree.main {
-            return Err(Error::WorktreeRemovalBlocked(
-                "The main worktree can't be removed.".to_owned(),
-            ));
+            return Err(Error::WorktreeRemovalBlocked(WorktreeRemovalBlocker::Main));
         }
         if worktree.current {
             return Err(Error::WorktreeRemovalBlocked(
-                "This worktree is the one open here, so it can't be removed from here. Open another one, and remove it from there."
-                    .to_owned(),
+                WorktreeRemovalBlocker::Current,
             ));
         }
         run.run(["worktree", "remove", "--force", "--", &worktree.path])

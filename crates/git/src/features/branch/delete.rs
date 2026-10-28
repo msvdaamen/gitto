@@ -1,11 +1,9 @@
 //! Deleting a branch, local or remote, with the local branches tracking a remote one. Ported from
 //! `delete.ts`.
 
-use futures::future::BoxFuture;
-
 use super::commands::{branch_target, tracking_locals};
 use super::in_use::branches_in_use;
-use crate::core::errors::{Error, Result};
+use crate::core::errors::{BranchDeletionBlocker, Error, Result};
 use crate::core::repo::{GitCommand, Repo};
 use crate::features::refs::schema::RefKind;
 use crate::features::remote::commands::list_remotes;
@@ -23,20 +21,12 @@ use crate::features::remote::remote_name::remote_of;
 /// terminal meanwhile say, that's returned, saying the remote one is gone.
 ///
 /// Fails with `Error::InvalidInput` if `ref` isn't a branch, as the UI's input is checked.
-///
-/// Its place in line among the writes is taken when it's called, not when it's first polled, as
-/// in TS: a write asked for after it waits for it.
-pub fn delete_branch(repo: &Repo, reference: &str) -> BoxFuture<'static, Result<()>> {
-    let target = match branch_target(reference) {
-        Ok(target) => target,
-        Err(error) => return Box::pin(std::future::ready(Err(error))),
-    };
+pub async fn delete_branch(repo: &Repo, reference: &str) -> Result<()> {
+    let target = branch_target(reference)?;
     if target.kind == RefKind::Local {
-        let write = repo.write(["branch", "--delete", "--force", "--", target.name.as_str()]);
-        return Box::pin(async move {
-            write.await?;
-            Ok(())
-        });
+        repo.write(["branch", "--delete", "--force", "--", target.name.as_str()])
+            .await?;
+        return Ok(());
     }
 
     let reference = reference.to_owned();
@@ -44,7 +34,7 @@ pub fn delete_branch(repo: &Repo, reference: &str) -> BoxFuture<'static, Result<
     // One write, from finding the local branches tracking it to deleting them, so no other write
     // (a switch, say) can check one out in between, once the remote one is gone. That holds up the
     // other writes while the remote answers, which a deletion, asked for and waited on, can afford.
-    Box::pin(repo.exclusive(move |run| async move {
+    repo.exclusive(move |run| async move {
         let (tracking, in_use, fetched, remotes) = futures::try_join!(
             tracking_locals(&run, &reference),
             branches_in_use(&run),
@@ -53,10 +43,11 @@ pub fn delete_branch(repo: &Repo, reference: &str) -> BoxFuture<'static, Result<
         )?;
         for local in &tracking {
             if let Some(using) = in_use.get(&format!("refs/heads/{}", local.name)) {
-                return Err(Error::BranchDeletionBlocked(format!(
-                    "{} tracks {} and {}, so neither was deleted. {}",
-                    local.name, target.name, using.state, using.fix
-                )));
+                return Err(Error::BranchDeletionBlocked(BranchDeletionBlocker::InUse {
+                    local: local.name.clone(),
+                    branch: target.name.clone(),
+                    in_use: using.clone(),
+                }));
             }
         }
 
@@ -79,10 +70,12 @@ pub fn delete_branch(repo: &Repo, reference: &str) -> BoxFuture<'static, Result<
                 .map_err(Error::without_hints)?;
         } else {
             if let Some(remote) = remote_of(&remotes, &target.name) {
-                return Err(Error::BranchDeletionBlocked(format!(
-                    "{remote}'s fetch settings don't fetch {} from a branch there, so nothing was deleted.",
-                    target.name
-                )));
+                return Err(Error::BranchDeletionBlocked(
+                    BranchDeletionBlocker::NotFetched {
+                        remote: remote.to_owned(),
+                        branch: target.name.clone(),
+                    },
+                ));
             }
             run.run([
                 "branch",
@@ -101,13 +94,16 @@ pub fn delete_branch(repo: &Repo, reference: &str) -> BoxFuture<'static, Result<
         args.extend(tracking.iter().map(|local| local.name.as_str()));
         match (run.run(args).await, &fetched) {
             (Ok(_), _) => Ok(()),
-            (Err(Error::Git(error)), Some(fetched)) => Err(Error::Git(error.with_message(format!(
-                "{} was deleted on {}, but not every local branch tracking it was. {}",
-                target.name, fetched.remote, error.message
-            )))),
+            (Err(Error::Git(error)), Some(fetched)) => {
+                Err(Error::Git(error.with_message(format!(
+                    "{} was deleted on {}, but not every local branch tracking it was. {}",
+                    target.name, fetched.remote, error.message
+                ))))
+            }
             (Err(error), _) => Err(error),
         }
-    }))
+    })
+    .await
 }
 
 /// A remote, and the branch on it that fetching updates a remote-tracking branch from (see
