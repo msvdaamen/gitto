@@ -242,7 +242,7 @@ impl PushButton {
             let force = this.clone();
             footer = footer.child(
                 Button::new("force-push")
-                    .primary()
+                    .danger()
                     .label("Force push")
                     .on_click(move |_, window, cx| {
                         window.close_dialog(cx);

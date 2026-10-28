@@ -232,7 +232,7 @@ impl OperationBar {
             "This puts the repository back as it was before {name} started. The conflicts \
                  you've resolved so far are lost."
         ))
-        .action("Abort", ButtonVariant::Primary, move |_, cx| {
+        .action("Abort", ButtonVariant::Danger, move |_, cx| {
             let _ = this.update(cx, |this, cx| {
                 // Not once another repository is on show: the operation asked about is this one's.
                 if this.repository_id == id {
