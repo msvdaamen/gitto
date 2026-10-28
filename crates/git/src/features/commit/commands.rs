@@ -1,67 +1,13 @@
-//! Committing, amending and rewording. Ported from `commit/commands.ts`, with the input check of
-//! `commit/contract.ts` ([`Message`]).
+//! Committing, amending and rewording. Ported from `commit/commands.ts`; the input check of
+//! `commit/contract.ts` is [`Message`], in `crate::input`.
 
-use std::fmt;
 use std::future::Future;
-use std::ops::Deref;
-
-use serde::{Deserialize, Serialize};
 
 use crate::core::errors::{Error, Result};
 use crate::core::repo::{GitCommand, Repo, current_branch, resolve_ref};
 use crate::core::runner::RunOptions;
+pub use crate::input::Message;
 use crate::input::{FullSha, Sha};
-
-/// A commit's message: anything but only whitespace. Not trimmed: an amend, or a reword, commits it
-/// exactly as it's sent, ending in a newline or not.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(try_from = "String", into = "String")]
-pub struct Message(String);
-
-impl Message {
-    /// `value`, if it has something but whitespace; `Error::InvalidInput` otherwise.
-    pub fn parse(value: impl Into<String>) -> Result<Message> {
-        let value = value.into();
-        // JS's `\S`: `\s` also has the byte order mark, which Unicode's whitespace doesn't.
-        if value.chars().any(|c| !c.is_whitespace() && c != '\u{feff}') {
-            Ok(Message(value))
-        } else {
-            Err(Error::InvalidInput("The message is empty.".to_owned()))
-        }
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl TryFrom<String> for Message {
-    type Error = Error;
-
-    fn try_from(value: String) -> Result<Message> {
-        Message::parse(value)
-    }
-}
-
-impl From<Message> for String {
-    fn from(message: Message) -> String {
-        message.0
-    }
-}
-
-impl Deref for Message {
-    type Target = str;
-
-    fn deref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for Message {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
 
 /// Commits what's staged, with `message` as it's written. With `amend`, HEAD's SHA, replaces that
 /// commit with it instead, with what's staged added to it, as long as HEAD is still that commit:
@@ -596,6 +542,10 @@ mod tests {
             "The message is empty."
         );
         assert_eq!(Message::parse(" a\n").unwrap().as_str(), " a\n");
+        // JS's `\s` has the byte order mark too.
+        assert!(Message::parse("\u{feff} ").is_err());
         assert!(serde_json::from_str::<Message>("\"\"").is_err());
+        // Made as the other checked strings are.
+        assert_eq!(Message::try_from("Fix").unwrap().as_ref() as &str, "Fix");
     }
 }
