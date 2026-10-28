@@ -132,6 +132,9 @@ impl GitVersion {
         }
     }
 
+    /// The installed git, and whether Gitto works with it. Until it does, every procedure on a
+    /// repository fails saying so (see `require`). Checked again on every call until it does,
+    /// e.g. after the user updated git. TS's `version` feature's procedure.
     pub async fn check(&self) -> GitInstall {
         let checked = lock(&self.checked)
             .get_or_insert_with(|| (self.read)().map(to_install).boxed().shared())

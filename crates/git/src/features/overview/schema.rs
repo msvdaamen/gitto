@@ -75,3 +75,24 @@ pub struct Overview {
     /// What was last done in the repository, most recent first.
     pub activity: Vec<Activity>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spells_each_kind_as_its_json_does() {
+        use ActivityKind::*;
+        // Doesn't compile once there's another kind, until it's listed here too.
+        let _listed = |kind| match kind {
+            Commit | Amend | Merge | Pull | Rebase | Checkout | Reset | CherryPick | Revert
+            | Clone | Other => (),
+        };
+        let kinds = [
+            Commit, Amend, Merge, Pull, Rebase, Checkout, Reset, CherryPick, Revert, Clone, Other,
+        ];
+        for kind in kinds {
+            assert_eq!(serde_json::to_value(kind).unwrap(), kind.as_str());
+        }
+    }
+}
