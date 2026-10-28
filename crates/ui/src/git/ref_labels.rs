@@ -7,6 +7,8 @@ use gitto_git::features::remote::remote_name::remote_of;
 use gitto_git::features::worktree::schema::Worktree;
 use indexmap::IndexMap;
 
+use super::search::contains_lowercase;
+
 /// A branch in the history's branch / tag column: local, on remotes, or both.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BranchLabel {
@@ -183,18 +185,18 @@ pub fn to_ref_labels<S: AsRef<str>>(
 /// for the checked-out branch, the worktree a branch is checked out in or, for a tag, `tag: v1`.
 /// Case-insensitive; `needle` is lowercase.
 pub fn ref_label_matches(label: &RefLabel, needle: &str) -> bool {
-    let matches = |name: &str| name.to_lowercase().contains(needle);
+    let matches = |name: &str| contains_lowercase(name.chars(), needle);
     match label {
-        RefLabel::Tag { name } => matches(&format!("tag: {name}")),
+        RefLabel::Tag { name } => contains_lowercase("tag: ".chars().chain(name.chars()), needle),
         RefLabel::Head => matches("HEAD"),
         RefLabel::Worktree(worktree) => matches(&worktree.name),
         RefLabel::Branch(branch) if !branch.local => matches(&branch.name),
         RefLabel::Branch(branch) => {
             matches(&branch.name)
-                || branch
-                    .remotes
-                    .iter()
-                    .any(|remote| matches(&format!("{remote}/{}", branch.name)))
+                || branch.remotes.iter().any(|remote| {
+                    let name = remote.chars().chain(['/']).chain(branch.name.chars());
+                    contains_lowercase(name, needle)
+                })
                 || (branch.current && matches("HEAD"))
                 || branch
                     .worktree
