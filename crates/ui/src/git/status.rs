@@ -2,8 +2,8 @@
 //!
 //! TS took `Pick`s of the `StatusSummary`; these take those of its fields.
 
-use gitto_git::features::remote::blockers::{PullBlocker, pull_blocker};
 use gitto_git::features::status::schema::{Head, StatusSummary};
+use gitto_git::{PullBlocker, pull_blocker};
 
 /// What to call HEAD: the branch name, or "detached HEAD".
 pub fn head_label(head: &Head) -> &str {

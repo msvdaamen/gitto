@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 
 use gitto_git::features::history::schema::{CommitRef, CommitRefKind};
-use gitto_git::features::remote::remote_name::remote_of;
 use gitto_git::features::worktree::schema::Worktree;
+use gitto_git::remote_of;
 use indexmap::IndexMap;
 
 use super::search::contains_lowercase;

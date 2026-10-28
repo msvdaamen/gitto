@@ -19,7 +19,7 @@ pub fn push_title(target: &PushTarget) -> String {
 
 #[cfg(test)]
 mod tests {
-    use gitto_git::features::remote::blockers::PushBlocker;
+    use gitto_git::PushBlocker;
 
     use super::*;
 

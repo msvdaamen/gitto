@@ -28,6 +28,7 @@ pub use crate::core::repo::{GitRepos, Repo, RepositoryLookup};
 pub use crate::core::runner::stop_commands_on_exit;
 pub use crate::core::shell_path::use_path_from_shell;
 pub use crate::core::version::{GitVersion, Version};
+pub use crate::features::branch::tracking::{local_name, pick_tracking};
 pub use crate::features::conflicts::commands::ShownConflict;
 pub use crate::features::diff::working_tree::{SaveExpectation, WorkingTreeFile};
 pub use crate::features::history::commands::Page;

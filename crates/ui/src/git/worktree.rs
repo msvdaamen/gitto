@@ -1,8 +1,8 @@
 //! Ported from `git/worktree.ts`: where branches are checked out, and new worktrees go.
 
-use gitto_git::features::branch::tracking::{local_name, pick_tracking};
 use gitto_git::features::refs::schema::{Ref, RefKind};
 use gitto_git::features::worktree::schema::Worktree;
+use gitto_git::{local_name, pick_tracking};
 
 use super::short_sha;
 use super::status::branch_name;
