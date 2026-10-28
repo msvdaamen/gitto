@@ -1,6 +1,7 @@
 //! Gitto's SQLite database, which every domain keeps its tables in.
 //!
-//! - [`Db`]: opens the database, migrated, and runs queries off the async executor.
+//! - [`Db`]: opens the database, migrated, and runs queries on a thread of its own, off the async
+//!   executor.
 //! - [`migrations`]: the schema, and how it's brought up to date.
 //! - [`database_path`]: where Gitto keeps it.
 //!
@@ -35,4 +36,7 @@ pub enum Error {
     /// [`migrations::check_shared_tables`]).
     #[error("the database isn't as Gitto makes it: {0}")]
     Schema(String),
+    /// The thread the connection is used on couldn't be started.
+    #[error("couldn't start the database's thread: {0}")]
+    Thread(std::io::Error),
 }

@@ -1,7 +1,10 @@
 //! Opening the database.
 
+use std::any::Any;
+use std::panic::{self, AssertUnwindSafe};
 use std::path::Path;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::mpsc;
+use std::thread;
 
 use rusqlite::Connection;
 use rusqlite::config::DbConfig;
@@ -9,13 +12,17 @@ use rusqlite::config::DbConfig;
 use crate::Result;
 use crate::migrations::{MIGRATIONS, check_shared_tables, migrate};
 
+/// A use of the connection, sent to its thread (see [`Db::run`]).
+type Job = Box<dyn FnOnce(&mut Connection) + Send>;
+
 /// Gitto's database: one SQLite connection, migrated. Cheap to clone; clones share the connection.
 ///
-/// SQLite blocks, so [`Db::run`] runs each use of the connection on a thread of `blocking`'s
-/// pool, off the async executor (GPUI's, or smol's in tests), one at a time.
+/// SQLite blocks, so the connection lives on a thread of its own, which runs each use of it that
+/// [`Db::run`] sends, one at a time, in the order they're sent, off the async executor (GPUI's, or
+/// smol's in tests). The thread ends once every clone is dropped, closing the connection.
 #[derive(Clone)]
 pub struct Db {
-    conn: Arc<Mutex<Connection>>,
+    jobs: mpsc::Sender<Job>,
 }
 
 impl std::fmt::Debug for Db {
@@ -27,6 +34,9 @@ impl std::fmt::Debug for Db {
 impl Db {
     /// Opens (or creates) the SQLite database at `path` and applies any pending migrations (see
     /// [`crate::migrations`]). Its folder has to exist.
+    ///
+    /// Unlike [`Db::run`], this blocks the caller while SQLite opens and migrates the file: it's
+    /// for starting up, before there's anything to show.
     pub fn open(path: impl AsRef<Path>) -> Result<Db> {
         Db::init(Connection::open(path)?, MIGRATIONS)
     }
@@ -44,30 +54,55 @@ impl Db {
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
         migrate(&mut conn, migrations)?;
         check_shared_tables(&mut conn)?;
-        Ok(Db {
-            conn: Arc::new(Mutex::new(conn)),
-        })
+        let (jobs, received) = mpsc::channel::<Job>();
+        thread::Builder::new()
+            .name("gitto-db".to_owned())
+            .spawn(move || {
+                for job in received {
+                    job(&mut conn);
+                }
+            })
+            .map_err(crate::Error::Thread)?;
+        Ok(Db { jobs })
     }
 
-    /// Runs `f` with the connection, on a thread of its own, and returns what it returns.
+    /// Runs `f` with the connection, on its thread, and returns what it returns. A panic in `f`
+    /// panics here, as if `f` had run here, and leaves the connection to the next use.
+    ///
+    /// Each use starts outside a transaction: one `f` began and left open, with a plain `BEGIN`,
+    /// is rolled back once it returns, as a rusqlite `Transaction` is when it's dropped. That loses
+    /// what it wrote, so short of a panic, it's a bug: it panics here too in a debug build.
     pub async fn run<T, F>(&self, f: F) -> T
     where
         F: FnOnce(&mut Connection) -> T + Send + 'static,
         T: Send + 'static,
     {
-        let conn = Arc::clone(&self.conn);
-        blocking::unblock(move || {
-            // A panic in another use leaves the connection usable. A rusqlite `Transaction` it had
-            // open was rolled back as it was dropped; one it began with a plain `BEGIN` is still
-            // open, so it's rolled back here, and each use starts outside a transaction.
-            let mut conn = conn.lock().unwrap_or_else(PoisonError::into_inner);
-            if !conn.is_autocommit() {
-                // If even this fails, `f`'s first statement says why.
+        let (done, outcome) = async_channel::bounded(1);
+        let job: Job = Box::new(move |conn| {
+            let ran = panic::catch_unwind(AssertUnwindSafe(|| f(conn)));
+            let left_open = !conn.is_autocommit();
+            if left_open {
+                // If even this fails, the next use's first statement says why.
                 let _ = conn.execute_batch("ROLLBACK");
             }
-            f(&mut conn)
-        })
-        .await
+            let ran = match ran {
+                Ok(_) if left_open && cfg!(debug_assertions) => Err(Box::new(
+                    "a use of the database left a transaction open, so it was rolled back",
+                )
+                    as Box<dyn Any + Send>),
+                ran => ran,
+            };
+            // The caller may have stopped waiting.
+            let _ = done.try_send(ran);
+        });
+        self.jobs
+            .send(job)
+            .expect("the database's thread runs as long as a Db is there");
+        match outcome.recv().await {
+            Ok(Ok(value)) => value,
+            Ok(Err(panicked)) => panic::resume_unwind(panicked),
+            Err(_) => unreachable!("the database's thread runs every use it's sent"),
+        }
     }
 }
 
@@ -172,6 +207,38 @@ mod tests {
             smol::block_on(db.run(|conn| conn.query_row("SELECT 1", [], |row| row.get(0))))
                 .unwrap();
         assert_eq!(one, 1);
+    }
+
+    #[test]
+    fn rolls_back_a_transaction_a_use_left_open_and_says_so_in_a_debug_build() {
+        let db = Db::open_in_memory().unwrap();
+        let left_open = std::thread::spawn({
+            let db = db.clone();
+            move || {
+                smol::block_on(db.run(|conn| {
+                    conn.execute_batch(
+                        "BEGIN; INSERT INTO repositories (id, name, path) VALUES ('1', 'one', '/one')",
+                    )
+                    .unwrap();
+                }))
+            }
+        })
+        .join();
+        if cfg!(debug_assertions) {
+            let panicked = left_open.unwrap_err();
+            assert_eq!(
+                panicked.downcast_ref::<&str>(),
+                Some(&"a use of the database left a transaction open, so it was rolled back")
+            );
+        } else {
+            left_open.unwrap();
+        }
+        let (autocommit, count): (bool, i64) = smol::block_on(db.run(|conn| {
+            let count = conn.query_row("SELECT count(*) FROM repositories", [], |row| row.get(0));
+            (conn.is_autocommit(), count.unwrap())
+        }));
+        assert!(autocommit);
+        assert_eq!(count, 0);
     }
 
     #[test]
