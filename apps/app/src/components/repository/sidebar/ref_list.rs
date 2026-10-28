@@ -14,12 +14,14 @@ use gitto_ui::git::ref_tree::{RefTreeNode, build_ref_tree, flatten_ref_tree};
 use gitto_ui::git::stash::can_pop;
 use gitto_ui::git::status::branch_name;
 use gitto_ui::git::worktree::{can_open_worktree, describe_worktree, worktree_on};
+use gpui_kit::base::actions::{Confirm, SelectDown, SelectFirst, SelectLast, SelectUp};
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::{WindowExt as _, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, Context, Entity, ScrollStrategy, SharedString, Subscription,
-    UniformListScrollHandle, WeakEntity, Window, div,
+    AnyElement, App, Context, DismissEvent, Entity, FocusHandle, Focusable, KeyBinding,
+    ScrollStrategy, SharedString, Subscription, TestSupportExt as _, UniformListScrollHandle,
+    WeakEntity, Window, actions, div,
 };
 
 use super::drop_stash_dialog::open_drop_stash_dialog;
@@ -41,6 +43,31 @@ use crate::services::Services;
 use crate::state::clock::Clock;
 use crate::state::collapsed::Collapsed;
 use crate::theme::base_px;
+
+actions!(
+    ref_list,
+    [
+        /// Opens the menu of the row the keyboard's on, as right-clicking it does.
+        OpenRowMenu
+    ]
+);
+
+/// The key context the list's keys are bound in (see [`bind_keys`]).
+const KEY_CONTEXT: &str = "RefList";
+
+/// Binds the list's keys: the arrows, Home and End move through its rows; Enter uses the row it's
+/// on, as double-clicking it does (a folder, as clicking it does); Shift+F10 opens the row's
+/// menu, as right-clicking it does.
+pub fn bind_keys(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("up", SelectUp, Some(KEY_CONTEXT)),
+        KeyBinding::new("down", SelectDown, Some(KEY_CONTEXT)),
+        KeyBinding::new("home", SelectFirst, Some(KEY_CONTEXT)),
+        KeyBinding::new("end", SelectLast, Some(KEY_CONTEXT)),
+        KeyBinding::new("enter", Confirm { secondary: false }, Some(KEY_CONTEXT)),
+        KeyBinding::new("shift-f10", OpenRowMenu, Some(KEY_CONTEXT)),
+    ]);
+}
 
 /// The sidebar's sections, in the order they're shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -196,6 +223,50 @@ pub fn worktree_meta(worktree: &Worktree) -> String {
     }
 }
 
+/// A row of the list, by what it shows: what the keyboard's on, and what its element's id is
+/// made of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RowKey {
+    /// A ref folder, by its path.
+    Folder(SharedString),
+    /// A local or remote branch, by its full ref name.
+    Branch(SharedString),
+    /// A tag, by its full ref name.
+    Tag(SharedString),
+    /// A stash, by its SHA.
+    Stash(SharedString),
+    /// A worktree, by its path.
+    Worktree(SharedString),
+}
+
+impl RowKey {
+    fn of_line(line: &TreeLine) -> RowKey {
+        match line {
+            TreeLine::Folder { path, .. } => RowKey::Folder(path.clone()),
+            TreeLine::Branch { branch, .. } => RowKey::Branch(branch.full_name.clone().into()),
+        }
+    }
+
+    /// The id of the row's element.
+    fn element_id(&self) -> SharedString {
+        match self {
+            RowKey::Folder(path) => format!("folder-{path}"),
+            RowKey::Branch(name) => format!("branch-{name}"),
+            RowKey::Tag(name) => format!("tag-{name}"),
+            RowKey::Stash(sha) => format!("stash-{sha}"),
+            RowKey::Worktree(path) => format!("worktree-{path}"),
+        }
+        .into()
+    }
+}
+
+/// A row's menu opened from the keyboard, until it's dismissed.
+struct KeyboardMenu {
+    row: RowKey,
+    menu: Entity<PopupMenu>,
+    _dismissed: Subscription,
+}
+
 /// The dialog open, asking about a stash or a worktree of a repository.
 enum Asking {
     Drop(RepositoryId, Stash),
@@ -220,8 +291,8 @@ struct OtherWorktrees {
     others: Rc<[Worktree]>,
 }
 
-/// What every row of a render reads: which menu is open, the other worktrees, and the list to
-/// act on.
+/// What every row of a render reads: which menu is open, the other worktrees, the row the
+/// keyboard's on, and the list to act on.
 struct RowContext {
     list: WeakEntity<RefList>,
     branch_menu: Entity<BranchMenuProvider>,
@@ -230,7 +301,33 @@ struct RowContext {
     branch_menu_for: Option<SharedString>,
     stash_menu_for: Option<SharedString>,
     worktree_menu_for: Option<SharedString>,
+    /// The row the keyboard's on, while it moves through the list.
+    outlined: Option<RowKey>,
+    /// A row's menu the keyboard opened, and the row.
+    keyboard_menu: Option<(RowKey, Entity<PopupMenu>)>,
     now: i64,
+}
+
+impl RowContext {
+    fn is_outlined(&self, row: &RowKey) -> bool {
+        self.outlined.as_ref() == Some(row)
+    }
+
+    fn keyboard_menu_of(&self, row: &RowKey) -> Option<Entity<PopupMenu>> {
+        self.keyboard_menu
+            .as_ref()
+            .filter(|(of, _)| of == row)
+            .map(|(_, menu)| menu.clone())
+    }
+
+    /// What clicking the row `row` does first: the keyboard goes on from it.
+    fn on_click(&self, row: RowKey) -> impl Fn(&mut Window, &mut App) + 'static {
+        let list = self.list.clone();
+        move |window, cx| {
+            let row = row.clone();
+            let _ = list.update(cx, |list, cx| list.click_row(row, window, cx));
+        }
+    }
 }
 
 /// The sidebar's sections: local branches, remotes, tags, stashes, worktrees (see
@@ -248,6 +345,12 @@ struct RowContext {
 /// folders share one saved collapsed state; folder ids are full ref paths like
 /// `refs/heads/feature`, so they can't clash with the section ids. Tags and stashes start
 /// collapsed.
+///
+/// The keyboard reaches it all: each section's header is a tab stop, and the list itself one
+/// more, whose rows the arrow keys, Home and End move through, across the expanded sections; Enter
+/// uses the row it's on, as double-clicking it does, and Shift+F10 opens its menu (see
+/// [`bind_keys`]). Clicking a row puts the keyboard there. The rail's sections open in popovers,
+/// which aren't moved through.
 pub struct RefList {
     repository_id: RepositoryId,
     refs: Query<Arc<[Ref]>>,
@@ -269,7 +372,20 @@ pub struct RefList {
     other_worktrees: OtherWorktrees,
     /// Shown as a rail of icons, which the sidebar decides (see `RefsSidebar`).
     rail: bool,
+    focus: FocusHandle,
+    /// The row the keyboard's on.
+    cursor: Option<RowKey>,
+    /// Whether the keyboard moved last, rather than the pointer: the cursor's row is outlined
+    /// then, while the list has the focus.
+    keyboard: bool,
+    keyboard_menu: Option<KeyboardMenu>,
     _subscriptions: Vec<Subscription>,
+}
+
+impl Focusable for RefList {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
+    }
 }
 
 impl RefList {
@@ -321,6 +437,10 @@ impl RefList {
             trees: Trees::default(),
             other_worktrees: OtherWorktrees::default(),
             rail: false,
+            focus: cx.focus_handle().tab_stop(true),
+            cursor: None,
+            keyboard: false,
+            keyboard_menu: None,
             _subscriptions: subscriptions,
         }
     }
@@ -359,6 +479,11 @@ impl RefList {
         self.repository_id = repository_id;
         self.stash_menu.close(cx);
         self.worktree_menu.close(cx);
+        self.cursor = None;
+        self.keyboard = false;
+        if let Some(open) = self.keyboard_menu.take() {
+            open.menu.update(cx, |_, cx| cx.emit(DismissEvent));
+        }
         if self.asking.take().is_some() {
             window.close_dialog(cx);
         }
@@ -645,7 +770,194 @@ impl RefList {
         };
     }
 
-    fn row_context(&mut self, cx: &mut Context<Self>) -> Rc<RowContext> {
+    /// The rows the keyboard moves through, in order, with their sections and places in them:
+    /// each expanded section's, as shown. None in the rail, whose sections open in popovers.
+    fn keyboard_rows(&mut self) -> Vec<(Section, usize, RowKey)> {
+        if self.rail || self.refs.is_pending() {
+            return Vec::new();
+        }
+        self.refresh_trees();
+        let mut rows = Vec::new();
+        for section in Section::ALL {
+            if self.is_section_collapsed(section) {
+                continue;
+            }
+            let keys: Vec<RowKey> = match section {
+                Section::Local => self.trees.local.iter().map(RowKey::of_line).collect(),
+                Section::Remotes => self.trees.remote.iter().map(RowKey::of_line).collect(),
+                Section::Tags => self
+                    .trees
+                    .tags
+                    .iter()
+                    .map(|tag| RowKey::Tag(tag.full_name.clone().into()))
+                    .collect(),
+                Section::Stashes => self
+                    .stashes
+                    .data()
+                    .iter()
+                    .flat_map(|stashes| stashes.iter())
+                    .map(|stash| RowKey::Stash(stash.sha.clone().into()))
+                    .collect(),
+                Section::Worktrees => self
+                    .worktrees
+                    .data()
+                    .iter()
+                    .flat_map(|worktrees| worktrees.iter())
+                    .map(|worktree| RowKey::Worktree(worktree.path.clone().into()))
+                    .collect(),
+            };
+            rows.extend(
+                keys.into_iter()
+                    .enumerate()
+                    .map(|(ix, key)| (section, ix, key)),
+            );
+        }
+        rows
+    }
+
+    /// The row the keyboard's on, if it's still shown.
+    fn cursor_row(&mut self) -> Option<RowKey> {
+        let cursor = self.cursor.clone()?;
+        self.keyboard_rows()
+            .into_iter()
+            .any(|(_, _, key)| key == cursor)
+            .then_some(cursor)
+    }
+
+    /// A row was clicked: the keyboard goes on from it, and the list takes the focus. The rows
+    /// come and go as the list scrolls, and would take the focus with them. Not in the rail,
+    /// whose popover would lose it.
+    fn click_row(&mut self, row: RowKey, window: &mut Window, cx: &mut Context<Self>) {
+        self.cursor = Some(row);
+        self.keyboard = false;
+        if !self.rail {
+            self.focus.focus(window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Moves the keyboard to the row `to` picks, from the place of the one it's on (if it's
+    /// shown) among `count` rows, and scrolls it into view. Only while the list itself has the
+    /// focus, not a section's header.
+    fn move_cursor(
+        &mut self,
+        to: impl FnOnce(Option<usize>, usize) -> usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.focus.is_focused(window) {
+            cx.propagate();
+            return;
+        }
+        let rows = self.keyboard_rows();
+        if rows.is_empty() {
+            return;
+        }
+        let current = self
+            .cursor
+            .as_ref()
+            .and_then(|cursor| rows.iter().position(|(_, _, key)| key == cursor));
+        let ix = to(current, rows.len()).min(rows.len() - 1);
+        let (section, in_section, key) = &rows[ix];
+        self.scrolls[*section as usize].scroll_to_item(*in_section, ScrollStrategy::Nearest);
+        self.cursor = Some(key.clone());
+        self.keyboard = true;
+        cx.notify();
+    }
+
+    fn select_up(&mut self, _: &SelectUp, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_cursor(
+            |current, _| current.map_or(0, |ix| ix.saturating_sub(1)),
+            window,
+            cx,
+        );
+    }
+
+    fn select_down(&mut self, _: &SelectDown, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_cursor(|current, _| current.map_or(0, |ix| ix + 1), window, cx);
+    }
+
+    fn select_first(&mut self, _: &SelectFirst, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_cursor(|_, _| 0, window, cx);
+    }
+
+    fn select_last(&mut self, _: &SelectLast, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_cursor(|_, count| count - 1, window, cx);
+    }
+
+    /// Enter: uses the row the keyboard's on, as double-clicking it does; a folder's toggled, as
+    /// clicking it does.
+    fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.focus.is_focused(window) {
+            cx.propagate();
+            return;
+        }
+        match self.cursor_row() {
+            Some(RowKey::Folder(path)) => self.toggle_folder(&path, cx),
+            Some(RowKey::Branch(name)) => self.activate_branch(&name, cx),
+            Some(RowKey::Worktree(path)) => self.activate_worktree(&path, cx),
+            Some(RowKey::Tag(_) | RowKey::Stash(_)) | None => {}
+        }
+    }
+
+    /// Shift+F10: opens the menu of the row the keyboard's on, below it, as right-clicking it
+    /// does; nothing for a folder or a tag, which have none.
+    fn open_row_menu(&mut self, _: &OpenRowMenu, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.focus.is_focused(window) {
+            cx.propagate();
+            return;
+        }
+        let Some(row) = self.cursor_row() else {
+            return;
+        };
+        type Build = Box<dyn FnOnce(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu>;
+        let list = cx.entity().downgrade();
+        let build: Build = match row.clone() {
+            RowKey::Branch(name) => {
+                let provider = self.branch_menu.clone();
+                Box::new(move |menu, _, cx| {
+                    BranchMenuProvider::build_menu(&provider, name, menu, cx)
+                })
+            }
+            RowKey::Stash(sha) => {
+                let list = list.clone();
+                Box::new(move |menu, _, cx| RefList::stash_menu(&list, sha, menu, cx))
+            }
+            RowKey::Worktree(path) => {
+                let list = list.clone();
+                Box::new(move |menu, _, cx| RefList::worktree_menu(&list, path, menu, cx))
+            }
+            RowKey::Folder(_) | RowKey::Tag(_) => return,
+        };
+        // Built outside this update: the menus read the list, and track themselves on it.
+        window.defer(cx, move |window, cx| {
+            let menu = PopupMenu::build(window, cx, build);
+            if menu.read(cx).is_empty() {
+                return;
+            }
+            menu.focus_handle(cx).focus(window, cx);
+            let _ = list.update(cx, |list, cx| {
+                let dismissed =
+                    cx.subscribe_in(&menu, window, |list, _, _: &DismissEvent, window, cx| {
+                        list.keyboard_menu = None;
+                        list.focus.focus(window, cx);
+                        cx.notify();
+                    });
+                list.keyboard_menu = Some(KeyboardMenu {
+                    row,
+                    menu,
+                    _dismissed: dismissed,
+                });
+                cx.notify();
+            });
+        });
+    }
+
+    fn row_context(&mut self, window: &Window, cx: &mut Context<Self>) -> Rc<RowContext> {
+        let outlined = self
+            .cursor
+            .clone()
+            .filter(|_| self.keyboard && self.focus.is_focused(window));
         Rc::new(RowContext {
             list: cx.entity().downgrade(),
             other_worktrees: self.other_worktrees(),
@@ -653,6 +965,11 @@ impl RefList {
             branch_menu_for: self.branch_menu.read(cx).open_for().cloned(),
             stash_menu_for: self.stash_menu.open_for().cloned(),
             worktree_menu_for: self.worktree_menu.open_for().cloned(),
+            outlined,
+            keyboard_menu: self
+                .keyboard_menu
+                .as_ref()
+                .map(|open| (open.row.clone(), open.menu.clone())),
             now: gitto_ui::hooks::relative_time::now_ms(),
         })
     }
@@ -709,19 +1026,17 @@ fn tree_row(line: &TreeLine, rows: &RowContext) -> AnyElement {
             collapsed,
         } => {
             let list = rows.list.clone();
+            let key = RowKey::Folder(path.clone());
+            let clicked = rows.on_click(key.clone());
             let path = path.clone();
-            SidebarFolder::new(
-                SharedString::from(format!("folder-{path}")),
-                name.clone(),
-                *count,
-                *depth,
-                *collapsed,
-            )
-            .on_toggle(move |_, cx| {
-                let path = path.clone();
-                let _ = list.update(cx, |list, cx| list.toggle_folder(&path, cx));
-            })
-            .into_any_element()
+            SidebarFolder::new(key.element_id(), name.clone(), *count, *depth, *collapsed)
+                .outlined(rows.is_outlined(&key))
+                .on_toggle(move |window, cx| {
+                    clicked(window, cx);
+                    let path = path.clone();
+                    let _ = list.update(cx, |list, cx| list.toggle_folder(&path, cx));
+                })
+                .into_any_element()
         }
         TreeLine::Branch {
             branch,
@@ -744,29 +1059,31 @@ fn branch_row(branch: &Ref, label: &SharedString, depth: usize, rows: &RowContex
     let activated = full_name.clone();
     let menu_of = full_name.clone();
     let provider = rows.branch_menu.clone();
-    SidebarRow::new(
-        SharedString::from(format!("branch-{full_name}")),
-        IconName::GitBranch,
-        label.clone(),
-    )
-    .title(branch_title(branch, worktree))
-    .depth(depth)
-    .active(branch.current)
-    .highlighted(rows.branch_menu_for.as_ref() == Some(&full_name))
-    .tag(tag)
-    .meta(branch_meta(branch).map(Into::into))
-    .on_double_click(move |_, cx| {
-        let _ = list.update(cx, |list, cx| list.activate_branch(&activated, cx));
-    })
-    .menu(move |menu, _, cx| BranchMenuProvider::build_menu(&provider, menu_of.clone(), menu, cx))
-    .into_any_element()
+    let key = RowKey::Branch(full_name.clone());
+    SidebarRow::new(key.element_id(), IconName::GitBranch, label.clone())
+        .title(branch_title(branch, worktree))
+        .depth(depth)
+        .active(branch.current)
+        .highlighted(rows.branch_menu_for.as_ref() == Some(&full_name))
+        .tag(tag)
+        .meta(branch_meta(branch).map(Into::into))
+        .outlined(rows.is_outlined(&key))
+        .on_click(rows.on_click(key.clone()))
+        .on_double_click(move |_, cx| {
+            let _ = list.update(cx, |list, cx| list.activate_branch(&activated, cx));
+        })
+        .menu(move |menu, _, cx| {
+            BranchMenuProvider::build_menu(&provider, menu_of.clone(), menu, cx)
+        })
+        .keyboard_menu(rows.keyboard_menu_of(&key))
+        .into_any_element()
 }
 
 impl Render for RefList {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let rail = self.rail;
         self.refresh_trees();
-        let rows = self.row_context(cx);
+        let rows = self.row_context(window, cx);
         let id = self.repository_id.clone();
 
         let error = self.refs.error().map(|error| {
@@ -783,6 +1100,15 @@ impl Render for RefList {
         });
         let list = v_flex()
             .id("ref-list")
+            .test_support()
+            .track_focus(&self.focus)
+            .key_context(KEY_CONTEXT)
+            .on_action(cx.listener(Self::select_up))
+            .on_action(cx.listener(Self::select_down))
+            .on_action(cx.listener(Self::select_first))
+            .on_action(cx.listener(Self::select_last))
+            .on_action(cx.listener(Self::confirm))
+            .on_action(cx.listener(Self::open_row_menu))
             .size_full()
             .min_h_0()
             .when(rail, |list| list.items_center().gap_1().pt_2())
@@ -815,26 +1141,24 @@ impl Render for RefList {
             )
             .rail(rail);
         let tags = Rc::clone(&self.trees.tags);
-        let tags = self
-            .section(
-                Section::Tags,
-                tags.len(),
-                tags.len(),
-                Rc::new(move |range: Range<usize>, _, _| {
-                    in_view(&tags, range)
-                        .iter()
-                        .map(|tag| {
-                            SidebarRow::new(
-                                SharedString::from(format!("tag-{}", tag.full_name)),
-                                IconName::Tag,
-                                tag.name.clone(),
-                            )
+        let tag_rows = {
+            let tags = Rc::clone(&tags);
+            let rows = Rc::clone(&rows);
+            Rc::new(move |range: Range<usize>, _: &mut Window, _: &mut App| {
+                in_view(&tags, range)
+                    .iter()
+                    .map(|tag| {
+                        let key = RowKey::Tag(tag.full_name.clone().into());
+                        SidebarRow::new(key.element_id(), IconName::Tag, tag.name.clone())
+                            .outlined(rows.is_outlined(&key))
+                            .on_click(rows.on_click(key))
                             .into_any_element()
-                        })
-                        .collect()
-                }),
-                cx,
-            )
+                    })
+                    .collect()
+            })
+        };
+        let tags = self
+            .section(Section::Tags, tags.len(), tags.len(), tag_rows, cx)
             .rail(rail);
 
         let stashes: Arc<[Stash]> = self.stashes.data().unwrap_or_else(|| Arc::new([]));
@@ -894,15 +1218,15 @@ fn stash_row(stash: &Stash, rows: &RowContext) -> AnyElement {
     let sha = SharedString::from(stash.sha.clone());
     let list = rows.list.clone();
     let menu_of = sha.clone();
-    SidebarRow::new(
-        SharedString::from(format!("stash-{sha}")),
-        IconName::Archive,
-        stash.message.clone(),
-    )
-    .title(stash_title(stash, rows.now))
-    .highlighted(rows.stash_menu_for.as_ref() == Some(&sha))
-    .menu(move |menu, _, cx| RefList::stash_menu(&list, menu_of.clone(), menu, cx))
-    .into_any_element()
+    let key = RowKey::Stash(sha.clone());
+    SidebarRow::new(key.element_id(), IconName::Archive, stash.message.clone())
+        .title(stash_title(stash, rows.now))
+        .highlighted(rows.stash_menu_for.as_ref() == Some(&sha))
+        .outlined(rows.is_outlined(&key))
+        .on_click(rows.on_click(key.clone()))
+        .menu(move |menu, _, cx| RefList::stash_menu(&list, menu_of.clone(), menu, cx))
+        .keyboard_menu(rows.keyboard_menu_of(&key))
+        .into_any_element()
 }
 
 /// A worktree's line, with its menu: the one on show active, one whose folder is gone faded.
@@ -912,8 +1236,9 @@ fn worktree_row(worktree: &Worktree, rows: &RowContext) -> AnyElement {
     let opened = list.clone();
     let menu_of = path.clone();
     let activated = path.clone();
+    let key = RowKey::Worktree(path.clone());
     SidebarRow::new(
-        SharedString::from(format!("worktree-{path}")),
+        key.element_id(),
         IconName::FolderGit2,
         worktree.name.clone(),
     )
@@ -922,11 +1247,14 @@ fn worktree_row(worktree: &Worktree, rows: &RowContext) -> AnyElement {
     .highlighted(rows.worktree_menu_for.as_ref() == Some(&path))
     .faded(worktree.prunable.is_some())
     .meta(Some(worktree_meta(worktree).into()))
+    .outlined(rows.is_outlined(&key))
+    .on_click(rows.on_click(key.clone()))
     // The section shows it running, and why it failed.
     .on_double_click(move |_, cx| {
         let _ = opened.update(cx, |list, cx| list.activate_worktree(&activated, cx));
     })
     .menu(move |menu, _, cx| RefList::worktree_menu(&list, menu_of.clone(), menu, cx))
+    .keyboard_menu(rows.keyboard_menu_of(&key))
     .into_any_element()
 }
 
@@ -1657,6 +1985,132 @@ mod tests {
         assert!(f.open_menu("tag-refs/tags/v0.1.0", cx).is_empty());
     }
 
+    // Moving through the list with the keyboard.
+
+    /// The id of the row the keyboard's on.
+    fn cursor(f: &Fixture, cx: &mut TestAppContext) -> Option<String> {
+        let list = f.list(cx);
+        list.read_with(cx, |list, _| {
+            list.cursor.as_ref().map(|row| row.element_id().to_string())
+        })
+    }
+
+    fn is_outlined(f: &Fixture, row: &str, cx: &mut TestAppContext) -> bool {
+        let row = SharedString::from(row.to_owned());
+        f.in_window(cx, |window, cx| {
+            window.render_frame(cx);
+            window.within(row).try_find("keyboard-outline").is_some()
+        })
+    }
+
+    #[gpui_kit::test]
+    fn moves_through_the_expanded_sections_rows_with_the_arrows_home_and_end(
+        cx: &mut TestAppContext,
+    ) {
+        let f = render(cx);
+        f.click(MAIN, cx);
+        assert_eq!(cursor(&f, cx).as_deref(), Some(MAIN));
+        // The pointer put it there: it isn't outlined.
+        assert!(!is_outlined(&f, MAIN, cx));
+
+        // The last row: the remote branch, as the tags and the stashes are collapsed.
+        f.press("end", cx);
+        assert_eq!(cursor(&f, cx).as_deref(), Some(ORIGIN_FEATURE));
+        assert!(is_outlined(&f, ORIGIN_FEATURE, cx));
+        f.press("down", cx);
+        assert_eq!(cursor(&f, cx).as_deref(), Some(ORIGIN_FEATURE));
+        // Across into the remotes' folder, then the local branches.
+        f.press("up", cx);
+        assert_eq!(
+            cursor(&f, cx).as_deref(),
+            Some("folder-refs/remotes/origin")
+        );
+        f.press("up", cx);
+        assert!(cursor(&f, cx).unwrap().starts_with("branch-refs/heads/"));
+        f.press("home", cx);
+        let first = cursor(&f, cx).unwrap();
+        assert!(first.starts_with("branch-refs/heads/"));
+        f.press("up", cx);
+        assert_eq!(cursor(&f, cx), Some(first));
+        assert!(f.fakes.switch.calls().is_empty());
+    }
+
+    #[gpui_kit::test]
+    fn switches_to_the_branch_the_keyboards_on_with_enter(cx: &mut TestAppContext) {
+        let f = render(cx);
+        f.click(MAIN, cx);
+        f.press("end", cx);
+        f.press("enter", cx);
+        assert_eq!(
+            f.fakes.switch.calls(),
+            vec!["refs/remotes/origin/feature".to_owned()]
+        );
+    }
+
+    #[gpui_kit::test]
+    fn toggles_the_folder_the_keyboards_on_with_enter(cx: &mut TestAppContext) {
+        let f = render(cx);
+        f.click(MAIN, cx);
+        f.press("end", cx);
+        f.press("up", cx);
+        f.press("enter", cx);
+        assert!(!f.has_row(ORIGIN_FEATURE, cx));
+        assert_eq!(
+            cursor(&f, cx).as_deref(),
+            Some("folder-refs/remotes/origin")
+        );
+        f.press("enter", cx);
+        assert!(f.has_row(ORIGIN_FEATURE, cx));
+    }
+
+    #[gpui_kit::test]
+    fn opens_the_menu_of_the_branch_the_keyboards_on_with_shift_f10(cx: &mut TestAppContext) {
+        let f = render(cx);
+        f.click(FEATURE, cx);
+        f.press("shift-f10", cx);
+        let items = f.in_window(cx, |window, _| {
+            window
+                .within("popup-menu")
+                .find_all_by_role(gpui_kit::Role::MenuItem)
+                .into_iter()
+                .map(|item| item.label().unwrap_or_default().to_owned())
+                .collect::<Vec<_>>()
+        });
+        assert!(items.contains(&"Create branch…".to_owned()));
+        let provider = f.provider(cx);
+        assert_eq!(
+            provider.read_with(cx, |provider, _| provider.open_for().cloned()),
+            Some(SharedString::from("refs/heads/feature"))
+        );
+
+        f.press("escape", cx);
+        assert!(!f.is_menu_open(cx));
+        // The list has the keyboard back.
+        f.press("down", cx);
+        assert_ne!(cursor(&f, cx).as_deref(), Some(FEATURE));
+
+        // A folder has no menu.
+        f.press("end", cx);
+        f.press("up", cx);
+        f.press("shift-f10", cx);
+        assert!(!f.is_menu_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn collapses_a_section_from_its_header_with_enter_or_space(cx: &mut TestAppContext) {
+        let f = render(cx);
+        // Clicking the header collapses it, and gives it the focus.
+        f.click("section-local", cx);
+        assert!(!f.has_row(MAIN, cx));
+        f.press("enter", cx);
+        assert!(f.has_row(MAIN, cx));
+        f.press("space", cx);
+        assert!(!f.has_row(MAIN, cx));
+        // The arrows are the list's, not its headers'.
+        f.press("down", cx);
+        assert_eq!(cursor(&f, cx), None);
+    }
+
     // ref-list.test.tsx: switching branches from the sidebar.
 
     #[gpui_kit::test]
@@ -1835,7 +2289,10 @@ mod tests {
         let _later = f.in_window(cx, |window, cx| {
             cx.new(|cx| BranchMenuProvider::new(other, window, cx))
         });
-        assert!(f.open_menu(FEATURE, cx).contains(&"Create branch…".to_owned()));
+        assert!(
+            f.open_menu(FEATURE, cx)
+                .contains(&"Create branch…".to_owned())
+        );
         let provider = f.provider(cx);
         assert_eq!(
             provider.read_with(cx, |provider, _| provider.open_for().cloned()),

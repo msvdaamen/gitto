@@ -7,7 +7,7 @@ use gitto_ui::format::compact_count;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::{Selectable, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{Selectable, Sizable as _, ThemeStyled as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, FontWeight, Role, SharedString, TestSupportExt as _, UniformListScrollHandle,
@@ -56,6 +56,9 @@ pub struct SectionFailure {
 ///
 /// Busy (running something on its items, e.g. a pop of a stash), a spinner takes the icon's
 /// place. Why that failed shows in a popover beside it ([`failure`](Self::failure)).
+///
+/// The header is a tab stop, which Enter or Space toggles as a click does; the rows are moved
+/// through by the list around it, which has the focus for them (see `RefList`).
 #[derive(IntoElement)]
 pub struct SidebarSection {
     id: SharedString,
@@ -136,13 +139,23 @@ impl SidebarSection {
         !self.collapsed && self.items > 0
     }
 
-    fn render_header(&self, cx: &App) -> impl IntoElement {
+    fn render_header(&self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let palette = *cx.palette();
         let on_toggle = self.on_toggle.clone();
+        let id = SharedString::from(format!("section-{}", self.id));
+        let focus = window
+            .use_keyed_state(SharedString::from(format!("{id}-focus")), cx, |_, cx| {
+                cx.focus_handle()
+            })
+            .read(cx)
+            .clone();
+        let focused = focus.is_focused(window);
         h_flex()
-            .id(SharedString::from(format!("section-{}", self.id)))
+            .id(id)
             .test_support()
             .role(Role::Button)
+            .track_focus(&focus)
+            .tab_stop(true)
             .aria_label(SharedString::from(format!("{} {}", self.title, self.count)))
             .aria_expanded(!self.collapsed)
             .flex_none()
@@ -172,6 +185,7 @@ impl SidebarSection {
             )
             .child(section_icon(self.icon, self.busy, 13., cx))
             .child(section_title(&self.title, self.count, cx))
+            .when(focused, |header| header.focus_ring_style(window, cx))
     }
 
     /// Why an action failed, beside the section's top right corner (TS's `right-start`).
@@ -191,11 +205,11 @@ impl SidebarSection {
         )
     }
 
-    fn render_wide(mut self, cx: &App) -> AnyElement {
+    fn render_wide(mut self, window: &mut Window, cx: &mut App) -> AnyElement {
         let palette = *cx.palette();
         let expanded = self.is_expanded();
         let failure = self.render_failure();
-        let header = self.render_header(cx);
+        let header = self.render_header(window, cx);
         v_flex()
             .id(SharedString::from(format!("sidebar-{}", self.id)))
             .relative()
@@ -347,11 +361,11 @@ impl SidebarSection {
 }
 
 impl RenderOnce for SidebarSection {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         if self.rail {
             self.render_rail(cx)
         } else {
-            self.render_wide(cx)
+            self.render_wide(window, cx)
         }
     }
 }
