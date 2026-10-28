@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use super::diff_metadata::{ChangeType, FileDiff, HunkContent, Side, end_boundary, start_boundary};
-use super::line_staging::HunkButton;
+use super::line_staging::{ChangedLine, ChangedRows, HunkButton, changed_lines};
 use super::patch_files::{Expanded, Expansion};
 
 /// How many unchanged lines a separator's buttons show at a time (`expansionLineCount`).
@@ -104,6 +104,8 @@ pub struct Layout {
     pub rows: Vec<Row>,
     deletion_rows: HashMap<usize, usize>,
     addition_rows: HashMap<usize, usize>,
+    /// The changed lines, by the rows they're on.
+    changed: ChangedRows,
 }
 
 impl Layout {
@@ -113,6 +115,17 @@ impl Layout {
             Side::Deletions => self.deletion_rows.get(&number).copied(),
             Side::Additions => self.addition_rows.get(&number).copied(),
         }
+    }
+
+    /// The changed lines, by the rows they're on.
+    pub fn changed(&self) -> &ChangedRows {
+        &self.changed
+    }
+
+    /// The changed line `number` of `side`, if it's one, and it's shown.
+    pub fn changed_line(&self, number: usize, side: Side) -> Option<ChangedLine> {
+        let row = self.row_of(number, side)?;
+        self.changed.line_at(row, number, side)
     }
 }
 
@@ -409,7 +422,11 @@ pub fn layout(diff: &FileDiff, options: LayoutOptions<'_>) -> Layout {
             );
         }
     }
-    builder.layout
+    let mut layout = builder.layout;
+    layout.changed = ChangedRows::new(&changed_lines(diff), &|number, side| {
+        layout.row_of(number, side)
+    });
+    layout
 }
 
 struct Builder<'a> {

@@ -385,7 +385,7 @@ impl PatchViewer {
         self.dragging = false;
         self.relayout();
         let pickable = self.is_pickable();
-        if let Some(line) = self.picker.shown(&diff, same_file, pickable, &self.layout) {
+        if let Some(line) = self.picker.shown(same_file, pickable, &self.layout) {
             self.reveal(&line);
         }
         self.watch_highlights(cx);
@@ -760,7 +760,7 @@ impl PatchViewer {
 
     /// The pointer is on the line `number` of `side`, or left it.
     fn hover_line(&mut self, number: usize, side: Side, hovered: bool, cx: &mut Context<Self>) {
-        let line = self.picker.changed_line(number, side);
+        let line = self.layout.changed_line(number, side);
         let next = if hovered {
             line
         } else if self.picker.hovered() == line.as_ref() {
@@ -1268,7 +1268,7 @@ fn hunk_button(frame: &Rc<Frame>, hunk: usize) -> AnyElement {
                 .disabled(busy)
                 .on_click(move |_, _, cx| {
                     let _ = entity.update(cx, |this, cx| {
-                        let lines = this.picker.hunk_lines(hunk);
+                        let lines = this.layout.changed().hunk_lines(hunk);
                         this.stage(lines, false, cx);
                     });
                 }),
