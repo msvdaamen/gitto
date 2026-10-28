@@ -38,9 +38,19 @@ pub struct Discarded {
 #[derive(Debug, Clone)]
 struct Entry {
     path: String,
-    mode: String,
-    /// Its stage in the index: other than `0` for a conflicted file's sides.
-    stage: String,
+    /// Its mode, e.g. `0o100644`; `SUBMODULE` for a submodule.
+    mode: u32,
+    /// Its stage in the index: other than 0 for a conflicted file's sides.
+    stage: u8,
+}
+
+/// The mode git gives a submodule, a commit in the tree.
+const SUBMODULE: u32 = 0o160000;
+
+/// The mode on a line of `ls-files --stage` or `ls-tree`, in octal.
+fn parse_mode(mode: &str) -> Result<u32> {
+    u32::from_str_radix(mode, 8)
+        .map_err(|_| Error::Bug(format!("Unexpected mode of a file: {mode}")))
 }
 
 /// The files whose changes are discarded by deleting them, as their list has them.
@@ -101,13 +111,13 @@ pub async fn discard(repo: &Repo, file: &Discarded) -> Result<()> {
                 }
             },
         )?;
-        if index.iter().any(|entry| entry.stage != "0") {
+        if index.iter().any(|entry| entry.stage != 0) {
             return Err(Error::DiscardBlocked(format!(
                 "{} has conflicts, so its changes weren't discarded. Resolve them, or abort what's under way.",
                 file.path
             )));
         }
-        if index.iter().chain(&head).any(|entry| entry.mode == "160000") {
+        if index.iter().chain(&head).any(|entry| entry.mode == SUBMODULE) {
             return Err(Error::DiscardBlocked(format!(
                 "{} is a submodule, so its changes weren't discarded. Discard them in the submodule itself.",
                 file.path
@@ -223,21 +233,27 @@ async fn index_entries(run: &GitCommand, paths: &[&str]) -> Result<Vec<Entry>> {
     let mut args = vec!["ls-files", "--stage", "-z", "--"];
     args.extend(paths);
     let output = run.run(args).await?;
-    Ok(output
+    output
         .split('\0')
-        .filter_map(|line| {
+        .filter(|line| !line.is_empty())
+        .map(|line| {
             // `<mode> <object> <stage>\t<path>`
-            let (info, path) = line.split_once('\t')?;
-            let mut fields = info.split(' ');
-            let mode = fields.next().unwrap_or("").to_owned();
-            let stage = fields.nth(1).unwrap_or("").to_owned();
-            Some(Entry {
+            let fields = line
+                .split_once('\t')
+                .and_then(|(info, path)| Some((info.split_once(' ')?, path)));
+            let Some(((mode, rest), path)) = fields else {
+                return Err(Error::Bug(format!("Unexpected file in the index: {line}")));
+            };
+            let stage = rest.rsplit(' ').next().unwrap_or_default();
+            Ok(Entry {
                 path: path.to_owned(),
-                mode,
-                stage,
+                mode: parse_mode(mode)?,
+                stage: stage
+                    .parse()
+                    .map_err(|_| Error::Bug(format!("Unexpected file in the index: {line}")))?,
             })
         })
-        .collect())
+        .collect()
 }
 
 /// HEAD's files at `paths`, or below them.
@@ -245,19 +261,21 @@ async fn head_entries(run: &GitCommand, paths: &[&str]) -> Result<Vec<Entry>> {
     let mut args = vec!["ls-tree", "-r", "-z", "HEAD", "--"];
     args.extend(paths);
     let output = run.run(args).await?;
-    Ok(output
+    output
         .split('\0')
-        .filter_map(|line| {
+        .filter(|line| !line.is_empty())
+        .map(|line| {
             // `<mode> <type> <object>\t<path>`
-            let (info, path) = line.split_once('\t')?;
-            let mode = info.split(' ').next().unwrap_or("");
-            Some(Entry {
+            let Some((info, path)) = line.split_once('\t') else {
+                return Err(Error::Bug(format!("Unexpected file in HEAD: {line}")));
+            };
+            Ok(Entry {
                 path: path.to_owned(),
-                mode: mode.to_owned(),
-                stage: "0".to_owned(),
+                mode: parse_mode(info.split(' ').next().unwrap_or_default())?,
+                stage: 0,
             })
         })
-        .collect())
+        .collect()
 }
 
 /// Which of `paths` are only marked to be added (`add -N`): the index has a placeholder for them,
