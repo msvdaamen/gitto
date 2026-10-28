@@ -2,14 +2,14 @@
 
 use std::collections::HashSet;
 
-use super::blockers::Action;
+use super::blockers::PushBlocker;
 use super::config::{PushDefault, map_ref, read_config};
-use super::progress::why_detached;
 use super::schema::PushTarget;
 use crate::core::errors::{Error, Result};
 use crate::core::git_dirs::git_dirs;
 use crate::core::repo::{GitCommand, Repo, current_branch, resolve_ref};
 use crate::core::runner::RunOptions;
+use crate::features::operation::commands::rebase_state;
 
 /// Where the checked-out branch is pushed (see `plan_push`).
 #[derive(Debug, Clone)]
@@ -34,9 +34,9 @@ struct PushPlan {
 /// push refspecs say if it has any, and otherwise under the same name, as `git push` does by
 /// default; or under its upstream's name if `push.default` says to push to the upstream, and
 /// that's on the same remote. Only ever the one branch, whatever `push.default` says: the Push
-/// button names one. Fails with why it can't be pushed (`Error::PushBlocked`). The repository's
-/// git directory is only asked for with HEAD detached.
-async fn plan_push(repo: &Repo) -> Result<PushPlan> {
+/// button names one. Or why it can't be pushed. The repository's git directory is only asked for
+/// with HEAD detached.
+async fn plan_push(repo: &Repo) -> Result<Result<PushPlan, PushBlocker>> {
     let run = repo.git();
     let (branch, config, head) = futures::try_join!(
         current_branch(&run),
@@ -45,20 +45,15 @@ async fn plan_push(repo: &Repo) -> Result<PushPlan> {
     )?;
     let Some(branch) = branch else {
         let git_dir = git_dirs(repo).await?.git_dir;
-        return Err(Error::PushBlocked(
-            why_detached(&git_dir, Action::Push).await,
-        ));
+        let rebasing = rebase_state(&git_dir).await.rebasing;
+        return Ok(Err(PushBlocker::Detached { rebasing }));
     };
     if head.is_none() {
-        return Err(Error::PushBlocked(format!(
-            "{branch} has no commits to push yet."
-        )));
+        return Ok(Err(PushBlocker::Unborn { branch }));
     }
     let settings = config.branch(&branch);
     let Some(remote) = settings.push_remote() else {
-        return Err(Error::PushBlocked(
-            "There's no remote to push to.".to_owned(),
-        ));
+        return Ok(Err(PushBlocker::NoRemote));
     };
 
     let local = format!("refs/heads/{branch}");
@@ -69,9 +64,10 @@ async fn plan_push(repo: &Repo) -> Result<PushPlan> {
         match map_ref(push_specs, &local, true) {
             Some(reference) => reference,
             None => {
-                return Err(Error::PushBlocked(format!(
-                    "{remote}'s push settings don't push {branch} anywhere."
-                )));
+                return Ok(Err(PushBlocker::NotPushed {
+                    remote: remote.clone(),
+                    branch: branch.clone(),
+                }));
             }
         }
     } else if let Some(merge) = merge.filter(|merge| {
@@ -90,7 +86,7 @@ async fn plan_push(repo: &Repo) -> Result<PushPlan> {
     } else {
         None
     };
-    Ok(PushPlan {
+    Ok(Ok(PushPlan {
         pulls_from: upstream_remote == Some(remote.as_str()) && merge == Some(reference.as_str()),
         set_upstream: upstream_remote.is_none_or(str::is_empty) || merge.is_none_or(str::is_empty),
         branch,
@@ -98,7 +94,7 @@ async fn plan_push(repo: &Repo) -> Result<PushPlan> {
         named,
         reference,
         tracking,
-    })
+    }))
 }
 
 /// What to call the ref `plan` pushes to, e.g. `origin/feature`.
@@ -112,10 +108,9 @@ fn target_name(plan: &PushPlan) -> String {
 
 /// Where the Push button pushes the checked-out branch, and how many commits it sends, or why not.
 pub async fn get_push_target(repo: &Repo) -> Result<PushTarget> {
-    let plan = match plan_push(repo).await {
+    let plan = match plan_push(repo).await? {
         Ok(plan) => plan,
-        Err(Error::PushBlocked(reason)) => return Ok(PushTarget::Blocked { reason }),
-        Err(error) => return Err(error),
+        Err(reason) => return Ok(PushTarget::Blocked { reason }),
     };
     let run = repo.git();
     let tracked = match &plan.tracking {
@@ -153,7 +148,7 @@ pub async fn get_push_target(repo: &Repo) -> Result<PushTarget> {
 /// Fails with an `Error::PushRejected` if the remote branch has commits the branch doesn't, which
 /// says whether forcing would get past that.
 pub async fn push(repo: &Repo, force: bool) -> Result<()> {
-    let plan = plan_push(repo).await?;
+    let plan = plan_push(repo).await?.map_err(Error::PushBlocked)?;
     let local = format!("refs/heads/{}", plan.branch);
     let refspec = format!("{local}:{}", plan.reference);
     // What happened to the ref, on stdout, to tell a rejection from other failures.
@@ -710,17 +705,25 @@ mod tests {
             assert_eq!(
                 get_push_target(&repo).await.unwrap(),
                 PushTarget::Blocked {
-                    reason: "HEAD is detached: check out a branch to push it.".into()
+                    reason: PushBlocker::Detached { rebasing: false }
                 }
             );
             let error = push(&repo, false).await.unwrap_err();
-            assert!(matches!(error, Error::PushBlocked(_)), "{error:?}");
+            assert!(
+                matches!(
+                    error,
+                    Error::PushBlocked(PushBlocker::Detached { rebasing: false })
+                ),
+                "{error:?}"
+            );
 
             git(&path, ["checkout", "-q", "--orphan", "empty"]);
             assert_eq!(
                 get_push_target(&repo).await.unwrap(),
                 PushTarget::Blocked {
-                    reason: "empty has no commits to push yet.".into()
+                    reason: PushBlocker::Unborn {
+                        branch: "empty".into()
+                    }
                 }
             );
 
@@ -729,7 +732,7 @@ mod tests {
                     .await
                     .unwrap(),
                 PushTarget::Blocked {
-                    reason: "There's no remote to push to.".into()
+                    reason: PushBlocker::NoRemote
                 }
             );
         });

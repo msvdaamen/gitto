@@ -9,6 +9,9 @@ use std::fmt;
 use std::io;
 use std::sync::Arc;
 
+use crate::features::operation::schema::OperationKind;
+use crate::features::remote::blockers::{PullBlocker, PushBlocker};
+
 /// What the git crate's functions return.
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -191,7 +194,7 @@ impl fmt::Display for StageAction {
 /// Every error the git crate returns. Its `Display` is the message for the user.
 ///
 /// The variants holding only a `String` are errors that are only a message (TS's `messageError`
-/// classes): make one with the message, e.g. `Error::NoUpstream(format!(...))`.
+/// classes): make one with the message, e.g. `Error::RepositoryChanged(format!(...))`.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum Error {
     /// A git command that failed, or couldn't start.
@@ -213,19 +216,15 @@ pub enum Error {
     #[error("{0}")]
     ChangesStashed(String),
 
-    /// There's nothing to pull from: HEAD isn't on a branch, or the branch doesn't track one.
+    /// A pull that can't start, for the reason it says: e.g. there's nothing to pull from, or a
+    /// branch that isn't checked out can't be pulled without being checked out. Nothing was done.
     #[error("{0}")]
-    NoUpstream(String),
+    PullBlocked(PullBlocker),
 
-    /// A branch that isn't checked out but can't be pulled without being checked out: it diverged
-    /// from its upstream, or is in use in a worktree. Nothing was done.
+    /// A push that can't start, for the reason it says: e.g. HEAD isn't on a branch, or there's no
+    /// remote. Nothing was done.
     #[error("{0}")]
-    PullBlocked(String),
-
-    /// There's nothing to push: HEAD isn't on a branch, the branch has no commits, or there's no
-    /// remote.
-    #[error("{0}")]
-    PushBlocked(String),
+    PushBlocked(PushBlocker),
 
     /// A push turned down as the remote branch has commits the branch doesn't. `forcible` when
     /// they're ones the branch had, as before a rebase or an amend, which force-pushing would
@@ -294,9 +293,12 @@ pub enum Error {
     #[error("The conflict in {path} changed since it was shown, so nothing was resolved.")]
     ConflictChanged { path: String },
 
-    /// No merge, rebase, cherry-pick, revert or `git am` is under way, or another one than shown.
-    #[error("{0}")]
-    NoOperation(String),
+    /// The operation `expected`, the one shown, isn't under way: `current` is, or none is.
+    #[error("{}", no_operation_message(*.expected, *.current))]
+    NoOperation {
+        expected: OperationKind,
+        current: Option<OperationKind>,
+    },
 
     /// A merge that can't start: HEAD isn't on a branch, an operation or conflicts are under way,
     /// the branch to merge is gone, or uncommitted changes or untracked files are in its way.
@@ -339,10 +341,12 @@ pub enum Error {
     #[error("{0}")]
     BranchDeletionBlocked(String),
 
-    /// What's asked of git needs an editor for a message, which Gitto can't open: a rebase's
-    /// reword.
-    #[error("{0}")]
-    EditorNeeded(String),
+    /// What's asked of git needs an editor for a message, which Gitto can't open: a rebase that
+    /// rewords or squashes commits.
+    #[error(
+        "The rest of this rebase rewords or squashes commits, whose messages need an editor Gitto can't open. Continue it in a terminal."
+    )]
+    EditorNeeded,
 
     /// No repository with that id has been added to Gitto.
     #[error("Repository not found.")]
@@ -385,19 +389,18 @@ impl Error {
             Error::RepositoryNotFound { .. }
             | Error::FolderNotFound { .. }
             | Error::WorkingTreeFileNotFound { .. } => NotFound,
-            Error::NoUpstream(_)
-            | Error::PullBlocked(_)
+            Error::PullBlocked(_)
             | Error::PushBlocked(_)
             | Error::UnsupportedGit { .. }
             | Error::ConflictMarkers { .. }
-            | Error::NoOperation(_)
+            | Error::NoOperation { .. }
             | Error::MergeBlocked(_)
             | Error::RebaseBlocked(_)
             | Error::RebaseUndone(_)
             | Error::DiscardBlocked(_)
             | Error::WorktreeRemovalBlocked(_)
             | Error::BranchDeletionBlocked(_)
-            | Error::EditorNeeded(_)
+            | Error::EditorNeeded
             | Error::WatchLimitReached => PreconditionFailed,
             Error::PullInterrupted(_)
             | Error::StashConflict(_)
@@ -499,6 +502,17 @@ pub fn command_error(
     GitError {
         stdout: stdout.to_owned(),
         ..GitError::new(message, args.to_vec(), exit_code, stderr)
+    }
+}
+
+fn no_operation_message(expected: OperationKind, current: Option<OperationKind>) -> String {
+    match current {
+        Some(current) => format!(
+            "A {} is under way now, not a {}.",
+            current.name(),
+            expected.name()
+        ),
+        None => format!("The {} is no longer under way.", expected.name()),
     }
 }
 

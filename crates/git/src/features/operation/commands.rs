@@ -265,14 +265,10 @@ async fn check_operation(git_dir: &Path, kind: OperationKind) -> Result<()> {
     if current == Some(kind) {
         return Ok(());
     }
-    Err(Error::NoOperation(match current {
-        Some(current) => format!(
-            "A {} is under way now, not a {}.",
-            current.name(),
-            kind.name()
-        ),
-        None => format!("The {} is no longer under way.", kind.name()),
-    }))
+    Err(Error::NoOperation {
+        expected: kind,
+        current,
+    })
 }
 
 /// Continues the operation `kind` once its conflicts are resolved: commits the merge, or the commit
@@ -293,13 +289,13 @@ pub async fn continue_operation(repo: &Repo, kind: OperationKind) -> Result<()> 
             check_operation(&git_dir, kind),
         )?;
         if kind == OperationKind::Rebase && rewords_or_squashes(&git_dir).await {
-            return Err(Error::EditorNeeded(
-                "The rest of this rebase rewords or squashes commits, whose messages need an editor Gitto can't open. Continue it in a terminal.".to_owned(),
-            ));
+            return Err(Error::EditorNeeded);
         }
         // With the message as git prepared it, as no editor can be opened: `:` takes it as it is,
         // and leaves out its comments, like the conflicts git lists in a merge's.
-        let options = RunOptions::default().env("GIT_EDITOR", ":").rewrites_files();
+        let options = RunOptions::default()
+            .env("GIT_EDITOR", ":")
+            .rewrites_files();
         let continued = go_on(
             &run,
             kind,
@@ -330,8 +326,8 @@ pub async fn continue_operation(repo: &Repo, kind: OperationKind) -> Result<()> 
             false,
             &options,
         )
-            .await
-            .map_err(Error::without_hints)
+        .await
+        .map_err(Error::without_hints)
     })
     .await
 }
@@ -560,17 +556,31 @@ mod tests {
                 .await
                 .unwrap_err();
             assert!(
-                matches!(&error, Error::NoOperation(message) if message == "A merge is under way now, not a rebase."),
+                matches!(
+                    error,
+                    Error::NoOperation {
+                        expected: OperationKind::Rebase,
+                        current: Some(OperationKind::Merge)
+                    }
+                ),
                 "{error:?}"
             );
+            assert_eq!(error.to_string(), "A merge is under way now, not a rebase.");
             abort_operation(&repo, OperationKind::Merge).await.unwrap();
             let error = continue_operation(&repo, OperationKind::Merge)
                 .await
                 .unwrap_err();
             assert!(
-                matches!(&error, Error::NoOperation(message) if message == "The merge is no longer under way."),
+                matches!(
+                    error,
+                    Error::NoOperation {
+                        expected: OperationKind::Merge,
+                        current: None
+                    }
+                ),
                 "{error:?}"
             );
+            assert_eq!(error.to_string(), "The merge is no longer under way.");
         });
     }
 
@@ -668,7 +678,7 @@ mod tests {
             let error = continue_operation(&repo, OperationKind::Rebase)
                 .await
                 .unwrap_err();
-            assert!(matches!(error, Error::EditorNeeded(_)), "{error:?}");
+            assert!(matches!(error, Error::EditorNeeded), "{error:?}");
             let operation = get_operation(&repo).await.unwrap();
             assert!(
                 matches!(
@@ -715,7 +725,7 @@ mod tests {
             let error = continue_operation(&repo, OperationKind::Rebase)
                 .await
                 .unwrap_err();
-            assert!(matches!(error, Error::EditorNeeded(_)), "{error:?}");
+            assert!(matches!(error, Error::EditorNeeded), "{error:?}");
         });
     }
 

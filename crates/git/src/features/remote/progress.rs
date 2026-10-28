@@ -3,7 +3,6 @@
 
 use std::path::Path;
 
-use super::blockers::{Action, detached_head};
 use crate::core::errors::{Error, GitError, Result};
 use crate::core::repo::{GitCommand, has_conflicts, ref_exists, succeeds};
 use crate::features::operation::commands::rebase_state;
@@ -21,12 +20,6 @@ pub struct Progress {
 /// Whether `state` has anything unfinished, which git won't merge or rebase over.
 pub fn in_progress(state: &Progress) -> bool {
     state.conflicts || state.merging || state.rebasing || state.applying
-}
-
-/// Why HEAD, detached in the worktree whose git directory is `git_dir`, can't be pulled into or
-/// pushed: a rebase may have stopped there.
-pub async fn why_detached(git_dir: &Path, action: Action) -> String {
-    detached_head(action, rebase_state(git_dir).await.rebasing)
 }
 
 /// What's unfinished in the repository, read at once.
@@ -142,30 +135,9 @@ fn capitalize(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use super::*;
     use crate::test_support::conflicts::text_conflict;
     use crate::test_support::{Fixture, git};
-
-    #[test]
-    fn why_detached_says_a_rebase_is_under_way_but_not_for_git_am() {
-        let fx = Fixture::new();
-        let path = fx.create_repo("why-detached");
-        let git_dir = path.join(".git");
-        smol::block_on(async {
-            fs::create_dir(git_dir.join("rebase-apply")).unwrap();
-            assert_eq!(
-                why_detached(&git_dir, Action::Push).await,
-                "A rebase is under way. Continue or abort it, then push."
-            );
-            fs::write(git_dir.join("rebase-apply").join("applying"), "").unwrap();
-            assert_eq!(
-                why_detached(&git_dir, Action::Push).await,
-                "HEAD is detached: check out a branch to push it."
-            );
-        });
-    }
 
     #[test]
     fn a_merge_that_conflicted_interrupts_the_pull() {
