@@ -1,20 +1,23 @@
 //! Errors the git crate returns. They describe what went wrong in git terms and carry a message a
-//! user can read, and each says how the UI should take it (`api`). An error whose `api` is
-//! `ApiCode::InternalServerError` is a bug, reported as such.
+//! user can read, and each says how the UI should take it (`api`): what kind of failure it is, and
+//! whether it's a bug, reported as such (`ApiCode::is_bug`). Those that say why something couldn't
+//! start, or stopped (the `*Blocked` and `*Stopped` errors), say it with a reason the UI can match
+//! on, which words their message.
 //!
 //! Ported from `packages/git/src/core/errors.ts`, where each error is a class; here each is a
 //! variant of [`Error`], and the failures of git commands share [`GitError`].
 
 use std::fmt;
 use std::io;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// What the git crate's functions return.
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-/// How an error reaches the UI: what kind of failure it is. In the Electron app it reached the
-/// renderer as an oRPC error with `code()`, and `status()` for a code of Gitto's own, which oRPC
-/// has no status for.
+/// What kind of failure an error is, which says what the UI does with it: tell the user, offer
+/// them a way past it, or report a bug ([`is_bug`](Self::is_bug)). The names are the codes the
+/// Electron app's renderer got the errors with (`code()`), kept until that app goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ApiCode {
     /// No such repository, folder or file.
@@ -23,9 +26,13 @@ pub enum ApiCode {
     PreconditionFailed,
     /// The repository changed under what was asked, or what it left is for the user to finish.
     Conflict,
+    /// A file or changes too large to show.
     PayloadTooLarge,
+    /// A path outside the repository's working tree.
     Forbidden,
+    /// A file that isn't text, which can't be shown or edited as such.
     UnsupportedMediaType,
+    /// Lines that can't be staged or unstaged on their own.
     UnprocessableContent,
     /// Input that isn't valid, e.g. a SHA that isn't hex (see `crate::input`).
     BadRequest,
@@ -55,17 +62,21 @@ impl ApiCode {
         }
     }
 
-    /// The HTTP status of a code of Gitto's own; `None` for oRPC's, which have one.
-    pub fn status(self) -> Option<u16> {
-        match self {
-            ApiCode::PushRewritten | ApiCode::PushBehind => Some(409),
-            _ => None,
-        }
-    }
-
     /// Whether this is a bug to report rather than something to tell the user.
     pub fn is_bug(self) -> bool {
-        self == ApiCode::InternalServerError
+        match self {
+            ApiCode::InternalServerError => true,
+            ApiCode::NotFound
+            | ApiCode::PreconditionFailed
+            | ApiCode::Conflict
+            | ApiCode::PayloadTooLarge
+            | ApiCode::Forbidden
+            | ApiCode::UnsupportedMediaType
+            | ApiCode::UnprocessableContent
+            | ApiCode::BadRequest
+            | ApiCode::PushRewritten
+            | ApiCode::PushBehind => false,
+        }
     }
 }
 
@@ -188,6 +199,220 @@ impl fmt::Display for StageAction {
     }
 }
 
+/// What a pull merges or rebases with, or what's done to the checked-out branch with another one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Integration {
+    Merge,
+    Rebase,
+}
+
+impl Integration {
+    /// As the user is told to do it, e.g. `merge`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Integration::Merge => "merge",
+            Integration::Rebase => "rebase",
+        }
+    }
+}
+
+/// Why a merge or a rebase of the checked-out branch can't start (see [`Error::MergeBlocked`] and
+/// [`Error::RebaseBlocked`], whose messages say it for each).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IntegrationBlocker {
+    /// The ref to merge, or rebase onto, isn't a branch's, e.g. a tag's.
+    NotABranch { reference: String },
+    /// A merge, rebase, cherry-pick, revert or `git am` is under way: `operation`, as the user is
+    /// told it, e.g. `cherry-pick`.
+    OperationUnderWay { operation: String },
+    /// Some files have conflicts.
+    Conflicts,
+    /// HEAD isn't on a branch.
+    Detached,
+    /// The branch to merge, or rebase onto, is gone.
+    Gone { branch: String },
+    /// The branch to merge, or rebase onto, is the checked-out one.
+    Itself { branch: String },
+    /// A rebase's: the checked-out `branch` has no commits yet, so it's for merging `onto` into.
+    NoCommits { branch: String, onto: String },
+    /// Uncommitted changes or untracked files that git won't merge or rebase over: `files`, and
+    /// `message` saying so.
+    InTheWay { files: Vec<String>, message: String },
+}
+
+impl IntegrationBlocker {
+    /// Why `integration` can't start, for the user.
+    pub fn message(&self, integration: Integration) -> String {
+        let verb = integration.as_str();
+        match self {
+            IntegrationBlocker::NotABranch { reference } => format!("{reference} isn't a branch."),
+            IntegrationBlocker::OperationUnderWay { operation } => {
+                format!("A {operation} is under way. Finish or abort it, then {verb}.")
+            }
+            IntegrationBlocker::Conflicts => {
+                format!("Some files have conflicts. Resolve them, then {verb}.")
+            }
+            IntegrationBlocker::Detached => match integration {
+                Integration::Merge => "HEAD is detached: check out a branch to merge into it.",
+                Integration::Rebase => "HEAD is detached: check out a branch to rebase it.",
+            }
+            .to_owned(),
+            IntegrationBlocker::Gone { branch } => format!("{branch} no longer exists."),
+            IntegrationBlocker::Itself { branch } => match integration {
+                Integration::Merge => format!("Can't merge {branch} into itself."),
+                Integration::Rebase => format!("Can't rebase {branch} onto itself."),
+            },
+            IntegrationBlocker::NoCommits { branch, onto } => format!(
+                "{branch} has no commits yet, so there's nothing to rebase. Merge {onto} into it instead."
+            ),
+            IntegrationBlocker::InTheWay { message, .. } => message.clone(),
+        }
+    }
+}
+
+/// Why changes can't be discarded (see [`Error::DiscardBlocked`]): a file's (`path`), or all of
+/// them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiscardBlocker {
+    /// A repository inside this one, whose changes are its own.
+    Repository { path: String },
+    /// A conflicted file, whose resolution is for the user.
+    Conflicted { path: String },
+    /// A submodule, whose changes are discarded in it.
+    Submodule { path: String },
+    /// Putting the file back would also lose `lost`, e.g. an untracked file at the old path of a
+    /// rename.
+    WouldLose { path: String, lost: String },
+    /// All changes, while a merge, rebase, cherry-pick, revert or `git am` is under way:
+    /// `operation`, as the user is told it.
+    OperationUnderWay { operation: String },
+    /// All changes, while some files have conflicts.
+    Conflicts,
+    /// All changes, when there are none that can be discarded here.
+    NothingToDiscard,
+}
+
+impl fmt::Display for DiscardBlocker {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DiscardBlocker::Repository { path } => write!(
+                f,
+                "{path} is a repository of its own, so its changes weren't discarded."
+            ),
+            DiscardBlocker::Conflicted { path } => write!(
+                f,
+                "{path} has conflicts, so its changes weren't discarded. Resolve them, or abort what's under way."
+            ),
+            DiscardBlocker::Submodule { path } => write!(
+                f,
+                "{path} is a submodule, so its changes weren't discarded. Discard them in the submodule itself."
+            ),
+            DiscardBlocker::WouldLose { path, lost } => write!(
+                f,
+                "{path}'s changes weren't discarded: putting it back would also lose {lost}."
+            ),
+            DiscardBlocker::OperationUnderWay { operation } => write!(
+                f,
+                "A {operation} is under way. Finish or abort it, then discard all changes."
+            ),
+            DiscardBlocker::Conflicts => f.write_str(
+                "Some files have conflicts. Resolve them, then discard all changes.",
+            ),
+            DiscardBlocker::NothingToDiscard => f.write_str(
+                "There's nothing here to discard. A submodule's changes, or those of a repository inside this one, are discarded in it.",
+            ),
+        }
+    }
+}
+
+/// Why a worktree can't be removed (see [`Error::WorktreeRemovalBlocked`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorktreeRemovalBlocker {
+    /// The main worktree, whose git directory the others share.
+    Main,
+    /// The one open here.
+    Current,
+}
+
+impl fmt::Display for WorktreeRemovalBlocker {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            WorktreeRemovalBlocker::Main => "The main worktree can't be removed.",
+            WorktreeRemovalBlocker::Current => {
+                "This worktree is the one open here, so it can't be removed from here. Open another one, and remove it from there."
+            }
+        })
+    }
+}
+
+/// Why a remote branch can't be deleted (see [`Error::BranchDeletionBlocked`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BranchDeletionBlocker {
+    /// The local branch `local`, which tracks the remote branch `branch` and is deleted with it,
+    /// is in use.
+    InUse {
+        local: String,
+        branch: String,
+        in_use: InUse,
+    },
+    /// The remote's fetch settings don't fetch `branch` (e.g. `origin/feature`) from a branch on
+    /// `remote`, so there's none there to delete it from.
+    NotFetched { remote: String, branch: String },
+}
+
+impl fmt::Display for BranchDeletionBlocker {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BranchDeletionBlocker::InUse {
+                local,
+                branch,
+                in_use,
+            } => write!(
+                f,
+                "{local} tracks {branch} and {}, so neither was deleted. {}",
+                in_use.state(),
+                in_use.fix()
+            ),
+            BranchDeletionBlocker::NotFetched { remote, branch } => write!(
+                f,
+                "{remote}'s fetch settings don't fetch {branch} from a branch there, so nothing was deleted."
+            ),
+        }
+    }
+}
+
+/// Why a local branch is in use in a worktree, which git won't delete, nor Gitto pull without
+/// checking it out (see `features::branch::in_use`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InUse {
+    /// Checked out in the worktree at `worktree`.
+    CheckedOut { worktree: PathBuf },
+    /// Being rebased in a worktree, which detaches its HEAD meanwhile.
+    Rebasing,
+    /// Being bisected in a worktree, which detaches its HEAD meanwhile.
+    Bisecting,
+}
+
+impl InUse {
+    /// What it is, following the branch's name, e.g. `is being rebased`.
+    pub fn state(&self) -> String {
+        match self {
+            InUse::CheckedOut { worktree } => format!("is checked out in {}", worktree.display()),
+            InUse::Rebasing => "is being rebased".to_owned(),
+            InUse::Bisecting => "is being bisected".to_owned(),
+        }
+    }
+
+    /// What to do about it.
+    pub fn fix(&self) -> &'static str {
+        match self {
+            InUse::CheckedOut { .. } => "Switch to another branch there first.",
+            InUse::Rebasing => "Finish or abort the rebase first.",
+            InUse::Bisecting => "Stop bisecting first.",
+        }
+    }
+}
+
 /// Every error the git crate returns. Its `Display` is the message for the user.
 ///
 /// The variants holding only a `String` are errors that are only a message (TS's `messageError`
@@ -301,43 +526,60 @@ pub enum Error {
     /// A merge that can't start: HEAD isn't on a branch, an operation or conflicts are under way,
     /// the branch to merge is gone, or uncommitted changes or untracked files are in its way.
     /// Nothing was done.
-    #[error("{0}")]
-    MergeBlocked(String),
+    #[error("{}", .0.message(Integration::Merge))]
+    MergeBlocked(IntegrationBlocker),
 
-    /// A merge that stopped before committing, without conflicts, e.g. as a hook turned the merge
-    /// commit down: it's under way, to commit or abort.
-    #[error("{0}")]
-    MergeStopped(String),
+    /// A merge of `branch` that stopped before committing, without conflicts, e.g. as a hook
+    /// turned the merge commit down, as git said (`reason`): it's under way, to commit or abort.
+    #[error(
+        "Merging {branch} stopped before committing:\n{reason}\nFix that, then commit the merge, or abort it."
+    )]
+    MergeStopped { branch: String, reason: String },
 
     /// A rebase that can't start: HEAD isn't on a branch, an operation or conflicts are under way,
     /// the branch to rebase onto is gone, or there are uncommitted changes or untracked files in
     /// the way. Nothing was done.
-    #[error("{0}")]
-    RebaseBlocked(String),
+    #[error("{}", .0.message(Integration::Rebase))]
+    RebaseBlocked(IntegrationBlocker),
 
-    /// A rebase that stopped partway without conflicts, e.g. as a commit couldn't be signed, and
-    /// was undone: nothing is left of it, to try again once that's fixed.
-    #[error("{0}")]
-    RebaseUndone(String),
+    /// A rebase of `branch` onto `onto` that stopped partway without conflicts, e.g. as a commit
+    /// couldn't be signed, as git said (`reason`), and was undone: nothing is left of it, to try
+    /// again once that's fixed.
+    #[error(
+        "Rebasing {branch} onto {onto} stopped partway, and was undone:\n{reason}\nFix that, then rebase again."
+    )]
+    RebaseUndone {
+        branch: String,
+        onto: String,
+        reason: String,
+    },
 
-    /// A rebase that stopped partway without conflicts, e.g. as a commit couldn't be signed, and
-    /// couldn't be undone either: it's under way, to finish in a terminal or abort.
-    #[error("{0}")]
-    RebaseStopped(String),
+    /// A rebase of `branch` onto `onto` that stopped partway without conflicts, e.g. as a commit
+    /// couldn't be signed, as git said (`reason`), and couldn't be undone either: it's under way,
+    /// to finish in a terminal or abort.
+    #[error(
+        "Rebasing {branch} onto {onto} stopped partway:\n{reason}\nFinish the rebase in a terminal, or abort it."
+    )]
+    RebaseStopped {
+        branch: String,
+        onto: String,
+        reason: String,
+    },
 
-    /// Changes that can't be discarded, as they're of conflicted files: nothing was discarded.
+    /// Changes that can't be discarded, e.g. as they're of conflicted files: nothing was
+    /// discarded.
     #[error("{0}")]
-    DiscardBlocked(String),
+    DiscardBlocked(DiscardBlocker),
 
     /// A worktree that can't be removed: the main one, which the others share their git directory
     /// with, or the one open here. Nothing was done.
     #[error("{0}")]
-    WorktreeRemovalBlocked(String),
+    WorktreeRemovalBlocked(WorktreeRemovalBlocker),
 
-    /// A remote branch that can't be deleted with the local branches tracking it, as one of those
-    /// is checked out, here or in another worktree. Nothing was deleted.
+    /// A remote branch that can't be deleted: with the local branches tracking it, as one of those
+    /// is in use, or at all, as its remote doesn't fetch it. Nothing was deleted.
     #[error("{0}")]
-    BranchDeletionBlocked(String),
+    BranchDeletionBlocked(BranchDeletionBlocker),
 
     /// What's asked of git needs an editor for a message, which Gitto can't open: a rebase's
     /// reword.
@@ -386,7 +628,7 @@ impl Error {
             | Error::NoOperation(_)
             | Error::MergeBlocked(_)
             | Error::RebaseBlocked(_)
-            | Error::RebaseUndone(_)
+            | Error::RebaseUndone { .. }
             | Error::DiscardBlocked(_)
             | Error::WorktreeRemovalBlocked(_)
             | Error::BranchDeletionBlocked(_)
@@ -399,8 +641,8 @@ impl Error {
             | Error::FileChangedOnDisk { .. }
             | Error::PatchChanged { .. }
             | Error::ConflictChanged { .. }
-            | Error::MergeStopped(_)
-            | Error::RebaseStopped(_) => Conflict,
+            | Error::MergeStopped { .. }
+            | Error::RebaseStopped { .. } => Conflict,
             Error::FileTooLarge { .. } | Error::ChangesTooLarge { .. } => PayloadTooLarge,
             Error::OutsideRepository { .. } => Forbidden,
             Error::NotUtf8 => UnsupportedMediaType,
@@ -634,9 +876,87 @@ mod tests {
                 message: "no".into(),
                 forcible: true
             }
-            .api()
-            .status(),
-            Some(409)
+            .api(),
+            ApiCode::PushRewritten
+        );
+    }
+
+    #[test]
+    fn only_internal_errors_are_bugs() {
+        assert!(ApiCode::InternalServerError.is_bug());
+        assert!(!ApiCode::PushBehind.is_bug());
+        assert!(!ApiCode::BadRequest.is_bug());
+        assert!(Error::Bug("x".into()).api().is_bug());
+        assert!(!Error::HeadMoved.api().is_bug());
+    }
+
+    #[test]
+    fn blocked_errors_say_why_for_what_was_blocked() {
+        let merge = |blocker| Error::MergeBlocked(blocker).to_string();
+        let rebase = |blocker| Error::RebaseBlocked(blocker).to_string();
+        assert_eq!(
+            merge(IntegrationBlocker::OperationUnderWay {
+                operation: "cherry-pick".into()
+            }),
+            "A cherry-pick is under way. Finish or abort it, then merge."
+        );
+        assert_eq!(
+            rebase(IntegrationBlocker::Conflicts),
+            "Some files have conflicts. Resolve them, then rebase."
+        );
+        assert_eq!(
+            merge(IntegrationBlocker::Detached),
+            "HEAD is detached: check out a branch to merge into it."
+        );
+        assert_eq!(
+            rebase(IntegrationBlocker::Detached),
+            "HEAD is detached: check out a branch to rebase it."
+        );
+        assert_eq!(
+            merge(IntegrationBlocker::Itself {
+                branch: "main".into()
+            }),
+            "Can't merge main into itself."
+        );
+        assert_eq!(
+            rebase(IntegrationBlocker::NoCommits {
+                branch: "new".into(),
+                onto: "main".into()
+            }),
+            "new has no commits yet, so there's nothing to rebase. Merge main into it instead."
+        );
+        let error = Error::RebaseUndone {
+            branch: "feature".into(),
+            onto: "main".into(),
+            reason: "error: gpg failed to sign the data".into(),
+        };
+        assert_eq!(
+            error.to_string(),
+            "Rebasing feature onto main stopped partway, and was undone:\nerror: gpg failed to sign the data\nFix that, then rebase again."
+        );
+        assert_eq!(error.api(), ApiCode::PreconditionFailed);
+        assert_eq!(
+            Error::DiscardBlocked(DiscardBlocker::WouldLose {
+                path: "a.txt".into(),
+                lost: "b.txt".into()
+            })
+            .to_string(),
+            "a.txt's changes weren't discarded: putting it back would also lose b.txt."
+        );
+        assert_eq!(
+            Error::WorktreeRemovalBlocked(WorktreeRemovalBlocker::Main).to_string(),
+            "The main worktree can't be removed."
+        );
+        let in_use = BranchDeletionBlocker::InUse {
+            local: "feature".into(),
+            branch: "origin/feature".into(),
+            in_use: InUse::CheckedOut {
+                worktree: PathBuf::from("/work/feature"),
+            },
+        };
+        assert_eq!(
+            Error::BranchDeletionBlocked(in_use).to_string(),
+            "feature tracks origin/feature and is checked out in /work/feature, so neither was deleted. Switch to another branch there first."
         );
     }
 }
