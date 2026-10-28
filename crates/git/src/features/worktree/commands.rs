@@ -305,7 +305,10 @@ mod tests {
             );
             let repo = fx.repos.open("linked").await.unwrap();
             let check = list_worktrees(&repo).await.unwrap().remove(1);
-            assert_eq!(check.locked.as_deref(), Some("busy"));
+            assert_eq!(
+                check.locked.and_then(|lock| lock.reason).as_deref(),
+                Some("busy")
+            );
             assert_eq!(check.head, Some(git(&path, ["rev-parse", "HEAD"])));
         });
     }
