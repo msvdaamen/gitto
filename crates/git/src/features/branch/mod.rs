@@ -8,3 +8,4 @@ pub mod in_use;
 pub mod merge;
 pub mod rebase;
 pub mod schema;
+pub mod tracking;
