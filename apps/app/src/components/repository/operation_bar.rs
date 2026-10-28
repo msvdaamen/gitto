@@ -83,10 +83,6 @@ impl OperationBar {
         }
     }
 
-    pub fn set_repository(&mut self, repository_id: RepositoryId, cx: &mut Context<Self>) {
-        self.repository.set(&repository_id, cx);
-    }
-
     /// What continuing or aborting waits for: the edits to a file on show saved.
     pub fn set_before_change(&mut self, guard: BeforeChange) {
         self.before_change = Some(guard);
@@ -106,23 +102,24 @@ impl OperationBar {
         conflicted(self.repository.read(cx))
     }
 
-    fn files(&self, cx: &App) -> Vec<ChangedFile> {
-        self.conflicted(cx)
-            .map(|conflicted| conflicted.files)
-            .unwrap_or_default()
+    /// Whether there are conflicts.
+    fn has_conflicts(conflicted: Option<&ConflictedFiles>) -> bool {
+        conflicted.is_some_and(|conflicted| !conflicted.files.is_empty())
     }
 
     /// Whether it's shown: there's an operation under way, or conflicts.
     pub fn is_shown(&self, cx: &App) -> bool {
-        self.operation(cx).is_some() || !self.files(cx).is_empty()
+        self.operation(cx).is_some() || Self::has_conflicts(self.conflicted(cx).as_ref())
     }
 
     /// What's said of the conflicts, as the bar shows it.
     pub fn summary(&self, cx: &App) -> String {
-        let conflicted = self.conflicted(cx);
-        let files = conflicted.as_ref().map_or(0, |c| c.files.len());
-        let ready = conflicted.as_ref().map_or(0, |c| c.marker_free.len());
-        let operation = self.operation(cx).is_some();
+        Self::summary_of(self.operation(cx).is_some(), self.conflicted(cx).as_ref())
+    }
+
+    fn summary_of(operation: bool, conflicted: Option<&ConflictedFiles>) -> String {
+        let files = conflicted.map_or(0, |c| c.files.len());
+        let ready = conflicted.map_or(0, |c| c.marker_free.len());
         let summary = conflicts_summary(operation, files, ready);
         if !operation && files > 0 {
             format!("{summary}. Resolve them, then commit.")
@@ -133,8 +130,11 @@ impl OperationBar {
 
     /// The file "Resolve conflicts" opens: one with markers left, if any is.
     pub fn first(&self, cx: &App) -> Option<ChangedFile> {
-        self.conflicted(cx)
-            .and_then(|conflicted| first_to_resolve(&conflicted).cloned())
+        Self::first_of(self.conflicted(cx).as_ref())
+    }
+
+    fn first_of(conflicted: Option<&ConflictedFiles>) -> Option<ChangedFile> {
+        conflicted.and_then(|conflicted| first_to_resolve(conflicted).cloned())
     }
 
     fn is_pending(&self, cx: &App) -> bool {
@@ -146,7 +146,7 @@ impl OperationBar {
     /// Whether Continue (or Commit merge) can be clicked: nothing's running, and nothing's
     /// conflicted.
     pub fn may_continue(&self, cx: &App) -> bool {
-        !self.is_pending(cx) && self.files(cx).is_empty()
+        !self.is_pending(cx) && !Self::has_conflicts(self.conflicted(cx).as_ref())
     }
 
     fn saved(&self, cx: &mut App) -> Task<bool> {
@@ -209,7 +209,7 @@ impl OperationBar {
     fn confirm_abort(&mut self, operation: Operation, window: &mut Window, cx: &mut Context<Self>) {
         let name = operation_name(&operation);
         let kind = operation.kind();
-        let this = cx.entity();
+        let this = cx.entity().downgrade();
         let id = self.repository.id(cx).clone();
         ConfirmDialog::new(
             IconName::TriangleAlert,
@@ -220,8 +220,8 @@ impl OperationBar {
             "This puts the repository back as it was before {name} started. The conflicts \
                  you've resolved so far are lost."
         ))
-        .action("Abort", ButtonVariant::Primary, move |_, cx| {
-            this.update(cx, |this, cx| {
+        .action("Abort", ButtonVariant::Danger, move |_, cx| {
+            let _ = this.update(cx, |this, cx| {
                 // Not once another repository is on show: the operation asked about is this one's.
                 if this.repository.id(cx) == &id {
                     this.abort(kind, cx);
@@ -234,14 +234,17 @@ impl OperationBar {
 
 impl Render for OperationBar {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !self.is_shown(cx) {
+        // Once a render: it's selected out of the status.
+        let conflicted = self.conflicted(cx);
+        let conflicted = conflicted.as_ref();
+        let operation = self.operation(cx);
+        let has_conflicts = Self::has_conflicts(conflicted);
+        if operation.is_none() && !has_conflicts {
             return div().into_any_element();
         }
         let palette = *cx.palette();
-        let operation = self.operation(cx);
-        let files = self.files(cx);
-        let first = self.first(cx);
-        let summary = self.summary(cx);
+        let summary = Self::summary_of(operation.is_some(), conflicted);
+        let first = Self::first_of(conflicted);
         let pending = self.is_pending(cx);
         let title: SharedString = operation.as_ref().map_or_else(
             || "Conflicts".into(),
@@ -289,7 +292,7 @@ impl Render for OperationBar {
                         action_button("continue")
                             .primary()
                             .label(label)
-                            .disabled(pending || !files.is_empty())
+                            .disabled(pending || has_conflicts)
                             .on_click(cx.listener(move |this, _, _, cx| this.go_on(kind, cx))),
                     )
                     .on_dismiss(move |_, cx| {
@@ -316,7 +319,7 @@ impl Render for OperationBar {
                 Icon::new(IconName::GitMergeConflict)
                     .size_4()
                     .flex_none()
-                    .text_color(if files.is_empty() {
+                    .text_color(if !has_conflicts {
                         palette.mint
                     } else {
                         palette.coral
@@ -407,7 +410,7 @@ mod tests {
     fn rebase(step: u64, total: u64) -> Operation {
         Operation::Rebase {
             branch: Some("feature".into()),
-            onto: "main".into(),
+            onto: Some("main".into()),
             steps: Some(Steps { step, total }),
         }
     }
@@ -445,7 +448,7 @@ mod tests {
             .boxed()
         }
 
-        fn status(&self, _: Option<String>) -> GitTask<StatusReply> {
+        fn status(&self, _: Option<gitto_git::ContentVersion>) -> GitTask<StatusReply> {
             let now = self.now.borrow().clone();
             async move {
                 now.map(|(_, status)| StatusReply::Status(Box::new(status)))
@@ -458,6 +461,7 @@ mod tests {
     struct Bar {
         _dir: tempfile::TempDir,
         window: AnyWindowHandle,
+        holder: Entity<Holder>,
         bar: Entity<OperationBar>,
         resolved: Rc<RefCell<Vec<ChangedFile>>>,
         saved: Rc<Cell<bool>>,
@@ -490,10 +494,12 @@ mod tests {
                 Holder { bar }
             }
         });
-        let bar = bar.read_with(cx, |holder, _| holder.bar.clone());
+        let holder = bar;
+        let bar = holder.read_with(cx, |holder, _| holder.bar.clone());
         Bar {
             _dir: dir,
             window,
+            holder,
             bar,
             resolved,
             saved,
@@ -630,16 +636,26 @@ mod tests {
     fn doesnt_abort_another_repositorys_operation_than_the_one_it_asked_about(
         cx: &mut TestAppContext,
     ) {
-        let bar = render(cx, Some(merge()), with_conflicts(status(), &["a.txt"], &[]));
+        let mut bar = render(cx, Some(merge()), with_conflicts(status(), &["a.txt"], &[]));
         click(&bar, "abort", cx);
         assert!(has_dialog(&bar, cx));
 
-        // Another repository, merging too, comes on show under the dialog.
+        // Another repository, merging too, comes on show under the dialog: its own bar takes this
+        // one's place.
         let other = repository_id();
         set_operation(&other, Some(merge()), cx);
         set_status(&other, with_conflicts(status(), &["b.txt"], &[]), cx);
-        bar.bar
-            .update(cx, |bar, cx| bar.set_repository(other.clone(), cx));
+        fake_git(&other, bar.calls.clone(), cx);
+        let other_bar = cx
+            .update_window(bar.window, |_, window, cx| {
+                cx.new(|cx| OperationBar::new(other, window, cx))
+            })
+            .unwrap();
+        bar.holder.update(cx, |holder, cx| {
+            holder.bar = other_bar.clone();
+            cx.notify();
+        });
+        drop(std::mem::replace(&mut bar.bar, other_bar));
         cx.run_until_parked();
         click_last_label(&bar, "Abort", cx);
         assert!(bar.calls.aborted.borrow().is_empty());

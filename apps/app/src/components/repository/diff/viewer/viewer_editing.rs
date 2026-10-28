@@ -7,6 +7,7 @@
 use std::ops::Range;
 use std::sync::Arc;
 
+use gitto_git::ContentVersion;
 use gpui_kit::component::input::{
     EditorState, InputEvent, RangeDecoration, RangeDecorationCollection, RangeDecorationStyle,
 };
@@ -15,19 +16,19 @@ use gpui_kit::{App, Context, Entity, EventEmitter, Subscription, Window, div};
 
 use super::super::conflicts::conflict_whole_file::{code_editor, render_code_editor, reveal_line};
 use super::super::file_editing::EditSession;
-use super::diff_metadata::{ChangeType, FileDiff, HunkContent, Side};
-use super::patch_files::fit_to_patch;
 use super::viewer_runtime::{LoadFile, LoadedFile};
 use gitto_app_kit::theme::PaletteExt as _;
 use gitto_app_kit::ui::LoadingState;
+use gitto_ui_logic::diff::diff_metadata::{ChangeType, FileDiff, HunkContent, Side};
+use gitto_ui_logic::diff::patch_files::fit_to_patch;
 
 /// What editing the file tells the file's view.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PatchEditorEvent {
     /// Editing started (see `EditSession`), or stopped.
     Editing(Option<EditSession>),
-    /// The file was edited to the text it has.
-    Edit(String),
+    /// The file was edited: its text is read from the editor as it's saved.
+    Edit,
     /// Why editing couldn't start, e.g. as the file changed again meanwhile.
     EditFailed(String),
 }
@@ -68,14 +69,17 @@ fn line_ranges(text: &str, lines: &[Range<usize>]) -> Vec<Range<usize>> {
 
 /// The working tree's file to edit: read whole, and checked against the patch on show (`diff`),
 /// so what's edited is what was shown. Fails with why it can't be edited.
-pub fn editable_text(diff: &FileDiff, read: LoadedFile) -> Result<(String, String), String> {
+pub fn editable_text(
+    diff: &FileDiff,
+    read: LoadedFile,
+) -> Result<(String, ContentVersion), String> {
     let LoadedFile::WorkingTree { contents, version } = read else {
         return Err("This file can't be edited.".to_owned());
     };
     let contents = if diff.kind == ChangeType::New && !diff.is_partial {
         contents
     } else {
-        fit_to_patch(diff, Side::Additions, &contents)?
+        fit_to_patch(diff, Side::Additions, &contents).map_err(|error| error.to_string())?
     };
     Ok((contents, version))
 }
@@ -111,8 +115,11 @@ impl PatchEditor {
                     .and_then(|read| editable_text(&diff, read));
                 match edited {
                     Ok((contents, version)) => {
-                        this.open(&diff, &path, &contents, window, cx);
-                        cx.emit(PatchEditorEvent::Editing(Some(EditSession { version })));
+                        let editor = this.open(&diff, &path, &contents, window, cx);
+                        cx.emit(PatchEditorEvent::Editing(Some(EditSession {
+                            version,
+                            editor,
+                        })));
                     }
                     Err(message) => cx.emit(PatchEditorEvent::EditFailed(message)),
                 }
@@ -126,7 +133,7 @@ impl PatchEditor {
         }
     }
 
-    /// Puts `contents` in the editor, its added lines marked, from the first change.
+    /// Puts `contents` in an editor, its added lines marked, from the first change; returns it.
     fn open(
         &mut self,
         diff: &FileDiff,
@@ -134,7 +141,7 @@ impl PatchEditor {
         contents: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> Entity<EditorState> {
         let editor = code_editor(path, contents, window, cx);
         let added = added_lines(diff);
         let tint = cx.palette().mint.opacity(0.14);
@@ -150,17 +157,17 @@ impl PatchEditor {
             editor.set_readonly(false, cx);
             editor.create_range_decorations_collection(decorations, cx)
         });
-        self._changes = Some(cx.subscribe(&editor, |_, editor, event, cx| {
+        self._changes = Some(cx.subscribe(&editor, |_, _, event, cx| {
             if matches!(event, InputEvent::Change) {
-                let text = editor.read(cx).value().to_string();
-                cx.emit(PatchEditorEvent::Edit(text));
+                cx.emit(PatchEditorEvent::Edit);
             }
         }));
         let first = added.first().map_or(0, |range| range.start - 1);
         reveal_line(&editor, first, window, cx);
         self._decorations = Some(collection);
-        self.editor = Some(editor);
+        self.editor = Some(editor.clone());
         cx.notify();
+        editor
     }
 
     /// The editor, once the file's read.
@@ -201,7 +208,8 @@ impl Render for PatchEditor {
 
 #[cfg(test)]
 mod tests {
-    use super::super::diff_metadata::parse_patch_files;
+    use gitto_ui_logic::diff::diff_metadata::parse_patch_files;
+
     use super::*;
 
     #[test]

@@ -1,10 +1,10 @@
 //! Staging, unstaging and discarding changes: whole files, or lines of them. Ported from
 //! `git/queries/staging.ts`.
 
-use gitto_git::DiscardSide;
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::features::staging::schema::LineSelection;
 use gitto_git::input::RepositoryId;
+use gitto_git::{DiscardSide, PatchVersion};
 use gpui_kit::{App, Entity};
 
 use super::mutation::Mutation;
@@ -99,13 +99,13 @@ pub fn stage_file_mutation(cx: &mut App) -> Entity<Mutation<FileToStage>> {
 }
 
 /// Lines of a file's changes to stage or unstage, picked from its patch on show, named by its
-/// `version` (see `patch_version`).
+/// `version` (see `PatchVersion`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct LinesToStage {
     pub repository_id: RepositoryId,
     pub action: StageAction,
     pub file: ChangedFile,
-    pub version: String,
+    pub version: PatchVersion,
     pub lines: LineSelection,
 }
 

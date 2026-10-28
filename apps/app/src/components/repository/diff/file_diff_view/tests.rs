@@ -2,14 +2,17 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 
 use futures::channel::oneshot;
-use gitto_git::features::staging::patch_version::patch_version;
+use gitto_git::PatchVersion;
 use gitto_git::features::staging::schema::{LineRange, LineSelection};
-use gitto_git::features::status::schema::{Head, StatusCounts, Uncommitted, WorkingTreeFiles};
+use gitto_git::features::status::schema::{
+    Head, StatusCounts, StatusSummary, Uncommitted, WorkingTreeFiles,
+};
 use gitto_ui_logic::git::changes::staging_paths;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
 
+use super::super::shown_file::cache_name;
 use super::super::test_views::{DiffGit, init, set_patch_in, set_status, update_repository};
 use super::super::viewer::line_picker::LineStaging;
 use super::super::viewer::viewer_runtime::ViewerRuntime;
@@ -70,7 +73,7 @@ fn pending_patch(
     file: &ChangedFile,
     cx: &mut TestAppContext,
 ) -> oneshot::Sender<FilePatch> {
-    let key = diff_file_key(source, &file.path);
+    let key = DiffFileKey::new(source, &file.path);
     let send = cx.update(|cx| DiffGit::get(cx).later(key));
     update_repository(cx, |repository, cx| {
         drop(repository.fetch_patch(source, file, cx))
@@ -103,18 +106,20 @@ fn set_changes(
     cx: &mut TestAppContext,
 ) {
     let status = Uncommitted {
-        head: Head::Branch {
-            name: "main".into(),
-            sha: "a1".into(),
-        },
-        upstream: None,
-        ahead: 0,
-        behind: 0,
-        counts: StatusCounts {
-            files: 0,
-            staged: 0,
-            unstaged: 0,
-            conflicted: 0,
+        summary: StatusSummary {
+            head: Head::Branch {
+                name: "main".into(),
+                sha: "a1".into(),
+            },
+            upstream: None,
+            ahead: 0,
+            behind: 0,
+            counts: StatusCounts {
+                files: 0,
+                staged: 0,
+                unstaged: 0,
+                conflicted: 0,
+            },
         },
         changes: WorkingTreeFiles {
             staged,
@@ -122,7 +127,7 @@ fn set_changes(
             uncounted,
             marker_free: Vec::new(),
         },
-        version: uuid::Uuid::new_v4().to_string(),
+        version: uuid::Uuid::new_v4().to_string().into(),
     };
     set_status(status, cx);
 }
@@ -269,12 +274,14 @@ impl Opened {
         lines: LineSelection,
         cx: &mut TestAppContext,
     ) -> Rc<RefCell<Option<Result<(), DataError>>>> {
-        let staging = self.staging(cx).expect("lines can be staged");
+        assert!(self.staging(cx).is_some(), "lines can be staged");
         let result = Rc::new(RefCell::new(None));
         let done = Rc::clone(&result);
-        let patch = patch.to_owned();
+        let patch: Arc<str> = patch.into();
         cx.update(|cx| {
-            let staged = (staging.stage)(patch, lines, cx);
+            let staged = self
+                .view
+                .update(cx, |view, cx| view.stage_lines(patch, lines, cx));
             cx.spawn(async move |_| *done.borrow_mut() = Some(staged.await))
                 .detach();
         });
@@ -353,7 +360,7 @@ fn keeps_the_last_file_on_show_header_and_all_until_the_next_ones_changes_are_in
     assert_eq!(opened.header(cx), "a.txt");
 
     next.send(FilePatch {
-        key: diff_file_key(&commit(), "b.txt"),
+        key: DiffFileKey::new(&commit(), "b.txt"),
         file: counted("b.txt"),
         patch: changed_line("b.txt", "later").into(),
     })
@@ -372,7 +379,7 @@ fn loads_the_files_a_step_away_ahead_once_its_on_show(cx: &mut TestAppContext) {
     // Parsed and highlighted, named as they'll be when they're opened.
     cx.update(|cx| {
         for path in ["a.txt", "c.txt"] {
-            let key = format!("{}:0", diff_file_key(&commit(), path));
+            let key = format!("{}:0", cache_name(&DiffFileKey::new(&commit(), path)));
             assert!(ViewerRuntime::has_highlights(&key, cx), "{path}");
         }
     });
@@ -711,8 +718,8 @@ fn doesnt_load_a_file_without_line_counts_ahead_which_can_be_of_any_size(cx: &mu
             let patch = changed_line(path, &format!("new {path}"));
             format!(
                 "{}:{}:0",
-                diff_file_key(&DiffSource::Unstaged, path),
-                patch_version(&patch)
+                cache_name(&DiffFileKey::new(&DiffSource::Unstaged, path)),
+                PatchVersion::of(&patch)
             )
         };
         assert!(ViewerRuntime::has_highlights(&key("a.txt"), cx));
@@ -760,7 +767,7 @@ fn stages_the_lines_picked_from_the_patch_on_show_and_shows_the_patch_they_leave
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].file, counted("a.txt"));
     assert_eq!(calls[0].action, StageAction::Stage);
-    assert_eq!(calls[0].version, patch_version(&from));
+    assert_eq!(calls[0].version, PatchVersion::of(&from));
     assert_eq!(calls[0].lines, lines());
     assert_eq!(opened.shown(cx), Some(changed_line("a.txt", "left")));
 }
@@ -807,6 +814,42 @@ fn shows_the_hunks_buttons_in_a_pane_narrower_than_the_window_once_opened(cx: &m
 }
 
 #[gpui_kit::test]
+fn stages_the_lines_the_viewer_picks_with_the_keyboard(cx: &mut TestAppContext) {
+    let _dir = init(cx);
+    set_changes(vec![], vec![counted("a.txt")], false, cx);
+    patches(&DiffSource::Unstaged, &[counted("a.txt")], "new", cx);
+    let opened = open(DiffSource::Unstaged, counted("a.txt"), cx);
+    opened.lines.respond(leaves(
+        DiffSource::Unstaged,
+        counted("a.txt"),
+        changed_line("a.txt", "left"),
+    ));
+
+    let viewer = cx.update(|cx| opened.view.read(cx).viewer().cloned().unwrap());
+    cx.update_window(opened.window, |_, window, cx| {
+        window.focus(&viewer.focus_handle(cx), cx)
+    })
+    .unwrap();
+    // The first changed line, the removed one, staged.
+    opened.press("down", cx);
+    opened.press("space", cx);
+    let calls = opened.lines.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(
+        calls[0].version,
+        PatchVersion::of(&changed_line("a.txt", "new a.txt"))
+    );
+    assert_eq!(
+        calls[0].lines,
+        LineSelection {
+            deletions: vec![LineRange::new(1, 1).unwrap()],
+            additions: vec![],
+        }
+    );
+    assert_eq!(opened.shown(cx), Some(changed_line("a.txt", "left")));
+}
+
+#[gpui_kit::test]
 fn stages_lines_of_an_untracked_file_as_such(cx: &mut TestAppContext) {
     let _dir = init(cx);
     let notes = with_status(file("notes.txt", None, None), FileStatus::Untracked);
@@ -848,7 +891,7 @@ fn unstages_lines_picked_from_the_staged_changes(cx: &mut TestAppContext) {
     opened.stage("the patch", lines(), cx);
     let calls = opened.lines.calls();
     assert_eq!(calls[0].action, StageAction::Unstage);
-    assert_eq!(calls[0].version, patch_version("the patch"));
+    assert_eq!(calls[0].version, PatchVersion::of("the patch"));
     assert_eq!(
         opened.shown(cx),
         Some(changed_line("a.txt", "still staged"))

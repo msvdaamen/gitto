@@ -9,7 +9,7 @@ publish = false
 name = "gitto_db"
 
 [dependencies]
-blocking.workspace = true
+async-channel.workspace = true
 dirs.workspace = true
 rusqlite.workspace = true
 thiserror.workspace = true

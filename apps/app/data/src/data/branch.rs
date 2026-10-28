@@ -2,7 +2,7 @@
 //! `git/queries/branch.ts`.
 
 use gitto_git::Result;
-use gitto_git::input::{BranchName, BranchRef, NonEmpty};
+use gitto_git::input::{BranchName, BranchRef, BranchShortName};
 
 /// A branch to make, `name`, at the branch `from`, by its full ref name.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,7 +26,7 @@ impl NewBranchFrom {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Merge {
     pub reference: BranchRef,
-    pub into: NonEmpty,
+    pub into: BranchShortName,
 }
 
 impl Merge {
@@ -34,7 +34,7 @@ impl Merge {
     pub fn parse(reference: impl Into<String>, into: impl Into<String>) -> Result<Self> {
         Ok(Merge {
             reference: BranchRef::parse(reference)?,
-            into: NonEmpty::parse(into)?,
+            into: BranchShortName::parse(into)?,
         })
     }
 }
@@ -44,7 +44,7 @@ impl Merge {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rebase {
     pub reference: BranchRef,
-    pub branch: NonEmpty,
+    pub branch: BranchShortName,
 }
 
 impl Rebase {
@@ -52,7 +52,7 @@ impl Rebase {
     pub fn parse(reference: impl Into<String>, branch: impl Into<String>) -> Result<Self> {
         Ok(Rebase {
             reference: BranchRef::parse(reference)?,
-            branch: NonEmpty::parse(branch)?,
+            branch: BranchShortName::parse(branch)?,
         })
     }
 }

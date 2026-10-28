@@ -13,6 +13,7 @@ use gitto_git::features::history::schema::Commit;
 use gitto_git::features::stash::schema::Stash;
 use gitto_git::features::status::schema::StatusSummary;
 use gitto_git::features::worktree::schema::Worktree;
+use gitto_git::input::RepositoryId;
 
 use super::loaded::Loaded;
 use super::repository::{Part, Repository};
@@ -38,7 +39,7 @@ pub const RELOAD_LIMIT: usize = 10_000;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Log {
     /// The repository it's of, so every row knows where its commit lives.
-    pub repository_id: String,
+    pub repository_id: RepositoryId,
     pub commits: Arc<[Commit]>,
     /// Whether that's all of the history: the last page loaded was short of its limit.
     pub complete: bool,
@@ -76,8 +77,8 @@ pub(crate) fn followed_by(log: &Log, commits: Vec<Commit>, complete: bool) -> Lo
 
 /// What the history table shows of a repository (`useHistory`): the log, and what's shown among
 /// it. The rows are laid out from these (see the module's doc): the log's commits with the stashes
-/// among them, a row of the uncommitted changes if there are any, and the other worktrees'
-/// checkouts on their labels.
+/// among them, a row of the uncommitted changes if there are any, and on their labels the other
+/// worktrees' checkouts and the remotes their remote branches are on.
 pub struct History<'a>(pub &'a Repository);
 
 impl History<'_> {
@@ -88,6 +89,7 @@ impl History<'_> {
         Part::Status,
         Part::Stashes,
         Part::Worktrees,
+        Part::Remotes,
     ];
 
     /// The log's commits, once it's loaded.
@@ -99,17 +101,17 @@ impl History<'_> {
     /// the stashes, this and HEAD; not on the rest of the status, which reloads whenever a file
     /// changes.
     pub fn has_changes(&self) -> bool {
-        has_uncommitted_changes(self.summary().as_ref())
+        self.summary().is_some_and(has_uncommitted_changes)
     }
 
-    pub fn summary(&self) -> Option<StatusSummary> {
-        self.0.status().data().map(|status| status.summary())
+    pub fn summary(&self) -> Option<&StatusSummary> {
+        self.0.status().data().map(|status| &status.summary)
     }
 
     /// The commit HEAD points at; `None` before the first commit, or until the status loads.
     pub fn head(&self) -> Option<String> {
         let status = self.0.status().data()?;
-        head_sha(&status.head).map(str::to_owned)
+        head_sha(&status.summary.head).map(str::to_owned)
     }
 
     /// The stashes to show among the log: none until they've loaded, rather than holding up the
@@ -123,6 +125,17 @@ impl History<'_> {
     pub fn shown_worktrees(&self) -> Arc<[Worktree]> {
         loaded(self.0.worktrees())
     }
+
+    /// The remotes the labels' remote branches are put on: none until they've loaded, and none
+    /// if they couldn't be, a remote branch then being taken to be on the part of its name before
+    /// its first slash.
+    pub fn shown_remotes(&self) -> Vec<String> {
+        let loaded = self.0.remotes();
+        match loaded.data() {
+            Some(remotes) if loaded.is_success() => remotes.clone(),
+            _ => Vec::new(),
+        }
+    }
 }
 
 fn loaded<T>(loaded: &Loaded<Arc<[T]>>) -> Arc<[T]> {
@@ -135,7 +148,6 @@ fn loaded<T>(loaded: &Loaded<Arc<[T]>>) -> Arc<[T]> {
 #[cfg(test)]
 mod tests {
     use gitto_git::Page;
-    use gitto_git::input::RepositoryId;
 
     use super::*;
     use crate::data::git::{GitRepository, RepositoryGit};
@@ -169,7 +181,7 @@ mod tests {
         for message in ["one", "two", "three"] {
             git(&path, &["commit", "-q", "--allow-empty", "-m", message]);
         }
-        let api = gitto_git::GitApi::new(move |_: &str| Some(path.clone()));
+        let api = gitto_git::GitApi::new(move |_: &RepositoryId| Some(path.clone()));
         let repository = GitRepository::new(api, repository_id());
         let page = smol::block_on(repository.log(Page::new(1, 1).unwrap())).unwrap();
         assert_eq!(page.len(), 1);

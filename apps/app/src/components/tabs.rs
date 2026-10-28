@@ -8,8 +8,8 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{Sizable as _, h_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    App, Context, Entity, FocusHandle, FontWeight, KeyDownEvent, SharedString, Subscription,
-    TestSupportExt as _, Window, div, rems,
+    App, Context, Entity, FocusHandle, FontWeight, KeyBinding, SharedString, Subscription,
+    TestSupportExt as _, Window, actions, div, rems,
 };
 
 use super::remove_repository_dialog::open_remove_repository_dialog;
@@ -18,27 +18,46 @@ use gitto_app_data::data::repositories::{
 };
 use gitto_app_data::data::{AppChanged, AppData, AppPart, DataError};
 use gitto_app_data::state::router::{Route, Router};
-use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::theme::breakpoints::{MEDIUM, SMALL};
+use gitto_app_kit::theme::{PaletteExt as _, base_px};
+use gitto_app_kit::ui::kbd::aria_keyshortcuts;
 use gitto_app_kit::ui::{FailurePopover, GittoIcon, Icon, IconName};
 
-/// Below these window widths the home tab shows its icon alone (`md`), and the repositories' tabs
-/// can be narrower (`sm`).
-const MEDIUM: f32 = 768.;
-const SMALL: f32 = 640.;
+actions!(
+    tabs,
+    [
+        /// Moves the focused repository's tab one place left.
+        MoveTabLeft,
+        /// Moves the focused repository's tab one place right.
+        MoveTabRight
+    ]
+);
+
+/// The key context of a focused repository's tab.
+pub const KEY_CONTEXT: &str = "Tab";
+
+/// Binds the tabs' keys: Alt+Shift and an arrow key move the focused tab. Call once, as the app
+/// starts.
+pub fn bind_keys(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("alt-shift-left", MoveTabLeft, Some(KEY_CONTEXT)),
+        KeyBinding::new("alt-shift-right", MoveTabRight, Some(KEY_CONTEXT)),
+    ]);
+}
 
 /// The ids in `list` that are in `other` too, in `list`'s order.
-fn common<'a>(list: &'a [String], other: &[String]) -> Vec<&'a String> {
+fn common<'a, T: PartialEq>(list: &'a [T], other: &[T]) -> Vec<&'a T> {
     list.iter().filter(|id| other.contains(id)).collect()
 }
 
 /// Whether the ids in both `a` and `b` are in the same order in each.
-pub fn same_order(a: &[String], b: &[String]) -> bool {
+pub fn same_order<T: PartialEq>(a: &[T], b: &[T]) -> bool {
     common(a, b) == common(b, a)
 }
 
 /// `order` with `id` moved to where `target` is.
-pub fn moved_to(order: &[String], id: &str, target: &str) -> Vec<String> {
-    let mut order: Vec<String> = order.to_vec();
+pub fn moved_to<T: PartialEq + Clone>(order: &[T], id: &T, target: &T) -> Vec<T> {
+    let mut order = order.to_vec();
     let Some(from) = order.iter().position(|other| other == id) else {
         return order;
     };
@@ -54,7 +73,7 @@ pub fn moved_to(order: &[String], id: &str, target: &str) -> Vec<String> {
 /// What a dragged tab carries: its repository.
 #[derive(Debug, Clone)]
 pub struct TabDrag {
-    id: String,
+    id: RepositoryId,
     name: SharedString,
 }
 
@@ -85,20 +104,21 @@ impl Render for TabDrag {
 
 /// A tab per repository, after the home tab. The page on show decides which one is selected:
 /// none, on a page of its own like the settings. The repositories' tabs are dragged, or moved with
-/// Alt+Shift and the arrow keys, into another order; their close button removes them, asking
-/// first.
+/// Alt+Shift and the arrow keys ([`MoveTabLeft`], [`MoveTabRight`]), into another order; their
+/// close button removes them, asking first.
 pub struct Tabs {
     data: Entity<AppData>,
     open_repository: Entity<OpenRepository>,
     /// The tabs' order once one's moved, until that's saved and read back.
-    moved_order: Option<Vec<String>>,
+    moved_order: Option<Vec<RepositoryId>>,
     /// The tab last moved, which says why if the new order couldn't be saved.
-    moved: Option<String>,
+    moved: Option<RepositoryId>,
     move_error: Option<DataError>,
     /// The repository last tried to be removed, and why that failed.
-    removing: Option<String>,
+    removing: Option<RepositoryId>,
     remove_error: Option<DataError>,
-    focus: HashMap<String, FocusHandle>,
+    /// Each repository's tab's, made and dropped as the list of repositories changes.
+    focus: HashMap<RepositoryId, FocusHandle>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -116,11 +136,12 @@ impl Tabs {
             cx.subscribe(&data, |tabs, _, AppChanged(part), cx| {
                 if *part == AppPart::Repositories {
                     tabs.forget_saved_order(cx);
+                    tabs.sync_focus(cx);
                     cx.notify();
                 }
             }),
         ];
-        Tabs {
+        let mut tabs = Tabs {
             data,
             open_repository,
             moved_order: None,
@@ -130,6 +151,20 @@ impl Tabs {
             remove_error: None,
             focus: HashMap::new(),
             _subscriptions: subscriptions,
+        };
+        tabs.sync_focus(cx);
+        tabs
+    }
+
+    /// Gives each repository listed its tab's focus handle, and forgets those of the
+    /// repositories removed.
+    fn sync_focus(&mut self, cx: &mut Context<Self>) {
+        let listed = self.saved_order(cx);
+        self.focus.retain(|id, _| listed.contains(id));
+        for id in listed {
+            self.focus
+                .entry(id)
+                .or_insert_with(|| cx.focus_handle().tab_stop(true));
         }
     }
 
@@ -141,7 +176,7 @@ impl Tabs {
             .map_or(&[], Vec::as_slice)
     }
 
-    fn saved_order(&self, cx: &App) -> Vec<String> {
+    fn saved_order(&self, cx: &App) -> Vec<RepositoryId> {
         self.repositories(cx)
             .iter()
             .map(|repository| repository.id.clone())
@@ -150,7 +185,7 @@ impl Tabs {
 
     /// The repositories' ids in the order their tabs are shown: ids rather than the repositories,
     /// so the tabs stay as they are when the list is read again.
-    pub fn ordered(&self, cx: &App) -> Vec<String> {
+    pub fn ordered(&self, cx: &App) -> Vec<RepositoryId> {
         self.moved_order
             .clone()
             .unwrap_or_else(|| self.saved_order(cx))
@@ -168,14 +203,14 @@ impl Tabs {
 
     /// Shows the tabs in `order` (with `id` moved) until it's saved, unless it's the order they
     /// had; puts them back, saying why, if it can't be saved.
-    fn reorder(&mut self, id: &str, order: Vec<String>, cx: &mut Context<Self>) {
+    fn reorder(&mut self, id: &RepositoryId, order: Vec<RepositoryId>, cx: &mut Context<Self>) {
         let unchanged = same_order(&order, &self.saved_order(cx));
         self.moved_order = Some(order.clone());
         cx.notify();
         if unchanged {
             return;
         }
-        self.moved = Some(id.to_owned());
+        self.moved = Some(id.clone());
         self.move_error = None;
         let saving = reorder_repositories(order, cx);
         cx.spawn(async move |this, cx| {
@@ -193,7 +228,7 @@ impl Tabs {
     }
 
     /// Moves the tab `id` one place left (`-1`) or right (`1`); it keeps focus.
-    pub fn move_tab(&mut self, id: &str, by: isize, cx: &mut Context<Self>) {
+    pub fn move_tab(&mut self, id: &RepositoryId, by: isize, cx: &mut Context<Self>) {
         let mut order = self.ordered(cx);
         let Some(from) = order.iter().position(|other| other == id) else {
             return;
@@ -207,7 +242,7 @@ impl Tabs {
         self.reorder(id, order, cx);
     }
 
-    fn drop_on(&mut self, dragged: &str, target: &str, cx: &mut Context<Self>) {
+    fn drop_on(&mut self, dragged: &RepositoryId, target: &RepositoryId, cx: &mut Context<Self>) {
         if dragged == target {
             return;
         }
@@ -215,7 +250,7 @@ impl Tabs {
         self.reorder(dragged, order, cx);
     }
 
-    fn remove(&mut self, id: String, cx: &mut Context<Self>) {
+    fn remove(&mut self, id: RepositoryId, cx: &mut Context<Self>) {
         self.removing = Some(id.clone());
         self.remove_error = None;
         let removing = remove_repository(id.clone(), cx);
@@ -224,11 +259,7 @@ impl Tabs {
             let _ = this.update(cx, |tabs, cx| {
                 match result {
                     Ok(()) => {
-                        if Router::current(cx)
-                            .repository_id()
-                            .map(|shown| shown.as_str())
-                            == Some(id.as_str())
-                        {
+                        if Router::current(cx).repository_id() == Some(&id) {
                             Router::navigate(Route::Home, cx);
                         }
                     }
@@ -255,11 +286,7 @@ impl Tabs {
     ) -> impl IntoElement + use<> {
         let palette = *cx.palette();
         tab_frame("home-tab", selected, cx)
-            .w(if narrow {
-                rems(53. / 15.)
-            } else {
-                rems(116. / 15.)
-            })
+            .w(if narrow { base_px(53.) } else { base_px(116.) })
             .flex_none()
             .aria_label("Home")
             .when(narrow, |this| this.justify_center())
@@ -284,23 +311,23 @@ impl Tabs {
         repository: &Repository,
         selected: bool,
         small: bool,
+        shortcuts: SharedString,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let palette = *cx.palette();
         let id = repository.id.clone();
-        let focus = self
-            .focus
-            .entry(id.clone())
-            .or_insert_with(|| cx.focus_handle().tab_stop(true))
-            .clone();
-        let error = if self.moved.as_deref() == Some(id.as_str()) && self.move_error.is_some() {
+        let focus = self.focus.get(&id).cloned();
+        let error = if self.moved.as_ref() == Some(&id) && self.move_error.is_some() {
             Some(("Move", self.move_error.clone()))
-        } else if self.removing.as_deref() == Some(id.as_str()) {
+        } else if self.removing.as_ref() == Some(&id) {
             Some(("Remove", self.remove_error.clone()))
         } else {
             None
         };
         let (action, error) = error.unwrap_or(("Remove", None));
+        let error = error.map(|error| SharedString::from(error.to_string()));
+        // Whether its remove button's shown, rather than only as the pointer's over it.
+        let shown = selected || error.is_some();
         let name: SharedString = repository.name.clone().into();
         let group = SharedString::from(format!("tab-group-{id}"));
         tab_frame(SharedString::from(format!("tab-{id}")), selected, cx)
@@ -308,32 +335,21 @@ impl Tabs {
             .max_w(rems(12.))
             .border_r_1()
             .border_color(palette.border_soft)
-            .track_focus(&focus)
+            .when_some(focus, |this, focus| this.track_focus(&focus))
+            .key_context(KEY_CONTEXT)
             .aria_label(name.clone())
-            .aria_keyshortcuts("Alt+Shift+ArrowLeft Alt+Shift+ArrowRight")
+            .aria_keyshortcuts(shortcuts)
             .on_click({
                 let id = id.clone();
-                move |_, _, cx| {
-                    if let Ok(id) = RepositoryId::parse(id.clone()) {
-                        Router::navigate(Route::Repository(id), cx);
-                    }
-                }
+                move |_, _, cx| Router::navigate(Route::Repository(id.clone()), cx)
             })
-            .on_key_down(cx.listener({
+            .on_action(cx.listener({
                 let id = id.clone();
-                move |tabs, event: &KeyDownEvent, _, cx| {
-                    let modifiers = event.keystroke.modifiers;
-                    if !modifiers.alt || !modifiers.shift {
-                        return;
-                    }
-                    let by = match event.keystroke.key.as_str() {
-                        "left" => -1,
-                        "right" => 1,
-                        _ => return,
-                    };
-                    cx.stop_propagation();
-                    tabs.move_tab(&id, by, cx);
-                }
+                move |tabs, _: &MoveTabLeft, _, cx| tabs.move_tab(&id, -1, cx)
+            }))
+            .on_action(cx.listener({
+                let id = id.clone();
+                move |tabs, _: &MoveTabRight, _, cx| tabs.move_tab(&id, 1, cx)
             }))
             .on_drag(
                 TabDrag {
@@ -376,23 +392,25 @@ impl Tabs {
                     .child(name.clone()),
             )
             .child(
-                // Shown on the selected tab, and on another while it's hovered.
+                // Shown on the selected tab, and on another while it's hovered: only the pointer
+                // finds it there, so it's no Tab stop while it's hidden, to land on unseen.
                 div()
                     .mr_2()
                     .ml_1()
-                    .when(!selected && error.is_none(), |this| this.opacity(0.))
+                    .when(!shown, |this| this.opacity(0.))
                     .group_hover(group, |style| style.opacity(1.))
                     .child(
                         FailurePopover::new(
                             SharedString::from(format!("tab-failure-{id}")),
                             format!("{action} {name}"),
-                            error.map(|error| error.to_string().into()),
+                            error,
                             Button::new(SharedString::from(format!("remove-{id}")))
                                 .ghost()
                                 .xsmall()
                                 .icon(Icon::new(IconName::X))
                                 .tooltip(format!("Remove {name}"))
                                 .accessibility_label(format!("Remove {name}"))
+                                .tab_stop(shown)
                                 .on_click(cx.listener({
                                     let repository = repository.clone();
                                     move |_, _, window, cx| {
@@ -453,22 +471,29 @@ impl Render for Tabs {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let route = Router::current(cx);
         let width = f32::from(window.viewport_size().width);
-        let selected = |id: &str| {
-            route
-                .repository_id()
-                .is_some_and(|shown| shown.as_str() == id)
-        };
+        let selected = |id: &RepositoryId| route.repository_id() == Some(id);
         let repositories = self.repositories(cx).to_vec();
+        let shortcuts = aria_keyshortcuts(window, &[&MoveTabLeft, &MoveTabRight], KEY_CONTEXT);
         let mut tabs = Vec::new();
         for id in self.ordered(cx) {
             if let Some(repository) = repositories.iter().find(|repository| repository.id == id) {
                 tabs.push(
-                    self.render_repository_tab(repository, selected(&id), width < SMALL, cx)
-                        .into_any_element(),
+                    self.render_repository_tab(
+                        repository,
+                        selected(&id),
+                        width < SMALL,
+                        shortcuts.clone(),
+                        cx,
+                    )
+                    .into_any_element(),
                 );
             }
         }
-        let open_error = self.open_repository.read(cx).error().cloned();
+        let open_error = self
+            .open_repository
+            .read(cx)
+            .error()
+            .map(|error| SharedString::from(error.to_string()));
         let open_repository = self.open_repository.clone();
         h_flex()
             .h_full()
@@ -481,7 +506,7 @@ impl Render for Tabs {
                     FailurePopover::new(
                         "open-repository-failure",
                         "Open repository",
-                        open_error.map(|error| error.to_string().into()),
+                        open_error,
                         Button::new("open-repository")
                             .ghost()
                             .small()
@@ -520,9 +545,10 @@ mod tests {
     #[test]
     fn moves_a_dropped_tab_to_where_it_was_dropped() {
         let order = ids(&["a", "b", "c"]);
-        assert_eq!(moved_to(&order, "a", "b"), ids(&["b", "a", "c"]));
-        assert_eq!(moved_to(&order, "c", "a"), ids(&["c", "a", "b"]));
-        assert_eq!(moved_to(&order, "a", "c"), ids(&["b", "c", "a"]));
+        let [a, b, c] = [0, 1, 2].map(|at| &order[at]);
+        assert_eq!(moved_to(&order, a, b), ids(&["b", "a", "c"]));
+        assert_eq!(moved_to(&order, c, a), ids(&["c", "a", "b"]));
+        assert_eq!(moved_to(&order, a, c), ids(&["b", "c", "a"]));
     }
 }
 
@@ -540,13 +566,14 @@ mod ui_tests {
     use super::*;
     use crate::test_support;
     use gitto_app_data::data::repositories::RepositorySource;
+    use gitto_app_data::data::{AppData, AppPart};
 
     /// The repositories as saved, which `reorder` changes, unless it's told to fail (TS's mocked
     /// `rpc.repository`).
     #[derive(Default)]
     struct Saved {
         repositories: RefCell<Vec<Repository>>,
-        reorders: RefCell<Vec<Vec<String>>>,
+        reorders: RefCell<Vec<Vec<RepositoryId>>>,
         fail: Cell<bool>,
     }
 
@@ -560,11 +587,11 @@ mod ui_tests {
             async { Err(DataError::msg("Not in this test.")) }.boxed()
         }
 
-        fn remove(&self, _: String) -> BoxFuture<'static, Result<(), DataError>> {
+        fn remove(&self, _: RepositoryId) -> BoxFuture<'static, Result<(), DataError>> {
             async { Err(DataError::msg("Not in this test.")) }.boxed()
         }
 
-        fn reorder(&self, ids: Vec<String>) -> BoxFuture<'static, Result<(), DataError>> {
+        fn reorder(&self, ids: Vec<RepositoryId>) -> BoxFuture<'static, Result<(), DataError>> {
             self.reorders.borrow_mut().push(ids.clone());
             if self.fail.get() {
                 return async { Err(DataError::msg("The database is locked.")) }.boxed();
@@ -591,7 +618,7 @@ mod ui_tests {
 
     fn repository(name: &str) -> Repository {
         Repository {
-            id: uuid::Uuid::now_v7().to_string(),
+            id: RepositoryId::generate(),
             name: format!("repo-{name}"),
             path: format!("/w/{name}"),
         }
@@ -603,7 +630,7 @@ mod ui_tests {
     ) -> (
         tempfile::TempDir,
         Rc<Saved>,
-        Vec<String>,
+        Vec<RepositoryId>,
         AnyWindowHandle,
         Entity<Host>,
     ) {
@@ -625,16 +652,34 @@ mod ui_tests {
         (dir, saved, ids, window, host)
     }
 
-    fn order(host: &Entity<Host>, cx: &mut TestAppContext) -> Vec<String> {
+    fn order(host: &Entity<Host>, cx: &mut TestAppContext) -> Vec<RepositoryId> {
         host.read_with(cx, |host, cx| host.tabs.read(cx).ordered(cx))
     }
 
-    fn move_right(id: &str, window: AnyWindowHandle, cx: &mut TestAppContext) {
+    fn move_right(id: &RepositoryId, window: AnyWindowHandle, cx: &mut TestAppContext) {
         cx.update_window(window, |_, window, cx| {
             window.click(SharedString::from(format!("tab-{id}")), cx);
             window.press("alt-shift-right", cx);
         })
         .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn tabs_past_the_remove_button_of_a_tab_that_hides_it(cx: &mut TestAppContext) {
+        let (_dir, _saved, ids, window, host) = render_tabs(cx);
+        // None's selected: their remove buttons only show as the pointer's over them.
+        let next = |from: &RepositoryId, cx: &mut TestAppContext| {
+            cx.update_window(window, |_, window, cx| {
+                window.render_frame(cx);
+                let focus = host.read(cx).tabs.read(cx).focus.clone();
+                window.focus(&focus[from], cx);
+                window.focus_next(cx);
+                ids.iter().find(|id| focus[*id].is_focused(window)).cloned()
+            })
+            .unwrap()
+        };
+        assert_eq!(next(&ids[0], cx).as_ref(), Some(&ids[1]));
+        assert_eq!(next(&ids[1], cx).as_ref(), Some(&ids[2]));
     }
 
     #[gpui_kit::test]
@@ -659,6 +704,35 @@ mod ui_tests {
     }
 
     #[gpui_kit::test]
+    fn forgets_the_focus_of_a_removed_repositorys_tab(cx: &mut TestAppContext) {
+        let (_dir, saved, ids, _, host) = render_tabs(cx);
+        saved.repositories.borrow_mut().remove(0);
+        cx.update(|cx| {
+            AppData::global(cx).update(cx, |data, cx| drop(data.reload(AppPart::Repositories, cx)))
+        });
+        cx.run_until_parked();
+
+        let mut focused: Vec<RepositoryId> = host.read_with(cx, |host, cx| {
+            host.tabs.read(cx).focus.keys().cloned().collect()
+        });
+        focused.sort();
+        let mut listed = ids[1..].to_vec();
+        listed.sort();
+        assert_eq!(focused, listed);
+    }
+
+    #[gpui_kit::test]
+    fn tells_assistive_technology_the_keys_bound_to_move_a_tab(cx: &mut TestAppContext) {
+        let (_dir, _, _, window, _) = render_tabs(cx);
+        let shortcuts = cx
+            .update_window(window, |_, window, _| {
+                aria_keyshortcuts(window, &[&MoveTabLeft, &MoveTabRight], KEY_CONTEXT)
+            })
+            .unwrap();
+        assert_eq!(shortcuts, "Alt+Shift+ArrowLeft Alt+Shift+ArrowRight");
+    }
+
+    #[gpui_kit::test]
     fn puts_the_tabs_back_and_says_why_when_the_order_cant_be_saved(cx: &mut TestAppContext) {
         let (_dir, saved, ids, window, host) = render_tabs(cx);
         saved.fail.set(true);
@@ -670,6 +744,6 @@ mod ui_tests {
         let error = host.read_with(cx, |host, cx| host.tabs.read(cx).move_error.clone());
         assert_eq!(error.unwrap().to_string(), "The database is locked.");
         let moved = host.read_with(cx, |host, cx| host.tabs.read(cx).moved.clone());
-        assert_eq!(moved.as_deref(), Some(ids[0].as_str()));
+        assert_eq!(moved.as_ref(), Some(&ids[0]));
     }
 }

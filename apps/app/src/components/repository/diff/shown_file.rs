@@ -6,14 +6,14 @@
 use std::sync::Arc;
 
 use gitto_git::FileStatus;
+use gitto_git::PatchVersion;
 use gitto_git::features::diff::schema::ChangedFile;
-use gitto_git::features::staging::patch_version::patch_version;
 use gitto_git::input::RepositoryId;
 use gitto_ui_logic::git::changes::{
     LineCounts, counts_of, has_patch, is_known_binary, is_nested_repository, total_lines,
 };
-use gitto_ui_logic::git::patch::{PatchSummary, is_link, summarize_patch};
-use gpui_kit::{AppContext as _, Context, Entity, Subscription};
+use gitto_ui_logic::git::patch::{PatchSummary, is_link, staged_whole, summarize_patch};
+use gpui_kit::{App, AppContext as _, Context, Entity, Subscription};
 
 use gitto_app_data::data::file_diff::{DiffSourceFiles, FilePatch};
 use gitto_app_data::data::keyed::Hold;
@@ -21,26 +21,80 @@ use gitto_app_data::data::{
     DataError, Loaded, Opaque, Part, Repositories, Repository, observe_parts,
 };
 use gitto_app_kit::delayed::{DELAY, Delayed};
-use gitto_ui_logic::git::diff_source::{DiffSource, diff_file_key, is_same_source, is_uncommitted};
+use gitto_ui_logic::git::diff_source::{DiffFileKey, DiffSource, is_uncommitted};
 
 /// Changed lines above which a file's changes are only shown when asked: reading and parsing them
 /// takes a noticeable moment, and such a change is rarely read line by line (a lockfile, say).
 pub const LARGE_DIFF_LINES: u64 = 20_000;
 
+/// Names the file `key` in the highlighting cache, whose names are strings (see
+/// `FileDiff::cache_key`), as TS's `diffFileKey` did: `<kind>:<sha>:<path>`, the SHA empty for the
+/// uncommitted changes. The path comes last, so no two files' names are the same.
+pub fn cache_name(key: &DiffFileKey) -> String {
+    let (kind, sha) = match &key.source {
+        DiffSource::Commit { sha } => ("commit", sha.as_str()),
+        DiffSource::Stash { sha } => ("stash", sha.as_str()),
+        DiffSource::Unstaged => ("unstaged", ""),
+        DiffSource::Staged => ("staged", ""),
+    };
+    format!("{kind}:{sha}:{}", key.path)
+}
+
 /// Names a file's patch in the highlighting cache. A commit's or a stash's never changes, so its
-/// file's name will do; an uncommitted one's is named by what's in it too (see `patch_version`).
+/// file's name will do; an uncommitted one's is named by what's in it too (see `PatchVersion`).
 pub fn patch_cache_key(source: &DiffSource, data: &FilePatch) -> String {
     if is_uncommitted(source) {
-        format!("{}:{}", data.key, patch_version(&data.patch))
+        format!(
+            "{}:{}",
+            cache_name(&data.key),
+            PatchVersion::of(&data.patch)
+        )
     } else {
-        data.key.clone()
+        cache_name(&data.key)
+    }
+}
+
+/// A loaded patch, with what the view reads of it worked out once, as it's loaded, rather than
+/// each time it's read: a patch can be megabytes, and an uncommitted one is loaded again whenever
+/// the working tree changes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreparedPatch {
+    pub data: FilePatch,
+    /// What the patch says of the changes, where the file's line counts may not: an
+    /// uncommitted file's can be older than its patch, and some files have none at all.
+    pub summary: Option<PatchSummary>,
+    /// Names it in the highlighting cache (see [`patch_cache_key`]).
+    pub cache_key: String,
+    /// Whether its lines can only be staged whole: it's of a whole file (see `staged_whole`).
+    pub staged_whole: bool,
+    /// Whether it's a symbolic link's.
+    pub link: bool,
+}
+
+impl PreparedPatch {
+    /// `data`, a patch of a file in `source`, prepared.
+    pub fn new(source: &DiffSource, data: FilePatch) -> Self {
+        let summary = (is_uncommitted(source) || data.file.additions.is_none())
+            .then(|| summarize_patch(&data.patch));
+        PreparedPatch {
+            summary,
+            cache_key: patch_cache_key(source, &data),
+            staged_whole: staged_whole(&data.patch),
+            link: is_link(&data.patch),
+            data,
+        }
+    }
+
+    /// Whether it's `data`, as loaded: the same patch, not another one alike.
+    fn is(&self, data: &FilePatch) -> bool {
+        self.data.key == data.key && Arc::ptr_eq(&self.data.patch, &data.patch)
     }
 }
 
 /// The patch on show, and the file it's of.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShownPatch {
-    pub key: String,
+    pub key: DiffFileKey,
     pub file: ChangedFile,
     pub patch: Arc<str>,
     pub counts: Option<LineCounts>,
@@ -49,7 +103,7 @@ pub struct ShownPatch {
 /// The file in the header: the one asked for, or the last one, while its patch is on its way.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HeaderFile {
-    pub key: String,
+    pub key: DiffFileKey,
     pub file: ChangedFile,
     pub counts: Option<LineCounts>,
 }
@@ -72,9 +126,9 @@ pub struct ShownFile {
     lists: DiffSourceFiles,
     /// Where the file was in its list, after it's gone from it: the files around it stay a step
     /// away. Only this file's place: another one opened that isn't in its list has none.
-    last_place: (String, Option<usize>),
+    last_place: (DiffFileKey, Option<usize>),
     /// The large file the user asked to see anyway.
-    shown_large: Option<String>,
+    shown_large: Option<DiffFileKey>,
     /// What the patch held is of, changing only when that does: an uncommitted file's list is
     /// replaced whenever anything in the working tree changes.
     patch_file: ChangedFile,
@@ -83,7 +137,7 @@ pub struct ShownFile {
     patch_hold: Option<Hold>,
     /// The patch loaded last, as last synced: this file's, or the last one's while this one's
     /// loads.
-    patch: Option<FilePatch>,
+    patch: Option<PreparedPatch>,
     /// Why this file's patch couldn't be loaded, as last synced.
     patch_error: Option<DataError>,
     /// The patch on show: going to another file, the last one stays on show until the new one's
@@ -95,7 +149,7 @@ pub struct ShownFile {
     /// Whether changes are being loaded, for long enough to say so.
     busy: Entity<Delayed>,
     /// While the file's edited: the file, and its patch, as they were when that started.
-    editing: Option<(ChangedFile, Option<FilePatch>)>,
+    editing: Option<(ChangedFile, Option<PreparedPatch>)>,
     _changes: Subscription,
 }
 
@@ -113,6 +167,7 @@ impl ShownFile {
         let lists = DiffSourceFiles::new(&repository, source.clone(), cx);
         let busy = cx.new(|cx| Delayed::new(false, DELAY, cx));
         let changes = observe_parts(&repository, PARTS, cx);
+        let last_place = (DiffFileKey::new(&source, &file.path), None);
         let mut shown = ShownFile {
             repository_id,
             repository,
@@ -120,7 +175,7 @@ impl ShownFile {
             patch_file: file.clone(),
             file,
             lists,
-            last_place: (String::new(), None),
+            last_place,
             shown_large: None,
             patch_enabled: false,
             patch_hold: None,
@@ -153,7 +208,7 @@ impl ShownFile {
             // Of another repository: its patch is held anew.
             self.patch_hold = None;
             self.patch_enabled = false;
-        } else if !is_same_source(&self.source, &source) {
+        } else if self.source != source {
             self.lists.set_source(source.clone(), cx);
         }
         self.source = source;
@@ -161,8 +216,8 @@ impl ShownFile {
         self.sync(cx);
     }
 
-    /// Brings what follows from the lists and the file up to date: its place in its list, and
-    /// what the patch held is of, and what of it's loaded.
+    /// Brings what follows from the lists and the file up to date: its place in its list, what
+    /// the patch held is of, and the patch loaded, prepared once.
     pub fn sync<V: 'static>(&mut self, cx: &mut Context<V>) {
         self.lists.sync(cx);
         let key = self.file_key();
@@ -190,19 +245,30 @@ impl ShownFile {
             self.patch_file = file;
             self.patch_enabled = enabled;
         }
+        self.prepare_loaded(cx);
+        let busy = self.shows_other() || self.loading_files;
+        self.busy.update(cx, |delayed, cx| delayed.set(busy, cx));
+    }
+
+    /// Takes the patch loaded last, prepared, unless it has already, and why this file's couldn't
+    /// be loaded. The last one's stays while this one's loads.
+    fn prepare_loaded(&mut self, cx: &App) {
         let loaded = self
             .repository
             .read(cx)
             .patch(&self.source, &self.patch_file.path);
-        if let Some(patch) = loaded.and_then(Loaded::data) {
-            self.patch = Some(patch.clone());
+        if let Some(data) = loaded.and_then(Loaded::data)
+            && !self
+                .patch
+                .as_ref()
+                .is_some_and(|prepared| prepared.is(data))
+        {
+            self.patch = Some(PreparedPatch::new(&self.source, data.clone()));
         }
         self.patch_error = loaded
             .and_then(Loaded::error)
             .filter(|_| self.patch_enabled)
             .cloned();
-        let busy = self.shows_other() || self.loading_files;
-        self.busy.update(cx, |delayed, cx| delayed.set(busy, cx));
     }
 
     pub fn repository_id(&self) -> &RepositoryId {
@@ -223,9 +289,9 @@ impl ShownFile {
         &self.lists
     }
 
-    /// Names the file in its source (see `DiffSource::file_key`).
-    pub fn file_key(&self) -> String {
-        diff_file_key(&self.source, &self.file.path)
+    /// The file on show, by its path in its source.
+    pub fn file_key(&self) -> DiffFileKey {
+        DiffFileKey::new(&self.source, &self.file.path)
     }
 
     /// Where the file is in its list, if it is.
@@ -310,6 +376,7 @@ impl ShownFile {
         if editing == self.editing.is_some() {
             return;
         }
+        self.prepare_loaded(cx);
         self.editing = editing.then(|| (self.live_file(), self.patch.clone()));
         self.sync(cx);
     }
@@ -324,17 +391,17 @@ impl ShownFile {
             None => true,
             Some(counts) => {
                 total_lines(counts) <= LARGE_DIFF_LINES
-                    || self.shown_large.as_deref() == Some(self.file_key().as_str())
+                    || self.shown_large.as_ref() == Some(&self.file_key())
             }
         }
     }
 
     /// The patch loaded last: this file's, or the last one's while this one's loads; the one
     /// editing started from, while the file's edited.
-    pub fn patch(&self) -> Option<FilePatch> {
+    pub fn patch(&self) -> Option<&PreparedPatch> {
         match &self.editing {
-            Some((_, patch)) => patch.clone(),
-            None => self.patch.clone(),
+            Some((_, patch)) => patch.as_ref(),
+            None => self.patch.as_ref(),
         }
     }
 
@@ -348,24 +415,21 @@ impl ShownFile {
     }
 
     /// The patch of this file, if it's loaded.
-    pub fn current(&self) -> Option<FilePatch> {
-        self.patch().filter(|data| data.key == self.file_key())
+    pub fn current(&self) -> Option<&PreparedPatch> {
+        self.patch()
+            .filter(|prepared| prepared.data.key == self.file_key())
     }
 
     /// What the patch says of the changes: an uncommitted file's line counts can be older than
-    /// its patch, and some files have none at all.
-    pub fn summary_of(&self, data: &FilePatch) -> Option<PatchSummary> {
-        (is_uncommitted(&self.source) || data.file.additions.is_none())
-            .then(|| summarize_patch(&data.patch))
-    }
-
+    /// its patch, and some files have none at all (see [`PreparedPatch::summary`]).
     fn summary(&self) -> Option<PatchSummary> {
-        self.current().and_then(|data| self.summary_of(&data))
+        self.current().and_then(|prepared| prepared.summary)
     }
 
     /// Whether the file has no changes left on its side, as its patch says.
     pub fn empty(&self) -> bool {
-        self.current().is_some_and(|data| data.patch.is_empty())
+        self.current()
+            .is_some_and(|prepared| prepared.data.patch.is_empty())
     }
 
     pub fn binary(&self) -> bool {
@@ -391,7 +455,7 @@ impl ShownFile {
     /// Whether the change is large, and the user hasn't asked to see it anyway.
     pub fn large(&self) -> bool {
         self.lines().unwrap_or(0) > LARGE_DIFF_LINES
-            && self.shown_large.as_deref() != Some(self.file_key().as_str())
+            && self.shown_large.as_ref() != Some(&self.file_key())
     }
 
     /// Shows the large change anyway.
@@ -480,13 +544,14 @@ impl ShownFile {
             && self.shows_patch()
             && !self.shows_other()
             && self.file().status != FileStatus::Deleted
-            && !self.current().is_some_and(|data| is_link(&data.patch))
+            && !self.current().is_some_and(|prepared| prepared.link)
     }
 
-    /// The patch `data` is on show.
-    pub fn patch_shown<V: 'static>(&mut self, data: &FilePatch, cx: &mut Context<V>) {
-        let counts = self
-            .summary_of(data)
+    /// The patch `prepared` is on show.
+    pub fn patch_shown<V: 'static>(&mut self, prepared: &PreparedPatch, cx: &mut Context<V>) {
+        let data = &prepared.data;
+        let counts = prepared
+            .summary
             .map(|summary| LineCounts {
                 additions: summary.additions,
                 deletions: summary.deletions,

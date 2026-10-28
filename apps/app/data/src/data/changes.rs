@@ -14,11 +14,14 @@ use std::path::PathBuf;
 use futures::FutureExt as _;
 use futures::channel::oneshot;
 use gitto_git::Discarded;
+use gitto_git::PatchVersion;
 use gitto_git::ShownConflict;
 use gitto_git::features::branch::schema::{MergeOutcome, RebaseOutcome};
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::features::operation::schema::OperationKind;
-use gitto_git::input::{BranchName, BranchRef, FileInput, FullSha, NonEmpty, Paths, RepositoryId};
+use gitto_git::input::{
+    BranchName, BranchRef, BranchShortName, FullSha, Paths, RepoPath, RepositoryId,
+};
 use gitto_git::schema::FileStatus;
 use gpui_kit::{AppContext as _, Context, Task};
 
@@ -27,12 +30,12 @@ use super::branch::{Merge, NewBranchFrom, Rebase};
 use super::commit::{NewCommit, Reword};
 use super::conflicts::ConflictResolution;
 use super::error::DataError;
-use super::git::GitTask;
+use super::git::{GitTask, file_input};
 use super::repository::{Changed, Part, Repository};
 use super::staging::{DiscardTarget, StageAction, StagingTarget};
 use super::worktree::AddWorktreeInput;
 use crate::services::Services;
-use gitto_ui_logic::git::diff_source::DiffSource;
+use gitto_ui_logic::git::diff_source::{DiffFileKey, DiffSource};
 use gitto_ui_logic::git::patch::has_hunks;
 use gitto_ui_logic::git::status::{branch_name, is_checked_out};
 
@@ -201,7 +204,7 @@ impl Repository {
     /// Pulls a local branch that isn't checked out, by its short name, fast-forwarding it to its
     /// upstream without touching the working tree (`usePullBranch`). It counts as running until
     /// the repository has reloaded, also after a failure: its remote was fetched all the same.
-    pub fn pull_branch(&mut self, branch: NonEmpty, cx: &mut Context<Self>) -> Done {
+    pub fn pull_branch(&mut self, branch: BranchShortName, cx: &mut Context<Self>) -> Done {
         self.run(
             Change::PullBranch,
             |repository, cx| {
@@ -291,7 +294,7 @@ impl Repository {
                 let checked_out = repository
                     .status()
                     .data()
-                    .is_some_and(|status| is_checked_out(&status.head, &reference));
+                    .is_some_and(|status| is_checked_out(&status.summary.head, &reference));
                 if checked_out {
                     return Task::ready(Ok(()));
                 }
@@ -564,7 +567,7 @@ impl Repository {
                     if let Some(reloaded) = reloaded {
                         let _ = reloaded.await;
                     }
-                    Ok(RepositoryId::parse(repository.id)?)
+                    Ok(repository.id)
                 })
             },
             cx,
@@ -703,22 +706,19 @@ impl Repository {
         &mut self,
         action: StageAction,
         file: ChangedFile,
-        version: String,
+        version: PatchVersion,
         lines: gitto_git::features::staging::schema::LineSelection,
         cx: &mut Context<Self>,
     ) -> Task<Result<String, DataError>> {
         let path = file.path.clone();
-        let input = FileInput {
-            path: file.path.clone(),
-            orig_path: file.orig_path.clone(),
-        };
-        let staging = match action {
+        let git = self.git().clone();
+        let staging = self.checked(file_input(&file), |input| match action {
             StageAction::Stage => {
                 let untracked = file.status == FileStatus::Untracked;
-                self.git().stage_lines(input, untracked, version, lines)
+                git.stage_lines(input, untracked, version, lines)
             }
-            StageAction::Unstage => self.git().unstage_lines(input, version, lines),
-        };
+            StageAction::Unstage => git.unstage_lines(input, version, lines),
+        });
         let staging = cx.background_spawn(staging);
         cx.spawn(async move |this, cx| match staging.await {
             Ok(patch) => {
@@ -753,7 +753,7 @@ impl Repository {
             StageAction::Unstage => DiffSource::Staged,
         };
         let shown = has_hunks(patch) && self.replace_patch(&source, path, patch);
-        drop(self.reload_uncommitted_but(shown.then_some((source, path.to_owned())), cx));
+        drop(self.reload_uncommitted_but(shown.then(|| DiffFileKey::new(&source, path)), cx));
         cx.emit(Changed(Part::Patches));
     }
 
@@ -769,7 +769,7 @@ impl Repository {
         cx: &mut Context<Self>,
     ) -> Task<Result<(), DataError>> {
         let git = self.git().clone();
-        let action = self.checked(NonEmpty::parse(path), |path| match resolution {
+        let action = self.checked(RepoPath::parse(path), |path| match resolution {
             ConflictResolution::Keep {
                 side,
                 sides,
@@ -820,7 +820,9 @@ mod tests {
 
     use futures::FutureExt as _;
     use gitto_git::features::refs::schema::Ref;
-    use gitto_git::features::status::schema::{Head, StatusCounts, Uncommitted, WorkingTreeFiles};
+    use gitto_git::features::status::schema::{
+        Head, StatusCounts, StatusSummary, Uncommitted, WorkingTreeFiles,
+    };
     use gpui_kit::{Entity, TestAppContext};
 
     use super::*;
@@ -846,7 +848,7 @@ mod tests {
             async { Ok(vec![]) }.boxed()
         }
 
-        fn merge_branch(&self, _: BranchRef, _: NonEmpty) -> GitTask<MergeOutcome> {
+        fn merge_branch(&self, _: BranchRef, _: BranchShortName) -> GitTask<MergeOutcome> {
             let outcome = self.merged.get().unwrap();
             async move { Ok(outcome) }.boxed()
         }
@@ -874,7 +876,7 @@ mod tests {
     fn merge_feature() -> Merge {
         Merge {
             reference: BranchRef::parse("refs/heads/feature").unwrap(),
-            into: NonEmpty::parse("main").unwrap(),
+            into: BranchShortName::parse("main").unwrap(),
         }
     }
 
@@ -918,18 +920,20 @@ mod tests {
         let git = Rc::new(Git::default());
         let repository = open(&git, cx);
         let status = Uncommitted {
-            head: Head::Branch {
-                name: "main".into(),
-                sha: "abc".into(),
-            },
-            upstream: None,
-            ahead: 0,
-            behind: 0,
-            counts: StatusCounts {
-                files: 0,
-                staged: 0,
-                unstaged: 0,
-                conflicted: 0,
+            summary: StatusSummary {
+                head: Head::Branch {
+                    name: "main".into(),
+                    sha: "abc".into(),
+                },
+                upstream: None,
+                ahead: 0,
+                behind: 0,
+                counts: StatusCounts {
+                    files: 0,
+                    staged: 0,
+                    unstaged: 0,
+                    conflicted: 0,
+                },
             },
             changes: WorkingTreeFiles {
                 staged: vec![],

@@ -11,12 +11,12 @@ use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_fl
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, Context, ElementId, Entity, FontWeight, Rems, Role, SharedString, Task,
-    TestSupportExt as _, Window, div, rems,
+    TestSupportExt as _, Window, div,
 };
 
 use crate::components::repository::file_status_badge::FileStatusBadge;
 use gitto_app_data::data::Opaque;
-use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::theme::{PaletteExt as _, base_px};
 use gitto_app_kit::ui::{
     ContextMenuExt as _, Icon, IconName, LineStats, PopupMenu, VirtualList, menu_frame,
 };
@@ -25,8 +25,8 @@ use gitto_app_kit::ui::{
 pub const HOVER: Duration = Duration::from_millis(80);
 
 /// Height of a file's row (42px of the 15px base), and of it with the space below it (2px).
-pub const ROW_HEIGHT: Rems = Rems(2.8);
-pub const ROW_PITCH: Rems = Rems(2.933);
+pub const ROW_HEIGHT: Rems = base_px(42.);
+pub const ROW_PITCH: Rems = base_px(44.);
 
 type FileHandler = Rc<dyn Fn(&ChangedFile, &mut Window, &mut App)>;
 type FileMenuBuilder =
@@ -227,8 +227,8 @@ impl ChangedFileList {
             .h_full()
             .min_w_0()
             .flex_1()
-            .gap(rems(0.467))
-            .p(rems(0.467))
+            .gap(base_px(7.))
+            .p(base_px(7.))
             .rounded_md()
             // Named as the badge's tooltip says it, for whoever can't see its color.
             .child(
@@ -299,7 +299,7 @@ impl ChangedFileList {
             let file = file.clone();
             div()
                 .flex_none()
-                .mr(rems(0.467))
+                .mr(base_px(7.))
                 .opacity(0.)
                 .group_hover("file-row", |style| style.opacity(1.))
                 .child(

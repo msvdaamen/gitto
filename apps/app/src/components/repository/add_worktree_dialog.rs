@@ -23,6 +23,9 @@ use gitto_app_data::state::lingering::Lingering;
 use gitto_app_kit::theme::PaletteExt as _;
 use gitto_app_kit::ui::{FormField, Icon, IconName};
 
+/// The folder's hint once one was picked whose path isn't UTF-8.
+const UNUSABLE_PICK: &str = "That folder's path can't be used: pick or type another";
+
 /// How wide the dialog is (`max-w-[400px]`), in rems of the 15px base.
 const WIDTH: f32 = 26.67;
 
@@ -45,6 +48,9 @@ pub struct AddWorktreeDialog {
     /// The new branch's placeholder, as it was last set: it names the branch kept, unless one
     /// has to be named.
     placeholder: SharedString,
+    /// The folder last picked had a path that isn't UTF-8, which git is given as text: it's
+    /// said so, until another is picked or typed.
+    unusable_pick: bool,
     open: bool,
     _subscriptions: Vec<Subscription>,
 }
@@ -54,23 +60,32 @@ impl AddWorktreeDialog {
         let folder = cx.new(|cx| InputState::new(window, cx).placeholder("/path/to/folder"));
         let new_branch = cx.new(|cx| InputState::new(window, cx));
         let on_input = |this: &mut Self,
-                        _: &Entity<InputState>,
+                        input: &Entity<InputState>,
                         event: &InputEvent,
                         window: &mut Window,
                         cx: &mut Context<Self>| match event {
             InputEvent::PressEnter { .. } => this.submit(window, cx),
-            InputEvent::Change => cx.notify(),
+            InputEvent::Change => {
+                if *input == this.folder {
+                    this.unusable_pick = false;
+                }
+                cx.notify()
+            }
             _ => {}
         };
         let subscriptions = vec![
             cx.subscribe_in(&folder, window, on_input),
             cx.subscribe_in(&new_branch, window, on_input),
+            // The worktrees and refs, which say whether a new branch has to be named, notify it.
+            cx.observe_in(&cx.entity(), window, |this, _, window, cx| {
+                this.update_placeholder(window, cx)
+            }),
         ];
         AppData::global(cx).update(cx, |data, cx| data.show(AppPart::Repositories, cx));
         AddWorktreeDialog {
             repository: Shown::new(
                 &repository_id,
-                &[Part::Worktrees, Part::Refs, Part::Changes],
+                &[Part::Worktrees, Part::Refs, Part::Remotes, Part::Changes],
                 cx,
             ),
             folder,
@@ -78,6 +93,7 @@ impl AddWorktreeDialog {
             branch: Lingering::default(),
             suggested: String::new(),
             placeholder: SharedString::default(),
+            unusable_pick: false,
             open: false,
             _subscriptions: subscriptions,
         }
@@ -97,6 +113,7 @@ impl AddWorktreeDialog {
         for input in [&self.folder, &self.new_branch] {
             input.update(cx, |input, cx| input.set_value("", window, cx));
         }
+        self.unusable_pick = false;
         if self.open {
             self.open = false;
             window.close_dialog(cx);
@@ -124,13 +141,11 @@ impl AddWorktreeDialog {
     /// if anywhere: then a new branch has to be made.
     fn clash(&self, cx: &App) -> Option<Worktree> {
         let repository = self.repository.read(cx);
-        let worktrees = repository
-            .worktrees()
-            .data()
-            .map(|worktrees| &worktrees[..]);
-        let refs = repository.refs().data().map(|refs| &refs[..]);
+        let worktrees = repository.worktrees().data()?;
+        let refs = repository.refs().data().map_or(&[][..], |refs| &refs[..]);
+        let remotes = repository.remotes().data().map_or(&[][..], Vec::as_slice);
         let branch = self.branch.get().map_or("", String::as_str);
-        checked_out_in(worktrees, refs, branch).cloned()
+        checked_out_in(worktrees, refs, remotes, branch).cloned()
     }
 
     /// Whether a new branch has to be named.
@@ -190,6 +205,7 @@ impl AddWorktreeDialog {
         self.repository.update(cx, |repository, cx| {
             repository.dismiss(Change::AddWorktree, cx)
         });
+        self.unusable_pick = false;
         let folder = Self::typed(&self.folder, cx);
         let id = self.repository.id(cx);
         let repository = AppData::global(cx)
@@ -206,61 +222,67 @@ impl AddWorktreeDialog {
                 .update(cx, |input, cx| input.set_value(suggested, window, cx));
         }
         self.branch.update(Some(branch));
+        self.update_placeholder(window, cx);
         if self.open {
             cx.notify();
             return;
         }
         self.open = true;
-        let this = cx.entity();
+        let this = cx.entity().downgrade();
         let focus = self.folder.focus_handle(cx);
         window.open_dialog(cx, move |dialog, window, cx| {
+            let Some(shown) = this.upgrade() else {
+                return dialog;
+            };
             let cancel = this.clone();
             dialog
                 .w(rems(WIDTH).to_pixels(window.rem_size()))
                 .close_button(false)
                 .on_cancel(move |_, _, cx| {
-                    cancel.update(cx, |this, cx| {
+                    let _ = cancel.update(cx, |this, cx| {
                         this.open = false;
                         cx.notify();
                     });
                     true
                 })
-                .child(Self::render_form(&this, window, cx))
+                .child(Self::render_form(&shown, cx))
         });
         focus.focus(window, cx);
         cx.notify();
     }
 
-    fn render_form(this: &Entity<Self>, window: &mut Window, cx: &mut App) -> impl IntoElement {
+    /// Names the branch kept in the new branch's placeholder, unless one has to be named.
+    fn update_placeholder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let placeholder: SharedString = if self.needs_new_branch(cx) {
+            NAME_PLACEHOLDER.into()
+        } else {
+            format!("Keep {}", self.name()).into()
+        };
+        if self.placeholder != placeholder {
+            self.placeholder = placeholder.clone();
+            self.new_branch.update(cx, |input, cx| {
+                input.set_placeholder(placeholder, window, cx)
+            });
+        }
+    }
+
+    fn render_form(this: &Entity<Self>, cx: &mut App) -> impl IntoElement {
         let palette = *cx.palette();
-        let (summary, needs_new_branch, name, folder, new_branch, valid, blocked) = {
+        let (summary, needs_new_branch, folder, new_branch, valid, blocked, unusable_pick) = {
             let shown = this.read(cx);
             (
                 shown.summary(cx),
                 shown.needs_new_branch(cx),
-                shown.name(),
                 shown.folder.clone(),
                 shown.new_branch.clone(),
                 shown.is_valid(cx),
                 shown.repository.read(cx).add_worktree_blocked(),
+                shown.unusable_pick,
             )
         };
-        let placeholder: SharedString = if needs_new_branch {
-            NAME_PLACEHOLDER.into()
-        } else {
-            format!("Keep {name}").into()
-        };
-        if this.read(cx).placeholder != placeholder {
-            this.update(cx, |this, cx| {
-                this.placeholder = placeholder.clone();
-                this.new_branch.update(cx, |input, cx| {
-                    input.set_placeholder(placeholder, window, cx)
-                });
-            });
-        }
         let naming = !Self::typed(&new_branch, cx).is_empty();
-        let browse = this.clone();
-        let submit = this.clone();
+        let browse = this.downgrade();
+        let submit = this.downgrade();
         v_flex()
             .child(
                 div()
@@ -277,7 +299,11 @@ impl AddWorktreeDialog {
                     .text_color(palette.muted)
                     .child(summary),
             )
-            .child(FormField::input("Folder", &folder).hint("Empty, or not there yet"))
+            .child(FormField::input("Folder", &folder).hint(if unusable_pick {
+                UNUSABLE_PICK
+            } else {
+                "Empty, or not there yet"
+            }))
             .child(FormField::input(
                 if needs_new_branch {
                     "New branch"
@@ -293,7 +319,7 @@ impl AddWorktreeDialog {
                         Button::new("browse")
                             .label("Browse…")
                             .on_click(move |_, window, cx| {
-                                browse.update(cx, |this, cx| this.browse(window, cx));
+                                let _ = browse.update(cx, |this, cx| this.browse(window, cx));
                             }),
                     )
                     .child(
@@ -308,7 +334,7 @@ impl AddWorktreeDialog {
                             })
                             .disabled(!valid || blocked)
                             .on_click(move |_, window, cx| {
-                                submit.update(cx, |this, cx| this.submit(window, cx));
+                                let _ = submit.update(cx, |this, cx| this.submit(window, cx));
                             }),
                     ),
             )
@@ -320,9 +346,15 @@ impl AddWorktreeDialog {
         cx.spawn_in(window, async move |this, cx| {
             if let Ok(Some(picked)) = picking.await {
                 let _ = this.update_in(cx, |this, window, cx| {
-                    let picked = picked.to_string_lossy().into_owned();
-                    this.folder
-                        .update(cx, |input, cx| input.set_value(picked, window, cx));
+                    // Not made into another path, as a lossy conversion would.
+                    match picked.into_os_string().into_string() {
+                        Ok(picked) => {
+                            this.unusable_pick = false;
+                            this.folder
+                                .update(cx, |input, cx| input.set_value(picked, window, cx));
+                        }
+                        Err(_) => this.unusable_pick = true,
+                    }
                     cx.notify();
                 });
             }
@@ -385,7 +417,8 @@ mod tests {
 
     use super::*;
     use crate::components::repository::test_support::{
-        Repositories, fake_git, repository, repository_id, set_refs, set_worktrees, setup_with,
+        Repositories, click_label, fake_git, has_dialog, repository, repository_id, set_refs,
+        set_remotes, set_worktrees, setup_with,
     };
     use gitto_app_data::data::git::{GitTask, RepositoryGit};
 
@@ -471,6 +504,7 @@ mod tests {
             vec![local("main", Some("origin/main")), local("topic", None)],
             cx,
         );
+        set_remotes(&id, &["origin"], cx);
         fake_git(&id, adds.clone(), cx);
         let (window, host) = crate::test_support::open(cx, move |window, cx| Host {
             dialog: cx.new(|cx| AddWorktreeDialog::new(id, window, cx)),
@@ -547,6 +581,87 @@ mod tests {
         })
         .unwrap();
         assert!(dialog.read_with(cx, |dialog, cx| dialog.is_valid(cx)));
+    }
+
+    #[gpui_kit::test]
+    fn names_the_branch_kept_in_the_placeholder_until_one_has_to_be_named(cx: &mut TestAppContext) {
+        let adds = Rc::new(Adds::default());
+        let (_dir, window, dialog) = render(cx, &adds);
+        let placeholder = |cx: &mut TestAppContext| {
+            dialog.read_with(cx, |dialog, _| dialog.placeholder.to_string())
+        };
+        open(window, &dialog, "refs/heads/topic", cx);
+        assert_eq!(placeholder(cx), "Keep topic");
+
+        // Checked out elsewhere meanwhile: one has to be named.
+        let id = dialog.read_with(cx, |dialog, cx| dialog.repository.id(cx).clone());
+        set_worktrees(
+            &id,
+            vec![
+                worktree("/work/gitto", Some("refs/heads/main"), true),
+                worktree("/work/gitto-topic", Some("refs/heads/topic"), false),
+            ],
+            cx,
+        );
+        cx.run_until_parked();
+        assert_eq!(placeholder(cx), NAME_PLACEHOLDER);
+    }
+
+    #[cfg(unix)]
+    #[gpui_kit::test]
+    fn refuses_a_picked_folder_whose_path_isnt_utf8(cx: &mut TestAppContext) {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt as _;
+        use std::path::PathBuf;
+
+        let adds = Rc::new(Adds::default());
+        let (_dir, window, dialog) = render(cx, &adds);
+        open(window, &dialog, "refs/heads/topic", cx);
+        let folder = dialog.read_with(cx, |dialog, _| dialog.folder.clone());
+        let pick = |path: PathBuf, cx: &mut TestAppContext| {
+            click_label(window, "Browse…", cx);
+            assert!(cx.did_prompt_for_paths());
+            cx.simulate_path_prompt_response(move |_| Some(vec![path]));
+            cx.run_until_parked();
+        };
+
+        pick(PathBuf::from(OsStr::from_bytes(b"/work/gitto-\xff")), cx);
+        assert_eq!(value(&folder, cx), "/work/gitto-topic");
+        assert!(dialog.read_with(cx, |dialog, _| dialog.unusable_pick));
+
+        pick(PathBuf::from("/work/elsewhere"), cx);
+        assert_eq!(value(&folder, cx), "/work/elsewhere");
+        assert!(!dialog.read_with(cx, |dialog, _| dialog.unusable_pick));
+    }
+
+    #[gpui_kit::test]
+    fn closes_and_forgets_the_folder_and_name_for_another_repository(cx: &mut TestAppContext) {
+        let adds = Rc::new(Adds::default());
+        let (_dir, window, dialog) = render(cx, &adds);
+        open(window, &dialog, "refs/remotes/origin/main", cx);
+        let (folder, new_branch) = dialog.read_with(cx, |dialog, _| {
+            (dialog.folder.clone(), dialog.new_branch.clone())
+        });
+        cx.update_window(window, |_, window, cx| {
+            new_branch.update(cx, |input, cx| input.set_value("hotfix", window, cx))
+        })
+        .unwrap();
+        assert_ne!(value(&folder, cx), "");
+
+        let other = repository_id();
+        set_worktrees(&other, Vec::new(), cx);
+        set_refs(&other, Vec::new(), cx);
+        set_remotes(&other, &[], cx);
+        cx.update_window(window, |_, window, cx| {
+            dialog.update(cx, |dialog, cx| dialog.set_repository(other, window, cx))
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert!(!dialog.read_with(cx, |dialog, _| dialog.is_open()));
+        assert!(!has_dialog(window, cx));
+        assert_eq!(value(&folder, cx), "");
+        assert_eq!(value(&new_branch, cx), "");
+        assert!(adds.0.borrow().is_empty());
     }
 
     #[gpui_kit::test]

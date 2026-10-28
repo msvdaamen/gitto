@@ -13,7 +13,6 @@
 use futures::FutureExt as _;
 use futures::channel::oneshot;
 use gitto_git::GitInstall;
-use gitto_git::features::version::check;
 use gitto_git::get_user_name;
 use gitto_repository::Repository;
 use gpui_kit::{App, AppContext as _, Context, Entity, EventEmitter, Global};
@@ -114,7 +113,7 @@ impl AppData {
             }
             AppPart::GitVersion => {
                 let git = Services::global(cx).git().clone();
-                let fetch = async move { Ok(check(git.version()).await) }.boxed();
+                let fetch = async move { Ok(git.version().check().await) }.boxed();
                 self.start(part, |data| &mut data.git_version, fetch, cx)
             }
             AppPart::UserName => {

@@ -35,10 +35,12 @@ mod tests {
     #[test]
     fn tells_why_a_push_was_turned_down() {
         let rejected = |forcible: bool| {
-            DataError::from(gitto_git::Error::PushRejected {
-                message: "Rejected.".to_owned(),
-                forcible,
-            })
+            DataError::from(gitto_git::ApiError::unreported(
+                gitto_git::Error::PushRejected {
+                    message: "Rejected.".to_owned(),
+                    forcible,
+                },
+            ))
         };
         assert_eq!(
             push_rejection(Some(&rejected(true))),

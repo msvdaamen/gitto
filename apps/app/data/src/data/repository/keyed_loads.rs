@@ -6,7 +6,7 @@ use futures::channel::oneshot;
 use gitto_git::features::conflicts::schema::Conflict;
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::features::history::schema::Commit;
-use gitto_git::input::{FileInput, FullSha, NonEmpty, Sha};
+use gitto_git::input::{FullSha, RepoPath, Sha};
 use gitto_git::schema::FileStatus;
 use gpui_kit::{Context, Task};
 
@@ -14,10 +14,11 @@ use super::{Part, Repository, failed, loaded_result};
 use crate::data::diff::{ChangedFiles, FilesOf};
 use crate::data::error::DataError;
 use crate::data::file_diff::FilePatch;
+use crate::data::git::file_input;
 use crate::data::keyed::Hold;
 use crate::data::loaded::Loaded;
 use crate::data::opaque::Opaque;
-use gitto_ui_logic::git::diff_source::{DiffSource, diff_file_key};
+use gitto_ui_logic::git::diff_source::{DiffFileKey, DiffSource};
 
 impl Repository {
     /// Which remote branch has the commit `sha`, if that's loaded.
@@ -56,7 +57,7 @@ impl Repository {
 
     /// The patch of the file at `path` in `source`, if that's loaded.
     pub fn patch(&self, source: &DiffSource, path: &str) -> Option<&Loaded<FilePatch>> {
-        self.patches.get(&(source.clone(), path.to_owned()))
+        self.patches.get(&DiffFileKey::new(source, path))
     }
 
     /// Holds the patch of `file` in `source`, loading it unless it's loaded or loading, and
@@ -67,7 +68,7 @@ impl Repository {
         file: &ChangedFile,
         cx: &mut Context<Self>,
     ) -> Hold {
-        let key = (source.clone(), file.path.clone());
+        let key = DiffFileKey::new(source, &file.path);
         let hold = self.patches.hold(key.clone());
         let loaded = self.patches.entry(key);
         if loaded.wants_load() {
@@ -84,7 +85,7 @@ impl Repository {
         file: &ChangedFile,
         cx: &mut Context<Self>,
     ) -> Task<Result<FilePatch, DataError>> {
-        let key = (source.clone(), file.path.clone());
+        let key = DiffFileKey::new(source, &file.path);
         let wait = {
             let loaded = self.patches.entry(key.clone());
             if loaded.wants_load() {
@@ -109,30 +110,29 @@ impl Repository {
         file: ChangedFile,
         cx: &mut Context<Self>,
     ) -> Option<oneshot::Receiver<()>> {
-        let input = FileInput {
-            path: file.path.clone(),
-            orig_path: file.orig_path.clone(),
-        };
-        let patch = match &source {
-            DiffSource::Commit { sha } => match Sha::parse(sha.clone()) {
-                Ok(commit) => self.git.commit_file_patch(commit, input),
-                Err(error) => failed(self.git.invalid(error)),
+        let patch = match file_input(&file) {
+            Err(error) => failed(self.git.invalid(error)),
+            Ok(input) => match &source {
+                DiffSource::Commit { sha } => match Sha::parse(sha.clone()) {
+                    Ok(commit) => self.git.commit_file_patch(commit, input),
+                    Err(error) => failed(self.git.invalid(error)),
+                },
+                DiffSource::Stash { sha } => match FullSha::parse(sha.clone()) {
+                    Ok(stash) => self.git.stash_file_patch(stash, input),
+                    Err(error) => failed(self.git.invalid(error)),
+                },
+                DiffSource::Unstaged => {
+                    let untracked = file.status == FileStatus::Untracked;
+                    self.git.unstaged_file_patch(input, untracked)
+                }
+                DiffSource::Staged => self.git.staged_file_patch(input),
             },
-            DiffSource::Stash { sha } => match FullSha::parse(sha.clone()) {
-                Ok(stash) => self.git.stash_file_patch(stash, input),
-                Err(error) => failed(self.git.invalid(error)),
-            },
-            DiffSource::Unstaged => {
-                let untracked = file.status == FileStatus::Untracked;
-                self.git.unstaged_file_patch(input, untracked)
-            }
-            DiffSource::Staged => self.git.staged_file_patch(input),
         };
-        let key = (source.clone(), file.path.clone());
+        let key = DiffFileKey::new(&source, &file.path);
         let fetch = async move {
             let patch = patch.await?;
             Ok(FilePatch {
-                key: diff_file_key(&source, &file.path),
+                key: DiffFileKey::new(&source, &file.path),
                 file,
                 patch: patch.into(),
             })
@@ -203,7 +203,7 @@ impl Repository {
         path: String,
         cx: &mut Context<Self>,
     ) -> Option<oneshot::Receiver<()>> {
-        let fetch = match NonEmpty::parse(path.clone()) {
+        let fetch = match RepoPath::parse(path.clone()) {
             Ok(file) => self.git.conflict(file),
             Err(error) => failed(self.git.invalid(error)),
         };

@@ -178,7 +178,7 @@ impl Repository {
             waits.extend(self.reload(Field::Status, cx).0);
         }
         let patches = self.patches.held_and_drop_rest(|key| {
-            is_uncommitted(&key.0) && kept.as_ref().is_none_or(|kept| kept != key)
+            is_uncommitted(&key.source) && kept.as_ref().is_none_or(|kept| kept != key)
         });
         for key in patches {
             let file = self
@@ -187,7 +187,7 @@ impl Repository {
                 .and_then(Loaded::data)
                 .map(|patch| patch.file.clone());
             if let Some(file) = file {
-                waits.extend(self.load_patch(key.0, file, cx));
+                waits.extend(self.load_patch(key.source, file, cx));
             }
         }
         for path in self.conflicts.held_and_drop_rest(|_| true) {
@@ -213,7 +213,7 @@ impl Repository {
         drop(self.pushed_to.held_and_drop_rest(|_| true));
         drop(
             self.patches
-                .held_and_drop_rest(|(source, _)| is_uncommitted(source)),
+                .held_and_drop_rest(|key| is_uncommitted(&key.source)),
         );
         drop(self.conflicts.held_and_drop_rest(|_| true));
     }
@@ -271,6 +271,12 @@ impl Repository {
                         repo.log.set(followed_by(&log, commits, complete));
                         cx.emit(Changed(Part::Log));
                     }
+                    // The pages before it were read unsorted, and turned out to need sorting:
+                    // the log's read again from the top, as many commits as were there, rather
+                    // than skipping on from them.
+                    Err(error) if is_log_order_changed(&error) => {
+                        drop(repo.reload(Field::Log, cx));
+                    }
                     Err(error) => repo.more.error = Some(error),
                 }
                 cx.emit(Changed(Part::More));
@@ -278,4 +284,12 @@ impl Repository {
         }));
         cx.emit(Changed(Part::More));
     }
+}
+
+/// Whether `error` says the log's order changed as more of it was read (see
+/// `Error::LogOrderChanged`).
+fn is_log_order_changed(error: &DataError) -> bool {
+    error
+        .api()
+        .is_some_and(|api| matches!(api.error(), gitto_git::Error::LogOrderChanged))
 }

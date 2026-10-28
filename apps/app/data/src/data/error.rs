@@ -73,14 +73,6 @@ impl From<ApiError> for DataError {
     }
 }
 
-/// As the API shows it (see `ApiError`), for git's errors that didn't come through a `GitRepo`
-/// method.
-impl From<gitto_git::Error> for DataError {
-    fn from(error: gitto_git::Error) -> Self {
-        DataError::new(ApiError::from(error))
-    }
-}
-
 impl From<gitto_repository::Error> for DataError {
     fn from(error: gitto_repository::Error) -> Self {
         DataError::new(error)
@@ -140,7 +132,7 @@ mod tests {
 
     #[test]
     fn keeps_an_anyhow_error_and_tells_its_causes() {
-        let api = ApiError::from(gitto_git::Error::PushRejected {
+        let api = ApiError::unreported(gitto_git::Error::PushRejected {
             message: "Rejected.".to_owned(),
             forcible: false,
         });

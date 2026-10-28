@@ -11,13 +11,16 @@ use std::time::Duration;
 
 use futures::FutureExt as _;
 use futures::future::Shared;
+use gitto_git::ContentVersion;
 use gpui_kit::{App, AppContext as _, Global, Task};
 
-use super::diff_metadata::{
-    ChangeType, FileDiff, LoadedSide, Side, diff_from_files, hydrate, parse_patch_files,
+use gitto_ui_logic::diff::diff_metadata::{
+    ChangeType, FileDiff, HydrateError, LoadedSide, Side, diff_from_files, hydrate,
+    parse_patch_files,
 };
-use super::highlight::DiffHighlights;
-use super::patch_files::{fit_to_patch, has_matching_ends};
+use gitto_ui_logic::diff::patch_files::{FitError, fit_to_patch, has_matching_ends};
+
+use super::highlight::{DiffHighlights, changed_words, side_syntax};
 use gitto_app_data::data::DataError;
 
 /// How long a diff waits for its highlighting before it's shown without, until it's
@@ -45,7 +48,10 @@ const KEPT_LINES: usize = 1000;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoadedFile {
     Blob(String),
-    WorkingTree { contents: String, version: String },
+    WorkingTree {
+        contents: String,
+        version: ContentVersion,
+    },
 }
 
 impl LoadedFile {
@@ -55,12 +61,35 @@ impl LoadedFile {
         }
     }
 
-    pub fn version(&self) -> Option<&str> {
+    pub fn version(&self) -> Option<&ContentVersion> {
         match self {
             LoadedFile::Blob(_) => None,
             LoadedFile::WorkingTree { version, .. } => Some(version),
         }
     }
+}
+
+/// Why a patch couldn't be shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum PatchError {
+    #[error("The patch has no file in it.")]
+    NoFile,
+}
+
+/// Why the file on show couldn't be read whole into its diff, to show the lines around its
+/// changes: it couldn't be read, or it isn't the file the patch is of any more (see [`FitError`]),
+/// both said to the user as they are; or it was asked of a diff that can't be filled in, which is
+/// the viewer's mistake ([`HydrateError`]).
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum LoadFilesError {
+    #[error("The patch doesn't name its files.")]
+    Unnamed,
+    #[error("{0}")]
+    Read(DataError),
+    #[error(transparent)]
+    Fit(#[from] FitError),
+    #[error(transparent)]
+    Hydrate(#[from] HydrateError),
 }
 
 /// Reads one side of the file on show in full, by the object name the patch has for it.
@@ -69,11 +98,9 @@ pub type LoadFile = Rc<dyn Fn(Side, &str, &mut App) -> Task<Result<LoadedFile, D
 /// The one file in `patch` (`parsePatch`). A file that changed type, e.g. from a symbolic link, is
 /// a deletion and an addition to git, each with the whole of its side: shown as one change, from
 /// the one's contents to the other's.
-pub fn parse_patch(patch: &str, cache_key: &str) -> Result<FileDiff, String> {
+pub fn parse_patch(patch: &str, cache_key: &str) -> Result<FileDiff, PatchError> {
     let mut files = parse_patch_files(patch, Some(cache_key)).into_iter();
-    let file = files
-        .next()
-        .ok_or_else(|| "The patch has no file in it.".to_owned())?;
+    let file = files.next().ok_or(PatchError::NoFile)?;
     if let Some(other) = files.next()
         && file.kind == ChangeType::Deleted
         && other.kind == ChangeType::New
@@ -148,7 +175,7 @@ impl ParsedPatches {
     }
 
     /// [`parse_patch`], of a patch that may have been parsed lately (`parsed`).
-    pub fn parsed(&mut self, patch: &Arc<str>, key: &str) -> Result<Arc<FileDiff>, String> {
+    pub fn parsed(&mut self, patch: &Arc<str>, key: &str) -> Result<Arc<FileDiff>, PatchError> {
         if let Some(diff) = self.get(patch, key) {
             return Ok(diff);
         }
@@ -182,7 +209,7 @@ impl ViewerRuntime {
         patch: Arc<str>,
         key: String,
         cx: &mut App,
-    ) -> Task<Result<Arc<FileDiff>, String>> {
+    ) -> Task<Result<Arc<FileDiff>, PatchError>> {
         if let Some(diff) = Self::global(cx).parsed.get(&patch, &key) {
             return Task::ready(Ok(diff));
         }
@@ -215,9 +242,25 @@ impl ViewerRuntime {
             runtime.highlights.push(entry);
             return highlights;
         }
-        let computed = Arc::clone(diff);
+        // The sides are parsed at once, and the changed words worked out meanwhile, each a task
+        // of the executor's: a modified file's two sides are two whole files, which parsing one
+        // after the other would take twice as long to color. Dropped, the tasks not yet started
+        // never are.
+        let syntax = |side, cx: &mut App| {
+            let diff = Arc::clone(diff);
+            cx.background_spawn(async move { side_syntax(&diff, side) })
+        };
+        let deletions = syntax(Side::Deletions, cx);
+        let additions = syntax(Side::Additions, cx);
+        let changed = cx.background_spawn({
+            let diff = Arc::clone(diff);
+            async move { changed_words(&diff) }
+        });
         let highlights = cx
-            .background_spawn(async move { Arc::new(DiffHighlights::compute(&computed)) })
+            .background_spawn(async move {
+                let (deletions, additions, changed) = futures::join!(deletions, additions, changed);
+                Arc::new(DiffHighlights::of_parts(deletions, additions, changed))
+            })
             .shared();
         if let Some(key) = &diff.cache_key {
             let runtime = Self::global(cx);
@@ -256,7 +299,11 @@ pub fn highlighted(diff: &Arc<FileDiff>, wait: Duration, cx: &mut App) -> Task<(
 
 /// Parses and highlights a patch ahead of showing it, with the same `cache_key`, so it shows at
 /// once (`preparePatch`). Fails if it can't be parsed.
-pub fn prepare_patch(patch: Arc<str>, cache_key: String, cx: &mut App) -> Task<Result<(), String>> {
+pub fn prepare_patch(
+    patch: Arc<str>,
+    cache_key: String,
+    cx: &mut App,
+) -> Task<Result<(), PatchError>> {
     let parsing = ViewerRuntime::parse(patch, cache_key, cx);
     cx.spawn(async move |cx| {
         let diff = parsing.await?;
@@ -320,7 +367,7 @@ impl ViewHighlights {
 pub struct LoadedFiles {
     pub hydrated: Arc<FileDiff>,
     /// The working tree's version of the new side, if it's the working tree's.
-    pub version: Option<String>,
+    pub version: Option<ContentVersion>,
 }
 
 /// Both sides of `diff` in full, read by the object names on its `index` line, and a copy of
@@ -330,16 +377,16 @@ pub fn load_files(
     diff: Arc<FileDiff>,
     load_file: &LoadFile,
     cx: &mut App,
-) -> Task<Result<LoadedFiles, String>> {
+) -> Task<Result<LoadedFiles, LoadFilesError>> {
     let (Some(prev), Some(new)) = (diff.prev_object_id.clone(), diff.new_object_id.clone()) else {
-        return Task::ready(Err("The patch doesn't name its files.".to_owned()));
+        return Task::ready(Err(LoadFilesError::Unnamed));
     };
     let old_file = load_file(Side::Deletions, &prev, cx);
     let new_file = load_file(Side::Additions, &new, cx);
     cx.spawn(async move |cx| {
-        let old = old_file.await.map_err(|error| error.to_string())?;
-        let read = new_file.await.map_err(|error| error.to_string())?;
-        let version = read.version().map(str::to_owned);
+        let old = old_file.await.map_err(LoadFilesError::Read)?;
+        let read = new_file.await.map_err(LoadFilesError::Read)?;
+        let version = read.version().cloned();
         let hydrated = cx
             .background_spawn(async move {
                 let before = fit_to_patch(&diff, Side::Deletions, old.contents())?;
@@ -359,12 +406,9 @@ pub fn load_files(
                     }),
                 )?;
                 if !has_matching_ends(&hydrated) {
-                    return Err(
-                        "The file has changed since its changes were loaded. Try again in a moment."
-                            .to_owned(),
-                    );
+                    return Err(FitError::Changed.into());
                 }
-                Ok(Arc::new(hydrated))
+                Ok::<_, LoadFilesError>(Arc::new(hydrated))
             })
             .await?;
         // Highlighted before it's handed over (see `EXPAND_HIGHLIGHT_WAIT`).
@@ -435,13 +479,29 @@ mod tests {
 
     #[test]
     fn says_a_patch_without_a_file_has_none() {
-        assert_eq!(
-            parse_patch("", "empty").unwrap_err(),
-            "The patch has no file in it."
-        );
+        assert_eq!(parse_patch("", "empty").unwrap_err(), PatchError::NoFile);
     }
 
     // parsed
+
+    #[gpui_kit::test]
+    async fn highlights_both_sides_and_the_changed_words_as_tasks_of_their_own(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let diff = Arc::new(
+            parse_patch_files(
+                "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-let a = 1;\n+let total = 2;\n",
+                Some("test"),
+            )
+            .remove(0),
+        );
+        let highlights = cx.update(|cx| ViewerRuntime::highlight(&diff, cx)).await;
+        // As worked out one part after the other.
+        assert_eq!(*highlights, DiffHighlights::compute(&diff));
+        assert!(!highlights.syntax(Side::Deletions, 0).is_empty());
+        assert!(!highlights.syntax(Side::Additions, 0).is_empty());
+        assert!(!highlights.changed(Side::Additions, 0).is_empty());
+    }
 
     #[test]
     fn keeps_a_patch_parsed_lately_so_it_isnt_parsed_again() {

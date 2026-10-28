@@ -45,7 +45,7 @@ use super::history::Log;
 use super::keyed::Keyed;
 use super::loaded::Loaded;
 use super::opaque::Opaque;
-use gitto_ui_logic::git::diff_source::DiffSource;
+use gitto_ui_logic::git::diff_source::{DiffFileKey, DiffSource};
 
 mod keyed_loads;
 mod loading;
@@ -188,7 +188,7 @@ impl std::future::IntoFuture for Reloading {
 }
 
 /// Where a file's patch is kept: its source and path.
-type PatchKey = (DiffSource, String);
+type PatchKey = DiffFileKey;
 
 /// A repository's data (see the module's doc).
 pub struct Repository {
@@ -372,7 +372,7 @@ impl Repository {
     /// Puts `patch` in place of the patch of the file at `path` in `source`, and of a load of it
     /// under way, keeping what it says of the file; whether there was one to replace.
     pub(crate) fn replace_patch(&mut self, source: &DiffSource, path: &str, patch: &str) -> bool {
-        let Some(loaded) = self.patches.get_mut(&(source.clone(), path.to_owned())) else {
+        let Some(loaded) = self.patches.get_mut(&DiffFileKey::new(source, path)) else {
             return false;
         };
         let Some(last) = loaded.data().cloned() else {
@@ -389,7 +389,7 @@ impl Repository {
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_patch(&mut self, source: &DiffSource, patch: FilePatch, cx: &mut Context<Self>) {
         self.patches
-            .set((source.clone(), patch.file.path.clone()), patch);
+            .set(DiffFileKey::new(source, &patch.file.path), patch);
         self.changed(Part::Patches, cx);
     }
 
@@ -522,7 +522,7 @@ impl Repository {
 /// `limit` commits of the log after skipping `skip`, as a [`Log`] of the repository `id`.
 fn log_page(git: &dyn RepositoryGit, id: &RepositoryId, skip: u32, limit: u32) -> GitTask<Log> {
     let commits = log_commits(git, skip, limit);
-    let repository_id = id.to_string();
+    let repository_id = id.clone();
     async move {
         let commits = commits.await?;
         Ok(Log {
@@ -580,18 +580,20 @@ mod tests {
 
     fn uncommitted() -> Uncommitted {
         Uncommitted {
-            head: Head::Branch {
-                name: "main".into(),
-                sha: "abc".into(),
-            },
-            upstream: None,
-            ahead: 0,
-            behind: 0,
-            counts: StatusCounts {
-                files: 1,
-                staged: 0,
-                unstaged: 1,
-                conflicted: 0,
+            summary: StatusSummary {
+                head: Head::Branch {
+                    name: "main".into(),
+                    sha: "abc".into(),
+                },
+                upstream: None,
+                ahead: 0,
+                behind: 0,
+                counts: StatusCounts {
+                    files: 1,
+                    staged: 0,
+                    unstaged: 1,
+                    conflicted: 0,
+                },
             },
             changes: WorkingTreeFiles {
                 staged: vec![],
@@ -631,21 +633,21 @@ mod tests {
     }
 
     /// A page of the log asked for: its skip and limit, and what answers it.
-    type Asked = (u32, u32, oneshot::Sender<Vec<Commit>>);
+    type Asked = (u32, u32, oneshot::Sender<Result<Vec<Commit>, DataError>>);
 
     /// A repository's git that answers the status with `replies`, in turn, and each page of the
     /// log when the test says; it counts what it's asked.
     #[derive(Default)]
     struct Git {
         replies: RefCell<Vec<StatusReply>>,
-        since: RefCell<Vec<Option<String>>>,
+        since: RefCell<Vec<Option<gitto_git::ContentVersion>>>,
         pages: RefCell<Vec<Asked>>,
         refs: Cell<usize>,
         overviews: Cell<usize>,
     }
 
     impl RepositoryGit for Git {
-        fn status(&self, since: Option<String>) -> GitTask<StatusReply> {
+        fn status(&self, since: Option<gitto_git::ContentVersion>) -> GitTask<StatusReply> {
             self.since.borrow_mut().push(since);
             let reply = self.replies.borrow_mut().remove(0);
             async move { Ok(reply) }.boxed()
@@ -656,7 +658,7 @@ mod tests {
             self.pages
                 .borrow_mut()
                 .push((page.skip(), page.limit(), answer));
-            async move { Ok(answered.await.unwrap()) }.boxed()
+            async move { answered.await.unwrap() }.boxed()
         }
 
         fn refs(&self) -> GitTask<Vec<Ref>> {
@@ -673,8 +675,13 @@ mod tests {
     impl Git {
         /// Answers the first page asked for that's still waiting with `commits`; what it asked.
         fn answer(&self, commits: Vec<Commit>) -> (u32, u32) {
-            let (skip, limit, answer) = self.pages.borrow_mut().remove(0);
-            answer.send(commits).unwrap();
+            self.answer_with(Ok(commits))
+        }
+
+        /// Answers the first page asked for that's still waiting with `answer`; what it asked.
+        fn answer_with(&self, answer: Result<Vec<Commit>, DataError>) -> (u32, u32) {
+            let (skip, limit, answered) = self.pages.borrow_mut().remove(0);
+            answered.send(answer).unwrap();
             (skip, limit)
         }
     }
@@ -713,7 +720,10 @@ mod tests {
         let reload = repository.update(cx, |repository, cx| repository.reload(Field::Status, cx));
         cx.run_until_parked();
         reload.into_future().now_or_never().unwrap();
-        assert_eq!(*git.since.borrow(), [None, Some("v1".to_owned())]);
+        assert_eq!(
+            *git.since.borrow(),
+            [None, Some(gitto_git::ContentVersion::from("v1"))]
+        );
         let shown = repository.read_with(cx, |repository, _| repository.status().data().cloned());
         // The same files, not a copy.
         assert!(Opaque::ptr_eq(&shown.unwrap(), &loaded));
@@ -727,18 +737,12 @@ mod tests {
         repository.update(cx, |repository, cx| repository.show(Field::Status, cx));
         cx.run_until_parked();
         let summary = repository.read_with(cx, |repository, _| {
-            repository.status().data().map(|status| status.summary())
+            repository
+                .status()
+                .data()
+                .map(|status| status.summary.clone())
         });
-        assert_eq!(
-            summary.unwrap(),
-            StatusSummary {
-                head: uncommitted().head,
-                upstream: None,
-                ahead: 0,
-                behind: 0,
-                counts: uncommitted().counts,
-            }
-        );
+        assert_eq!(summary.unwrap(), uncommitted().summary);
     }
 
     // `lib/query-client.test.ts`.
@@ -893,6 +897,35 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn reloads_the_log_from_its_first_page_when_its_order_changed(cx: &mut TestAppContext) {
+        let git = Rc::new(Git::default());
+        let repository = open(&git, cx);
+        repository.update(cx, |repository, cx| repository.show(Field::Log, cx));
+        cx.run_until_parked();
+        git.answer(commits(0..200));
+        cx.run_until_parked();
+
+        repository.update(cx, |repository, cx| repository.load_more(cx));
+        cx.run_until_parked();
+        let changed = gitto_git::ApiError::unreported(gitto_git::Error::LogOrderChanged);
+        assert_eq!(git.answer_with(Err(changed.into())), (200, NEXT_PAGE));
+        cx.run_until_parked();
+        // Read again from the top, keeping its place, rather than saying more couldn't load.
+        assert!(repository.read_with(cx, |repository, _| repository.more_error().is_none()));
+        assert_eq!(
+            git.answer(commits(0..200)),
+            (0, super::super::history::FIRST_PAGE)
+        );
+        cx.run_until_parked();
+        let log = repository.read_with(cx, |repository, _| repository.log().data().cloned());
+        assert_eq!(log.unwrap().commits.len(), 200);
+        // And more of it loads as before, now that it's sorted.
+        repository.update(cx, |repository, cx| repository.load_more(cx));
+        cx.run_until_parked();
+        assert_eq!(git.answer(commits(200..1200)), (200, NEXT_PAGE));
+    }
+
+    #[gpui_kit::test]
     fn drops_a_page_loaded_while_the_log_reloaded(cx: &mut TestAppContext) {
         let git = Rc::new(Git::default());
         let repository = open(&git, cx);
@@ -913,7 +946,7 @@ mod tests {
         );
         cx.run_until_parked();
         reload.into_future().now_or_never().unwrap();
-        let _ = page.send(commits(200..1200));
+        let _ = page.send(Ok(commits(200..1200)));
         cx.run_until_parked();
 
         let log = repository.read_with(cx, |repository, _| repository.log().data().cloned());
@@ -930,7 +963,7 @@ mod tests {
         repository.update(cx, |repository, cx| {
             repository.set_log(
                 Log {
-                    repository_id: repository_id().to_string(),
+                    repository_id: repository_id(),
                     commits: commits(0..3).into(),
                     complete: true,
                 },
@@ -1026,7 +1059,7 @@ mod tests {
     fn doesnt_open_again_a_repository_removed_before_a_change_to_it(cx: &mut TestAppContext) {
         let git: Rc<dyn RepositoryGit> = Rc::new(Git::default());
         cx.update(|cx| Repositories::insert(&repository_id(), git, cx));
-        cx.update(|cx| Repositories::close(repository_id().as_str(), cx));
+        cx.update(|cx| Repositories::close(&repository_id(), cx));
         let changed = cx.update(|cx| {
             Repositories::update_opened(
                 &repository_id(),
@@ -1037,7 +1070,7 @@ mod tests {
         let error = changed.now_or_never().unwrap().unwrap_err();
         assert_eq!(error.to_string(), "The repository was removed from Gitto.");
         assert!(
-            cx.update(|cx| Repositories::get(repository_id().as_str(), cx))
+            cx.update(|cx| Repositories::get(&repository_id(), cx))
                 .is_none()
         );
     }

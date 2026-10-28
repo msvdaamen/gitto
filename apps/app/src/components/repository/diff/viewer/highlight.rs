@@ -12,9 +12,8 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::LazyLock;
 
+use gitto_ui_logic::diff::diff_metadata::{FileDiff, HunkContent, Side};
 use syntect::parsing::{ParseState, Scope, ScopeStack, SyntaxReference, SyntaxSet};
-
-use super::diff_metadata::{FileDiff, HunkContent, Side};
 
 /// Loaded once, on the first highlight: deserializing it takes a few milliseconds.
 static SYNTAXES: LazyLock<SyntaxSet> = LazyLock::new(two_face::syntax::extra_newlines);
@@ -98,11 +97,6 @@ impl<T> LineSpans<T> {
     }
 }
 
-/// What a scoped thread returned; its panic passed on as it was, with its message.
-fn joined<T>(result: std::thread::Result<T>) -> T {
-    result.unwrap_or_else(|panic| std::panic::resume_unwind(panic))
-}
-
 /// What's highlighted in each line of a diff's sides.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DiffHighlights {
@@ -113,29 +107,24 @@ pub struct DiffHighlights {
 }
 
 impl DiffHighlights {
-    /// Works out what's highlighted in `diff`. Blocking: run it on a background thread.
+    /// Works out what's highlighted in `diff`, one part after the other. Blocking: run it on a
+    /// background thread. [`ViewerRuntime::highlight`](super::viewer_runtime::ViewerRuntime)
+    /// works the parts out at once instead, each a task of the executor's.
     pub fn compute(diff: &FileDiff) -> Self {
-        let too_long =
-            diff.deletion_lines.len().max(diff.addition_lines.len()) > MAX_HIGHLIGHTED_LINES;
-        let side_syntax = |side: Side| {
-            let name = match side {
-                Side::Deletions => diff.prev_name.as_deref().unwrap_or(&diff.name),
-                Side::Additions => &diff.name,
-            };
-            match find_syntax(name).filter(|_| !too_long) {
-                Some(syntax) => syntax_spans(diff, side, syntax),
-                None => LineSpans::new(),
-            }
-        };
-        // The sides are parsed at once, each on a thread of its own, and the changed words
-        // meanwhile: a modified file's two sides are two whole files, which parsing one after
-        // the other would take twice as long to color.
-        let (deletions, additions, changed) = std::thread::scope(|scope| {
-            let deletions = scope.spawn(|| side_syntax(Side::Deletions));
-            let changed = scope.spawn(|| changed_words(diff));
-            let additions = side_syntax(Side::Additions);
-            (joined(deletions.join()), additions, joined(changed.join()))
-        });
+        DiffHighlights::of_parts(
+            side_syntax(diff, Side::Deletions),
+            side_syntax(diff, Side::Additions),
+            changed_words(diff),
+        )
+    }
+
+    /// What's highlighted, of the syntax of each side (see [`side_syntax`]) and the words that
+    /// changed ([`changed_words`]).
+    pub fn of_parts(
+        deletions: LineSpans<u8>,
+        additions: LineSpans<u8>,
+        changed: [LineSpans<()>; 2],
+    ) -> Self {
         DiffHighlights {
             syntax: [deletions, additions],
             changed,
@@ -395,9 +384,23 @@ fn semantic_name(scope: Scope) -> Option<u8> {
         .map(|ix| ix as u8)
 }
 
+/// The syntax of `side` of `diff`, by its file's name; none if it's of no known type, or too long
+/// to highlight. Blocking, as it parses the whole side.
+pub fn side_syntax(diff: &FileDiff, side: Side) -> LineSpans<u8> {
+    let too_long = diff.deletion_lines.len().max(diff.addition_lines.len()) > MAX_HIGHLIGHTED_LINES;
+    let name = match side {
+        Side::Deletions => diff.prev_name.as_deref().unwrap_or(&diff.name),
+        Side::Additions => &diff.name,
+    };
+    match find_syntax(name).filter(|_| !too_long) {
+        Some(syntax) => syntax_spans(diff, side, syntax),
+        None => LineSpans::new(),
+    }
+}
+
 /// The words that changed between each removed line and the added line in its place: within a
 /// run of changes, the first removed line is paired with the first added one, and so on.
-fn changed_words(diff: &FileDiff) -> [LineSpans<()>; 2] {
+pub fn changed_words(diff: &FileDiff) -> [LineSpans<()>; 2] {
     let mut sides: [Vec<Vec<Range<u32>>>; 2] = [
         vec![Vec::new(); diff.deletion_lines.len()],
         vec![Vec::new(); diff.addition_lines.len()],
@@ -530,8 +533,8 @@ fn push_run(runs: &mut Vec<Range<u32>>, range: Range<usize>, text: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::diff_metadata::parse_patch_files;
     use super::*;
+    use gitto_ui_logic::diff::diff_metadata::parse_patch_files;
 
     fn names(highlights: &DiffHighlights, diff: &FileDiff, side: Side, ix: usize) -> Vec<String> {
         let line = diff.lines(side).line(ix);

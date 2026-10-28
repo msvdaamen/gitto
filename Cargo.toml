@@ -28,9 +28,11 @@ async-process = "2.5.0"
 blocking = "1.7.0"
 dunce = "1.0.5"
 event-listener = "5.4.2"
-futures = "0.3.34"
+# Without the executor and its thread pool: tasks run on smol's, or the caller's.
+futures = { version = "0.3.34", default-features = false, features = ["std", "async-await"] }
 futures-lite = "2.6.1"
 libc = "0.2.191"
+log = { version = "0.4.34", features = ["std"] }
 memchr = "2.8.3"
 notify = "8.2.0"
 regex = "1.13.1"
@@ -46,14 +48,14 @@ uuid = { version = "1.28.0", features = ["v4", "v7"] }
 dirs = "6.0.0"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 
-# apps/app: the GPUI app, and the logging it does.
+# apps/app: the GPUI app.
 anyhow = "1.0.104"
-log = { version = "0.4.34", features = ["std"] }
 
 # apps/app's diffs: syntax highlighting as gpui-kit's `syntect` feature does it (the same syntect
-# and syntax set), and the words that changed between a removed line and the line added for it.
-# The regexes are Oniguruma's (`regex-onig`, which syntect takes over `regex-fancy`, which gpui-kit
-# asks for): it parses a file about three times as fast, so a diff's colors don't lag its text.
+# and syntax set), and the words that changed between a removed line and the line added for it
+# (and, in crates/ui-logic, the diff of two whole files). The regexes are Oniguruma's (`regex-onig`,
+# which syntect takes over `regex-fancy`, which gpui-kit asks for): it parses a file about three
+# times as fast, so a diff's colors don't lag its text.
 similar = "2.7.0"
 syntect = { version = "5.3.0", default-features = false, features = [
   "parsing",

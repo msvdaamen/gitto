@@ -421,7 +421,7 @@ describe("rebasing a branch", () => {
     const error = await rejection(rebaseBranch(repo, "refs/heads/main", "side"));
     expect(error).toBeInstanceOf(RebaseUndoneError);
     expect((error as Error).message).toMatch(
-      /^Rebasing side onto main stopped partway, and was undone:\n[^]*failed to write commit object\nFix that, then rebase again\.$/,
+      /^Rebasing side onto main stopped partway, and was undone:\n[^]*failed to write commit object\n(?:Could not apply [^\n]*\n)?Fix that, then rebase again\.$/,
     );
     expect(await getOperation(repo)).toBeNull();
     expect(snapshot(path)).toEqual(before);
@@ -448,7 +448,7 @@ describe("rebasing a branch", () => {
     const error = await rejection(rebaseBranch(repo, "refs/heads/main", "side"));
     expect(error).toBeInstanceOf(RebaseStoppedError);
     expect((error as Error).message).toMatch(
-      /^Rebasing side onto main stopped partway:\n[^]*failed to write commit object\nFinish the rebase in a terminal, or abort it\.$/,
+      /^Rebasing side onto main stopped partway:\n[^]*failed to write commit object\n(?:Could not apply [^\n]*\n)?Finish the rebase in a terminal, or abort it\.$/,
     );
     expect(await getOperation(repo)).toMatchObject({ kind: "rebase", branch: "side" });
   });

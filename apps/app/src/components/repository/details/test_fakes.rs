@@ -15,7 +15,7 @@ use gitto_git::features::history::schema::Commit;
 use gitto_git::features::operation::schema::Operation;
 use gitto_git::features::stash::schema::Stash;
 use gitto_git::features::status::schema::{
-    Head, StatusCounts, StatusReply, Uncommitted, WorkingTreeFiles,
+    Head, StatusCounts, StatusReply, StatusSummary, Uncommitted, WorkingTreeFiles,
 };
 use gitto_git::input::{FullSha, Message, Paths, RepositoryId, Sha};
 use gitto_git::schema::FileStatus;
@@ -153,7 +153,7 @@ impl Fakes {
 }
 
 impl RepositoryGit for Fakes {
-    fn status(&self, _: Option<String>) -> GitTask<StatusReply> {
+    fn status(&self, _: Option<gitto_git::ContentVersion>) -> GitTask<StatusReply> {
         let gate = self.status_gate.borrow_mut().take();
         let status = self.status.borrow().clone();
         async move {
@@ -204,7 +204,13 @@ impl RepositoryGit for Fakes {
     }
 
     fn stage(&self, paths: Paths) -> GitTask<()> {
-        let target = StagingTarget::Paths(paths.as_slice().to_vec());
+        let target = StagingTarget::Paths(
+            paths
+                .as_slice()
+                .iter()
+                .map(|path| path.as_str().to_owned())
+                .collect(),
+        );
         self.staged.answer(&format!("{target:?}"))
     }
 
@@ -213,7 +219,13 @@ impl RepositoryGit for Fakes {
     }
 
     fn unstage(&self, paths: Paths) -> GitTask<()> {
-        let target = StagingTarget::Paths(paths.as_slice().to_vec());
+        let target = StagingTarget::Paths(
+            paths
+                .as_slice()
+                .iter()
+                .map(|path| path.as_str().to_owned())
+                .collect(),
+        );
         self.unstaged.answer(&format!("{target:?}"))
     }
 
@@ -279,18 +291,20 @@ pub fn uncommitted(unstaged: Vec<ChangedFile>, staged: Vec<ChangedFile>) -> Unco
         .filter(|change| change.status == FileStatus::Conflicted)
         .count() as u64;
     Uncommitted {
-        head: Head::Branch {
-            name: "main".into(),
-            sha: "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1".into(),
-        },
-        upstream: None,
-        ahead: 0,
-        behind: 0,
-        counts: StatusCounts {
-            files: (unstaged.len() + staged.len()) as u64,
-            staged: staged.len() as u64,
-            unstaged: unstaged.len() as u64 - conflicted,
-            conflicted,
+        summary: StatusSummary {
+            head: Head::Branch {
+                name: "main".into(),
+                sha: "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1".into(),
+            },
+            upstream: None,
+            ahead: 0,
+            behind: 0,
+            counts: StatusCounts {
+                files: (unstaged.len() + staged.len()) as u64,
+                staged: staged.len() as u64,
+                unstaged: unstaged.len() as u64 - conflicted,
+                conflicted,
+            },
         },
         changes: WorkingTreeFiles {
             staged,
@@ -298,7 +312,7 @@ pub fn uncommitted(unstaged: Vec<ChangedFile>, staged: Vec<ChangedFile>) -> Unco
             uncounted: false,
             marker_free: vec![],
         },
-        version: uuid::Uuid::new_v4().to_string(),
+        version: uuid::Uuid::new_v4().to_string().into(),
     }
 }
 

@@ -1,8 +1,11 @@
 //! Ported from `git/conflicts.ts`: what a conflicted file is, and what's under way in the
 //! repository, in the user's words.
 
-use gitto_git::features::conflicts::schema::{Conflict, ConflictSide, ConflictSides, Side};
+use gitto_git::features::conflicts::schema::{
+    Conflict, ConflictFile, ConflictSide, ConflictSides, Side,
+};
 use gitto_git::features::operation::schema::{CommitName, Operation};
+use gitto_git::{ContentVersion, FileMode};
 
 use super::short_sha;
 
@@ -15,41 +18,39 @@ pub enum SideKind {
 }
 
 pub fn side_kind(side: &ConflictSide) -> SideKind {
-    match side.mode.as_str() {
-        "120000" => SideKind::Link,
-        "160000" => SideKind::Submodule,
+    match side.mode {
+        FileMode::Symlink => SideKind::Link,
+        FileMode::Submodule => SideKind::Submodule,
         _ => SideKind::File,
     }
 }
 
 /// How a conflicted file is resolved: in its text, conflict by conflict, when both sides changed it
 /// as a text file; or by keeping one side whole otherwise, e.g. when one deleted it, or it's binary;
-/// or not at all, once it isn't conflicted any more.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConflictKind {
-    Text { contents: String, version: String },
+/// or not at all, once it isn't conflicted any more. Its text is the conflict's, borrowed: a file
+/// can be megabytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConflictKind<'a> {
+    Text {
+        contents: &'a str,
+        version: &'a ContentVersion,
+    },
     Sides,
     Resolved,
 }
 
-pub fn conflict_kind(conflict: &Conflict) -> ConflictKind {
-    let Conflict {
-        base,
-        ours,
-        theirs,
-        text,
-        ..
-    } = conflict;
+pub fn conflict_kind(conflict: &Conflict) -> ConflictKind<'_> {
+    let ConflictSides { base, ours, theirs } = &conflict.sides;
     if base.is_none() && ours.is_none() && theirs.is_none() {
         return ConflictKind::Resolved;
     }
-    match (ours, theirs, text) {
+    match (ours, theirs, conflict.file.text()) {
         (Some(ours), Some(theirs), Some(text))
             if side_kind(ours) == SideKind::File && side_kind(theirs) == SideKind::File =>
         {
             ConflictKind::Text {
-                contents: text.contents.clone(),
-                version: text.version.clone(),
+                contents: &text.contents,
+                version: &text.version,
             }
         }
         _ => ConflictKind::Sides,
@@ -78,8 +79,21 @@ pub fn describe_side(side: Option<&ConflictSide>) -> String {
     match side_kind(side) {
         SideKind::Link => "A symbolic link".to_owned(),
         SideKind::Submodule => format!("A submodule at {}", short_sha(&side.oid)),
-        SideKind::File if side.mode == "100755" => "An executable file".to_owned(),
+        SideKind::File if side.mode == FileMode::Executable => "An executable file".to_owned(),
         SideKind::File => "A file".to_owned(),
+    }
+}
+
+/// Why what's in the working tree at a conflicted file's path, `path`, isn't shown as text, in the
+/// user's words; `None` if it is, or if there's nothing more to say: it's gone, or a link, which
+/// the sides already say.
+pub fn unreadable_reason(file: &ConflictFile, path: &str) -> Option<String> {
+    match file {
+        ConflictFile::TooLarge { .. } => Some("This file is too large to show.".to_owned()),
+        ConflictFile::Binary { .. } => Some("This file is binary.".to_owned()),
+        ConflictFile::NotUtf8 { .. } => Some("This file isn't UTF-8 text.".to_owned()),
+        ConflictFile::Outside => Some(format!("{path} isn't a file in this repository.")),
+        ConflictFile::Text(_) | ConflictFile::Missing | ConflictFile::Link => None,
     }
 }
 
@@ -105,10 +119,11 @@ pub fn operation_title(operation: &Operation) -> String {
             None => format!("Merging {merging}"),
         },
         Operation::Rebase { branch, onto, .. } => {
-            format!(
-                "Rebasing {} onto {onto}",
-                branch.as_deref().unwrap_or("HEAD")
-            )
+            let branch = branch.as_deref().unwrap_or("HEAD");
+            match onto {
+                Some(onto) => format!("Rebasing {branch} onto {onto}"),
+                None => format!("Rebasing {branch}"),
+            }
         }
         Operation::CherryPick { commit, .. } => picking("Cherry-picking", commit.as_ref()),
         Operation::Revert { commit, .. } => picking("Reverting", commit.as_ref()),
@@ -117,7 +132,7 @@ pub fn operation_title(operation: &Operation) -> String {
 }
 
 /// A cherry-pick's or revert's title: `verb` and the commit it's at, e.g. "Reverting 1a2b3c4 Fix
-/// it"; `None` between the commits of a series, once one was committed by hand.
+/// it"; or `"{verb} commits"` between the commits of a series, once one was committed by hand.
 fn picking(verb: &str, commit: Option<&CommitName>) -> String {
     match commit {
         Some(commit) => format!("{verb} {} {}", commit.sha, commit.subject)
@@ -157,7 +172,7 @@ mod tests {
 
     fn side(mode: &str, oid: &str) -> ConflictSide {
         ConflictSide {
-            mode: mode.into(),
+            mode: mode.parse().unwrap(),
             oid: oid.into(),
         }
     }
@@ -168,16 +183,11 @@ mod tests {
 
     fn conflict() -> Conflict {
         Conflict {
-            base: file(),
-            ours: file(),
-            theirs: file(),
-            text: Some(ConflictText {
+            sides: sides(file(), file(), file()),
+            file: ConflictFile::Text(ConflictText {
                 contents: "text".into(),
                 version: "v1".into(),
             }),
-            version: Some("v1".into()),
-            binary: false,
-            unreadable: None,
         }
     }
 
@@ -197,12 +207,12 @@ mod tests {
             assert_eq!(
                 conflict_kind(&conflict()),
                 ConflictKind::Text {
-                    contents: "text".into(),
-                    version: "v1".into()
+                    contents: "text",
+                    version: &ContentVersion::from("v1")
                 }
             );
             let added = Conflict {
-                base: None,
+                sides: sides(None, file(), file()),
                 ..conflict()
             };
             assert!(matches!(conflict_kind(&added), ConflictKind::Text { .. }));
@@ -211,18 +221,19 @@ mod tests {
         #[test]
         fn keeps_a_side_whole_otherwise() {
             let deleted = Conflict {
-                theirs: None,
+                sides: sides(file(), file(), None),
                 ..conflict()
             };
             assert_eq!(conflict_kind(&deleted), ConflictKind::Sides);
             let binary = Conflict {
-                text: None,
-                binary: true,
+                file: ConflictFile::Binary {
+                    version: "v1".into(),
+                },
                 ..conflict()
             };
             assert_eq!(conflict_kind(&binary), ConflictKind::Sides);
             let submodule = Conflict {
-                ours: Some(side("160000", &"b".repeat(40))),
+                sides: sides(file(), Some(side("160000", &"b".repeat(40))), file()),
                 ..conflict()
             };
             assert_eq!(conflict_kind(&submodule), ConflictKind::Sides);
@@ -231,13 +242,41 @@ mod tests {
         #[test]
         fn has_nothing_to_resolve_once_it_isnt_conflicted() {
             let resolved = Conflict {
-                base: None,
-                ours: None,
-                theirs: None,
+                sides: sides(None, None, None),
                 ..conflict()
             };
             assert_eq!(conflict_kind(&resolved), ConflictKind::Resolved);
         }
+    }
+
+    #[test]
+    fn says_why_a_file_isnt_shown_as_text() {
+        let reason = |file: ConflictFile| unreadable_reason(&file, "a/b.txt");
+        assert_eq!(
+            reason(ConflictFile::TooLarge { stamp: "s".into() }).as_deref(),
+            Some("This file is too large to show.")
+        );
+        assert_eq!(
+            reason(ConflictFile::Binary {
+                version: "v1".into()
+            })
+            .as_deref(),
+            Some("This file is binary.")
+        );
+        assert_eq!(
+            reason(ConflictFile::NotUtf8 {
+                version: "v1".into()
+            })
+            .as_deref(),
+            Some("This file isn't UTF-8 text.")
+        );
+        assert_eq!(
+            reason(ConflictFile::Outside).as_deref(),
+            Some("a/b.txt isn't a file in this repository.")
+        );
+        assert_eq!(reason(conflict().file), None);
+        assert_eq!(reason(ConflictFile::Missing), None);
+        assert_eq!(reason(ConflictFile::Link), None);
     }
 
     mod what_each_side_did {
@@ -311,13 +350,19 @@ mod tests {
             );
             let rebase = Operation::Rebase {
                 branch: Some("feature".into()),
-                onto: "origin/main".into(),
+                onto: Some("origin/main".into()),
                 steps: Some(Steps { step: 3, total: 7 }),
             };
             assert_eq!(
                 operation_title(&rebase),
                 "Rebasing feature onto origin/main"
             );
+            let onto_unknown = Operation::Rebase {
+                branch: Some("feature".into()),
+                onto: None,
+                steps: None,
+            };
+            assert_eq!(operation_title(&onto_unknown), "Rebasing feature");
             assert_eq!(operation_progress(&rebase).as_deref(), Some("3/7"));
             let pick =
                 |commit: Option<CommitName>, remaining| Operation::CherryPick { commit, remaining };

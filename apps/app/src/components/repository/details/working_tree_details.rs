@@ -30,7 +30,7 @@ use gitto_app_data::data::staging::{
 use gitto_app_data::data::status::head_sha;
 use gitto_app_data::data::{Changed, DataError, Mutation, Opaque, Part, Shown};
 use gitto_app_kit::delayed::{DELAY, Delayed};
-use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::theme::{PaletteExt as _, base_px};
 use gitto_app_kit::ui::{
     Badge, IconButton, IconName, LinkButton, Mascot, SectionHeader, Tone, UpdatingIndicator,
 };
@@ -163,7 +163,7 @@ impl WorkingTreeDetails {
 
     fn summary(&self, cx: &App) -> Option<StatusSummary> {
         let status = self.repository.read(cx).status().data()?;
-        Some(status.summary())
+        Some(status.summary.clone())
     }
 
     /// Follows the status as it reloads: tells the form what's staged and where HEAD is, says
@@ -342,7 +342,7 @@ impl WorkingTreeDetails {
         h_flex()
             .flex_none()
             .items_start()
-            .gap(rems(0.867))
+            .gap(base_px(13.))
             .p_4()
             .border_b_1()
             .border_color(palette.border)
@@ -351,7 +351,7 @@ impl WorkingTreeDetails {
                     .self_center()
                     .rounded_full()
                     .shadow_md()
-                    .child(Mascot::new(rems(3.467))),
+                    .child(Mascot::new(base_px(52.))),
             )
             .child(
                 v_flex()
@@ -361,7 +361,7 @@ impl WorkingTreeDetails {
                     .child(Badge::new("WIP").tone(Tone::Amber))
                     .child(
                         div()
-                            .mt(rems(0.467))
+                            .mt(base_px(7.))
                             .mb_1p5()
                             .text_sm()
                             .font_weight(FontWeight::MEDIUM)
@@ -506,7 +506,7 @@ impl WorkingTreeDetails {
         if side == Side::Unstaged
             && let Some(lists) = lists.as_ref()
         {
-            list = list.marker_free(Opaque::new(lists.marker_free().clone()));
+            list = list.marker_free(lists.marker_free().clone());
         }
 
         let header =
@@ -539,11 +539,11 @@ impl WorkingTreeDetails {
             .id(side.list_id())
             .flex_1()
             .flex_basis(rems(0.))
-            .min_h(rems(8.667))
+            .min_h(base_px(130.))
             .pt_3()
             .border_b_1()
             .border_color(palette.border)
-            .child(div().px(rems(0.933)).pb_2().child(header))
+            .child(div().px(base_px(14.)).pb_2().child(header))
             .child(div().min_h_0().flex_1().px_2p5().pb_3().child(content))
     }
 }

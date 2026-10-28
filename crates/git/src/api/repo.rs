@@ -40,6 +40,7 @@ use crate::features::staging::commands::{
     stage, stage_all, stage_lines, unstage, unstage_all, unstage_lines,
 };
 use crate::features::staging::discard::{Discarded, discard, discard_all};
+use crate::features::staging::patch_version::PatchVersion;
 use crate::features::staging::schema::LineSelection;
 use crate::features::stash::commands::{
     drop_stash, get_stash_file_patch, get_stash_files, list_stashes, pop_stash, push_stash,
@@ -50,8 +51,10 @@ use crate::features::status::schema::StatusReply;
 use crate::features::worktree::commands::{add_worktree, list_worktrees, remove_worktree};
 use crate::features::worktree::schema::Worktree;
 use crate::input::{
-    BranchName, BranchRef, FileInput, Folder, FullSha, Message, NonEmpty, Paths, Sha,
+    BranchName, BranchRef, BranchShortName, FileInput, Folder, FullSha, Message, Paths, RepoPath,
+    Sha,
 };
+use crate::schema::ContentVersion;
 
 /// A repository the UI opened with [`GitApi::repo`]: each method runs a feature with it, off the
 /// caller (its future is `Send + 'static`, to spawn on a background executor), and fails as the UI
@@ -140,12 +143,12 @@ macro_rules! for_each_repo_method {
             // Status and what's in the working tree.
 
             /// The uncommitted changes, or that they're unchanged since the version `since`.
-            fn status(repo, since: Option<String>) -> StatusReply {
-                get_status_since(repo, since.as_deref()).await
+            fn status(repo, since: Option<ContentVersion>) -> StatusReply {
+                get_status_since(repo, since.as_ref()).await
             }
 
             /// The file at `path` in the working tree, as the editor shows it.
-            fn working_tree_file(repo, path: String) -> WorkingTreeFile {
+            fn working_tree_file(repo, path: RepoPath) -> WorkingTreeFile {
                 read_working_tree_file(repo, &path).await
             }
 
@@ -153,10 +156,10 @@ macro_rules! for_each_repo_method {
             /// version.
             fn save_working_tree_file(
                 repo,
-                path: String,
+                path: RepoPath,
                 contents: String,
                 expected: SaveExpectation,
-            ) -> String {
+            ) -> ContentVersion {
                 save_working_tree_file(repo, &path, &contents, &expected).await
             }
 
@@ -184,7 +187,7 @@ macro_rules! for_each_repo_method {
                 repo,
                 file: FileInput,
                 untracked: bool,
-                version: String,
+                version: PatchVersion,
                 selection: LineSelection,
             ) -> String {
                 stage_lines(repo, &file, untracked, &version, &selection).await
@@ -194,7 +197,7 @@ macro_rules! for_each_repo_method {
             fn unstage_lines(
                 repo,
                 file: FileInput,
-                version: String,
+                version: PatchVersion,
                 selection: LineSelection,
             ) -> String {
                 unstage_lines(repo, &file, &version, &selection).await
@@ -283,12 +286,12 @@ macro_rules! for_each_repo_method {
             }
 
             /// Merges `reference` into the branch `into`.
-            fn merge_branch(repo, reference: BranchRef, into: NonEmpty) -> MergeOutcome {
+            fn merge_branch(repo, reference: BranchRef, into: BranchShortName) -> MergeOutcome {
                 merge_branch(repo, &reference, &into).await
             }
 
             /// Rebases the branch `branch` onto `reference`.
-            fn rebase_branch(repo, reference: BranchRef, branch: NonEmpty) -> RebaseOutcome {
+            fn rebase_branch(repo, reference: BranchRef, branch: BranchShortName) -> RebaseOutcome {
                 rebase_branch(repo, &reference, &branch).await
             }
 
@@ -304,7 +307,7 @@ macro_rules! for_each_repo_method {
 
             /// Pulls the checked-out branch's upstream, or, with `branch`, that local branch's
             /// (see `api::pull`).
-            fn pull(repo, branch: Option<NonEmpty>) -> () {
+            fn pull(repo, branch: Option<BranchShortName>) -> () {
                 super::pull(repo, branch.as_ref()).await
             }
 
@@ -330,23 +333,23 @@ macro_rules! for_each_repo_method {
                 abort_operation(repo, kind).await
             }
 
-            fn conflict(repo, path: NonEmpty) -> Conflict {
+            fn conflict(repo, path: RepoPath) -> Conflict {
                 get_conflict(repo, &path).await
             }
 
             /// Resolves the conflict at `path` by keeping `side`, as `shown` showed it.
-            fn keep_side(repo, path: NonEmpty, side: Side, shown: ShownConflict) -> () {
+            fn keep_side(repo, path: RepoPath, side: Side, shown: ShownConflict) -> () {
                 keep_side(repo, &path, side, &shown).await
             }
 
             /// Marks the conflict at `path` resolved, if the file's still at `version`.
             fn mark_resolved(
                 repo,
-                path: NonEmpty,
-                version: Option<String>,
+                path: RepoPath,
+                version: Option<ContentVersion>,
                 with_markers: bool,
             ) -> () {
-                mark_resolved(repo, &path, version.as_deref(), with_markers).await
+                mark_resolved(repo, &path, version.as_ref(), with_markers).await
             }
 
             // Stashes.

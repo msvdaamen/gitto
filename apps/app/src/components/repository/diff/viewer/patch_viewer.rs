@@ -9,25 +9,32 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use gitto_git::features::staging::schema::LineSelection;
+use gitto_ui_logic::diff::diff_metadata::{ChangeType, FileDiff, Side};
+use gitto_ui_logic::diff::line_staging::{ChangedLine, SelectedRange, hunk_buttons, to_selection};
+use gitto_ui_logic::diff::patch_files::{Expanded, carried_expansion};
+use gitto_ui_logic::diff::viewer_rows::{
+    ExpandDirection, Layout, LayoutOptions, LineAt, LineKind, Row, SeparatorButtons, Separators,
+    expand, gap_size, layout,
+};
+use gitto_ui_logic::git::diff_source::DiffFileKey;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, HighlightStyle, Hsla,
-    KeyDownEvent, ListHorizontalSizingBehavior, MouseButton, MouseDownEvent, MouseMoveEvent,
-    Pixels, SharedString, StyledText, Subscription, Task, TextRun, UniformListScrollHandle,
-    WeakEntity, Window, combine_highlights, div, font, point, px, rems, uniform_list,
+    ListHorizontalSizingBehavior, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels,
+    ScrollStrategy, SharedString, Size, StyledText, Subscription, Task, TextRun,
+    UniformListScrollHandle, WeakEntity, Window, canvas, combine_highlights, div, font, point, px,
+    rems, uniform_list,
 };
 
-use super::super::line_staging::{ChangedLine, SelectedRange, hunk_buttons, to_selection};
-use super::diff_metadata::{ChangeType, FileDiff, Side};
 use super::highlight::{DiffHighlights, highlight_name};
-use super::line_picker::{KeyOutcome, LinePicker, LineStaging, PickerKey, Viewport};
-use super::patch_files::{Expanded, carried_expansion};
-use super::viewer_rows::{
-    ExpandDirection, Layout, LayoutOptions, LineAt, LineKind, Row, SeparatorButtons, Separators,
-    expand, gap_size, layout,
+use super::line_picker::{KeyOutcome, LinePicker, LineStaging, PickerKey, StagedAt, Viewport};
+use super::viewer_actions::{
+    ClearSelection, ExtendSelectionDown, ExtendSelectionUp, PATCH_VIEWER, ScrollLeft,
+    ScrollPageDown, ScrollPageUp, ScrollRight, ScrollToBottom, ScrollToTop, SelectDown,
+    SelectNextHunk, SelectPreviousHunk, SelectUp, StageSelection,
 };
 use super::viewer_runtime::{
     HIGHLIGHT_WAIT, LoadFile, SharedHighlights, ViewHighlights, ViewerRuntime, load_files,
@@ -150,42 +157,129 @@ pub(in crate::components::repository::diff) fn code_char_width(
         / 10.
 }
 
+/// Rows kept in sight above and below a line the view scrolls to, as moving through a list does.
+const REVEAL_MARGIN_ROWS: f32 = 3.;
+
+/// Which way the keyboard scrolls a viewer (see `viewer_actions`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::components::repository::diff) enum Scroll {
+    LineDown,
+    LineUp,
+    Left,
+    Right,
+    PageDown,
+    PageUp,
+    Top,
+    Bottom,
+}
+
+/// How far a list is scrolled, and how large its view and its contents were when it was last laid
+/// out. The one place the viewer reads GPUI's scroll state by hand, as its handle scrolls to a row,
+/// but neither by an amount nor with rows in sight on both sides of it.
+struct ListScroll {
+    /// How far it's scrolled down and right.
+    top: Pixels,
+    left: Pixels,
+    /// `None` until it's laid out.
+    view: Option<Size<Pixels>>,
+    contents_width: Pixels,
+}
+
+impl ListScroll {
+    fn of(scroll: &UniformListScrollHandle) -> Self {
+        let state = scroll.0.borrow();
+        let offset = state.base_handle.offset();
+        ListScroll {
+            top: -offset.y,
+            left: -offset.x,
+            view: state.last_item_size.map(|size| size.item),
+            contents_width: state
+                .last_item_size
+                .map_or(px(0.), |size| size.contents.width),
+        }
+    }
+
+    /// The view's height, or nothing before it's laid out.
+    fn height(&self) -> Pixels {
+        self.view.map_or(px(0.), |view| view.height)
+    }
+}
+
+/// Scrolls the list `scroll` tracks to `left` and `top`, as they are: within its contents.
+pub(in crate::components::repository::diff) fn scroll_list_to(
+    scroll: &UniformListScrollHandle,
+    left: Pixels,
+    top: Pixels,
+) {
+    scroll.0.borrow().base_handle.set_offset(point(-left, -top));
+}
+
+/// Scrolls the list `scroll` tracks, of `rows` rows `row_height` high, as a browser's scroll
+/// container does with the keyboard: a line is two rows, a page nine tenths of the view, and a
+/// column six characters `char_width` wide (a guess, before the font's measured).
+pub(in crate::components::repository::diff) fn scroll_list(
+    scroll: &UniformListScrollHandle,
+    rows: usize,
+    how: Scroll,
+    row_height: Pixels,
+    char_width: Option<Pixels>,
+) {
+    let page = (ListScroll::of(scroll).height() / row_height).max(1.) * 0.9 * row_height;
+    let line = row_height * 2.;
+    let column = char_width.unwrap_or(px(8.)) * 6.;
+    let (down, right) = match how {
+        Scroll::LineDown => (line, px(0.)),
+        Scroll::LineUp => (-line, px(0.)),
+        Scroll::Right => (px(0.), column),
+        Scroll::Left => (px(0.), -column),
+        Scroll::PageDown => (page, px(0.)),
+        Scroll::PageUp => (-page, px(0.)),
+        Scroll::Top => return scroll.scroll_to_item(0, ScrollStrategy::Top),
+        Scroll::Bottom => return scroll.scroll_to_bottom(),
+    };
+    scroll_list_by(scroll, rows, down, right, row_height);
+}
+
 /// Scrolls the list `scroll` tracks, of `rows` rows `row_height` high, by `down` pixels (up, if
 /// negative) and `across` right, within its contents.
-pub(in crate::components::repository::diff) fn scroll_list_by(
+fn scroll_list_by(
     scroll: &UniformListScrollHandle,
     rows: usize,
     down: Pixels,
     across: Pixels,
     row_height: Pixels,
 ) {
-    let state = scroll.0.borrow();
-    let handle = &state.base_handle;
-    let offset = handle.offset();
-    let height = state.last_item_size.map_or(px(0.), |size| size.item.height);
-    let width = state.last_item_size.map_or(px(0.), |size| size.item.width);
-    let content = state
-        .last_item_size
-        .map_or(px(0.), |size| size.contents.width);
-    let bottom = (row_height * rows as f32 - height).max(px(0.));
-    let right = (content - width).max(px(0.));
-    let y = (-offset.y + down).clamp(px(0.), bottom);
-    let x = (-offset.x + across).clamp(px(0.), right);
-    handle.set_offset(point(-x, -y));
+    let at = ListScroll::of(scroll);
+    let width = at.view.map_or(px(0.), |view| view.width);
+    let bottom = (row_height * rows as f32 - at.height()).max(px(0.));
+    let right = (at.contents_width - width).max(px(0.));
+    let top = (at.top + down).clamp(px(0.), bottom);
+    let left = (at.left + across).clamp(px(0.), right);
+    scroll_list_to(scroll, left, top);
 }
 
 /// What the viewer tells the file's view.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PatchViewerEvent {
     /// The last patch given is on show (`onShown`), with the key of the file it's of.
-    Shown { file_key: String },
+    Shown { file_key: DiffFileKey },
     /// Whether the whole file is being loaded, to show more of it (`onLoadingFiles`).
     LoadingFiles(bool),
     /// Why the whole file couldn't be loaded, e.g. it's too large; `None` if it could
     /// (`onFilesError`).
     FilesError(Option<String>),
     /// Why the last patch given can't be shown: it couldn't be parsed.
-    Failed { file_key: String, message: String },
+    Failed {
+        file_key: DiffFileKey,
+        message: String,
+    },
+    /// Stages (or unstages, as `LineStaging::action` says) `lines` of `patch`, the patch on show
+    /// they were picked from. The owner says if they couldn't be
+    /// ([`stage_failed`](PatchViewer::stage_failed)).
+    StageLines {
+        patch: Arc<str>,
+        lines: LineSelection,
+    },
 }
 
 /// What the viewer shows, from its owner.
@@ -194,7 +288,7 @@ pub struct PatchProps {
     /// The patch, as git gave it.
     pub patch: Arc<str>,
     /// Names the file the patch is of: a new patch with the same name is of the same file.
-    pub file_key: String,
+    pub file_key: DiffFileKey,
     /// Names the patch in the highlighting cache, e.g. by its commit and path: another patch,
     /// even of the same file, needs another name, or it's shown with the last one's highlighting.
     pub cache_key: String,
@@ -207,7 +301,7 @@ pub struct PatchProps {
 #[derive(Clone)]
 struct NextPatch {
     patch: Arc<str>,
-    file_key: String,
+    file_key: DiffFileKey,
     cache_key: String,
 }
 
@@ -262,6 +356,8 @@ pub struct PatchViewer {
     /// Why the whole file couldn't be loaded, by the diff it's of: it's no use trying again.
     failures: Vec<(Arc<FileDiff>, String)>,
     picker: LinePicker,
+    /// Where the keyboard staged the lines asked for last, if it did, until they're staged.
+    staging_at: Option<StagedAt>,
     /// A line-number drag is selecting lines, from the selection's start.
     dragging: bool,
     /// The diffs this view had highlighted, to drop the long ones once it closes.
@@ -302,6 +398,7 @@ impl PatchViewer {
             loads: Vec::new(),
             failures: Vec::new(),
             picker: LinePicker::default(),
+            staging_at: None,
             dragging: false,
             highlights: ViewHighlights::default(),
             reported: (false, None),
@@ -359,9 +456,16 @@ impl PatchViewer {
             self.relayout();
             cx.notify();
         }
-        if self.next.as_ref() != Some(&next) {
-            self.next = Some(next.clone());
-            self.show(next, cx);
+        match &mut self.next {
+            Some(kept) if *kept == next => {
+                // The same patch, loaded again: kept as it came, so it's told from the next one
+                // without comparing them.
+                kept.patch = next.patch;
+            }
+            _ => {
+                self.next = Some(next.clone());
+                self.show(next, cx);
+            }
         }
     }
 
@@ -395,12 +499,12 @@ impl PatchViewer {
         self.showing = Some(cx.spawn(async move |this, cx| {
             let diff = match parsing.await {
                 Ok(diff) => diff,
-                Err(message) => {
+                Err(error) => {
                     let _ = this.update(cx, |this, cx| {
                         if this.next.as_ref() == Some(&next) {
                             cx.emit(PatchViewerEvent::Failed {
                                 file_key: next.file_key.clone(),
-                                message,
+                                message: error.to_string(),
                             });
                         }
                     });
@@ -468,11 +572,7 @@ impl PatchViewer {
     ) {
         // Another file starts at its top.
         if self.shown.is_some() && !same_file {
-            self.scroll
-                .0
-                .borrow()
-                .base_handle
-                .set_offset(point(px(0.), px(0.)));
+            scroll_list_to(&self.scroll, px(0.), px(0.));
         }
         if same_file
             && let Some(shown) = &self.shown
@@ -498,7 +598,7 @@ impl PatchViewer {
         self.dragging = false;
         self.relayout();
         let pickable = self.is_pickable();
-        if let Some(line) = self.picker.shown(&diff, same_file, pickable, &self.layout) {
+        if let Some(line) = self.picker.shown(same_file, pickable, &self.layout) {
             self.reveal(&line);
         }
         self.watch_highlights(cx);
@@ -544,7 +644,7 @@ impl PatchViewer {
         self.layout = Rc::new(layout(
             &shown.diff,
             LayoutOptions {
-                style: self.style,
+                split: self.style == DiffStyle::Split,
                 expanded: &self.expanded,
                 separators: if failed {
                     Separators::Simple
@@ -606,6 +706,15 @@ impl PatchViewer {
         let loading = load_files(Arc::clone(&diff), &self.load_file, cx);
         cx.spawn(async move |this, cx| {
             let loaded = loading.await;
+            // The whole file can have lines wider than the patch's, or more of them: measured off
+            // the main thread, as it's read whole.
+            let measured = match &loaded {
+                Ok(loaded) => {
+                    let hydrated = Arc::clone(&loaded.hydrated);
+                    Some(cx.background_spawn(async move { measure(&hydrated) }).await)
+                }
+                Err(_) => None,
+            };
             let _ = this.update(cx, |this, cx| {
                 if let Some(ix) = this.loads.iter().position(|load| Arc::ptr_eq(load, &diff)) {
                     this.loads.remove(ix);
@@ -619,11 +728,13 @@ impl PatchViewer {
                         if on_show {
                             this.highlights.remember(&loaded.hydrated);
                             let highlights = ViewerRuntime::highlight(&loaded.hydrated, cx);
-                            let highest = measure(&loaded.hydrated).1;
                             if let Some(shown) = &mut this.shown {
                                 shown.diff = Arc::clone(&loaded.hydrated);
                                 shown.highlights = highlights;
-                                shown.highest = highest;
+                                if let Some((widest, highest)) = measured {
+                                    shown.widest = widest;
+                                    shown.highest = highest;
+                                }
                             }
                             let range = gap_size(&loaded.hydrated, index);
                             expand(&mut this.expanded, index, direction, range);
@@ -631,8 +742,8 @@ impl PatchViewer {
                             this.watch_highlights(cx);
                         }
                     }
-                    Err(message) => {
-                        this.failures.push((Arc::clone(&diff), message));
+                    Err(error) => {
+                        this.failures.push((Arc::clone(&diff), error.to_string()));
                         this.relayout();
                     }
                 }
@@ -645,7 +756,7 @@ impl PatchViewer {
 
     /// Stages `changed`, of the patch on show, if lines can be staged now.
     fn stage(&mut self, changed: Vec<ChangedLine>, by_keyboard: bool, cx: &mut Context<Self>) {
-        let Some(staging) = self.staging.clone() else {
+        let Some(staging) = self.staging else {
             return;
         };
         if staging.busy || !self.is_live() {
@@ -654,7 +765,7 @@ impl PatchViewer {
         let Some(patch) = self
             .shown
             .as_ref()
-            .map(|shown| shown.patch.patch.to_string())
+            .map(|shown| Arc::clone(&shown.patch.patch))
         else {
             return;
         };
@@ -664,29 +775,26 @@ impl PatchViewer {
         else {
             return;
         };
-        let selection: LineSelection = to_selection(&request.lines);
-        let at = request.at;
-        // Not from inside this view's update: staging updates its owner, which updates this.
-        cx.spawn(async move |this, cx| {
-            let staged = cx.update(|cx| (staging.stage)(patch, selection, cx)).await;
-            if staged.is_err() {
-                let _ = this.update(cx, |this, _| {
-                    let awaiting = this.is_awaiting_patch();
-                    this.picker.stage_failed(at, awaiting);
-                });
-            }
-        })
-        .detach();
+        self.staging_at = request.at;
+        cx.emit(PatchViewerEvent::StageLines {
+            patch,
+            lines: to_selection(&request.lines),
+        });
+    }
+
+    /// The lines asked for last ([`PatchViewerEvent::StageLines`]) couldn't be staged: the
+    /// keyboard picks the same ones again, in the patch reloaded.
+    pub fn stage_failed(&mut self) {
+        let awaiting = self.is_awaiting_patch();
+        self.picker.stage_failed(self.staging_at.take(), awaiting);
     }
 
     /// The rows in view.
     fn viewport(&self, row_height: Pixels) -> Viewport {
-        let state = self.scroll.0.borrow();
-        let top = -state.base_handle.offset().y;
-        let height = state.last_item_size.map_or(px(0.), |size| size.item.height);
+        let at = ListScroll::of(&self.scroll);
         Viewport {
-            top: top / row_height,
-            rows: height / row_height,
+            top: at.top / row_height,
+            rows: at.height() / row_height,
         }
     }
 
@@ -696,105 +804,91 @@ impl PatchViewer {
         let Some(row) = self.layout.row_of(line.line_number, line.side) else {
             return;
         };
-        let state = self.scroll.0.borrow();
-        let Some(size) = state.last_item_size else {
+        let at = ListScroll::of(&self.scroll);
+        let Some(view) = at.view else {
             // Not laid out yet: from the top.
-            drop(state);
-            self.scroll
-                .scroll_to_item_with_offset(row, gpui_kit::ScrollStrategy::Top, 3);
+            self.scroll.scroll_to_item_with_offset(
+                row,
+                ScrollStrategy::Top,
+                REVEAL_MARGIN_ROWS as usize,
+            );
             return;
         };
         let row_height = self.row_height;
         let top = row_height * row as f32;
-        let margin = row_height * 3.;
-        let offset = state.base_handle.offset();
-        let scroll_top = -offset.y;
-        let target = if top - margin < scroll_top {
+        let margin = row_height * REVEAL_MARGIN_ROWS;
+        let target = if top - margin < at.top {
             Some((top - margin).max(px(0.)))
-        } else if top + row_height + margin > scroll_top + size.item.height {
-            Some(top + row_height + margin - size.item.height)
+        } else if top + row_height + margin > at.top + view.height {
+            Some(top + row_height + margin - view.height)
         } else {
             None
         };
-        if let Some(y) = target {
-            state.base_handle.set_offset(point(offset.x, -y));
+        if let Some(top) = target {
+            scroll_list_to(&self.scroll, at.left, top);
         }
     }
 
-    fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let keystroke = &event.keystroke;
-        let modifiers = &keystroke.modifiers;
-        if modifiers.alt || modifiers.control || modifiers.platform {
-            return;
-        }
+    /// Picks lines with `key` (see the viewer's actions, `viewer_actions`), if they can be picked
+    /// now; whether it did.
+    fn pick(&mut self, key: PickerKey, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let row_height = rems(ROW_REMS).to_pixels(window.rem_size());
-        let picker_key = match keystroke.key.as_str() {
-            "down" => Some(PickerKey::Down {
-                extend: modifiers.shift,
-            }),
-            "up" => Some(PickerKey::Up {
-                extend: modifiers.shift,
-            }),
-            "]" => Some(PickerKey::NextHunk),
-            "[" => Some(PickerKey::PreviousHunk),
-            "space" if !modifiers.shift => Some(PickerKey::Space),
-            "escape" => Some(PickerKey::Escape),
-            _ => None,
-        };
-        if let Some(key) = picker_key {
-            let viewport = self.viewport(row_height);
-            let (pickable, live) = (self.is_pickable(), self.is_live());
-            let layout = Rc::clone(&self.layout);
-            match self.picker.key(key, pickable, live, &layout, viewport) {
-                KeyOutcome::Ignored => {}
-                KeyOutcome::Handled { reveal } => {
-                    if let Some(line) = reveal {
-                        self.reveal(&line);
-                    }
-                    cx.stop_propagation();
-                    cx.notify();
-                    return;
-                }
-                KeyOutcome::RevealHunk { first, last } => {
-                    self.reveal(&last);
-                    self.reveal(&first);
-                    cx.stop_propagation();
-                    cx.notify();
-                    return;
-                }
-                KeyOutcome::Stage => {
-                    let picked = self.picker.picked().to_vec();
-                    self.stage(picked, true, cx);
-                    cx.stop_propagation();
-                    return;
+        let viewport = self.viewport(row_height);
+        let (pickable, live) = (self.is_pickable(), self.is_live());
+        let layout = Rc::clone(&self.layout);
+        match self.picker.key(key, pickable, live, &layout, viewport) {
+            KeyOutcome::Ignored => return false,
+            KeyOutcome::Handled { reveal } => {
+                if let Some(line) = reveal {
+                    self.reveal(&line);
                 }
             }
+            KeyOutcome::RevealHunk { first, last } => {
+                self.reveal(&last);
+                self.reveal(&first);
+            }
+            KeyOutcome::Stage => {
+                let picked = self.picker.picked().to_vec();
+                self.stage(picked, true, cx);
+                return true;
+            }
         }
-        // Scrolling, as a browser's scroll container does.
-        let page = self.viewport(row_height).rows.max(1.) * 0.9 * row_height;
-        let line = row_height * 2.;
-        let column = self.char_width.map_or(px(8.), |(_, width)| width) * 6.;
-        let (down, right) = match keystroke.key.as_str() {
-            "down" => (line, px(0.)),
-            "up" => (-line, px(0.)),
-            "right" => (px(0.), column),
-            "left" => (px(0.), -column),
-            "pagedown" => (page, px(0.)),
-            "pageup" => (-page, px(0.)),
-            "space" if modifiers.shift => (-page, px(0.)),
-            "space" => (page, px(0.)),
-            "home" => (px(-1e9), px(0.)),
-            "end" => (px(1e9), px(0.)),
-            _ => return,
-        };
-        scroll_list_by(
+        cx.notify();
+        true
+    }
+
+    /// Picks lines with `key`; scrolls as `otherwise` says if they can't be picked.
+    fn pick_or_scroll(
+        &mut self,
+        key: PickerKey,
+        otherwise: Scroll,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.pick(key, window, cx) {
+            self.scroll(otherwise, window, cx);
+        }
+    }
+
+    /// Picks lines with `key`; leaves the key to the view around otherwise, e.g. Esc to close the
+    /// changes.
+    fn pick_or_propagate(&mut self, key: PickerKey, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.pick(key, window, cx) {
+            cx.propagate();
+        }
+    }
+
+    /// Scrolls, as a browser's scroll container does with the keyboard.
+    fn scroll(&mut self, how: Scroll, window: &mut Window, cx: &mut Context<Self>) {
+        let row_height = rems(ROW_REMS).to_pixels(window.rem_size());
+        let char_width = self.char_width.map(|(_, width)| width);
+        scroll_list(
             &self.scroll,
             self.layout.rows.len(),
-            down,
-            right,
+            how,
             row_height,
+            char_width,
         );
-        cx.stop_propagation();
         cx.notify();
     }
 
@@ -851,7 +945,7 @@ impl PatchViewer {
 
     /// The pointer is on the line `number` of `side`, or left it.
     fn hover_line(&mut self, number: usize, side: Side, hovered: bool, cx: &mut Context<Self>) {
-        let line = self.picker.changed_line(number, side);
+        let line = self.layout.changed_line(number, side);
         let next = if hovered {
             line
         } else if self.picker.hovered() == line.as_ref() {
@@ -887,21 +981,12 @@ impl PatchViewer {
         let row_height = rems(ROW_REMS).to_pixels(rem);
         self.row_height = row_height;
         let char_width = self.char_width(font_size, window, cx);
-        let viewport_width = self
-            .scroll
-            .0
-            .borrow()
-            .last_item_size
-            .map_or(window.viewport_size().width, |size| size.item.width);
         // Until the list is laid out (the first frame) the window's width stands in for its own,
         // which puts what's aligned to the rows' right out of sight: drawn again once the list's
-        // width is known (after this frame's drawn), or has changed.
-        cx.defer_in(window, move |this, _, cx| {
-            let measured = this.scroll.0.borrow().last_item_size;
-            if measured.is_some_and(|size| size.item.width != viewport_width) {
-                cx.notify();
-            }
-        });
+        // width is known, or has changed (see `width_check`).
+        let viewport_width = ListScroll::of(&self.scroll)
+            .view
+            .map_or(window.viewport_size().width, |view| view.width);
         let digits = highest.max(1).ilog10() as f32 + 1.;
         let gutter_width = char_width * digits + rem * 1.2;
         let code_padding = rem * 1.2;
@@ -940,6 +1025,7 @@ impl PatchViewer {
             split,
             row_width,
             column_width,
+            viewport_width,
             gutter_width,
             row_height,
             font_size,
@@ -977,6 +1063,8 @@ struct Frame {
     split: bool,
     row_width: Pixels,
     column_width: Pixels,
+    /// How wide the list was taken to be.
+    viewport_width: Pixels,
     gutter_width: Pixels,
     row_height: Pixels,
     font_size: Pixels,
@@ -1015,7 +1103,7 @@ impl Render for PatchViewer {
         let busy = self.staging.as_ref().is_some_and(|staging| staging.busy);
         div()
             .id("patch-viewer")
-            .key_context("PatchViewer")
+            .key_context(PATCH_VIEWER)
             .track_focus(&self.focus)
             .relative()
             .size_full()
@@ -1023,7 +1111,62 @@ impl Render for PatchViewer {
             .bg(palette.bg)
             .text_color(palette.text)
             .when(busy, |this| this.cursor_default())
-            .on_key_down(cx.listener(Self::on_key_down))
+            .on_action(cx.listener(|this, _: &SelectDown, window, cx| {
+                this.pick_or_scroll(
+                    PickerKey::Down { extend: false },
+                    Scroll::LineDown,
+                    window,
+                    cx,
+                )
+            }))
+            .on_action(cx.listener(|this, _: &SelectUp, window, cx| {
+                this.pick_or_scroll(PickerKey::Up { extend: false }, Scroll::LineUp, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ExtendSelectionDown, window, cx| {
+                this.pick_or_scroll(
+                    PickerKey::Down { extend: true },
+                    Scroll::LineDown,
+                    window,
+                    cx,
+                )
+            }))
+            .on_action(cx.listener(|this, _: &ExtendSelectionUp, window, cx| {
+                this.pick_or_scroll(PickerKey::Up { extend: true }, Scroll::LineUp, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SelectNextHunk, window, cx| {
+                this.pick_or_propagate(PickerKey::NextHunk, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SelectPreviousHunk, window, cx| {
+                this.pick_or_propagate(PickerKey::PreviousHunk, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &StageSelection, window, cx| {
+                this.pick_or_scroll(PickerKey::Space, Scroll::PageDown, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ClearSelection, window, cx| {
+                this.pick_or_propagate(PickerKey::Escape, window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &ScrollLeft, window, cx| {
+                    this.scroll(Scroll::Left, window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &ScrollRight, window, cx| {
+                this.scroll(Scroll::Right, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ScrollPageDown, window, cx| {
+                this.scroll(Scroll::PageDown, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ScrollPageUp, window, cx| {
+                this.scroll(Scroll::PageUp, window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &ScrollToTop, window, cx| {
+                    this.scroll(Scroll::Top, window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &ScrollToBottom, window, cx| {
+                this.scroll(Scroll::Bottom, window, cx)
+            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseDownEvent, window, cx| {
@@ -1052,6 +1195,11 @@ impl Render for PatchViewer {
                     .size_full(),
                 )
                 .child(Scrollbar::new(&self.scroll))
+                .child(width_check(
+                    &self.scroll,
+                    frame.viewport_width,
+                    cx.entity().downgrade(),
+                ))
             })
             // The focus ring, inside: the view fills its panel.
             .when(focused, |this| {
@@ -1064,6 +1212,31 @@ impl Render for PatchViewer {
                 )
             })
     }
+}
+
+/// Checks, as the list `scroll` tracks is laid out, that it's `drawn_for` wide, as its rows were
+/// drawn; if it isn't (before its first layout, or once it's resized), `viewer` draws them again,
+/// once this frame's drawn (it can't be told to while it is). After the list, so it's laid out
+/// by then: nothing's put off but when its width changed.
+pub(in crate::components::repository::diff) fn width_check<V: 'static>(
+    scroll: &UniformListScrollHandle,
+    drawn_for: Pixels,
+    viewer: WeakEntity<V>,
+) -> impl IntoElement {
+    let scroll = scroll.clone();
+    canvas(
+        move |_, _, cx| {
+            let measured = ListScroll::of(&scroll).view;
+            if measured.is_some_and(|view| view.width != drawn_for) {
+                cx.defer(move |cx| {
+                    let _ = viewer.update(cx, |_, cx| cx.notify());
+                });
+            }
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .size_0()
 }
 
 /// The row `ix`.
@@ -1344,7 +1517,7 @@ fn hunk_button(frame: &Rc<Frame>, hunk: usize) -> AnyElement {
                 .disabled(busy)
                 .on_click(move |_, _, cx| {
                     let _ = entity.update(cx, |this, cx| {
-                        let lines = this.picker.hunk_lines(hunk);
+                        let lines = this.layout.changed().hunk_lines(hunk);
                         this.stage(lines, false, cx);
                     });
                 }),
@@ -1471,8 +1644,11 @@ fn line_text(
 
 #[cfg(test)]
 mod tests {
-    use gpui_kit::{AppContext as _, TestAppContext};
+    use gitto_ui_logic::git::diff_source::DiffSource;
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{AppContext as _, TestAppContext, size};
 
+    use super::super::viewer_runtime::LoadedFile;
     use super::*;
     use gitto_app_data::data::DataError;
 
@@ -1490,7 +1666,7 @@ mod tests {
                 viewer.set_props(
                     PatchProps {
                         patch: PATCH.into(),
-                        file_key: "f.txt".into(),
+                        file_key: DiffFileKey::new(&DiffSource::Unstaged, "f.txt"),
                         cache_key: "test:f.txt".into(),
                         style: DiffStyle::Unified,
                         staging,
@@ -1517,14 +1693,14 @@ mod tests {
     #[test]
     fn measures_lines_in_characters_as_drawn() {
         let patch = "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-\u{e9}\u{e9}\u{e9}\n+\ta\n";
-        let diff = super::super::diff_metadata::parse_patch_files(patch, None).remove(0);
+        let diff = gitto_ui_logic::diff::diff_metadata::parse_patch_files(patch, None).remove(0);
         // Three characters of two bytes each, and a tab drawn as four spaces before a letter.
         assert_eq!(measure(&diff).0, TAB_WIDTH + 1);
         let long = format!(
             "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-a\n+{}\n",
             "\u{e9}".repeat(MAX_DRAWN_LINE)
         );
-        let diff = super::super::diff_metadata::parse_patch_files(&long, None).remove(0);
+        let diff = gitto_ui_logic::diff::diff_metadata::parse_patch_files(&long, None).remove(0);
         // Cut at as many bytes, with an ellipsis.
         assert_eq!(measure(&diff).0, MAX_DRAWN_LINE / 2 + 1);
     }
@@ -1534,7 +1710,6 @@ mod tests {
         let staging = LineStaging {
             action: StageAction::Stage,
             busy: false,
-            stage: Rc::new(|_, _, _| Task::ready(Ok(()))),
         };
         assert!(stage_button_on_hover(Some(staging), cx));
     }
@@ -1543,5 +1718,128 @@ mod tests {
     fn keeps_the_line_numbers_of_a_patch_whose_lines_cant_be_staged(cx: &mut TestAppContext) {
         // A commit's, say: the button would take the number's place, with nothing in it.
         assert!(!stage_button_on_hover(None, cx));
+    }
+
+    #[gpui_kit::test]
+    fn widens_the_rows_for_a_line_wider_than_the_patchs_once_its_shown_around_it(
+        cx: &mut TestAppContext,
+    ) {
+        let _dir = crate::test_support::init(cx, |services| services);
+        // The first line, hidden above the hunk, is far wider than the patch's lines.
+        let wide = "w".repeat(500);
+        let old = format!("{wide}\ntwo\nthree\nfour\nfive\nsix\n");
+        let new = format!("{wide}\ntwo\nthree\nfour\nfive\nSIX\n");
+        let load_file: LoadFile = Rc::new(move |side, _, _| {
+            let contents = match side {
+                Side::Deletions => old.clone(),
+                Side::Additions => new.clone(),
+            };
+            Task::ready(Ok(LoadedFile::Blob(contents)))
+        });
+        let (window, viewer) =
+            crate::test_support::open(cx, |_, cx| PatchViewer::new(load_file, cx));
+        cx.update(|cx| {
+            viewer.update(cx, |viewer, cx| {
+                viewer.set_props(
+                    PatchProps {
+                        patch: "diff --git a/f.txt b/f.txt\nindex 1111111..2222222 100644\n--- a/f.txt\n+++ b/f.txt\n@@ -5,2 +5,2 @@\n five\n-six\n+SIX\n".into(),
+                        file_key: DiffFileKey::new(&DiffSource::Unstaged, "f.txt"),
+                        cache_key: "test:wide".into(),
+                        style: DiffStyle::Unified,
+                        staging: None,
+                    },
+                    cx,
+                )
+            })
+        });
+        cx.run_until_parked();
+        let row_width = |cx: &mut TestAppContext| {
+            cx.update_window(window, |_, window, cx| {
+                viewer.update(cx, |viewer, cx| {
+                    viewer.frame(window, cx).expect("a patch on show").row_width
+                })
+            })
+            .unwrap()
+        };
+        let before = row_width(cx);
+        viewer.update(cx, |viewer, cx| {
+            viewer.expand_gap(0, ExpandDirection::All, cx)
+        });
+        cx.run_until_parked();
+        assert!(viewer.read_with(cx, |viewer, _| !viewer.shown_diff().unwrap().is_partial));
+        let after = row_width(cx);
+        assert!(after > before * 2., "{before:?} to {after:?}");
+    }
+
+    #[gpui_kit::test]
+    fn draws_its_rows_again_as_wide_as_the_list_once_its_resized(cx: &mut TestAppContext) {
+        let _dir = crate::test_support::init(cx, |services| services);
+        let load_file: LoadFile = Rc::new(|side, _, _| {
+            let contents = match side {
+                Side::Deletions => "one\ntwo\nthree\nfour\nfive\nsix\n",
+                Side::Additions => "one\ntwo\nthree\nfour\nfive\nSIX\n",
+            };
+            Task::ready(Ok(LoadedFile::Blob(contents.to_owned())))
+        });
+        let (window, viewer) =
+            crate::test_support::open(cx, |_, cx| PatchViewer::new(load_file, cx));
+        cx.update(|cx| {
+            viewer.update(cx, |viewer, cx| {
+                viewer.set_props(
+                    PatchProps {
+                        patch: "diff --git a/f.txt b/f.txt\nindex 1111111..2222222 100644\n--- a/f.txt\n+++ b/f.txt\n@@ -5,2 +5,2 @@\n five\n-six\n+SIX\n".into(),
+                        file_key: DiffFileKey::new(&DiffSource::Unstaged, "f.txt"),
+                        cache_key: "test:resized".into(),
+                        style: DiffStyle::Unified,
+                        staging: Some(LineStaging {
+                            action: gitto_app_data::data::staging::StageAction::Stage,
+                            busy: false,
+                        }),
+                    },
+                    cx,
+                )
+            })
+        });
+        cx.run_until_parked();
+        let drawn = |cx: &mut TestAppContext| {
+            cx.update_window(window, |_, window, cx| window.render_frame(cx))
+                .unwrap();
+            cx.run_until_parked();
+        };
+        // The width of the list, and where what's aligned to its rows' right ends, as drawn last.
+        let widths = |cx: &mut TestAppContext| {
+            cx.update_window(window, |_, window, cx| {
+                let list = ListScroll::of(&viewer.read(cx).scroll)
+                    .view
+                    .map(|view| view.width);
+                let right = window.find(("stage-hunk", 0usize)).bounds().right();
+                (list.expect("laid out"), right)
+            })
+            .unwrap()
+        };
+        // In sight, by the list's right edge.
+        let in_sight = |(list, right): (Pixels, Pixels)| right <= list && right > list - px(40.);
+        let notified = Rc::new(std::cell::Cell::new(0));
+        let _observing = cx.update(|cx| {
+            let notified = Rc::clone(&notified);
+            cx.observe(&viewer, move |_, _| notified.set(notified.get() + 1))
+        });
+        drawn(cx);
+        drawn(cx);
+        let (list, right) = widths(cx);
+        assert!(in_sight((list, right)), "{right:?} in {list:?}");
+        // Drawn again as wide as it was laid out: it isn't asked to be drawn once more.
+        let settled = notified.get();
+        drawn(cx);
+        assert_eq!(notified.get(), settled);
+
+        // Drawn at the new size as it was laid out at the last, then again as it's laid out now.
+        cx.simulate_window_resize(window, size(px(700.), px(800.)));
+        drawn(cx);
+        assert!(notified.get() > settled);
+        drawn(cx);
+        let (resized, right) = widths(cx);
+        assert!(resized < list);
+        assert!(in_sight((resized, right)), "{right:?} in {resized:?}");
     }
 }

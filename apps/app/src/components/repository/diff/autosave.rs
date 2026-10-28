@@ -6,8 +6,10 @@ use std::time::Duration;
 use futures::FutureExt as _;
 use futures::future::Shared;
 use gitto_git::ApiCode;
+use gitto_git::ContentVersion;
 use gpui_kit::{App, Context, Task};
 
+use super::file_editing::{Overwrite, SaveRequest};
 use gitto_app_data::data::DataError;
 
 /// Where saving a file that's being edited is at.
@@ -33,41 +35,52 @@ impl SaveState {
     }
 }
 
-/// Saves `text` over the file as it was at `version`, or whatever it is if `overwrite`; resolves
-/// to the version saved.
-pub type SaveFile =
-    Rc<dyn Fn(String, String, bool, &mut App) -> Task<Result<String, DataError>> + 'static>;
+/// Saves the edits over the file being edited, as the request says; resolves to the version saved.
+pub type SaveEdits =
+    Rc<dyn Fn(SaveRequest, &mut App) -> Task<Result<ContentVersion, DataError>> + 'static>;
+
+/// The text the edits left, as it is now (an editor's): read only as it's saved, rather than
+/// copied with each edit, as a file can be megabytes.
+pub type ReadEdits = Rc<dyn Fn(&App) -> String>;
 
 /// How long after the last edit it's saved: long enough not to write on every key.
 pub const AUTOSAVE_DELAY: Duration = Duration::from_millis(600);
 
 /// Saves a file's edits a moment after each, one save at a time, each over the version the last
 /// one wrote: one that changed on disk since isn't saved over unless the user says so
-/// ([`overwrite`](Self::overwrite)). Started with the version the edits are of
-/// ([`start`](Self::start)); [`flush`](Self::flush) saves what's left at once, e.g. before the file
-/// is closed. An entity, which its owner observes for its [`state`](Self::state).
+/// ([`overwrite`](Self::overwrite)). Started with the version the edits are of, and where to read
+/// them ([`start`](Self::start)); told only that there's been an edit ([`change`](Self::change));
+/// [`flush`](Self::flush) saves what's left at once, e.g. before the file is closed. An entity,
+/// which its owner observes for its [`state`](Self::state).
 pub struct Autosave {
-    save: SaveFile,
+    save: SaveEdits,
     delay: Duration,
     state: SaveState,
-    version: Option<String>,
-    /// The edits to save; `None` once they're saved.
-    unsaved: Option<String>,
-    /// Counts the timers set: one that fires after another was set, or cleared, does nothing.
-    timer: u64,
+    version: Option<ContentVersion>,
+    /// Where the edits are read, while there are edits to save.
+    edits: Option<ReadEdits>,
+    /// How many edits there have been, to tell whether there were more while one was saved.
+    edited: u64,
+    /// The edits to save, by how many there had been once the last was made; `None` once they're
+    /// saved.
+    unsaved: Option<u64>,
+    /// The save due once the typing stops, replaced by each edit: dropped, it's cancelled.
+    pending: Option<Task<()>>,
     /// The saves asked for, one after the other: the last one.
     saves: Shared<Task<()>>,
 }
 
 impl Autosave {
-    pub fn new(save: SaveFile, delay: Duration) -> Self {
+    pub fn new(save: SaveEdits, delay: Duration) -> Self {
         Autosave {
             save,
             delay,
             state: SaveState::Saved,
             version: None,
+            edits: None,
+            edited: 0,
             unsaved: None,
-            timer: 0,
+            pending: None,
             saves: Task::ready(()).shared(),
         }
     }
@@ -88,17 +101,20 @@ impl Autosave {
         }
     }
 
-    /// Saves over the file as it is at `version` from now on, with nothing to save yet.
-    pub fn start(&mut self, version: String, cx: &mut Context<Self>) {
+    /// Saves the edits `edits` reads over the file as it is at `version` from now on, with
+    /// nothing to save yet.
+    pub fn start(&mut self, version: ContentVersion, edits: ReadEdits, cx: &mut Context<Self>) {
         self.clear_timer();
         self.version = Some(version);
+        self.edits = Some(edits);
         self.unsaved = None;
         self.set_state(SaveState::Saved, cx);
     }
 
-    /// The file was edited to `text`: saved once the edits stop for a moment.
-    pub fn change(&mut self, text: String, cx: &mut Context<Self>) {
-        self.unsaved = Some(text);
+    /// The file was edited: saved once the edits stop for a moment.
+    pub fn change(&mut self, cx: &mut Context<Self>) {
+        self.edited += 1;
+        self.unsaved = Some(self.edited);
         if matches!(self.state, SaveState::ChangedOnDisk(_)) {
             return;
         }
@@ -119,13 +135,22 @@ impl Autosave {
     /// Sends the edits that are left at once, as the app quits: not after a save under way, whose
     /// answer may come too late. Over the version that save started from, which the save takes as
     /// the one it's saving (see `save_working_tree_file`).
-    pub fn flush_now(&mut self, cx: &mut Context<Self>) -> Option<Task<Result<String, DataError>>> {
+    pub fn flush_now(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<Task<Result<ContentVersion, DataError>>> {
         self.clear_timer();
-        let (text, version) = (self.unsaved.clone()?, self.version.clone()?);
+        self.unsaved?;
+        let (edits, expected) = (self.edits.clone()?, self.version.clone()?);
         if matches!(self.state, SaveState::ChangedOnDisk(_)) {
             return None;
         }
-        Some((self.save)(text, version, false, cx))
+        let request = SaveRequest {
+            contents: edits(cx),
+            expected,
+            overwrite: Overwrite::IfUnchanged,
+        };
+        Some((self.save)(request, cx))
     }
 
     /// Saves the edits over the file whatever it is now; resolves to whether they're saved.
@@ -138,6 +163,7 @@ impl Autosave {
     pub fn stop(&mut self, cx: &mut Context<Self>) {
         self.clear_timer();
         self.unsaved = None;
+        self.edits = None;
         self.version = None;
         self.set_state(SaveState::Saved, cx);
     }
@@ -154,22 +180,16 @@ impl Autosave {
     }
 
     fn clear_timer(&mut self) {
-        self.timer += 1;
+        self.pending = None;
     }
 
     fn schedule(&mut self, cx: &mut Context<Self>) {
-        self.clear_timer();
-        let timer = self.timer;
         let delay = self.delay;
-        cx.spawn(async move |this, cx| {
+        self.pending = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(delay).await;
-            let _ = this.update(cx, |this, cx| {
-                if this.timer == timer {
-                    drop(this.run(false, cx));
-                }
-            });
-        })
-        .detach();
+            // Running the save drops this timer (see `run`), as it's done.
+            let _ = this.update(cx, |this, cx| drop(this.run(false, cx)));
+        }));
     }
 
     /// Saves the latest edits, after any save under way.
@@ -179,36 +199,51 @@ impl Autosave {
         let saves = cx
             .spawn(async move |this, cx| {
                 previous.await;
-                let Ok(Some((text, saving))) =
+                let Ok(Some((at, saving))) =
                     this.update(cx, |this, cx| this.save_latest(overwrite, cx))
                 else {
                     return;
                 };
                 let result = saving.await;
-                let _ = this.update(cx, |this, cx| this.saved(text, result, cx));
+                let _ = this.update(cx, |this, cx| this.saved(at, result, cx));
             })
             .shared();
         self.saves = saves.clone();
         saves
     }
 
-    /// Starts saving the latest edits, if there are any to save.
+    /// Starts saving the latest edits, if there are any to save; with how many edits it saves.
     fn save_latest(
         &mut self,
         overwrite: bool,
         cx: &mut Context<Self>,
-    ) -> Option<(String, Task<Result<String, DataError>>)> {
-        let (text, version) = (self.unsaved.clone()?, self.version.clone()?);
+    ) -> Option<(u64, Task<Result<ContentVersion, DataError>>)> {
+        let at = self.unsaved?;
+        let (edits, expected) = (self.edits.clone()?, self.version.clone()?);
         if !overwrite && matches!(self.state, SaveState::ChangedOnDisk(_)) {
             return None;
         }
         self.set_state(SaveState::Saving, cx);
-        let saving = (self.save)(text.clone(), version, overwrite, cx);
-        Some((text, saving))
+        let request = SaveRequest {
+            contents: edits(cx),
+            expected,
+            overwrite: if overwrite {
+                Overwrite::Always
+            } else {
+                Overwrite::IfUnchanged
+            },
+        };
+        let saving = (self.save)(request, cx);
+        Some((at, saving))
     }
 
-    /// `text` was saved, or not.
-    fn saved(&mut self, text: String, result: Result<String, DataError>, cx: &mut Context<Self>) {
+    /// The edits made by the `at`th were saved, or not.
+    fn saved(
+        &mut self,
+        at: u64,
+        result: Result<ContentVersion, DataError>,
+        cx: &mut Context<Self>,
+    ) {
         // Stopped meanwhile: nothing left to save, nor to say about it.
         if self.version.is_none() {
             return;
@@ -225,7 +260,7 @@ impl Autosave {
             }
             Ok(version) => {
                 self.version = Some(version);
-                if self.unsaved.as_deref() == Some(&text) {
+                if self.unsaved == Some(at) {
                     self.unsaved = None;
                     self.set_state(SaveState::Saved, cx);
                 } else if self.unsaved.is_some() {
@@ -251,7 +286,8 @@ mod tests {
     use std::cell::RefCell;
 
     use futures::channel::oneshot;
-    use gitto_git::core::errors::DiskChange;
+    use gitto_git::DiskChange;
+    use gitto_git::input::RepositoryId;
     use gitto_git::{ApiError, Error};
     use gpui_kit::{AppContext as _, Entity, TestAppContext};
 
@@ -262,19 +298,46 @@ mod tests {
     /// The saves asked for: text, version, and whether to overwrite.
     type Calls = Rc<RefCell<Vec<(String, String, bool)>>>;
 
+    /// The text being edited.
+    type Text = Rc<RefCell<String>>;
+
     fn autosave(
         cx: &mut TestAppContext,
         respond: impl Fn(&str, &str, bool, &mut App) -> Task<Result<String, DataError>> + 'static,
-    ) -> (Entity<Autosave>, Calls) {
+    ) -> (Entity<Autosave>, Calls, Text) {
         let calls: Calls = Rc::default();
         let recorded = Rc::clone(&calls);
-        let save: SaveFile = Rc::new(move |text, version, overwrite, cx| {
+        let save: SaveEdits = Rc::new(move |request, cx| {
+            let overwrite = request.overwrite == Overwrite::Always;
+            let (text, version) = (request.contents, request.expected.to_string());
             recorded
                 .borrow_mut()
                 .push((text.clone(), version.clone(), overwrite));
-            respond(&text, &version, overwrite, cx)
+            let responding = respond(&text, &version, overwrite, cx);
+            cx.spawn(async move |_| responding.await.map(ContentVersion::from))
         });
-        (cx.new(|_| Autosave::new(save, DELAY)), calls)
+        (
+            cx.new(|_| Autosave::new(save, DELAY)),
+            calls,
+            Text::default(),
+        )
+    }
+
+    /// Starts saving `text`'s edits over `v0`.
+    fn start(autosave: &mut Autosave, text: &Text, cx: &mut gpui_kit::Context<Autosave>) {
+        let text = Rc::clone(text);
+        autosave.start("v0".into(), Rc::new(move |_| text.borrow().clone()), cx);
+    }
+
+    /// Edits `text` to `typed`.
+    fn edit(
+        autosave: &mut Autosave,
+        text: &Text,
+        typed: &str,
+        cx: &mut gpui_kit::Context<Autosave>,
+    ) {
+        *text.borrow_mut() = typed.to_owned();
+        autosave.change(cx);
     }
 
     fn call(text: &str, version: &str, overwrite: bool) -> (String, String, bool) {
@@ -283,7 +346,7 @@ mod tests {
 
     /// An error as git's API makes it for a file changed on disk.
     fn changed_on_disk() -> DataError {
-        ApiError::from(Error::FileChangedOnDisk {
+        ApiError::unreported(Error::FileChangedOnDisk {
             path: "a.txt".into(),
             how: DiskChange::Changed,
         })
@@ -312,29 +375,72 @@ mod tests {
 
     #[gpui_kit::test]
     fn saves_once_the_edits_stop_over_the_version_the_last_save_wrote(cx: &mut TestAppContext) {
-        let (autosave, calls) = autosave(cx, |text, _, _, _| Task::ready(Ok(format!("v-{text}"))));
-        autosave.update(cx, |autosave, cx| autosave.start("v0".into(), cx));
+        let (autosave, calls, text) =
+            autosave(cx, |text, _, _, _| Task::ready(Ok(format!("v-{text}"))));
+        autosave.update(cx, |autosave, cx| start(autosave, &text, cx));
 
         autosave.update(cx, |autosave, cx| {
-            autosave.change("a".into(), cx);
-            autosave.change("ab".into(), cx);
+            edit(autosave, &text, "a", cx);
+            edit(autosave, &text, "ab", cx);
         });
         assert_eq!(state(&autosave, cx), SaveState::Pending);
         wait(cx, DELAY);
         assert_eq!(*calls.borrow(), [call("ab", "v0", false)]);
         assert_eq!(state(&autosave, cx), SaveState::Saved);
 
-        autosave.update(cx, |autosave, cx| autosave.change("abc".into(), cx));
+        autosave.update(cx, |autosave, cx| edit(autosave, &text, "abc", cx));
         wait(cx, DELAY);
         assert_eq!(calls.borrow().last(), Some(&call("abc", "v-ab", false)));
     }
 
     #[gpui_kit::test]
-    fn saves_whats_left_at_once_when_flushed(cx: &mut TestAppContext) {
-        let (autosave, calls) = autosave(cx, |_, _, _, _| Task::ready(Ok("v1".into())));
+    fn reads_the_edits_only_as_it_saves_them(cx: &mut TestAppContext) {
+        let (autosave, calls, text) = autosave(cx, |_, _, _, _| Task::ready(Ok("v1".into())));
+        let reads = Rc::new(std::cell::Cell::new(0));
         autosave.update(cx, |autosave, cx| {
-            autosave.start("v0".into(), cx);
-            autosave.change("a".into(), cx);
+            let (read, reads) = (Rc::clone(&text), Rc::clone(&reads));
+            let edits: ReadEdits = Rc::new(move |_| {
+                reads.set(reads.get() + 1);
+                read.borrow().clone()
+            });
+            autosave.start("v0".into(), edits, cx);
+            for typed in ["a", "ab", "abc"] {
+                edit(autosave, &text, typed, cx);
+            }
+        });
+        assert_eq!(reads.get(), 0);
+        wait(cx, DELAY);
+        assert_eq!(reads.get(), 1);
+        assert_eq!(*calls.borrow(), [call("abc", "v0", false)]);
+    }
+
+    #[gpui_kit::test]
+    fn keeps_one_timer_for_the_last_edit_however_many_there_were(cx: &mut TestAppContext) {
+        let (autosave, calls, text) = autosave(cx, |_, _, _, _| Task::ready(Ok("v1".into())));
+        autosave.update(cx, |autosave, cx| start(autosave, &text, cx));
+
+        for typed in ["a", "ab", "abc"] {
+            autosave.update(cx, |autosave, cx| edit(autosave, &text, typed, cx));
+            wait(cx, DELAY / 2);
+        }
+        assert_eq!(*calls.borrow(), []);
+        wait(cx, DELAY / 2);
+        assert_eq!(*calls.borrow(), [call("abc", "v0", false)]);
+        // Flushed, the timer's dropped, and saves nothing more once it would have fired.
+        autosave.update(cx, |autosave, cx| edit(autosave, &text, "abcd", cx));
+        let flushed = autosave.update(cx, |autosave, cx| autosave.flush(cx));
+        assert!(resolved(flushed, cx));
+        assert!(autosave.read_with(cx, |autosave, _| autosave.pending.is_none()));
+        wait(cx, DELAY);
+        assert_eq!(calls.borrow().len(), 2);
+    }
+
+    #[gpui_kit::test]
+    fn saves_whats_left_at_once_when_flushed(cx: &mut TestAppContext) {
+        let (autosave, calls, text) = autosave(cx, |_, _, _, _| Task::ready(Ok("v1".into())));
+        autosave.update(cx, |autosave, cx| {
+            start(autosave, &text, cx);
+            edit(autosave, &text, "a", cx);
         });
 
         let flushed = autosave.update(cx, |autosave, cx| autosave.flush(cx));
@@ -347,7 +453,7 @@ mod tests {
     fn holds_the_edits_once_the_file_changed_on_disk_until_its_overwritten(
         cx: &mut TestAppContext,
     ) {
-        let (autosave, calls) = autosave(cx, |_, _, overwrite, _| {
+        let (autosave, calls, text) = autosave(cx, |_, _, overwrite, _| {
             Task::ready(if overwrite {
                 Ok("v1".into())
             } else {
@@ -355,15 +461,15 @@ mod tests {
             })
         });
         autosave.update(cx, |autosave, cx| {
-            autosave.start("v0".into(), cx);
-            autosave.change("a".into(), cx);
+            start(autosave, &text, cx);
+            edit(autosave, &text, "a", cx);
         });
 
         let flushed = autosave.update(cx, |autosave, cx| autosave.flush(cx));
         assert!(!resolved(flushed, cx));
         assert!(matches!(state(&autosave, cx), SaveState::ChangedOnDisk(_)));
         // Further edits aren't saved over it either.
-        autosave.update(cx, |autosave, cx| autosave.change("ab".into(), cx));
+        autosave.update(cx, |autosave, cx| edit(autosave, &text, "ab", cx));
         wait(cx, Duration::from_millis(500));
         assert_eq!(calls.borrow().len(), 1);
 
@@ -375,7 +481,7 @@ mod tests {
     #[gpui_kit::test]
     fn tries_a_failed_save_again_with_the_next_edit(cx: &mut TestAppContext) {
         let failed = Rc::new(RefCell::new(false));
-        let (autosave, _) = autosave(cx, move |_, _, _, _| {
+        let (autosave, _, text) = autosave(cx, move |_, _, _, _| {
             let first = !failed.replace(true);
             Task::ready(if first {
                 Err(DataError::msg("The disk is full."))
@@ -384,8 +490,8 @@ mod tests {
             })
         });
         autosave.update(cx, |autosave, cx| {
-            autosave.start("v0".into(), cx);
-            autosave.change("a".into(), cx);
+            start(autosave, &text, cx);
+            edit(autosave, &text, "a", cx);
         });
         wait(cx, DELAY);
         assert_eq!(
@@ -393,7 +499,7 @@ mod tests {
             SaveState::Failed("The disk is full.".into())
         );
 
-        autosave.update(cx, |autosave, cx| autosave.change("ab".into(), cx));
+        autosave.update(cx, |autosave, cx| edit(autosave, &text, "ab", cx));
         wait(cx, DELAY);
         assert_eq!(state(&autosave, cx), SaveState::Saved);
     }
@@ -402,7 +508,7 @@ mod tests {
     fn saves_edits_made_while_a_save_is_under_way_after_it(cx: &mut TestAppContext) {
         let finish = Rc::new(RefCell::new(None::<oneshot::Sender<String>>));
         let pending = Rc::clone(&finish);
-        let (autosave, calls) = autosave(cx, move |_, _, _, cx| {
+        let (autosave, calls, text) = autosave(cx, move |_, _, _, cx| {
             if pending.borrow().is_some() {
                 return Task::ready(Ok("v2".into()));
             }
@@ -411,11 +517,11 @@ mod tests {
             cx.spawn(async move |_| receive.await.map_err(|_| DataError::msg("Dropped.")))
         });
         autosave.update(cx, |autosave, cx| {
-            autosave.start("v0".into(), cx);
-            autosave.change("a".into(), cx);
+            start(autosave, &text, cx);
+            edit(autosave, &text, "a", cx);
         });
         wait(cx, DELAY);
-        autosave.update(cx, |autosave, cx| autosave.change("ab".into(), cx));
+        autosave.update(cx, |autosave, cx| edit(autosave, &text, "ab", cx));
         let send = finish.borrow_mut().take().expect("a save under way");
         // Taken: the next save resolves at once.
         *finish.borrow_mut() = Some(oneshot::channel().0);
@@ -430,7 +536,7 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let first = Rc::new(RefCell::new(true));
-        let (autosave, calls) = autosave(cx, move |_, _, _, cx| {
+        let (autosave, calls, text) = autosave(cx, move |_, _, _, cx| {
             if first.replace(false) {
                 // Never answered.
                 return cx.spawn(async move |_| futures::future::pending().await);
@@ -438,11 +544,11 @@ mod tests {
             Task::ready(Ok("v2".into()))
         });
         autosave.update(cx, |autosave, cx| {
-            autosave.start("v0".into(), cx);
-            autosave.change("a".into(), cx);
+            start(autosave, &text, cx);
+            edit(autosave, &text, "a", cx);
         });
         wait(cx, DELAY);
-        autosave.update(cx, |autosave, cx| autosave.change("ab".into(), cx));
+        autosave.update(cx, |autosave, cx| edit(autosave, &text, "ab", cx));
 
         let sent = autosave.update(cx, |autosave, cx| autosave.flush_now(cx));
         assert!(sent.is_some());
@@ -453,7 +559,7 @@ mod tests {
     fn says_nothing_of_a_save_that_failed_after_it_was_stopped(cx: &mut TestAppContext) {
         let finish = Rc::new(RefCell::new(None::<oneshot::Sender<String>>));
         let pending = Rc::clone(&finish);
-        let (autosave, _) = autosave(cx, move |_, _, _, cx| {
+        let (autosave, _, text) = autosave(cx, move |_, _, _, cx| {
             let (send, receive) = oneshot::channel::<String>();
             *pending.borrow_mut() = Some(send);
             cx.spawn(async move |_| {
@@ -462,8 +568,8 @@ mod tests {
             })
         });
         autosave.update(cx, |autosave, cx| {
-            autosave.start("v0".into(), cx);
-            autosave.change("a".into(), cx);
+            start(autosave, &text, cx);
+            edit(autosave, &text, "a", cx);
         });
         wait(cx, DELAY);
         assert_eq!(state(&autosave, cx), SaveState::Saving);
@@ -478,15 +584,15 @@ mod tests {
     fn takes_a_file_thats_gone_or_a_repository_for_a_failed_save_not_one_to_overwrite(
         cx: &mut TestAppContext,
     ) {
-        let (autosave, _) = autosave(cx, |_, _, _, _| {
-            Task::ready(Err(ApiError::from(Error::RepositoryNotFound {
-                repository_id: "repo".into(),
+        let (autosave, _, text) = autosave(cx, |_, _, _, _| {
+            Task::ready(Err(ApiError::unreported(Error::RepositoryNotFound {
+                repository_id: RepositoryId::parse("01890a5d-ac96-774b-bcce-b302099a8057").unwrap(),
             })
             .into()))
         });
         autosave.update(cx, |autosave, cx| {
-            autosave.start("v0".into(), cx);
-            autosave.change("a".into(), cx);
+            start(autosave, &text, cx);
+            edit(autosave, &text, "a", cx);
         });
         let flushed = autosave.update(cx, |autosave, cx| autosave.flush(cx));
         assert!(!resolved(flushed, cx));

@@ -25,8 +25,19 @@ pub fn count_conflicts(text: &str) -> usize {
 }
 
 /// Past this many characters, a line's rest isn't kept while the next piece of it comes: a marker
-/// is told by its start, and a separator line this long isn't one.
+/// is told by its start, and a separator line longer than this isn't one.
 const KEPT_LINE: usize = 4096;
+
+/// What's kept of the start of a line whose end hasn't come yet: all of it, or, past `KEPT_LINE`,
+/// that much and an `x`, so it's still too long to be a separator, as it was.
+fn kept(start: &[u8]) -> Vec<u8> {
+    if start.len() <= KEPT_LINE {
+        return start.to_vec();
+    }
+    let mut kept = start[..KEPT_LINE].to_vec();
+    kept.push(b'x');
+    kept
+}
 
 /// Counts conflicts (see `count_conflicts`) in text given a piece at a time, as a file is read: one
 /// of hundreds of megabytes is never all in memory.
@@ -49,19 +60,11 @@ impl ConflictCounter {
         let mut text = std::mem::take(&mut self.rest);
         text.extend_from_slice(piece);
         let Some(last) = memchr::memrchr(b'\n', &text) else {
-            // Too long to be a marker's line but for its start; and no separator, with this after
-            // it.
-            if text.len() > KEPT_LINE {
-                text.truncate(KEPT_LINE);
-                text.push(b'x');
-            }
-            self.rest = text;
+            self.rest = kept(&text);
             return;
         };
         self.scan(&text, last);
-        let from = last + 1;
-        let to = (from + KEPT_LINE + 1).min(text.len());
-        self.rest = text[from..to].to_vec();
+        self.rest = kept(&text[last + 1..]);
     }
 
     /// The conflicts in all of the text given, which has ended.
@@ -83,15 +86,16 @@ impl ConflictCounter {
             };
             // Only a line that starts with a marker's character is looked at closer.
             if matches!(text[start], b'<' | b'=' | b'>') {
-                match marker_kind(text, start, end) {
-                    Some(Marker::Start) => self.open.push(false),
-                    Some(Marker::Separator) => {
+                match classify_marker(&text[start..end]) {
+                    Some(MarkerKind::Start) => self.open.push(false),
+                    Some(MarkerKind::Separator) => {
                         if let Some(open) = self.open.last_mut() {
                             *open = true;
                         }
                     }
-                    Some(Marker::End) if self.open.pop() == Some(true) => self.count += 1,
-                    Some(Marker::End) | None => {}
+                    Some(MarkerKind::End) if self.open.pop() == Some(true) => self.count += 1,
+                    // The base's marker says nothing of where a conflict starts or ends.
+                    Some(MarkerKind::End | MarkerKind::Base) | None => {}
                 }
             }
             start = end + 1;
@@ -99,41 +103,49 @@ impl ConflictCounter {
     }
 }
 
+/// A conflict marker's kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Marker {
+pub enum MarkerKind {
+    /// `<<<<<<< HEAD`, before ours.
     Start,
+    /// `||||||| base`, before the base's lines (diff3 and zdiff3).
+    Base,
+    /// `=======`, between the sides.
     Separator,
+    /// `>>>>>>> feature`, after theirs.
     End,
 }
 
-/// Which marker the line from `start` to `end` (its newline) is, if it's one.
-fn marker_kind(text: &[u8], start: usize, end: usize) -> Option<Marker> {
-    // Without the line's CR, for a file with CRLF line ends.
-    let last = if end > 0 && text.get(end - 1) == Some(&b'\r') {
-        end - 1
-    } else {
-        end
+/// Which conflict marker `line` is, if it's one, its line end (LF or CRLF) left on or off: seven
+/// or more of the same marker character, then whitespace or nothing; nothing at all after `=`, and
+/// no more than `KEPT_LINE` of them. The one grammar of markers, for counting a file's conflicts
+/// here and for reading them in the app's viewer, so the two can't disagree on which lines are
+/// markers.
+pub fn classify_marker(line: &[u8]) -> Option<MarkerKind> {
+    let line = line.strip_suffix(b"\n").unwrap_or(line);
+    // Too long for a separator, counted with a CR as a line whose end hasn't come yet is (see
+    // `kept`), so a file's conflicts count the same however it's read.
+    let too_long = line.len() > KEPT_LINE;
+    let line = line.strip_suffix(b"\r").unwrap_or(line);
+    let char = *line.first()?;
+    let kind = match char {
+        b'<' => MarkerKind::Start,
+        b'|' => MarkerKind::Base,
+        b'=' => MarkerKind::Separator,
+        b'>' => MarkerKind::End,
+        _ => return None,
     };
-    let char = text[start];
-    let mut run = start;
-    while run < last && text[run] == char {
-        run += 1;
-    }
-    if run - start < 7 {
+    let run = line.iter().take_while(|byte| **byte == char).count();
+    if run < 7 {
         return None;
     }
-    if char == b'=' {
-        return (run == last).then_some(Marker::Separator);
-    }
-    // A label may follow, after a space: `<<<<<<< HEAD`.
-    if run != last && !is_space(text[run]) {
-        return None;
-    }
-    Some(if char == b'<' {
-        Marker::Start
-    } else {
-        Marker::End
-    })
+    let rest = &line[run..];
+    let marker = match kind {
+        MarkerKind::Separator => rest.is_empty() && !too_long,
+        // A label may follow, after a space: `<<<<<<< HEAD`.
+        _ => rest.first().is_none_or(|byte| is_space(*byte)),
+    };
+    marker.then_some(kind)
 }
 
 /// Whether `byte`, as a Latin-1 character, is whitespace as JavaScript's `\s` has it.
@@ -211,6 +223,50 @@ mod tests {
     }
 
     #[test]
+    fn counts_the_same_however_a_line_too_long_to_be_a_separator_comes_in_pieces() {
+        let long = "=".repeat(10_000);
+        let text = format!("<<<<<<< HEAD\nours\n{long}\ntheirs\n>>>>>>> side\n");
+        assert_eq!(count_conflicts(&text), 0);
+        let bytes = text.as_bytes();
+        let near_kept = (KEPT_LINE - 2..KEPT_LINE + 30).chain(5000..5003);
+        for at in (0..=bytes.len()).step_by(37).chain(near_kept) {
+            let mut counter = ConflictCounter::new();
+            counter.push(&bytes[..at]);
+            counter.push(&bytes[at..]);
+            assert_eq!(counter.end(), 0, "split at {at}");
+        }
+        // As long as a separator can be, it's one.
+        let longest = format!(
+            "<<<<<<< HEAD\nours\n{}\ntheirs\n>>>>>>> side\n",
+            &long[..KEPT_LINE]
+        );
+        assert_eq!(count_conflicts(&longest), 1);
+        let mut counter = ConflictCounter::new();
+        let (first, second) = longest.split_at(20 + KEPT_LINE / 2);
+        counter.push(first.as_bytes());
+        counter.push(second.as_bytes());
+        assert_eq!(counter.end(), 1);
+        // Its CR counts in its length, as it does while the line's end hasn't come.
+        let with_cr = format!(
+            "<<<<<<< HEAD\r\nours\r\n{}\r\ntheirs\r\n>>>>>>> side\r\n",
+            &long[..KEPT_LINE]
+        );
+        assert_eq!(count_conflicts(&with_cr), 0);
+        let bytes = with_cr.as_bytes();
+        for at in [20, 20 + KEPT_LINE / 2, 20 + KEPT_LINE, 21 + KEPT_LINE] {
+            let mut counter = ConflictCounter::new();
+            counter.push(&bytes[..at]);
+            counter.push(&bytes[at..]);
+            assert_eq!(counter.end(), 0, "split at {at}");
+        }
+        assert_eq!(
+            classify_marker(&long.as_bytes()[..KEPT_LINE]),
+            Some(MarkerKind::Separator)
+        );
+        assert_eq!(classify_marker(&long.as_bytes()[..=KEPT_LINE]), None);
+    }
+
+    #[test]
     fn keeps_only_the_start_of_a_line_too_long_to_be_a_markers() {
         let mut counter = ConflictCounter::new();
         counter.push(b"<<<<<<< HEAD\nours\n");
@@ -218,6 +274,50 @@ mod tests {
         counter.push("=".repeat(10_000).as_bytes());
         counter.push(b"\ntheirs\n>>>>>>> side\n");
         assert_eq!(counter.end(), 0);
+    }
+
+    #[test]
+    fn tells_each_marker_with_its_line_end_or_without() {
+        assert_eq!(classify_marker(b"<<<<<<< HEAD\n"), Some(MarkerKind::Start));
+        assert_eq!(classify_marker(b"<<<<<<<\r\n"), Some(MarkerKind::Start));
+        assert_eq!(classify_marker(b"<<<<<<<<<< x"), Some(MarkerKind::Start));
+        assert_eq!(classify_marker(b"||||||| base\n"), Some(MarkerKind::Base));
+        assert_eq!(classify_marker(b"=======\r\n"), Some(MarkerKind::Separator));
+        assert_eq!(classify_marker(b"==========="), Some(MarkerKind::Separator));
+        assert_eq!(classify_marker(b">>>>>>> side"), Some(MarkerKind::End));
+        assert_eq!(classify_marker(b">>>>>>>\tside"), Some(MarkerKind::End));
+        assert_eq!(classify_marker(b">>>>>>>\x0bside"), Some(MarkerKind::End));
+        // A no-break space, as a Latin-1 file has it.
+        assert_eq!(classify_marker(b">>>>>>>\xa0side"), Some(MarkerKind::End));
+    }
+
+    #[test]
+    fn doesnt_take_a_line_that_only_looks_like_one_for_a_marker() {
+        for line in [
+            &b""[..],
+            b"\n",
+            b"<<<<<< short",
+            b"<<<<<<<HEAD",
+            b"======= x",
+            b"=======x",
+            b"-------",
+            b"<<<<<<<>>>",
+            b" <<<<<<< HEAD",
+        ] {
+            assert_eq!(
+                classify_marker(line),
+                None,
+                "{:?}",
+                String::from_utf8_lossy(line)
+            );
+        }
+    }
+
+    #[test]
+    fn counts_a_conflict_with_the_bases_lines_once_whatever_they_look_like() {
+        let base =
+            "<<<<<<< HEAD\nours\n||||||| base\n||||||| more\n=======\ntheirs\n>>>>>>> side\n";
+        assert_eq!(count_conflicts(base), 1);
     }
 
     #[test]

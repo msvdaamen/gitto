@@ -30,11 +30,6 @@ impl StashButtons {
         }
     }
 
-    /// Shows another repository's.
-    pub fn set_repository(&mut self, repository_id: RepositoryId, cx: &mut Context<Self>) {
-        self.repository.set(&repository_id, cx);
-    }
-
     /// Stash, as it is now. Until the status has loaded, it's disabled.
     pub fn stash_button(&self, cx: &App) -> ToolbarButton {
         let repository = self.repository.read(cx);
@@ -43,10 +38,11 @@ impl StashButtons {
         let status = repository.status().data();
         let title = status.map_or_else(
             || "Stash".to_owned(),
-            |status| stash_title(&status.head, &status.counts),
+            |status| stash_title(&status.summary.head, &status.summary.counts),
         );
-        let blocked =
-            status.is_none_or(|status| stash_blocker(&status.head, &status.counts).is_some());
+        let blocked = status.is_none_or(|status| {
+            stash_blocker(&status.summary.head, &status.summary.counts).is_some()
+        });
         let stash = self.repository.entity().clone();
         let dismiss = stash.clone();
         ToolbarButton::new("stash", IconName::Archive, "Stash")
@@ -70,11 +66,15 @@ impl StashButtons {
         let status = repository.status().data();
         let stashes = repository.stashes().data();
         let title = match (status, stashes, repository.stashes().error()) {
-            (Some(status), Some(stashes), _) => pop_title(&status.counts, stashes),
+            (Some(status), Some(stashes), _) => pop_title(&status.summary.counts, stashes),
             (_, None, Some(error)) => format!("Couldn't load the stashes: {error}"),
             _ => "Pop".to_owned(),
         };
-        let poppable = can_pop(status.map(|status| &status.counts), stashes.map(|s| &s[..]));
+        // Not until both have loaded.
+        let poppable = matches!(
+            (status, stashes),
+            (Some(status), Some(stashes)) if can_pop(&status.summary.counts, stashes)
+        );
         let newest = stashes
             .and_then(|stashes| stashes.first())
             .map(|stash| stash.sha.clone());

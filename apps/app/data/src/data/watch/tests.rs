@@ -10,7 +10,7 @@ use gitto_git::Page;
 use gitto_git::features::history::schema::Commit;
 use gitto_git::features::refs::schema::Ref;
 use gitto_git::features::status::schema::{
-    Head, StatusCounts, StatusReply, Uncommitted, WorkingTreeFiles,
+    Head, StatusCounts, StatusReply, StatusSummary, Uncommitted, WorkingTreeFiles,
 };
 
 use super::*;
@@ -59,7 +59,7 @@ impl<T: Send + 'static> Procedure<T> {
     /// Ends the open stream with an error, like the watcher running out of file watches.
     fn fail(&self, message: &str) {
         if let Some(sender) = self.sender.borrow_mut().take() {
-            let error = ApiError::from(gitto_git::Error::Bug(message.to_owned()));
+            let error = ApiError::unreported(gitto_git::Error::Bug(message.to_owned()));
             let _ = sender.unbounded_send(Err(error));
         }
     }
@@ -100,18 +100,20 @@ fn repository_id() -> RepositoryId {
 
 fn uncommitted() -> Uncommitted {
     Uncommitted {
-        head: Head::Branch {
-            name: "main".into(),
-            sha: "abc".into(),
-        },
-        upstream: None,
-        ahead: 0,
-        behind: 0,
-        counts: StatusCounts {
-            files: 0,
-            staged: 0,
-            unstaged: 0,
-            conflicted: 0,
+        summary: StatusSummary {
+            head: Head::Branch {
+                name: "main".into(),
+                sha: "abc".into(),
+            },
+            upstream: None,
+            ahead: 0,
+            behind: 0,
+            counts: StatusCounts {
+                files: 0,
+                staged: 0,
+                unstaged: 0,
+                conflicted: 0,
+            },
         },
         changes: WorkingTreeFiles {
             staged: vec![],
@@ -133,7 +135,7 @@ struct Git {
 }
 
 impl RepositoryGit for Git {
-    fn status(&self, _: Option<String>) -> GitTask<StatusReply> {
+    fn status(&self, _: Option<gitto_git::ContentVersion>) -> GitTask<StatusReply> {
         self.status.set(self.status.get() + 1);
         async { Ok(StatusReply::Status(Box::new(uncommitted()))) }.boxed()
     }
@@ -261,7 +263,7 @@ fn doesnt_refetch_what_was_loaded_while_switching_to_the_repository(cx: &mut Tes
 #[gpui_kit::test]
 fn drops_what_nothing_shows_once_its_no_longer_watched(cx: &mut TestAppContext) {
     let mut watched = watch(true, cx);
-    let repository = cx.update(|cx| Repositories::get(repository_id().as_str(), cx).unwrap());
+    let repository = cx.update(|cx| Repositories::get(&repository_id(), cx).unwrap());
     let sha = "a".repeat(40);
     repository.update(cx, |repository, cx| {
         repository.set_message(&sha, "Kept a while".into(), cx)
@@ -273,14 +275,14 @@ fn drops_what_nothing_shows_once_its_no_longer_watched(cx: &mut TestAppContext) 
 #[gpui_kit::test]
 fn doesnt_open_again_a_repository_removed_while_it_was_watched(cx: &mut TestAppContext) {
     let mut watched = watch(true, cx);
-    cx.update(|cx| Repositories::close(repository_id().as_str(), cx));
+    cx.update(|cx| Repositories::close(&repository_id(), cx));
     cx.run_until_parked();
 
     watched.streams.git_dir.push(vec![GitDirChange::Refs]);
     cx.run_until_parked();
     assert_eq!(watched.reloaded(), Reloaded::Nothing);
     assert!(
-        cx.update(|cx| Repositories::get(repository_id().as_str(), cx))
+        cx.update(|cx| Repositories::get(&repository_id(), cx))
             .is_none()
     );
     watched.cleanup(cx);

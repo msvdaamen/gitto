@@ -26,11 +26,6 @@ impl PullButton {
         }
     }
 
-    /// Shows another repository's.
-    pub fn set_repository(&mut self, repository_id: RepositoryId, cx: &mut Context<Self>) {
-        self.repository.set(&repository_id, cx);
-    }
-
     /// The button as it is now. Until the status has loaded, it's disabled.
     pub fn button(&self, cx: &App) -> ToolbarButton {
         let repository = self.repository.read(cx);
@@ -38,10 +33,16 @@ impl PullButton {
         let status = repository.status().data();
         let title = status.map_or_else(
             || "Pull".to_owned(),
-            |status| pull_title(&status.head, status.upstream.as_deref(), status.behind),
+            |status| {
+                pull_title(
+                    &status.summary.head,
+                    status.summary.upstream.as_deref(),
+                    status.summary.behind,
+                )
+            },
         );
         let blocked = status.is_none_or(|status| {
-            head_pull_blocker(&status.head, status.upstream.as_deref()).is_some()
+            head_pull_blocker(&status.summary.head, status.summary.upstream.as_deref()).is_some()
         });
         let pull = self.repository.entity().clone();
         let dismiss = pull.clone();
@@ -50,7 +51,7 @@ impl PullButton {
             .title(title)
             .disabled(blocked || state.running)
             .busy(state.running)
-            .count(status.map(|status| status.behind))
+            .count(status.map(|status| status.summary.behind))
             .failure("Pull", state.error, move |_, cx| {
                 dismiss.update(cx, |repository, cx| repository.dismiss(Change::Pull, cx))
             })
@@ -73,7 +74,7 @@ mod tests {
 
     use futures::FutureExt as _;
     use futures::channel::oneshot;
-    use gitto_git::input::NonEmpty;
+    use gitto_git::input::BranchShortName;
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{AnyWindowHandle, Entity, TestAppContext};
 
@@ -91,7 +92,7 @@ mod tests {
     }
 
     impl RepositoryGit for Pulls {
-        fn pull(&self, _: Option<NonEmpty>) -> GitTask<()> {
+        fn pull(&self, _: Option<BranchShortName>) -> GitTask<()> {
             let (settle, settled) = oneshot::channel();
             self.settle.borrow_mut().push(settle);
             async move { settled.await.unwrap_or(Err(DataError::msg("dropped"))) }.boxed()
@@ -168,8 +169,8 @@ mod tests {
         let _dir = setup(cx);
         let repo = repository_id();
         let mut summary = status();
-        summary.upstream = None;
-        summary.behind = 0;
+        summary.summary.upstream = None;
+        summary.summary.behind = 0;
         set_status(&repo, summary, cx);
         let (_, button) = render(cx, &repo);
 
@@ -194,8 +195,8 @@ mod tests {
         assert!(shown(&button, cx).is_busy());
 
         // Another repository's pull button isn't busy with it…
-        button.update(cx, |button, cx| button.set_repository(other.clone(), cx));
-        let shown_other = shown(&button, cx);
+        let (_, other_button) = render(cx, &other);
+        let shown_other = shown(&other_button, cx);
         assert!(!shown_other.is_disabled());
         assert!(!shown_other.is_busy());
 
@@ -205,11 +206,11 @@ mod tests {
             .send(Err(DataError::msg("Pulling origin/main caused conflicts.")))
             .unwrap();
         cx.run_until_parked();
-        assert!(shown(&button, cx).shown_failure().is_none());
+        assert!(shown(&other_button, cx).shown_failure().is_none());
 
-        // Back in that repository, it does.
-        button.update(cx, |button, cx| button.set_repository(repo.clone(), cx));
-        assert!(shown(&button, cx).shown_failure().is_some());
+        // That repository's, made again, does.
+        let (_, again) = render(cx, &repo);
+        assert!(shown(&again, cx).shown_failure().is_some());
     }
 
     #[gpui_kit::test]
@@ -220,13 +221,14 @@ mod tests {
         set_status(&repo, status(), cx);
         set_status(&other, status(), cx);
         let pulls = pulls(&repo, cx);
-        let (window, button) = render(cx, &repo);
+        let (window, _) = render(cx, &repo);
 
         cx.update_window(window, |_, window, cx| window.click("pull", cx))
             .unwrap();
         cx.run_until_parked();
-        button.update(cx, |button, cx| button.set_repository(other.clone(), cx));
-        button.update(cx, |button, cx| button.set_repository(repo.clone(), cx));
+        // The page makes the toolbar again for each repository that comes on show.
+        render(cx, &other);
+        let (window, button) = render(cx, &repo);
         let shown = shown(&button, cx);
         assert!(shown.is_busy());
         // A second click is ignored while it runs.

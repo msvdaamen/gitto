@@ -5,10 +5,9 @@ use std::rc::Rc;
 use gitto_git::features::overview::schema::{Activity, ActivityKind};
 use gitto_repository::Repository;
 use gitto_ui_logic::git::activity::describe_activity;
-use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{ActiveTheme as _, v_flex};
+use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{App, ElementId, FontWeight, SharedString, TestSupportExt as _, Window, div};
+use gpui_kit::{App, FontWeight, SharedString, TestSupportExt as _, Window, div};
 
 use super::repository_link::repository_link;
 use super::summaries::RepositorySummary;
@@ -71,7 +70,7 @@ impl RecentActivity {
 }
 
 impl RenderOnce for RecentActivity {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let palette = *cx.palette();
         let entries = recent_entries(&self.summaries);
         let card = Card::new(IconName::RotateCcwClock, "Recent activity");
@@ -89,107 +88,101 @@ impl RenderOnce for RecentActivity {
         }
         let mut rows = Vec::with_capacity(entries.len());
         for (ix, (repository, activity)) in entries.into_iter().enumerate() {
-            rows.push(activity_row(ix, repository, activity, window, cx));
+            rows.push(activity_row(ix, repository, activity, cx));
         }
-        card.child(v_flex().children(rows))
+        card.child(v_flex().id("recent-activity").children(rows))
     }
 }
 
-/// One thing done: what, in which repository, and when; it opens the repository.
+/// One thing done: what, in which repository, and when; it opens the repository. It's the
+/// `ix`th shown, which is its id: Git's reflog keeps times to the second, so two entries can share
+/// their repository, time and kind.
 fn activity_row(
     ix: usize,
     repository: Repository,
     activity: Activity,
-    window: &mut Window,
     cx: &mut App,
 ) -> impl IntoElement + use<> {
     let palette = *cx.palette();
     let description = describe_activity(&activity);
     let (icon, tone) = activity_style(activity.kind);
     let (background, foreground) = tone.colors(&palette);
-    // Its repository, when and what. Git's reflog keeps times to the second, so two entries can
-    // share all three: the row's place among the shown ones tells those apart.
-    let id = ElementId::from(SharedString::from(format!(
-        "activity-{}-{}-{}-{ix}",
-        repository.id,
-        activity.at,
-        activity.kind.as_str()
-    )));
     let message: SharedString = activity.message.clone().into();
     let place = match description.action {
         Some(action) => format!("{} · {action}", repository.name),
         None => repository.name.clone(),
     };
-    repository_link(id, &repository.id, window, cx)
-        .flex()
-        .flex_row()
-        .items_center()
-        .aria_label(SharedString::from(description.title.clone()))
-        .gap_2()
-        .px_1()
-        .py_2()
-        .rounded(cx.theme().radius)
+    // The line between rows is outside the button, which takes its border's color when hovered.
+    div()
         .when(ix > 0, |this| {
             this.border_t_1().border_color(palette.border_soft)
         })
-        .hover(|style| style.bg(palette.panel_hover))
-        .focus_visible(|style| style.bg(palette.panel_hover))
-        .tooltip(move |window, cx| Tooltip::new(message.clone()).build(window, cx))
         .child(
-            div()
-                .flex()
-                .flex_none()
-                .size_6()
-                .items_center()
-                .justify_center()
-                .rounded(cx.theme().radius)
-                .bg(background)
-                .text_color(foreground)
-                .child(Icon::new(icon).size_3p5()),
-        )
-        .child(
-            v_flex()
-                .flex_1()
-                .min_w_0()
-                .gap_0p5()
+            repository_link(("activity", ix), &repository.id)
+                .accessibility_label(SharedString::from(description.title.clone()))
+                .tooltip(message)
+                .w_full()
+                .px_1()
+                .py_2()
                 .child(
-                    div()
-                        .truncate()
-                        .text_xs()
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(palette.text)
-                        .child(description.title),
-                )
-                .child(
-                    div()
-                        .truncate()
-                        .text_xs()
-                        .text_color(palette.faint)
-                        .child(place),
+                    h_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex()
+                                .flex_none()
+                                .size_6()
+                                .items_center()
+                                .justify_center()
+                                .rounded(cx.theme().radius)
+                                .bg(background)
+                                .text_color(foreground)
+                                .child(Icon::new(icon).size_3p5()),
+                        )
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .gap_0p5()
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .text_xs()
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(palette.text)
+                                        .child(description.title),
+                                )
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .text_xs()
+                                        .text_color(palette.faint)
+                                        .child(place),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .whitespace_nowrap()
+                                .text_xs()
+                                .text_color(palette.faint)
+                                .child(relative_time(activity.at)),
+                        ),
                 ),
-        )
-        .child(
-            div()
-                .flex_none()
-                .whitespace_nowrap()
-                .text_xs()
-                .text_color(palette.faint)
-                .child(relative_time(activity.at)),
         )
 }
 
 #[cfg(test)]
 mod tests {
-    use gitto_git::features::overview::schema::Overview;
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{Context, IntoElement, Render, TestAppContext, Window};
 
     use super::*;
+    use crate::components::home::test_support::{self as home, GITTO, NOTES};
     use crate::test_support;
     use gitto_app_data::state::router::{Route, Router};
-
-    const GITTO: &str = "0190a6c8-0000-7000-8000-000000000001";
-    const NOTES: &str = "0190a6c8-0000-7000-8000-000000000002";
 
     fn activity(at: i64, kind: ActivityKind, subject: &str) -> Activity {
         Activity {
@@ -202,22 +195,7 @@ mod tests {
     }
 
     fn summary(id: &str, name: &str, activity: Vec<Activity>) -> RepositorySummary {
-        RepositorySummary {
-            repository: Repository {
-                id: id.into(),
-                name: name.into(),
-                path: format!("/src/{name}"),
-            },
-            status: None,
-            overview: Some(Overview {
-                remote: None,
-                fetched_at: None,
-                committed_at: None,
-                activity,
-            }),
-            error: None,
-            settled: false,
-        }
+        home::summary(id, name).activity(activity).build()
     }
 
     #[test]
@@ -239,10 +217,7 @@ mod tests {
                 ],
             ),
             // Not loaded yet.
-            RepositorySummary {
-                overview: None,
-                ..summary(GITTO, "other", Vec::new())
-            },
+            home::summary(GITTO, "other").without_overview().build(),
         ];
         let subjects: Vec<String> = recent_entries(&summaries)
             .into_iter()
@@ -292,9 +267,11 @@ mod tests {
         });
         cx.update_window(window, |_, window, cx| {
             window.render_frame(cx);
-            let row = SharedString::from(format!("activity-{NOTES}-1-commit-0"));
-            assert_eq!(window.find(row.clone()).label(), Some("Write it down"));
-            window.click(row, cx);
+            assert_eq!(
+                window.find(("activity", 0usize)).label(),
+                Some("Write it down")
+            );
+            window.click(("activity", 0usize), cx);
         })
         .unwrap();
         cx.run_until_parked();

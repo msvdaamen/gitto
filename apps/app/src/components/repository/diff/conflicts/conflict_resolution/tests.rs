@@ -1,4 +1,4 @@
-use gitto_git::features::conflicts::schema::ConflictSides;
+use gitto_git::features::conflicts::schema::{ConflictFile, ConflictSides};
 use gpui_kit::{AppContext as _, TestAppContext};
 
 use super::super::super::test_views::{
@@ -36,31 +36,31 @@ fn open_conflict(contents: &str, cx: &mut TestAppContext) -> Opened {
 
 /// What the header says of the conflicts left, if it does.
 fn left(opened: &Opened, cx: &mut TestAppContext) -> Option<String> {
-    opened.read(cx, |view, _| {
-        view.shown_progress()
+    opened.read(cx, |view, cx| {
+        view.resolution
+            .read(cx)
+            .shown_progress()
             .filter(|shown| shown.problem.is_none())
             .map(|shown| conflicts_left_label(shown.left))
     })
 }
 
 fn progress(opened: &Opened, cx: &mut TestAppContext) -> Option<ConflictProgress> {
-    opened.read(cx, |view, _| view.shown_progress().cloned())
+    opened.read(cx, |view, cx| {
+        view.resolution.read(cx).shown_progress().cloned()
+    })
 }
 
 fn shown_text(opened: &Opened, cx: &mut TestAppContext) -> Option<String> {
     opened.read(cx, |view, cx| {
-        let viewer = view.resolution.viewer()?;
+        let viewer = view.resolution.read(cx).viewer()?;
         viewer.read(cx).shown_text().map(str::to_owned)
     })
 }
 
 fn error(opened: &Opened, cx: &mut TestAppContext) -> Option<String> {
-    opened.read(cx, |view, _| {
-        view.resolution
-            .error
-            .as_ref()
-            .filter(|(key, _)| *key == view.view.file_key())
-            .map(|(_, message)| message.clone())
+    opened.read(cx, |view, cx| {
+        view.resolution.read(cx).error().map(str::to_owned)
     })
 }
 
@@ -99,6 +99,65 @@ fn shows_its_conflicts_rather_than_a_patch_and_how_many_are_left(cx: &mut TestAp
 }
 
 #[gpui_kit::test]
+fn gives_the_viewer_the_text_it_read_without_copying_it_each_time(cx: &mut TestAppContext) {
+    let _dir = init(cx);
+    let opened = open_conflict(&conflicts(2), cx);
+    let first = opened
+        .read(cx, |view, cx| view.resolution.read(cx).disk())
+        .expect("its text");
+    opened.press("]", cx);
+    let again = opened
+        .read(cx, |view, cx| view.resolution.read(cx).disk())
+        .expect("its text");
+    assert!(Arc::ptr_eq(&first.contents, &again.contents));
+    let viewer = opened.read(cx, |view, cx| {
+        view.resolution.read(cx).viewer().cloned().unwrap()
+    });
+    assert!(cx.update(|cx| {
+        let given = viewer.read(cx).given.clone();
+        given.is_some_and(|(_, disk)| {
+            disk.is_some_and(|disk| Arc::ptr_eq(&disk.contents, &first.contents))
+        })
+    }));
+}
+
+#[gpui_kit::test]
+fn follows_the_file_on_show_as_its_view_is_notified_and_drops_its_viewer_with_it(
+    cx: &mut TestAppContext,
+) {
+    let _dir = init(cx);
+    let opened = open_conflict(&conflicts(2), cx);
+    let resolution = opened.read(cx, |view, _| view.resolution.clone());
+    let viewer = cx.update(|cx| resolution.read(cx).viewer().map(Entity::downgrade));
+    let viewer = viewer.expect("the conflicts' viewer");
+    assert!(cx.update(|cx| resolution.read(cx).file.next == Some(conflicted("b.txt"))));
+
+    // Not drawn again, the view tells its resolution of the next file as it's notified.
+    opened.view.update(cx, |view, cx| {
+        view.set_file(id(), DiffSource::Unstaged, conflicted("b.txt"), cx)
+    });
+    cx.run_until_parked();
+    cx.update(|cx| {
+        let resolution = resolution.read(cx);
+        assert_eq!(resolution.file.file.path, "b.txt");
+        assert_eq!(resolution.file.next, Some(conflicted("a.txt")));
+    });
+
+    // Staged, the file isn't resolved here: its viewer goes, and what it was told with it.
+    opened.view.update(cx, |view, cx| {
+        view.set_file(id(), DiffSource::Staged, conflicted("b.txt"), cx)
+    });
+    cx.run_until_parked();
+    cx.update(|cx| {
+        let resolution = resolution.read(cx);
+        assert!(!resolution.file.active);
+        assert!(resolution.viewer().is_none());
+        assert!(resolution.viewer_events.is_none());
+    });
+    assert!(viewer.upgrade().is_none());
+}
+
+#[gpui_kit::test]
 fn is_only_marked_resolved_with_conflicts_left_once_the_user_says_they_belong_in_it(
     cx: &mut TestAppContext,
 ) {
@@ -125,13 +184,11 @@ fn doesnt_take_another_files_progress_for_its_own(cx: &mut TestAppContext) {
     assert_eq!(left(&opened, cx).as_deref(), Some("No conflicts left"));
 
     // The viewer still says how the last file went, while this one's conflicts are highlighted.
-    opened.view.update(cx, |view, cx| {
-        view.on_conflict_viewer(
+    let resolution = opened.read(cx, |view, _| view.resolution.clone());
+    resolution.update(cx, |resolution, cx| {
+        resolution.on_viewer(
             &ConflictViewerEvent::Progress(ConflictProgress {
-                file_key: Some(gitto_ui_logic::git::diff_source::diff_file_key(
-                    &DiffSource::Unstaged,
-                    "b.txt",
-                )),
+                file_key: Some(DiffFileKey::new(&DiffSource::Unstaged, "b.txt")),
                 left: 0,
                 current: None,
                 saving: false,
@@ -143,6 +200,30 @@ fn doesnt_take_another_files_progress_for_its_own(cx: &mut TestAppContext) {
     });
     assert!(!opened.is_enabled("mark-resolved", cx));
     assert_ne!(left(&opened, cx).as_deref(), Some("No conflicts left"));
+}
+
+#[gpui_kit::test]
+fn leaves_its_keys_to_the_editor_while_its_edited_by_hand(cx: &mut TestAppContext) {
+    let _dir = init(cx);
+    let opened = open_conflict(&conflicts(2), cx);
+    opened.click("edit-file", cx);
+    let edited = |cx: &mut TestAppContext| {
+        opened.read(cx, |view, cx| {
+            let viewer = view.resolution.read(cx).viewer()?;
+            let editor = viewer.read(cx).whole_file()?;
+            Some(editor.read(cx).value().to_string())
+        })
+    };
+    assert_eq!(edited(cx), Some(conflicts(2)));
+
+    // Typed, rather than keeping ours or opening the next conflicted file.
+    opened.press("o", cx);
+    opened.press("n", cx);
+    assert!(
+        edited(cx).is_some_and(|text| text.contains("on") && text.len() == conflicts(2).len() + 2)
+    );
+    assert_eq!(opened.events(), []);
+    assert_eq!(opened.resolve.calls(), []);
 }
 
 #[gpui_kit::test]
@@ -301,7 +382,7 @@ fn keeps_a_side_whole_of_the_version_shown(cx: &mut TestAppContext) {
                     ours: Some(side("o1")),
                     theirs: Some(side("t1")),
                 },
-                version: Some("v1".into()),
+                version: Some(FileVersion::Content("v1".into())),
             },
         }]
     );
@@ -322,7 +403,9 @@ fn isnt_resolved_whole_while_its_edited_as_the_edits_arent_known_yet(cx: &mut Te
     assert_eq!(opened.resolve.calls(), []);
 }
 
-#[gpui_kit::test]
+// Of a few orders of the tasks: the edits left are shown before what's read since, whichever
+// is read first.
+#[gpui_kit::test(iterations = 8)]
 fn is_edited_by_hand_and_read_again_once_that_stops_before_its_shown(cx: &mut TestAppContext) {
     let _dir = init(cx);
     let opened = open_conflict(&conflicts(2), cx);
@@ -330,9 +413,13 @@ fn is_edited_by_hand_and_read_again_once_that_stops_before_its_shown(cx: &mut Te
     opened.click("edit-file", cx);
     assert!(opened.read(cx, |view, _| view.editing.is_editing()));
     // What's read while it's edited isn't for the viewer.
-    assert_eq!(opened.read(cx, |view, _| view.disk()), None);
+    assert_eq!(
+        opened.read(cx, |view, cx| view.resolution.read(cx).disk()),
+        None
+    );
     assert!(opened.read(cx, |view, cx| {
         view.resolution
+            .read(cx)
             .viewer()
             .is_some_and(|viewer| viewer.read(cx).whole_file().is_some())
     }));
@@ -340,7 +427,7 @@ fn is_edited_by_hand_and_read_again_once_that_stops_before_its_shown(cx: &mut Te
     reload_conflict_as("a.txt", text_conflict("resolved\n", "v3"), cx);
     opened.click("edit-file", cx);
     assert_eq!(
-        opened.read(cx, |view, _| view.disk()),
+        opened.read(cx, |view, cx| view.resolution.read(cx).disk()),
         Some(DiskFile {
             contents: "resolved\n".into(),
             version: "v3".into(),
@@ -359,12 +446,10 @@ fn is_edited_by_hand_and_read_again_once_that_stops_before_its_shown(cx: &mut Te
 fn says_what_each_side_did_and_keeps_one_whole(cx: &mut TestAppContext) {
     let _dir = init(cx);
     set_changes(vec![], vec![conflicted("gone.txt")], cx);
-    let conflict = Conflict {
-        theirs: None,
-        ..text_conflict("ours\n", "v1")
-    };
+    let mut conflict = text_conflict("ours\n", "v1");
+    conflict.sides.theirs = None;
     assert_eq!(
-        describe_conflict(&conflict.sides()),
+        describe_conflict(&conflict.sides),
         "Deleted in theirs, changed in ours"
     );
     set_conflict("gone.txt", conflict, cx);
@@ -382,7 +467,7 @@ fn says_what_each_side_did_and_keeps_one_whole(cx: &mut TestAppContext) {
                 ..
             },
             ..
-        }] if path == "gone.txt" && version == "v1"
+        }] if path == "gone.txt" && *version == FileVersion::Content("v1".into())
     ));
     // It was the last one: its staged changes, its deletion, are next.
     assert!(matches!(
@@ -399,9 +484,9 @@ fn says_a_binary_file_cant_be_shown_as_text(cx: &mut TestAppContext) {
     set_conflict(
         "gone.txt",
         Conflict {
-            text: None,
-            binary: true,
-            unreadable: Some("This file is binary.".into()),
+            file: ConflictFile::Binary {
+                version: "v1".into(),
+            },
             ..text_conflict(MARKERS, "v1")
         },
         cx,

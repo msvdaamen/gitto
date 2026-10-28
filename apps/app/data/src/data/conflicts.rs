@@ -1,6 +1,7 @@
 //! Resolving a conflicted file whole. Ported from `git/queries/conflicts.ts`.
 
-use gitto_git::features::conflicts::schema::{ConflictSides, Side};
+use gitto_git::ContentVersion;
+use gitto_git::features::conflicts::schema::{ConflictSides, FileVersion, Side};
 use gitto_git::input::RepositoryId;
 use gpui_kit::{App, Entity};
 
@@ -14,10 +15,11 @@ pub enum ConflictResolution {
         side: Side,
         /// The sides the user saw, which have to be the file's still.
         sides: ConflictSides,
-        version: Option<String>,
+        /// The version of the file the user saw (`ConflictFile::version`).
+        version: Option<FileVersion>,
     },
     Mark {
-        version: Option<String>,
+        version: Option<ContentVersion>,
         /// Even with conflict markers left: the user said they belong in it.
         with_markers: bool,
     },

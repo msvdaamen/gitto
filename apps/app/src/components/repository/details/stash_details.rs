@@ -15,7 +15,7 @@ use super::details_sections::{DetailsError, DetailsList, FileTotals, RenderTop};
 use gitto_app_data::data::diff::{FilesOf, FilesOnShow};
 use gitto_app_data::data::{Opaque, Part, Shown};
 use gitto_app_data::state::clock::{Clock, relative_time};
-use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::theme::{PaletteExt as _, base_px};
 use gitto_app_kit::ui::{Icon, IconName, LoadingState, Tone};
 use gitto_ui_logic::git::changes::LineCounts;
 use gitto_ui_logic::git::diff_source::DiffSource;
@@ -194,9 +194,9 @@ impl RenderOnce for StashSummary {
             .child(
                 div()
                     .mt_3()
-                    .px(rems(0.467))
+                    .px(base_px(7.))
                     .py_1()
-                    .rounded(rems(0.333))
+                    .rounded(base_px(5.))
                     .border_1()
                     .border_color(palette.border_soft)
                     .bg(palette.bg)

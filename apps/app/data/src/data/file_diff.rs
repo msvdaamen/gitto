@@ -3,10 +3,11 @@
 
 use std::sync::Arc;
 
+use gitto_git::ContentVersion;
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::features::diff::working_tree::{SaveExpectation, WorkingTreeFile};
 use gitto_git::features::status::schema::Uncommitted;
-use gitto_git::input::RepositoryId;
+use gitto_git::input::{RepoPath, RepositoryId};
 use gpui_kit::{App, AppContext as _, Entity, Task};
 
 use super::diff::{ChangedFiles, FilesOf, ShownFiles, WorkingTreeLists};
@@ -16,13 +17,12 @@ use super::keyed::Hold;
 use super::loaded::Loaded;
 use super::opaque::Opaque;
 use super::repository::{Field, Repositories, Repository, removed};
-use gitto_ui_logic::git::diff_source::{DiffSource, is_uncommitted};
+use gitto_ui_logic::git::diff_source::{DiffFileKey, DiffSource, is_uncommitted};
 
-/// One file's patch in a source, with the file and its `DiffSource::file_key`, so what's shown can
-/// match.
+/// One file's patch in a source, with the file and its key, so what's shown can match.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FilePatch {
-    pub key: String,
+    pub key: DiffFileKey,
     pub file: ChangedFile,
     /// Shared: a patch can be megabytes, and it's read every time it's rendered.
     pub patch: Arc<str>,
@@ -173,7 +173,10 @@ pub fn fetch_working_tree_file(
         return Task::ready(Err(removed()));
     };
     let git = repository.read(cx).git().clone();
-    cx.background_spawn(git.working_tree_file(path.to_owned()))
+    match RepoPath::parse(path) {
+        Ok(path) => cx.background_spawn(git.working_tree_file(path)),
+        Err(error) => Task::ready(Err(git.invalid(error))),
+    }
 }
 
 /// Saves a file's edits over it in the working tree, if it's still at `version` or to
@@ -183,14 +186,17 @@ pub fn save_working_tree_file(
     id: &RepositoryId,
     path: &str,
     contents: String,
-    version: String,
+    version: ContentVersion,
     overwrite: bool,
     cx: &mut App,
-) -> Task<Result<String, DataError>> {
+) -> Task<Result<ContentVersion, DataError>> {
     let Some(repository) = Repositories::get(id, cx) else {
         return Task::ready(Err(removed()));
     };
     let git = repository.read(cx).git().clone();
     let expected = SaveExpectation { version, overwrite };
-    cx.background_spawn(git.save_working_tree_file(path.to_owned(), contents, expected))
+    match RepoPath::parse(path) {
+        Ok(path) => cx.background_spawn(git.save_working_tree_file(path, contents, expected)),
+        Err(error) => Task::ready(Err(git.invalid(error))),
+    }
 }

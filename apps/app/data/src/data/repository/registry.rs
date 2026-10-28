@@ -173,7 +173,7 @@ impl Repositories {
     }
 
     /// The repository `id`, if it's been opened.
-    pub fn get(id: &str, cx: &App) -> Option<Entity<Repository>> {
+    pub fn get(id: &RepositoryId, cx: &App) -> Option<Entity<Repository>> {
         cx.try_global::<Repositories>()?.open.get(id).cloned()
     }
 
@@ -195,7 +195,7 @@ impl Repositories {
     }
 
     /// Forgets the repository `id`, as it was removed from Gitto.
-    pub fn close(id: &str, cx: &mut App) {
+    pub fn close(id: &RepositoryId, cx: &mut App) {
         if cx.has_global::<Repositories>() {
             cx.global_mut::<Repositories>().open.remove(id);
         }

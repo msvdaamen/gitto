@@ -85,11 +85,14 @@ impl CreateBranchDialog {
             return;
         }
         self.open = true;
-        let this = cx.entity();
+        let this = cx.entity().downgrade();
         let focus = self.name.focus_handle(cx);
         window.open_dialog(cx, move |dialog, window, cx| {
+            let Some(shown) = this.upgrade() else {
+                return dialog;
+            };
             let (summary, name, disabled) = {
-                let shown = this.read(cx);
+                let shown = shown.read(cx);
                 (
                     shown.summary(cx),
                     shown.name.clone(),
@@ -102,7 +105,7 @@ impl CreateBranchDialog {
                 .w(rems(WIDTH).to_pixels(window.rem_size()))
                 .close_button(false)
                 .on_cancel(move |_, _, cx| {
-                    cancel.update(cx, |this, cx| {
+                    let _ = cancel.update(cx, |this, cx| {
                         this.open = false;
                         cx.notify();
                     });
@@ -112,8 +115,8 @@ impl CreateBranchDialog {
                     BranchForm::new(summary, &name)
                         // `run` does nothing while a switch or a merge is running.
                         .disabled(disabled)
-                        .on_submit(move |_, window, cx| {
-                            submit.update(cx, |this, cx| this.submit(window, cx));
+                        .on_submit(move |window, cx| {
+                            let _ = submit.update(cx, |this, cx| this.submit(window, cx));
                         }),
                 )
         });
@@ -138,8 +141,8 @@ impl CreateBranchDialog {
             .read(cx)
             .status()
             .data()
-            .map(|status| status.summary());
-        let changes = if !has_uncommitted_changes(status.as_ref()) {
+            .map(|status| status.summary.clone());
+        let changes = if !status.as_ref().is_some_and(has_uncommitted_changes) {
             "."
         } else if status
             .as_ref()
@@ -203,7 +206,7 @@ mod tests {
 
     use super::*;
     use crate::components::repository::test_support::{
-        changed, fake_git, repository_id, set_status, setup, status,
+        changed, fake_git, has_dialog, repository_id, set_status, setup, status,
     };
     use gitto_app_data::data::git::{GitTask, RepositoryGit};
 
@@ -289,11 +292,47 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn closes_and_forgets_the_name_for_another_repository(cx: &mut TestAppContext) {
+        let _dir = setup(cx);
+        let id = repository_id();
+        set_status(&id, status(), cx);
+        let calls = Rc::new(Creates::default());
+        let (window, dialog) = render(cx, &id, &calls);
+        cx.update_window(window, |_, window, cx| {
+            dialog.update(cx, |dialog, cx| {
+                dialog.open("refs/heads/main".into(), window, cx)
+            });
+            window.input("topic", cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert_eq!(
+            dialog.read_with(cx, |dialog, cx| dialog.name.read(cx).value().to_string()),
+            "topic"
+        );
+
+        let other = repository_id();
+        set_status(&other, status(), cx);
+        cx.update_window(window, |_, window, cx| {
+            dialog.update(cx, |dialog, cx| dialog.set_repository(other, window, cx))
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert!(!dialog.read_with(cx, |dialog, _| dialog.is_open()));
+        assert!(!has_dialog(window, cx));
+        assert_eq!(
+            dialog.read_with(cx, |dialog, cx| dialog.name.read(cx).value().to_string()),
+            ""
+        );
+        assert!(calls.0.borrow().is_empty());
+    }
+
+    #[gpui_kit::test]
     fn says_the_changes_come_along_from_the_checked_out_branch(cx: &mut TestAppContext) {
         let _dir = setup(cx);
         let id = repository_id();
         let mut on_main = changed(status(), 1);
-        on_main.head = Head::Branch {
+        on_main.summary.head = Head::Branch {
             name: "main".into(),
             sha: "abc".into(),
         };

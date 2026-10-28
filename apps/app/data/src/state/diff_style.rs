@@ -32,7 +32,7 @@ impl DiffStyle {
 
     /// Saves it; it still applies if it can't be saved, until the app closes.
     pub fn save(self, storage: &LocalStorage) {
-        let _ = storage.set_item(STORAGE_KEY, self.as_str());
+        storage.set_item(STORAGE_KEY, self.as_str());
     }
 
     /// The layout every file's changes are shown in (`useDiffStyle`'s `diffStyle`): the saved one,

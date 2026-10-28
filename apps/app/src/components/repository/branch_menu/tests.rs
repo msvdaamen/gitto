@@ -5,7 +5,7 @@ use futures::FutureExt as _;
 use gitto_git::features::operation::schema::Operation;
 use gitto_git::features::refs::schema::Ref;
 use gitto_git::features::status::schema::{Head, StatusReply, Uncommitted};
-use gitto_git::input::{BranchRef, NonEmpty};
+use gitto_git::input::{BranchRef, BranchShortName};
 use gpui_kit::component::menu::ContextMenuExt as _;
 use gpui_kit::prelude::*;
 use gpui_kit::test::{TestSupportExt as _, TestWindowExt as _};
@@ -34,6 +34,7 @@ impl Render for Host {
             .flex_col()
             .children(self.branches.iter().map(|branch| {
                 let full_name = SharedString::from(*branch);
+                let provider = self.provider.clone();
                 div()
                     .id(SharedString::from(format!("row-{branch}")))
                     .test_support()
@@ -41,7 +42,7 @@ impl Render for Host {
                     .w_40()
                     .child(full_name.clone())
                     .context_menu(move |menu, window, cx| {
-                        branch_menu(menu, full_name.clone(), window, cx)
+                        branch_menu(menu, full_name.clone(), &provider, window, cx)
                     })
             }))
     }
@@ -102,7 +103,7 @@ struct Calls {
 
 /// The menus' repository's git, which records what it was asked to run.
 impl RepositoryGit for Calls {
-    fn merge_branch(&self, reference: BranchRef, into: NonEmpty) -> GitTask<MergeOutcome> {
+    fn merge_branch(&self, reference: BranchRef, into: BranchShortName) -> GitTask<MergeOutcome> {
         self.merges.borrow_mut().push(Merge { reference, into });
         *self.now.borrow_mut() = self.after_merge.borrow_mut().take();
         let outcome = self.merge_outcome.borrow_mut().take();
@@ -116,7 +117,7 @@ impl RepositoryGit for Calls {
         async { Ok(()) }.boxed()
     }
 
-    fn pull(&self, branch: Option<NonEmpty>) -> GitTask<()> {
+    fn pull(&self, branch: Option<BranchShortName>) -> GitTask<()> {
         if let Some(branch) = branch {
             self.pulled_branches
                 .borrow_mut()
@@ -126,7 +127,7 @@ impl RepositoryGit for Calls {
     }
 
     // As the repository reloads after a merge.
-    fn status(&self, _: Option<String>) -> GitTask<StatusReply> {
+    fn status(&self, _: Option<gitto_git::ContentVersion>) -> GitTask<StatusReply> {
         let now = self.now.borrow().clone();
         async move {
             now.map(|status| StatusReply::Status(Box::new(status)))
@@ -253,6 +254,43 @@ fn offers_merging_rebasing_a_worktree_and_deleting_for_another_branch(cx: &mut T
         provider.read_with(cx, |provider, _| provider.open_for().cloned()),
         None
     );
+}
+
+#[gpui_kit::test]
+fn forgets_its_menu_and_closes_its_dialogs_for_another_repository(cx: &mut TestAppContext) {
+    let calls = Rc::new(Calls::default());
+    let (_dir, id, window, host) = render(cx, &calls);
+    let provider = host.read_with(cx, |host, _| host.provider.clone());
+    let other = repository_id();
+    set_status(&other, status(), cx);
+    set_operation(&other, None, cx);
+    set_refs(&other, Vec::new(), cx);
+    set_worktrees(&other, Vec::new(), cx);
+    set_remotes(&other, &[], cx);
+    let switch = |to: RepositoryId, cx: &mut TestAppContext| {
+        cx.update_window(window, |_, window, cx| {
+            provider.update(cx, |provider, cx| provider.set_repository(to, window, cx))
+        })
+        .unwrap();
+        cx.run_until_parked();
+    };
+
+    open_menu(window, "row-refs/heads/topic", cx);
+    switch(other.clone(), cx);
+    assert_eq!(
+        provider.read_with(cx, |provider, _| provider.open_for().cloned()),
+        None
+    );
+
+    switch(id, cx);
+    open_menu(window, "row-refs/heads/topic", cx);
+    choose(window, "Create branch…", cx);
+    assert!(has_dialog(window, cx));
+    switch(other, cx);
+    assert!(!has_dialog(window, cx));
+    assert!(!provider.read_with(cx, |provider, cx| {
+        provider.create_dialog().read(cx).is_open()
+    }));
 }
 
 #[gpui_kit::test]

@@ -6,23 +6,25 @@ use gitto_ui_logic::git::message::{CommitMessage, edit_message, split_message};
 use gpui_kit::component::Disableable as _;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    App, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, KeyDownEvent, Rems,
-    Subscription, Window, div,
+    App, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, Rems, Subscription,
+    Window, div,
 };
 
 use super::columns::SMALL_TEXT;
+use crate::components::repository::commit_message::{
+    CommitMessageEditor, CommitMessageEvent, push_warning,
+};
 use gitto_app_data::data::commit::{Reword, reword_commit_mutation};
 use gitto_app_data::data::keyed::Hold;
 use gitto_app_data::data::{Changed, DataError, Loaded, Mutation, Part, Repositories, Repository};
-use gitto_app_kit::theme::PaletteExt as _;
-use gitto_app_kit::ui::{FormField, Icon, IconName};
+use gitto_app_kit::theme::{PaletteExt as _, base_px};
+use gitto_app_kit::ui::{Icon, IconName};
 
 /// How wide the dialog is (`max-w-[440px]`), in rems of the 15px base.
-const WIDTH: Rems = Rems(440. / 15.);
+const WIDTH: Rems = base_px(440.);
 
 /// Rewording a commit: the repository and the commit's SHA, and the message to give it.
 pub type RewordMutation = Mutation<(RepositoryId, Reword), String>;
@@ -47,13 +49,10 @@ pub struct RewordDialog {
     /// Holds the commit's message and where it was pushed, while it's open.
     holds: Option<(Hold, Hold)>,
     reword: Entity<RewordMutation>,
-    summary: Entity<InputState>,
-    description: Entity<TextareaState>,
+    editor: Entity<CommitMessageEditor>,
     /// The message the fields were filled with once it loaded: until then they're locked, so no
     /// edits stand in for it.
     loaded: Option<CommitMessage>,
-    /// Whether the fields were edited since: the message isn't put in them again.
-    edited: bool,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
     _loading: Option<Subscription>,
@@ -70,24 +69,12 @@ impl Focusable for RewordDialog {
 impl RewordDialog {
     pub fn new(repository_id: RepositoryId, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let reword = reword_commit_mutation(cx);
-        let summary =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Summary of your changes"));
-        let description = cx.new(|cx| {
-            TextareaState::new(window, cx)
-                .rows(5)
-                .placeholder("Add more context…")
-        });
+        let editor = cx.new(|cx| CommitMessageEditor::new(5, window, cx));
         let subscriptions = vec![
             cx.observe(&reword, |_, _, cx| cx.notify()),
-            cx.subscribe_in(&summary, window, |this, _, event, window, cx| match event {
-                InputEvent::Change => this.on_edit(cx),
-                InputEvent::PressEnter { .. } => this.submit(window, cx),
-                _ => {}
-            }),
-            cx.subscribe_in(&description, window, |this, _, event, _, cx| {
-                if let InputEvent::Change = event {
-                    this.on_edit(cx)
-                }
+            cx.subscribe_in(&editor, window, |this, _, event, window, cx| match event {
+                CommitMessageEvent::Edited(_) => cx.notify(),
+                CommitMessageEvent::Submit => this.submit(window, cx),
             }),
         ];
         RewordDialog {
@@ -96,10 +83,8 @@ impl RewordDialog {
             sha: None,
             holds: None,
             reword,
-            summary,
-            description,
+            editor,
             loaded: None,
-            edited: false,
             focus: cx.focus_handle(),
             _subscriptions: subscriptions,
             _loading: None,
@@ -125,20 +110,11 @@ impl RewordDialog {
         self.sha.as_deref()
     }
 
-    pub fn summary(&self) -> &Entity<InputState> {
-        &self.summary
-    }
-
-    pub fn description(&self) -> &Entity<TextareaState> {
-        &self.description
-    }
-
     /// Opens it for the commit `sha`. Each time it opens, it starts from the commit's message,
     /// with no failure from before.
     pub fn open(&mut self, sha: String, window: &mut Window, cx: &mut Context<Self>) {
         let was_open = self.sha.is_some();
         self.reword.update(cx, |reword, cx| reword.reset(cx));
-        self.edited = false;
         self.loaded = None;
         self.holds = Some(self.repository.update(cx, |repository, cx| {
             (
@@ -157,7 +133,9 @@ impl RewordDialog {
             },
         ));
         self.sha = Some(sha);
-        self.set_fields(&CommitMessage::default(), window, cx);
+        self.editor.update(cx, |editor, cx| {
+            editor.set_message(&CommitMessage::default(), true, window, cx)
+        });
         self.fill(window, cx);
         if !was_open {
             let this = cx.entity();
@@ -176,8 +154,8 @@ impl RewordDialog {
                     .child(this.clone())
             });
         }
-        let focus = self.summary.focus_handle(cx);
-        focus.focus(window, cx);
+        self.editor
+            .update(cx, |editor, cx| editor.focus(window, cx));
         cx.notify();
     }
 
@@ -197,24 +175,11 @@ impl RewordDialog {
         cx.notify();
     }
 
-    fn set_fields(&mut self, message: &CommitMessage, window: &mut Window, cx: &mut Context<Self>) {
-        let (summary, description) = (message.summary.clone(), message.description.clone());
-        self.summary
-            .update(cx, |input, cx| input.set_value(summary, window, cx));
-        self.description
-            .update(cx, |input, cx| input.set_value(description, window, cx));
-    }
-
     /// Puts the commit's message in the fields once it's loaded, unless they've been edited.
     fn fill(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let loading = self.loaded_message(cx).is_some_and(Loaded::is_pending);
-        let placeholder = if loading {
-            "Loading the message…"
-        } else {
-            "Summary of your changes"
-        };
-        self.summary.update(cx, |input, cx| {
-            input.set_placeholder(placeholder, window, cx)
+        self.editor.update(cx, |editor, cx| {
+            editor.set_loading(loading.then_some("Loading the message…"), window, cx)
         });
         if self.loaded.is_some() {
             return;
@@ -223,24 +188,18 @@ impl RewordDialog {
             return;
         };
         let message = split_message(&original);
-        if !self.edited {
-            self.set_fields(&message, window, cx);
-        }
+        self.editor.update(cx, |editor, cx| {
+            if !editor.is_edited() {
+                editor.set_message(&message, false, window, cx);
+            }
+        });
         self.loaded = Some(message);
-        cx.notify();
-    }
-
-    fn on_edit(&mut self, cx: &mut Context<Self>) {
-        self.edited = true;
         cx.notify();
     }
 
     /// The message as the fields have it.
     pub fn message(&self, cx: &App) -> CommitMessage {
-        CommitMessage::new(
-            self.summary.read(cx).value().to_string(),
-            self.description.read(cx).value().to_string(),
-        )
+        self.editor.read(cx).message().clone()
     }
 
     /// The commit's message, as far as it's loaded, while it's open.
@@ -336,28 +295,10 @@ impl RewordDialog {
     /// What it says under the fields: that the commit is pushed already, or that couldn't be
     /// checked, so the branch would need force-pushing; and why rewording failed.
     pub fn notes(&self, cx: &App) -> Vec<(Note, String)> {
-        let pushed_to = self
-            .pushed_to(cx)
-            .filter(|loaded| loaded.is_success())
-            .and_then(Loaded::data)
-            .cloned()
-            .flatten();
         let mut notes = Vec::new();
-        if let Some(branch) = pushed_to {
-            notes.push((
-                Note::Warning,
-                format!(
-                    "The commit is already on {branch}; editing its message means force-pushing."
-                ),
-            ));
-        }
-        if self.pushed_to(cx).is_some_and(Loaded::is_error) {
-            notes.push((
-                Note::Warning,
-                "Couldn't check whether the commit has been pushed; if it has, editing its \
-                 message means force-pushing."
-                    .to_owned(),
-            ));
+        let warning = push_warning(self.pushed_to(cx), "the commit", "editing its message");
+        if let Some(warning) = warning {
+            notes.push((Note::Warning, warning));
         }
         if let Some(error) = self.error(cx) {
             notes.push((Note::Error, error.to_string()));
@@ -382,18 +323,9 @@ impl Render for RewordDialog {
         v_flex()
             .id("reword-dialog")
             .track_focus(&self.focus)
-            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                // Cmd/Ctrl+Enter saves from either field; in the description, rather than
-                // starting a line.
-                let keystroke = &event.keystroke;
-                if keystroke.key == "enter" && keystroke.modifiers.secondary() {
-                    cx.stop_propagation();
-                    this.submit(window, cx);
-                }
-            }))
             .child(
                 div()
-                    .text_size(Rems(12.5 / 15.))
+                    .text_size(base_px(12.5))
                     .font_weight(FontWeight(680.))
                     .text_color(palette.text)
                     .child("Edit commit message"),
@@ -409,12 +341,8 @@ impl Render for RewordDialog {
                          added to it.",
                     ),
             )
-            .child(FormField::input("Commit message", &self.summary).readonly(locked))
-            .child(
-                FormField::textarea("Description", &self.description)
-                    .hint("optional")
-                    .readonly(locked),
-            )
+            // Cmd or Ctrl+Enter saves from either field, as Enter does in the summary.
+            .child(CommitMessageEditor::fields(&self.editor, locked, cx))
             .children(notes.into_iter().map(|(note, text)| {
                 div()
                     .mb_2p5()

@@ -4,7 +4,8 @@
 
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    App, Bounds, KeyBinding, TitlebarOptions, WindowBounds, WindowOptions, actions, px, size,
+    App, Bounds, Context, KeyBinding, PromptLevel, TitlebarOptions, Window, WindowBounds,
+    WindowOptions, actions, div, px, size,
 };
 
 use crate::assets::AppAssets;
@@ -34,6 +35,9 @@ pub const MIN_HEIGHT: f32 = 400.;
 /// opens the window again when it's launched again, from the Dock say (`activate`).
 pub fn run() {
     logger::init();
+    // Git runs with the PATH the user's shell has, as from a terminal, not only the one a Dock or
+    // a launcher gave Gitto.
+    gitto_git::use_path_from_shell();
     let application = gpui_kit::application().with_assets(AppAssets);
     application.on_reopen(|cx| {
         if cx.windows().is_empty() && cx.has_global::<Services>() {
@@ -46,8 +50,7 @@ pub fn run() {
         let services = match start_services() {
             Ok(services) => services,
             Err(error) => {
-                log::error!("Gitto couldn't start: {error:#}");
-                cx.quit();
+                quit_with_error("Gitto couldn't start", &error, cx);
                 return;
             }
         };
@@ -70,19 +73,36 @@ fn start_services() -> anyhow::Result<Services> {
 }
 
 /// Sets up what every window needs, on `services`, starting on `route`: the services, the theme
-/// the user picked, the data layer, the router and the key bindings. Call after `gpui_kit::init`.
+/// the user picked, the data layer, the app's state, the router and the key bindings. Call after
+/// `gpui_kit::init`.
 pub fn init(services: Services, route: Route, cx: &mut App) {
     let storage = services.storage().clone();
     cx.set_global(services);
     let saved = storage.get_item(theme::STORAGE_KEY);
-    let save: theme::SaveTheme = Box::new(move |picked| {
-        let _ = storage.set_item(theme::STORAGE_KEY, picked.as_str());
+    let save: theme::SaveTheme = Box::new({
+        let storage = storage.clone();
+        move |picked| storage.set_item(theme::STORAGE_KEY, picked.as_str())
     });
     theme::init(saved.as_deref(), Some(save), cx);
     gitto_app_data::data::init(cx);
+    gitto_app_data::state::init(cx);
     Router::init(route, cx);
     cx.bind_keys([KeyBinding::new("secondary-q", Quit, None)]);
+    cx.bind_keys(crate::components::repository::diff::viewer::viewer_actions::key_bindings());
+    crate::components::repository::sidebar::ref_list::bind_keys(cx);
+    crate::components::repository::history::history_table::bind_keys(cx);
+    crate::components::tabs::bind_keys(cx);
+    gitto_app_kit::ui::resize_handle::bind_keys(cx);
     cx.on_action(|_: &Quit, cx| cx.quit());
+    // What the UI remembers is saved off the UI thread: what's still being saved is, before
+    // Gitto goes.
+    cx.on_app_quit(move |_| {
+        if let Err(error) = storage.flush() {
+            log::error!("Couldn't save what the UI remembers: {error}");
+        }
+        async {}
+    })
+    .detach();
 }
 
 /// Opens Gitto's window, centered.
@@ -103,7 +123,78 @@ pub fn open_main_window(cx: &mut App) {
     if let Err(error) = gpui_kit::open_window(options, cx, |window, cx| {
         cx.new(|cx| AppShell::new(window, cx))
     }) {
-        log::error!("Gitto couldn't open its window: {error:#}");
+        quit_with_error("Gitto couldn't open its window", &error, cx);
+    }
+}
+
+/// Says that Gitto can't go on, and why, then quits once that's been read: launched from the
+/// Finder, the Dock or the Start menu, it would otherwise just not appear. Said in a window of
+/// its own, as there's none of Gitto's to say it over; if not even that opens, it quits at once,
+/// with the reason in the log.
+pub fn quit_with_error(title: &str, error: &anyhow::Error, cx: &mut App) {
+    log::error!("{title}: {error:#}");
+    let detail = format!("{error:#}");
+    let bounds = Bounds::centered(None, size(px(480.), px(200.)), cx);
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        titlebar: Some(TitlebarOptions {
+            title: Some(identity::APP_NAME.into()),
+            ..TitlebarOptions::default()
+        }),
+        app_id: Some(identity::APP_ID.to_owned()),
+        ..WindowOptions::default()
+    };
+    let title = title.to_owned();
+    let opened = gpui_kit::open_window(options, cx, |_, cx| cx.new(|_| ErrorWindow)).and_then(
+        |(window, _)| {
+            window.update(cx, |_, window, cx| {
+                window.prompt(PromptLevel::Critical, &title, Some(&detail), &["Quit"], cx)
+            })
+        },
+    );
+    let Ok(answered) = opened else {
         cx.quit();
+        return;
+    };
+    cx.spawn(async move |cx| {
+        let _ = answered.await;
+        cx.update(|cx| {
+            for window in cx.windows() {
+                let _ = window.update(cx, |_, window, _| window.remove_window());
+            }
+            cx.quit();
+        });
+    })
+    .detach();
+}
+
+/// The window Gitto says it can't go on in: empty, under what it says.
+struct ErrorWindow;
+
+impl Render for ErrorWindow {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::TestAppContext;
+
+    use super::*;
+
+    #[gpui_kit::test]
+    fn says_why_gitto_cant_go_on_before_it_quits(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(|cx| {
+            let error = anyhow::anyhow!("The database is locked.");
+            quit_with_error("Gitto couldn't start", &error, cx);
+        });
+        cx.run_until_parked();
+        assert!(cx.has_pending_prompt());
+
+        cx.simulate_prompt_answer("Quit");
+        cx.run_until_parked();
+        assert!(cx.update(|cx| cx.windows().is_empty()));
     }
 }

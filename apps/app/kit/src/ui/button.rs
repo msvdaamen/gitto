@@ -8,9 +8,10 @@
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{Disableable as _, Selectable as _, Sizable as _};
 use gpui_kit::prelude::*;
-use gpui_kit::{App, ClickEvent, ElementId, FontWeight, SharedString, Window, rems};
+use gpui_kit::{App, ClickEvent, ElementId, FontWeight, SharedString, Window};
 
 use super::icons::{Icon, IconName};
+use crate::theme::base_px;
 
 type OnClick = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 
@@ -19,7 +20,7 @@ type OnClick = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 pub fn action_button(id: impl Into<ElementId>) -> Button {
     Button::new(id)
         .xsmall()
-        .h(rems(26. / 15.))
+        .h(base_px(26.))
         .font_weight(FontWeight::SEMIBOLD)
 }
 

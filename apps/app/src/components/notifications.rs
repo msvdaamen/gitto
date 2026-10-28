@@ -16,7 +16,7 @@ use gitto_app_kit::ui::{Icon, IconName};
 pub struct Notifications {
     update: Entity<UpdateStatus>,
     /// What the user last saw: an update, while downloading, is news again once it's ready.
-    seen: Option<String>,
+    seen: Option<Update>,
     _subscription: Subscription,
 }
 
@@ -35,15 +35,10 @@ impl Notifications {
         self.update.read(cx).state()?.update.clone()
     }
 
-    /// What the user sees of the update: its version, and whether it's ready.
-    fn key(update: Option<&Update>) -> Option<String> {
-        update.map(|update| format!("{}:{}", update.version, update.ready))
-    }
-
     /// Whether there's news the bell hasn't been opened to see.
     pub fn is_unseen(&self, cx: &App) -> bool {
-        let key = Self::key(self.current(cx).as_ref());
-        key.is_some() && key != self.seen
+        let current = self.current(cx);
+        current.is_some() && current != self.seen
     }
 }
 
@@ -60,12 +55,12 @@ impl Render for Notifications {
                 Popover::new("notifications")
                     .anchor(Anchor::TopRight)
                     .on_open_change({
-                        let key = Self::key(update.as_ref());
+                        let update = update.clone();
                         move |open, _, cx| {
                             if *open {
-                                let key = key.clone();
+                                let update = update.clone();
                                 this.update(cx, |this, cx| {
-                                    this.seen = key;
+                                    this.seen = update;
                                     cx.notify();
                                 });
                             }

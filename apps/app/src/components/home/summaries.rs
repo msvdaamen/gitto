@@ -4,7 +4,6 @@ use std::rc::Rc;
 
 use gitto_git::features::overview::schema::Overview;
 use gitto_git::features::status::schema::StatusSummary;
-use gitto_git::input::RepositoryId;
 use gitto_repository::Repository;
 use gpui_kit::{App, Context, Entity, Subscription};
 
@@ -71,10 +70,7 @@ impl RepositorySummaries {
                 self.entries.push(entry);
                 continue;
             }
-            let Ok(id) = RepositoryId::parse(repository.id.clone()) else {
-                continue;
-            };
-            let data = Repositories::open(&id, cx);
+            let data = Repositories::open(&repository.id, cx);
             Self::reload(&data, cx);
             let subscription = cx.subscribe(&data, |_, _, Changed(part), cx| {
                 if matches!(part, Part::Status | Part::Overview) {
@@ -107,7 +103,7 @@ impl RepositorySummaries {
                 let overview = data.overview();
                 RepositorySummary {
                     repository: entry.repository.clone(),
-                    status: status.data().map(|status| status.summary()),
+                    status: status.data().map(|status| status.summary.clone()),
                     overview: overview.data().cloned(),
                     error: status.error().or_else(|| overview.error()).cloned(),
                     settled: status.data().is_some() || status.is_error(),

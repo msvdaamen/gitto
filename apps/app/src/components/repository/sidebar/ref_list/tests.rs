@@ -25,7 +25,7 @@ use gitto_app_data::data::worktree::AddWorktreeInput;
 use gitto_app_data::data::{Change, PopFrom};
 use gitto_app_data::state::router::{Route, Router};
 use gitto_git::features::status::schema::Uncommitted;
-use gitto_git::input::{BranchName, BranchRef, Folder, FullSha, NonEmpty};
+use gitto_git::input::{BranchName, BranchRef, BranchShortName, Folder, FullSha, RepositoryId};
 use gitto_repository::Repository;
 use std::path::PathBuf;
 
@@ -125,12 +125,16 @@ impl RepositoryGit for Fakes {
         self.create.run(input, ())
     }
 
-    fn merge_branch(&self, reference: BranchRef, into: NonEmpty) -> GitTask<MergeOutcome> {
+    fn merge_branch(&self, reference: BranchRef, into: BranchShortName) -> GitTask<MergeOutcome> {
         let input = Merge { reference, into };
         self.merge.run(input, MergeOutcome::Merged)
     }
 
-    fn rebase_branch(&self, reference: BranchRef, branch: NonEmpty) -> GitTask<RebaseOutcome> {
+    fn rebase_branch(
+        &self,
+        reference: BranchRef,
+        branch: BranchShortName,
+    ) -> GitTask<RebaseOutcome> {
         let input = Rebase { reference, branch };
         self.rebase.run(input, RebaseOutcome::Rebased)
     }
@@ -139,7 +143,7 @@ impl RepositoryGit for Fakes {
         self.delete.run(reference.as_str().to_owned(), ())
     }
 
-    fn pull(&self, branch: Option<NonEmpty>) -> GitTask<()> {
+    fn pull(&self, branch: Option<BranchShortName>) -> GitTask<()> {
         match branch {
             Some(branch) => self.pull_branch.run(branch.as_str().to_owned(), ()),
             None => self.pull.run((), ()),
@@ -199,11 +203,11 @@ impl RepositorySource for Source {
             .boxed()
     }
 
-    fn remove(&self, _: String) -> BoxFuture<'static, Result<(), DataError>> {
+    fn remove(&self, _: RepositoryId) -> BoxFuture<'static, Result<(), DataError>> {
         async { Err(DataError::msg("Not in this test.")) }.boxed()
     }
 
-    fn reorder(&self, _: Vec<String>) -> BoxFuture<'static, Result<(), DataError>> {
+    fn reorder(&self, _: Vec<RepositoryId>) -> BoxFuture<'static, Result<(), DataError>> {
         async { Err(DataError::msg("Not in this test.")) }.boxed()
     }
 }
@@ -277,7 +281,7 @@ fn status() -> Uncommitted {
         name: "main".into(),
         sha: "abc".into(),
     });
-    status.counts = StatusCounts {
+    status.summary.counts = StatusCounts {
         files: 1,
         staged: 0,
         unstaged: 1,
@@ -342,7 +346,7 @@ fn seed(id: &RepositoryId, cx: &mut TestAppContext) {
     set_push_target(
         id,
         gitto_git::features::remote::schema::PushTarget::Blocked {
-            reason: "There's no remote to push to.".into(),
+            reason: gitto_git::PushBlocker::NoRemote,
         },
         cx,
     );
@@ -387,7 +391,7 @@ fn render_with(
         let add = cx.new(|cx| AddWorktreeDialog::new(shown.clone(), window, cx));
         let provider = cx.new(|cx| BranchMenuProvider::with(shown.clone(), create, add, cx));
         let toolbar = cx.new(|cx| RepositoryToolbar::new(shown.clone(), window, cx));
-        let list = cx.new(|cx| RefList::new(shown.clone(), window, cx));
+        let list = cx.new(|cx| RefList::new(shown.clone(), provider.clone(), window, cx));
         Host {
             toolbar,
             provider,
@@ -500,19 +504,24 @@ impl Fixture {
         })
     }
 
-    fn is_section_busy(&self, section: &str, cx: &mut TestAppContext) -> bool {
+    fn is_section_busy(&self, section: Section, cx: &mut TestAppContext) -> bool {
         let list = self.list(cx);
         list.read_with(cx, |list, cx| list.is_section_busy(section, cx))
     }
 
     /// The failure shown beside the section, by its title and message.
-    fn section_failure(&self, section: &str, cx: &mut TestAppContext) -> Option<(String, String)> {
+    fn section_failure(
+        &self,
+        section: Section,
+        cx: &mut TestAppContext,
+    ) -> Option<(String, String)> {
         let list = self.list(cx);
         list.read_with(cx, |list, cx| {
             let repository = list.repository.entity();
             let failure = match section {
-                STASHES => StashMenu::failure(repository, cx),
-                _ => WorktreeMenu::failure(repository, cx),
+                Section::Stashes => StashMenu::failure(repository, cx),
+                Section::Worktrees => WorktreeMenu::failure(repository, cx),
+                _ => unreachable!("{section:?} has no actions on its items"),
             };
             failure
                 .error
@@ -524,24 +533,27 @@ impl Fixture {
     fn show(&self, id: &RepositoryId, cx: &mut TestAppContext) {
         let list = self.list(cx);
         let provider = self.provider(cx);
-        let toolbar = self.host.read_with(cx, |host, _| host.toolbar.clone());
+        let host = self.host.clone();
         let id = id.clone();
         self.in_window(cx, |window, cx| {
             provider.update(cx, |provider, cx| {
                 provider.set_repository(id.clone(), window, cx)
             });
-            toolbar.update(cx, |toolbar, cx| {
-                toolbar.set_repository(id.clone(), window, cx)
+            // The page makes another toolbar for another repository.
+            let toolbar = cx.new(|cx| RepositoryToolbar::new(id.clone(), window, cx));
+            host.update(cx, |host, cx| {
+                host.toolbar = toolbar;
+                cx.notify();
             });
             list.update(cx, |list, cx| list.set_repository(id, window, cx));
         });
     }
 
-    /// Expands the section `id` if it's collapsed (tags and stashes are, at first).
-    fn expand(&self, section: &'static str, cx: &mut TestAppContext) {
+    /// Expands `section` if it's collapsed (tags and stashes are, at first).
+    fn expand(&self, section: Section, cx: &mut TestAppContext) {
         let list = self.list(cx);
-        if list.read_with(cx, |list, _| list.is_collapsed(section)) {
-            self.click(&format!("section-{section}"), cx);
+        if list.read_with(cx, |list, _| list.is_section_collapsed(section)) {
+            self.click(&format!("section-{}", section.key()), cx);
         }
     }
 
@@ -707,9 +719,9 @@ fn starts_with_the_tags_and_stashes_collapsed(cx: &mut TestAppContext) {
     let f = render(cx);
     assert!(f.has_row(MAIN, cx));
     let list = f.list(cx);
-    assert!(list.read_with(cx, |list, _| list.is_collapsed(TAGS)));
-    assert!(list.read_with(cx, |list, _| list.is_collapsed(STASHES)));
-    assert!(!list.read_with(cx, |list, _| list.is_collapsed(LOCAL)));
+    assert!(list.read_with(cx, |list, _| list.is_section_collapsed(Section::Tags)));
+    assert!(list.read_with(cx, |list, _| list.is_section_collapsed(Section::Stashes)));
+    assert!(!list.read_with(cx, |list, _| list.is_section_collapsed(Section::Local)));
     assert!(f.in_window(cx, |window, _| {
         window.find("section-tags").expanded() == Some(false)
             && window.find("section-local").expanded() == Some(true)
@@ -751,7 +763,7 @@ fn lists_the_tags_which_have_no_menu(cx: &mut TestAppContext) {
         set_refs(id, vec![local("main", true), tag("v0.1.0")], cx)
     });
     assert!(!f.has_row("tag-refs/tags/v0.1.0", cx));
-    f.expand(TAGS, cx);
+    f.expand(Section::Tags, cx);
     assert!(f.has_row("tag-refs/tags/v0.1.0", cx));
     assert!(f.open_menu("tag-refs/tags/v0.1.0", cx).is_empty());
 }
@@ -1062,7 +1074,7 @@ fn isnt_offered_while_switching_branches(cx: &mut TestAppContext) {
 fn isnt_offered_while_conflicts_are_left_to_resolve(cx: &mut TestAppContext) {
     let f = render_with(cx, |id, cx| {
         let mut conflicted = status();
-        conflicted.counts.conflicted = 1;
+        conflicted.summary.counts.conflicted = 1;
         set_status(id, conflicted, cx);
     });
     f.open_menu(FEATURE, cx);
@@ -1190,7 +1202,7 @@ fn pops_the_stash_right_clicked_an_older_one_too_showing_it_running_on_the_secti
 ) {
     let f = render_with(cx, with_stashes);
     f.fakes.pop.hold.set(true);
-    f.expand(STASHES, cx);
+    f.expand(Section::Stashes, cx);
 
     assert_eq!(
         f.open_menu(&stash_row(&older()), cx),
@@ -1198,7 +1210,7 @@ fn pops_the_stash_right_clicked_an_older_one_too_showing_it_running_on_the_secti
     );
     f.choose("Pop stash", cx);
     assert_eq!(f.fakes.pop.calls(), [older().sha]);
-    assert!(f.is_section_busy(STASHES, cx));
+    assert!(f.is_section_busy(Section::Stashes, cx));
     // The toolbar's Pop isn't the one running, but waits for it.
     let repository = f.repository(cx);
     assert!(repository.read_with(cx, |repository, _| {
@@ -1218,7 +1230,7 @@ fn pops_the_stash_right_clicked_an_older_one_too_showing_it_running_on_the_secti
 
     f.fakes.pop.finish(());
     cx.run_until_parked();
-    assert!(!f.is_section_busy(STASHES, cx));
+    assert!(!f.is_section_busy(Section::Stashes, cx));
 }
 
 #[gpui_kit::test]
@@ -1226,12 +1238,12 @@ fn says_beside_the_section_why_a_stash_couldnt_be_popped(cx: &mut TestAppContext
     let f = render_with(cx, with_stashes);
     let message = "Popping the stash caused conflicts.";
     f.fakes.pop.fail_with(message);
-    f.expand(STASHES, cx);
+    f.expand(Section::Stashes, cx);
 
     f.open_menu(&stash_row(&older()), cx);
     f.choose("Pop stash", cx);
     assert_eq!(
-        f.section_failure(STASHES, cx),
+        f.section_failure(Section::Stashes, cx),
         Some(("Pop stash".to_owned(), message.to_owned()))
     );
     // Only there, not under the toolbar's Pop as well.
@@ -1244,14 +1256,14 @@ fn says_beside_the_section_why_a_stash_couldnt_be_popped(cx: &mut TestAppContext
     }));
 
     f.choose("Dismiss", cx);
-    assert_eq!(f.section_failure(STASHES, cx), None);
+    assert_eq!(f.section_failure(Section::Stashes, cx), None);
 }
 
 #[gpui_kit::test]
 fn doesnt_delete_one_while_another_stash_action_runs(cx: &mut TestAppContext) {
     let f = render_with(cx, with_stashes);
     f.fakes.pop.hold.set(true);
-    f.expand(STASHES, cx);
+    f.expand(Section::Stashes, cx);
 
     // The dialog was open before the pop began.
     f.open_menu(&stash_row(&older()), cx);
@@ -1273,7 +1285,7 @@ fn doesnt_delete_one_while_another_stash_action_runs(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn forgets_the_stash_it_was_asking_about_deleting_in_another_repository(cx: &mut TestAppContext) {
     let f = render_with(cx, with_stashes);
-    f.expand(STASHES, cx);
+    f.expand(Section::Stashes, cx);
     f.open_menu(&stash_row(&older()), cx);
     f.choose("Delete stash…", cx);
     assert!(f.has_dialog(cx));
@@ -1288,10 +1300,10 @@ fn doesnt_pop_one_over_conflicts(cx: &mut TestAppContext) {
     let f = render_with(cx, |id, cx| {
         with_stashes(id, cx);
         let mut conflicted = status();
-        conflicted.counts.conflicted = 1;
+        conflicted.summary.counts.conflicted = 1;
         set_status(id, conflicted, cx);
     });
-    f.expand(STASHES, cx);
+    f.expand(Section::Stashes, cx);
     f.open_menu(&stash_row(&newer()), cx);
     f.choose("Pop stash", cx);
     assert!(f.fakes.pop.calls().is_empty());
@@ -1300,7 +1312,7 @@ fn doesnt_pop_one_over_conflicts(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn deletes_the_stash_right_clicked_once_thats_confirmed(cx: &mut TestAppContext) {
     let f = render_with(cx, with_stashes);
-    f.expand(STASHES, cx);
+    f.expand(Section::Stashes, cx);
 
     f.open_menu(&stash_row(&older()), cx);
     f.choose("Delete stash…", cx);
@@ -1321,13 +1333,13 @@ fn says_why_a_stash_couldnt_be_deleted(cx: &mut TestAppContext) {
     let f = render_with(cx, with_stashes);
     let message = "The stash is gone: the stashes changed before it could be deleted.";
     f.fakes.drop.fail_with(message);
-    f.expand(STASHES, cx);
+    f.expand(Section::Stashes, cx);
 
     f.open_menu(&stash_row(&newer()), cx);
     f.choose("Delete stash…", cx);
     f.choose("Delete", cx);
     assert_eq!(
-        f.section_failure(STASHES, cx),
+        f.section_failure(Section::Stashes, cx),
         Some(("Delete stash".to_owned(), message.to_owned()))
     );
 }
@@ -1335,7 +1347,7 @@ fn says_why_a_stash_couldnt_be_deleted(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn opens_no_branch_menu_for_a_stash(cx: &mut TestAppContext) {
     let f = render_with(cx, with_stashes);
-    f.expand(STASHES, cx);
+    f.expand(Section::Stashes, cx);
     let offered = f.open_menu(&stash_row(&newer()), cx);
     assert!(offered.contains(&"Pop stash".to_owned()));
     assert!(!offered.contains(&"Create branch…".to_owned()));
@@ -1400,11 +1412,11 @@ fn opens_a_worktree_thats_double_clicked_as_a_repository_of_its_own_showing_it_r
 
     f.double_click(&worktree_row("/w/repo-feature"), cx);
     assert_eq!(f.fakes.open.calls(), ["/w/repo-feature"]);
-    assert!(f.is_section_busy(WORKTREES, cx));
+    assert!(f.is_section_busy(Section::Worktrees, cx));
 
     f.fakes.open.finish(());
     cx.run_until_parked();
-    assert!(!f.is_section_busy(WORKTREES, cx));
+    assert!(!f.is_section_busy(Section::Worktrees, cx));
     // The view that opened it shows it.
     assert_eq!(
         cx.update(|cx| Router::current(cx)),
@@ -1439,7 +1451,7 @@ fn says_beside_the_section_why_a_worktree_couldnt_be_opened(cx: &mut TestAppCont
     f.choose("Open worktree", cx);
     assert_eq!(f.fakes.open.calls(), ["/w/repo-check"]);
     assert_eq!(
-        f.section_failure(WORKTREES, cx),
+        f.section_failure(Section::Worktrees, cx),
         Some(("Open worktree".to_owned(), message.to_owned()))
     );
 }
@@ -1457,7 +1469,7 @@ fn removes_the_worktree_right_clicked_asking_first_showing_it_running_on_the_sec
     assert!(f.fakes.remove.calls().is_empty());
     f.choose("Remove", cx);
     assert_eq!(f.fakes.remove.calls(), ["/w/repo-feature"]);
-    assert!(f.is_section_busy(WORKTREES, cx));
+    assert!(f.is_section_busy(Section::Worktrees, cx));
 
     // Nor another one meanwhile.
     f.open_menu(&worktree_row("/w/repo-check"), cx);
@@ -1466,7 +1478,7 @@ fn removes_the_worktree_right_clicked_asking_first_showing_it_running_on_the_sec
 
     f.fakes.remove.finish(());
     cx.run_until_parked();
-    assert!(!f.is_section_busy(WORKTREES, cx));
+    assert!(!f.is_section_busy(Section::Worktrees, cx));
 }
 
 #[gpui_kit::test]
@@ -1497,12 +1509,12 @@ fn says_beside_the_section_why_a_worktree_couldnt_be_removed(cx: &mut TestAppCon
     f.choose("Remove worktree…", cx);
     f.choose("Remove", cx);
     assert_eq!(
-        f.section_failure(WORKTREES, cx),
+        f.section_failure(Section::Worktrees, cx),
         Some(("Remove worktree".to_owned(), message.to_owned()))
     );
 
     f.choose("Dismiss", cx);
-    assert_eq!(f.section_failure(WORKTREES, cx), None);
+    assert_eq!(f.section_failure(Section::Worktrees, cx), None);
 }
 
 #[gpui_kit::test]
@@ -1539,7 +1551,7 @@ fn opens_the_worktree_a_branch_is_checked_out_in_when_its_double_clicked_rather_
     f.double_click(FEATURE, cx);
     assert!(f.fakes.switch.calls().is_empty());
     assert_eq!(f.fakes.open.calls(), ["/w/repo-feature"]);
-    assert!(f.is_section_busy(WORKTREES, cx));
+    assert!(f.is_section_busy(Section::Worktrees, cx));
     f.fakes.open.finish(());
 }
 
@@ -1553,7 +1565,7 @@ fn says_beside_the_worktrees_why_one_couldnt_be_opened_from_a_branchs_menu(
     f.open_menu(FEATURE, cx);
     f.choose("Open worktree repo-feature", cx);
     assert_eq!(
-        f.section_failure(WORKTREES, cx),
+        f.section_failure(Section::Worktrees, cx),
         Some(("Open worktree".to_owned(), message.to_owned()))
     );
 }
@@ -1578,11 +1590,11 @@ fn adds_a_worktree_for_a_branch_suggesting_a_folder_beside_the_repository(cx: &m
     );
     // The dialog closes, and the section shows it running.
     assert!(!f.has_dialog(cx));
-    assert!(f.is_section_busy(WORKTREES, cx));
+    assert!(f.is_section_busy(Section::Worktrees, cx));
 
     f.fakes.add.finish(());
     cx.run_until_parked();
-    assert!(!f.is_section_busy(WORKTREES, cx));
+    assert!(!f.is_section_busy(Section::Worktrees, cx));
 }
 
 #[gpui_kit::test]
@@ -1597,7 +1609,7 @@ fn says_beside_the_section_why_a_worktree_couldnt_be_added_and_keeps_the_folder_
     f.choose("Add worktree…", cx);
     f.choose("Add worktree", cx);
     assert_eq!(
-        f.section_failure(WORKTREES, cx),
+        f.section_failure(Section::Worktrees, cx),
         Some(("Add worktree".to_owned(), message.to_owned()))
     );
 
@@ -1611,7 +1623,7 @@ fn says_beside_the_section_why_a_worktree_couldnt_be_added_and_keeps_the_folder_
         "/w/repo-origin-feature"
     );
     // Out of the way of the folder.
-    assert_eq!(f.section_failure(WORKTREES, cx), None);
+    assert_eq!(f.section_failure(Section::Worktrees, cx), None);
 }
 
 // ref-list.test.tsx: deleting from the branch menu.
@@ -1681,14 +1693,14 @@ fn doesnt_run_while_a_worktree_is_being_added_which_checks_out_a_branch_nor_that
     f.open_menu(FEATURE, cx);
     f.choose("Add worktree…", cx);
     f.choose("Add worktree", cx);
-    assert!(f.is_section_busy(WORKTREES, cx));
+    assert!(f.is_section_busy(Section::Worktrees, cx));
     f.open_menu(ORIGIN_FEATURE, cx);
     f.choose("Delete origin/feature…", cx);
     assert!(!f.has_dialog(cx));
 
     f.fakes.add.finish(());
     cx.run_until_parked();
-    assert!(!f.is_section_busy(WORKTREES, cx));
+    assert!(!f.is_section_busy(Section::Worktrees, cx));
     f.open_menu(ORIGIN_FEATURE, cx);
     f.choose("Delete origin/feature…", cx);
     f.choose("Delete", cx);
@@ -1751,4 +1763,147 @@ fn says_why_a_branch_couldnt_be_deleted_until_thats_dismissed(cx: &mut TestAppCo
 
     f.choose("Dismiss", cx);
     assert_eq!(f.branch_failure(cx), None);
+}
+
+/// The id of the row the keyboard's on.
+fn cursor(f: &Fixture, cx: &mut TestAppContext) -> Option<String> {
+    let list = f.list(cx);
+    list.read_with(cx, |list, _| {
+        list.cursor.as_ref().map(|row| row.element_id().to_string())
+    })
+}
+
+fn is_outlined(f: &Fixture, row: &str, cx: &mut TestAppContext) -> bool {
+    let row = SharedString::from(row.to_owned());
+    f.in_window(cx, |window, cx| {
+        window.render_frame(cx);
+        window.within(row).try_find("keyboard-outline").is_some()
+    })
+}
+
+#[gpui_kit::test]
+fn collapses_a_section_from_its_header_with_enter_or_space(cx: &mut TestAppContext) {
+    let f = render(cx);
+    // Clicking the header collapses it, and gives it the focus.
+    f.click("section-local", cx);
+    assert!(!f.has_row(MAIN, cx));
+    f.press("enter", cx);
+    assert!(f.has_row(MAIN, cx));
+    f.press("space", cx);
+    assert!(!f.has_row(MAIN, cx));
+    // The arrows are the list's, not its headers'.
+    f.press("down", cx);
+    assert_eq!(cursor(&f, cx), None);
+}
+
+#[gpui_kit::test]
+fn moves_through_the_expanded_sections_rows_with_the_arrows_home_and_end(cx: &mut TestAppContext) {
+    let f = render(cx);
+    f.click(MAIN, cx);
+    assert_eq!(cursor(&f, cx).as_deref(), Some(MAIN));
+    // The pointer put it there: it isn't outlined.
+    assert!(!is_outlined(&f, MAIN, cx));
+
+    // The last row: the remote branch, as the tags and the stashes are collapsed.
+    f.press("end", cx);
+    assert_eq!(cursor(&f, cx).as_deref(), Some(ORIGIN_FEATURE));
+    assert!(is_outlined(&f, ORIGIN_FEATURE, cx));
+    f.press("down", cx);
+    assert_eq!(cursor(&f, cx).as_deref(), Some(ORIGIN_FEATURE));
+    // Across into the remotes' folder, then the local branches.
+    f.press("up", cx);
+    assert_eq!(
+        cursor(&f, cx).as_deref(),
+        Some("folder-refs/remotes/origin")
+    );
+    f.press("up", cx);
+    assert!(cursor(&f, cx).unwrap().starts_with("branch-refs/heads/"));
+    f.press("home", cx);
+    let first = cursor(&f, cx).unwrap();
+    assert!(first.starts_with("branch-refs/heads/"));
+    f.press("up", cx);
+    assert_eq!(cursor(&f, cx), Some(first));
+    assert!(f.fakes.switch.calls().is_empty());
+}
+
+#[gpui_kit::test]
+fn switches_to_the_branch_the_keyboards_on_with_enter(cx: &mut TestAppContext) {
+    let f = render(cx);
+    f.click(MAIN, cx);
+    f.press("end", cx);
+    f.press("enter", cx);
+    assert_eq!(
+        f.fakes.switch.calls(),
+        vec!["refs/remotes/origin/feature".to_owned()]
+    );
+}
+
+#[gpui_kit::test]
+fn toggles_the_folder_the_keyboards_on_with_enter(cx: &mut TestAppContext) {
+    let f = render(cx);
+    f.click(MAIN, cx);
+    f.press("end", cx);
+    f.press("up", cx);
+    f.press("enter", cx);
+    assert!(!f.has_row(ORIGIN_FEATURE, cx));
+    assert_eq!(
+        cursor(&f, cx).as_deref(),
+        Some("folder-refs/remotes/origin")
+    );
+    f.press("enter", cx);
+    assert!(f.has_row(ORIGIN_FEATURE, cx));
+}
+
+#[gpui_kit::test]
+fn opens_the_menu_of_the_branch_the_keyboards_on_with_shift_f10(cx: &mut TestAppContext) {
+    let f = render(cx);
+    f.click(FEATURE, cx);
+    f.press("shift-f10", cx);
+    let items = f.in_window(cx, |window, _| {
+        window
+            .within("popup-menu")
+            .find_all_by_role(gpui_kit::Role::MenuItem)
+            .into_iter()
+            .map(|item| item.label().unwrap_or_default().to_owned())
+            .collect::<Vec<_>>()
+    });
+    assert!(items.contains(&"Create branch…".to_owned()));
+    let provider = f.provider(cx);
+    assert_eq!(
+        provider.read_with(cx, |provider, _| provider.open_for().cloned()),
+        Some(SharedString::from("refs/heads/feature"))
+    );
+
+    f.press("escape", cx);
+    assert!(!f.is_menu_open(cx));
+    // The list has the keyboard back.
+    f.press("down", cx);
+    assert_ne!(cursor(&f, cx).as_deref(), Some(FEATURE));
+
+    // A folder has no menu.
+    f.press("end", cx);
+    f.press("up", cx);
+    f.press("shift-f10", cx);
+    assert!(!f.is_menu_open(cx));
+}
+
+#[gpui_kit::test]
+fn opens_the_menus_of_the_branch_menus_its_given_rather_than_the_last_made(
+    cx: &mut TestAppContext,
+) {
+    let f = render(cx);
+    // Another page's, made after this one's.
+    let other = f.other.clone();
+    let _later = f.in_window(cx, |window, cx| {
+        cx.new(|cx| BranchMenuProvider::new(other, window, cx))
+    });
+    assert!(
+        f.open_menu(FEATURE, cx)
+            .contains(&"Create branch…".to_owned())
+    );
+    let provider = f.provider(cx);
+    assert_eq!(
+        provider.read_with(cx, |provider, _| provider.open_for().cloned()),
+        Some(SharedString::from("refs/heads/feature"))
+    );
 }

@@ -8,7 +8,7 @@
 //! - Linux's task bars find an app's name and icon by its desktop entry, named by the window's app
 //!   id (Wayland's app id, X11's window class); X11 also takes the window's own icon.
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use gpui_kit::App;
 
@@ -34,15 +34,19 @@ pub fn init(cx: &mut App) {
     }
 }
 
-/// The window's own icon, which only X11 takes (`_NET_WM_ICON`); `None` elsewhere.
+/// The window's own icon, which only X11 takes (`_NET_WM_ICON`); `None` elsewhere. Made once,
+/// for the first window: each one opened after shares it.
 pub fn window_icon() -> Option<Arc<image::RgbaImage>> {
-    if !cfg!(any(target_os = "linux", target_os = "freebsd")) {
-        return None;
-    }
-    let icon = image::load_from_memory_with_format(ICON_PNG, image::ImageFormat::Png).ok()?;
-    // X11 is sent every pixel, and task bars show it far smaller than 512px.
-    let icon = icon.resize(128, 128, image::imageops::FilterType::Lanczos3);
-    Some(Arc::new(icon.into_rgba8()))
+    static ICON: LazyLock<Option<Arc<image::RgbaImage>>> = LazyLock::new(|| {
+        if !cfg!(any(target_os = "linux", target_os = "freebsd")) {
+            return None;
+        }
+        let icon = image::load_from_memory_with_format(ICON_PNG, image::ImageFormat::Png).ok()?;
+        // X11 is sent every pixel, and task bars show it far smaller than 512px.
+        let icon = icon.resize(128, 128, image::imageops::FilterType::Lanczos3);
+        Some(Arc::new(icon.into_rgba8()))
+    });
+    ICON.clone()
 }
 
 #[cfg(target_os = "macos")]
@@ -76,7 +80,9 @@ mod linux {
     /// Gives an unpackaged build a desktop entry, so the task bar shows Gitto's name and icon:
     /// on Wayland, a window has no icon of its own, only the app id the desktop finds its entry
     /// by. Kept out of the menus (`NoDisplay`), as it's only a build's. Left to a package that
-    /// installs an entry of its own, and only written when it changes.
+    /// installs an entry of its own, and only written when it changes. Another build's entry
+    /// does as well, as long as its program's still there: builds run from other worktrees, or
+    /// target directories, don't take it from each other each time they start.
     pub fn register_desktop_entry() -> io::Result<()> {
         let file = format!("{APP_ID}.desktop");
         let installed = system_data_dirs()
@@ -89,8 +95,40 @@ mod linux {
             .join("icons/hicolor/512x512/apps")
             .join(format!("{APP_ID}.png"));
         write_if_changed(&icon, ICON_PNG)?;
+        let path = data_home.join("applications").join(file);
+        let written = fs::read_to_string(&path).ok();
+        if written
+            .as_deref()
+            .is_some_and(|written| is_another_builds(written, &icon))
+        {
+            return Ok(());
+        }
         let entry = desktop_entry(&env::current_exe()?, &icon);
-        write_if_changed(&data_home.join("applications").join(file), entry.as_bytes())
+        write_if_changed(&path, entry.as_bytes())
+    }
+
+    /// Whether `written` is the entry another build wrote, with `icon`, whose program is still
+    /// there: all but its `Exec` as this build's would be.
+    fn is_another_builds(written: &str, icon: &Path) -> bool {
+        program_of(written)
+            .filter(|program| program.is_file())
+            .is_some_and(|program| desktop_entry(&program, icon) == written)
+    }
+
+    /// The program an entry's `Exec` runs, as [`exec_argument`] quoted it.
+    fn program_of(entry: &str) -> Option<PathBuf> {
+        let exec = entry.lines().find_map(|line| line.strip_prefix("Exec="))?;
+        let quoted = exec
+            .strip_suffix(" %U")?
+            .replace("%%", "%")
+            .replace("\\\\", "\\");
+        let inner = quoted.strip_prefix('"')?.strip_suffix('"')?;
+        let mut path = String::new();
+        let mut chars = inner.chars();
+        while let Some(c) = chars.next() {
+            path.push(if c == '\\' { chars.next()? } else { c });
+        }
+        Some(PathBuf::from(path))
     }
 
     fn desktop_entry(exe: &Path, icon: &Path) -> String {
@@ -184,6 +222,35 @@ mod linux {
         }
 
         #[test]
+        fn reads_the_program_back_from_exec() {
+            for program in [
+                "/opt/gitto/gitto",
+                "/home/me/my apps/gitto",
+                "/a\"b$c`d\\e%f/gitto",
+            ] {
+                let entry = desktop_entry(Path::new(program), Path::new("/icons/gitto.png"));
+                assert_eq!(program_of(&entry), Some(PathBuf::from(program)));
+            }
+        }
+
+        #[test]
+        fn leaves_another_builds_entry_while_its_program_is_there() {
+            let dir = tempfile::tempdir().unwrap();
+            let icon = dir.path().join("gitto.png");
+            let program = dir.path().join("other/gitto");
+            let written = desktop_entry(&program, &icon);
+            // Deleted with its target directory, say.
+            assert!(!is_another_builds(&written, &icon));
+            fs::create_dir_all(program.parent().unwrap()).unwrap();
+            fs::write(&program, b"").unwrap();
+            assert!(is_another_builds(&written, &icon));
+            // Not if it's of another icon, or written by an older Gitto.
+            assert!(!is_another_builds(&written, &dir.path().join("old.png")));
+            let older = written.replace("NoDisplay=true\n", "");
+            assert!(!is_another_builds(&older, &icon));
+        }
+
+        #[test]
         fn writes_only_what_changed() {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("applications/gitto.desktop");
@@ -207,6 +274,8 @@ mod tests {
         if cfg!(any(target_os = "linux", target_os = "freebsd")) {
             let icon = window_icon().expect("the icon decodes");
             assert_eq!(icon.dimensions(), (128, 128));
+            // Made once: another window shares it.
+            assert!(Arc::ptr_eq(&icon, &window_icon().unwrap()));
         } else {
             assert!(window_icon().is_none());
         }

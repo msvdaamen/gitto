@@ -15,15 +15,16 @@ use crate::theme::{PaletteExt as _, mixed};
 type OnDismiss = Rc<dyn Fn(&mut Window, &mut App) + 'static>;
 
 /// A button (or anything else that starts an action, and can show it's open), with a popover
-/// under it that says why the action failed (its `error`, as the user's told) until dismissed: e.g. the toolbar's Pull, or a tab's
-/// Remove. Dismissed by its close button, Escape, or a click outside; it doesn't take focus from
+/// under it that says why the action failed until dismissed: e.g. the toolbar's Pull, or a tab's
+/// Remove. It's given what to say (an error's message), not the error. Dismissed by its close
+/// button, Escape, or a click outside; it doesn't take focus from
 /// where the user is typing, as the action can fail meanwhile.
 #[derive(IntoElement)]
 pub struct FailurePopover<T: Selectable + IntoElement + 'static> {
     id: ElementId,
     /// The action, e.g. "Pull".
     title: SharedString,
-    /// Why it failed, if it did.
+    /// Why it failed; `None` while it hasn't.
     error: Option<SharedString>,
     on_dismiss: Option<OnDismiss>,
     trigger: T,

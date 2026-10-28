@@ -1,9 +1,12 @@
 //! A conflict resolved by keeping one side whole. Ported from `conflict-sides.tsx`.
 
 use std::rc::Rc;
+use std::sync::Arc;
 
 use gitto_git::features::conflicts::schema::{Conflict, Side};
-use gitto_ui_logic::git::conflicts::{describe_conflict, describe_side, keep_label};
+use gitto_ui_logic::git::conflicts::{
+    describe_conflict, describe_side, keep_label, unreadable_reason,
+};
 use gpui_kit::component::button::Button;
 use gpui_kit::component::{Disableable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
@@ -18,18 +21,23 @@ type OnKeep = Rc<dyn Fn(Side, &mut Window, &mut App) + 'static>;
 /// and a button to keep it, e.g. "Delete, as theirs does".
 #[derive(IntoElement)]
 pub struct ConflictSides {
-    conflict: Conflict,
+    conflict: Arc<Conflict>,
+    /// Why the file isn't shown as text, if there's more to say than the sides do.
+    unreadable: Option<String>,
     disabled: bool,
     on_keep: OnKeep,
 }
 
 impl ConflictSides {
+    /// The sides of `conflict`, the conflicted file at `path`.
     pub fn new(
-        conflict: Conflict,
+        conflict: Arc<Conflict>,
+        path: &str,
         disabled: bool,
         on_keep: impl Fn(Side, &mut Window, &mut App) + 'static,
     ) -> Self {
         ConflictSides {
+            unreadable: unreadable_reason(&conflict.file, path),
             conflict,
             disabled,
             on_keep: Rc::new(on_keep),
@@ -40,7 +48,7 @@ impl ConflictSides {
 impl RenderOnce for ConflictSides {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let palette = *cx.palette();
-        let sides = self.conflict.sides();
+        let sides = &self.conflict.sides;
         let side = |side: Side| {
             let (name, id, of) = match side {
                 Side::Ours => ("ours", "keep-ours", &sides.ours),
@@ -72,7 +80,7 @@ impl RenderOnce for ConflictSides {
                 .child(
                     Button::new(id)
                         .small()
-                        .label(keep_label(&sides, side))
+                        .label(keep_label(sides, side))
                         .disabled(self.disabled)
                         .on_click(move |_, window, cx| on_keep(side, window, cx)),
                 )
@@ -94,9 +102,9 @@ impl RenderOnce for ConflictSides {
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(palette.text_soft)
-                            .child(describe_conflict(&sides)),
+                            .child(describe_conflict(sides)),
                     )
-                    .when_some(self.conflict.unreadable.clone(), |this, reason| {
+                    .when_some(self.unreadable, |this, reason| {
                         this.child(div().text_xs().child(reason))
                     }),
             )

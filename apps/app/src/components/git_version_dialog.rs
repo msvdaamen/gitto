@@ -283,7 +283,7 @@ mod tests {
     struct Statuses(Cell<usize>);
 
     impl RepositoryGit for Statuses {
-        fn status(&self, _: Option<String>) -> GitTask<StatusReply> {
+        fn status(&self, _: Option<gitto_git::ContentVersion>) -> GitTask<StatusReply> {
             self.0.set(self.0.get() + 1);
             async { Err(DataError::msg("No git.")) }.boxed()
         }

@@ -25,9 +25,10 @@ use gitto_git::features::stash::schema::Stash;
 use gitto_git::features::status::schema::StatusReply;
 use gitto_git::features::worktree::schema::Worktree;
 use gitto_git::input::{
-    BranchName, BranchRef, FileInput, Folder, FullSha, Message, NonEmpty, Paths, RepositoryId, Sha,
+    BranchName, BranchRef, BranchShortName, FileInput, Folder, FullSha, Message, Paths, RepoPath,
+    RepositoryId, Sha,
 };
-use gitto_git::{ApiError, GitApi, GitRepo};
+use gitto_git::{ApiError, ContentVersion, GitApi, GitRepo, PatchVersion};
 
 use super::error::DataError;
 
@@ -53,9 +54,9 @@ macro_rules! repository_git {
             )*
 
             /// `error`, from checking what the UI hands over, as the UI shows it: logged, and
-            /// reported as the bug it is (see `GitRepo::input`).
+            /// reported as the bug it is (see `GitRepo::input`). A test's is only the error.
             fn invalid(&self, error: gitto_git::Error) -> DataError {
-                ApiError::from(error).into()
+                DataError::new(error)
             }
         }
 
@@ -140,6 +141,14 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 gitto_git::for_each_repo_method!(repository_git);
 
+/// The file `file`, as git's methods take it: its path, and the one it was renamed from, checked.
+pub fn file_input(file: &ChangedFile) -> gitto_git::Result<FileInput> {
+    Ok(FileInput {
+        path: RepoPath::parse(file.path.clone())?,
+        orig_path: file.orig_path.clone().map(RepoPath::parse).transpose()?,
+    })
+}
+
 /// A test's git that does nothing: every method fails.
 pub struct NoGit;
 
@@ -167,7 +176,7 @@ mod tests {
         assert!(init.status.success(), "{init:?}");
         let lookups = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&lookups);
-        let api = GitApi::new(move |_: &str| -> Option<PathBuf> {
+        let api = GitApi::new(move |_: &RepositoryId| -> Option<PathBuf> {
             counted.fetch_add(1, Ordering::SeqCst);
             Some(path.clone())
         });

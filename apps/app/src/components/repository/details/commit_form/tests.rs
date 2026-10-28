@@ -41,7 +41,9 @@ impl Form {
 
     /// Types `text` in the summary, at its end; `replace` first selects what's there.
     fn type_summary(&self, text: &str, replace: bool, cx: &mut TestAppContext) {
-        let summary = self.form.read_with(cx, |form, _| form.summary.clone());
+        let summary = self
+            .form
+            .read_with(cx, |form, cx| form.editor.read(cx).summary().clone());
         cx.update_window(self.window, |_, window, cx| {
             summary.update(cx, |input, cx| input.focus(window, cx));
             window.render_frame(cx);
@@ -59,7 +61,9 @@ impl Form {
     const TO_END: &str = "ctrl-end";
 
     fn type_description(&self, text: &str, cx: &mut TestAppContext) {
-        let description = self.form.read_with(cx, |form, _| form.description.clone());
+        let description = self
+            .form
+            .read_with(cx, |form, cx| form.editor.read(cx).description().clone());
         cx.update_window(self.window, |_, window, cx| {
             description.update(cx, |input, cx| input.focus(window, cx));
             window.render_frame(cx);
@@ -87,17 +91,19 @@ impl Form {
     fn fields(&self, cx: &mut TestAppContext) -> (String, String) {
         self.render(cx);
         self.form.read_with(cx, |form, cx| {
+            let editor = form.editor.read(cx);
             (
-                form.summary.read(cx).value().to_string(),
-                form.description.read(cx).value().to_string(),
+                editor.summary().read(cx).value().to_string(),
+                editor.description().read(cx).value().to_string(),
             )
         })
     }
 
     fn is_readonly(&self, cx: &mut TestAppContext) -> bool {
         self.render(cx);
-        self.form
-            .read_with(cx, |form, cx| !form.summary.read(cx).is_editable())
+        self.form.read_with(cx, |form, cx| {
+            !form.editor.read(cx).summary().read(cx).is_editable()
+        })
     }
 
     fn is_amend_checked(&self, cx: &mut TestAppContext) -> bool {
@@ -127,6 +133,11 @@ impl Form {
     fn render(&self, cx: &mut TestAppContext) {
         cx.update_window(self.window, |_, window, cx| window.render_frame(cx))
             .unwrap();
+    }
+
+    fn placeholder(&self, cx: &mut TestAppContext) -> &'static str {
+        self.form
+            .read_with(cx, |form, cx| form.editor.read(cx).placeholder())
     }
 
     fn committed(&self) -> Vec<NewCommit> {
@@ -163,6 +174,52 @@ fn edits_the_last_commits_message_and_amends_it_without_anything_staged(cx: &mut
         )]
     );
     assert!(!form.is_amend_checked(cx));
+}
+
+/// Holds the form without rendering it.
+struct Unrendered {
+    form: Entity<CommitForm>,
+}
+
+impl Render for Unrendered {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
+}
+
+#[gpui_kit::test]
+fn puts_the_last_commits_message_in_the_fields_without_being_rendered(cx: &mut TestAppContext) {
+    let fakes = Fakes::new();
+    let _dir = crate::test_support::init(cx, |services| services);
+    crate::components::repository::test_support::fake_git(&repository_id(), fakes, cx);
+    let (_, host) = crate::test_support::open(cx, move |window, cx| Unrendered {
+        form: cx.new(|cx| {
+            let mut form = CommitForm::new(repository_id(), window, cx);
+            form.set_head(
+                repository_id(),
+                0,
+                Some("a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1".to_owned()),
+                cx,
+            );
+            form
+        }),
+    });
+    let form = host.read_with(cx, |host, _| host.form.clone());
+    form.update(cx, |form, cx| form.toggle_amend(true, cx));
+    cx.run_until_parked();
+    assert_eq!(
+        form.read_with(cx, |form, cx| {
+            let editor = form.editor.read(cx);
+            (
+                editor.summary().read(cx).value().to_string(),
+                editor.description().read(cx).value().to_string(),
+            )
+        }),
+        (
+            "Commit a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1".to_owned(),
+            "Its body".to_owned()
+        )
+    );
 }
 
 #[gpui_kit::test]
@@ -210,10 +267,7 @@ fn cant_be_edited_until_the_last_commits_message_has_loaded(cx: &mut TestAppCont
     let answer = form.fakes.messages.later();
     form.click("amend", cx);
     assert!(form.is_readonly(cx));
-    assert_eq!(
-        form.form.read_with(cx, |form, _| form.placeholder),
-        "Loading the last commit…"
-    );
+    assert_eq!(form.placeholder(cx), "Loading the last commit…");
 
     answer.send(Ok("Loaded".into())).unwrap();
     cx.run_until_parked();
@@ -370,10 +424,7 @@ fn says_why_the_fields_stay_locked_when_the_last_commits_message_cant_be_loaded(
     let error = form.form.read_with(cx, |form, cx| form.error(cx));
     assert_eq!(error.unwrap().to_string(), "log failed");
     assert!(form.is_readonly(cx));
-    assert_eq!(
-        form.form.read_with(cx, |form, _| form.placeholder),
-        "Summary of your changes"
-    );
+    assert_eq!(form.placeholder(cx), "Summary of your changes");
 
     form.click("amend", cx);
     assert!(!form.is_readonly(cx));

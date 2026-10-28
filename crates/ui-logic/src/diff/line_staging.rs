@@ -5,7 +5,7 @@
 
 use gitto_git::features::staging::schema::{LineRange, LineSelection};
 
-use super::viewer::diff_metadata::{FileDiff, HunkContent, Side};
+use super::diff_metadata::{FileDiff, HunkContent, Side};
 
 /// A removed or added line of a diff.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -187,6 +187,87 @@ pub fn changed_rows(
     rows
 }
 
+/// The changed lines of a diff laid out in rows, by row (see `viewer_rows::Layout`): worked out
+/// once per layout, so that moving the selection, dragging it, or pointing at a line looks the
+/// lines up rather than going through all of them, which a new file of tens of thousands of lines
+/// has.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ChangedRows {
+    /// Every changed line that's on a row, by row: side by side, a row can have two. With where
+    /// each is in [`changed_lines`]' order.
+    lines: Vec<(ChangedRow, usize)>,
+    /// The rows with changed lines, each with the first of its lines (see [`changed_rows`]).
+    rows: Vec<ChangedRow>,
+}
+
+impl ChangedRows {
+    /// `lines` (see [`changed_lines`]) by the rows they're on: `row_of` is the row a line is on.
+    pub fn new(lines: &[ChangedLine], row_of: &dyn Fn(usize, Side) -> Option<usize>) -> Self {
+        let mut by_row: Vec<(ChangedRow, usize)> = lines
+            .iter()
+            .enumerate()
+            .filter_map(|(ix, line)| {
+                let row = row_of(line.line_number, line.side)?;
+                Some((ChangedRow { row, line: *line }, ix))
+            })
+            .collect();
+        by_row.sort_by_key(|(row, ix)| (row.row, *ix));
+        let mut rows: Vec<ChangedRow> = Vec::new();
+        for (row, _) in &by_row {
+            if rows.last().is_none_or(|last| last.row != row.row) {
+                rows.push(*row);
+            }
+        }
+        ChangedRows {
+            lines: by_row,
+            rows,
+        }
+    }
+
+    /// The rows with changed lines, in order, each with the first of its lines: what the keyboard
+    /// moves through.
+    pub fn rows(&self) -> &[ChangedRow] {
+        &self.rows
+    }
+
+    /// The changed lines on the rows from `top` to `bottom`, in [`changed_lines`]' order.
+    pub fn in_rows(&self, top: usize, bottom: usize) -> Vec<ChangedLine> {
+        let start = self.lines.partition_point(|(row, _)| row.row < top);
+        let end = self.lines.partition_point(|(row, _)| row.row <= bottom);
+        let mut lines: Vec<(ChangedRow, usize)> = self.lines[start..end.max(start)].to_vec();
+        lines.sort_by_key(|(_, ix)| *ix);
+        lines.into_iter().map(|(row, _)| row.line).collect()
+    }
+
+    /// The changed line `number` of `side`, on the row `row`, if it's one.
+    pub fn line_at(&self, row: usize, number: usize, side: Side) -> Option<ChangedLine> {
+        let start = self.lines.partition_point(|(at, _)| at.row < row);
+        self.lines[start..]
+            .iter()
+            .take_while(|(at, _)| at.row == row)
+            .map(|(at, _)| at.line)
+            .find(|line| line.side == side && line.line_number == number)
+    }
+
+    /// The changed lines of the hunk `hunk`, in [`changed_lines`]' order.
+    pub fn hunk_lines(&self, hunk: usize) -> Vec<ChangedLine> {
+        let mut lines: Vec<&(ChangedRow, usize)> = self
+            .lines
+            .iter()
+            .filter(|(row, _)| row.line.hunk == hunk)
+            .collect();
+        lines.sort_by_key(|(_, ix)| *ix);
+        lines.into_iter().map(|(row, _)| row.line).collect()
+    }
+
+    /// The rows of the hunk `hunk`: a run of [`rows`](Self::rows), as hunks are laid out in order.
+    pub fn hunk_rows(&self, hunk: usize) -> &[ChangedRow] {
+        let start = self.rows.partition_point(|row| row.line.hunk < hunk);
+        let end = self.rows.partition_point(|row| row.line.hunk <= hunk);
+        &self.rows[start..end.max(start)]
+    }
+}
+
 /// A selection of the rows from `from`'s to `to`'s.
 pub fn range_of(from: &ChangedLine, to: &ChangedLine) -> SelectedRange {
     SelectedRange {
@@ -245,7 +326,7 @@ pub fn hunk_buttons(diff: &FileDiff) -> Vec<HunkButton> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::viewer::diff_metadata::parse_patch_files;
+    use super::super::diff_metadata::parse_patch_files;
     use super::*;
 
     /// The rows lines are on, as the viewer numbers them, in unified or split view.
@@ -516,5 +597,48 @@ mod tests {
                 hunk: 0
             }]
         );
+    }
+
+    // ChangedRows
+
+    #[test]
+    fn looks_the_changed_lines_up_by_row_as_the_lists_have_them() {
+        let diff = diff();
+        let lines = changed_lines(&diff);
+        for split in [false, true] {
+            let row_of = rows(&diff, split);
+            let by_row = ChangedRows::new(&lines, &row_of);
+            assert_eq!(
+                by_row.rows(),
+                changed_rows(&lines, &row_of),
+                "split: {split}"
+            );
+            for line in &lines {
+                let row = row_of(line.line_number, line.side).unwrap();
+                assert_eq!(
+                    by_row.line_at(row, line.line_number, line.side),
+                    Some(*line)
+                );
+                // The same lines as a selection of the rows from the first to this one.
+                let first = SelectedRange::new(3, Side::Deletions, 3);
+                let selected = SelectedRange {
+                    end: line.line_number,
+                    end_side: line.side,
+                    ..first
+                };
+                let top = row_of(3, Side::Deletions).unwrap();
+                assert_eq!(
+                    by_row.in_rows(top.min(row), top.max(row)),
+                    selected_lines(&lines, &selected, &row_of),
+                    "split: {split}, to {line:?}"
+                );
+            }
+            assert_eq!(by_row.line_at(0, 1, Side::Additions), None);
+            assert_eq!(by_row.hunk_lines(0), &lines[..3]);
+            assert_eq!(by_row.hunk_lines(1), &lines[3..]);
+            let hunk: Vec<_> = by_row.hunk_rows(1).iter().map(|row| row.line).collect();
+            assert_eq!(hunk, [lines[3]]);
+            assert!(by_row.hunk_rows(2).is_empty());
+        }
     }
 }

@@ -6,10 +6,9 @@
 
 use std::collections::HashMap;
 
-use super::super::line_staging::HunkButton;
 use super::diff_metadata::{ChangeType, FileDiff, HunkContent, Side, end_boundary, start_boundary};
+use super::line_staging::{ChangedLine, ChangedRows, HunkButton, changed_lines};
 use super::patch_files::{Expanded, Expansion};
-use gitto_app_data::state::diff_style::DiffStyle;
 
 /// How many unchanged lines a separator's buttons show at a time (`expansionLineCount`).
 pub const EXPANSION_LINES: usize = 100;
@@ -105,6 +104,8 @@ pub struct Layout {
     pub rows: Vec<Row>,
     deletion_rows: HashMap<usize, usize>,
     addition_rows: HashMap<usize, usize>,
+    /// The changed lines, by the rows they're on.
+    changed: ChangedRows,
 }
 
 impl Layout {
@@ -115,12 +116,24 @@ impl Layout {
             Side::Additions => self.addition_rows.get(&number).copied(),
         }
     }
+
+    /// The changed lines, by the rows they're on.
+    pub fn changed(&self) -> &ChangedRows {
+        &self.changed
+    }
+
+    /// The changed line `number` of `side`, if it's one, and it's shown.
+    pub fn changed_line(&self, number: usize, side: Side) -> Option<ChangedLine> {
+        let row = self.row_of(number, side)?;
+        self.changed.line_at(row, number, side)
+    }
 }
 
 /// What a diff is laid out with.
 #[derive(Debug, Clone, Copy)]
 pub struct LayoutOptions<'a> {
-    pub style: DiffStyle,
+    /// Side by side, the old lines beside the new ones, rather than in one column.
+    pub split: bool,
     pub expanded: &'a Expanded,
     pub separators: Separators,
     /// Whether the whole file can be read to show the lines a partial diff hides.
@@ -200,7 +213,7 @@ fn can_hydrate(diff: &FileDiff, can_load_files: bool) -> bool {
 pub fn layout(diff: &FileDiff, options: LayoutOptions<'_>) -> Layout {
     let mut builder = Builder {
         layout: Layout::default(),
-        split: options.style == DiffStyle::Split,
+        split: options.split,
         buttons: options.hunk_buttons,
     };
     let can_hydrate = can_hydrate(diff, options.can_load_files);
@@ -409,7 +422,11 @@ pub fn layout(diff: &FileDiff, options: LayoutOptions<'_>) -> Layout {
             );
         }
     }
-    builder.layout
+    let mut layout = builder.layout;
+    layout.changed = ChangedRows::new(&changed_lines(diff), &|number, side| {
+        layout.row_of(number, side)
+    });
+    layout
 }
 
 struct Builder<'a> {
@@ -532,8 +549,8 @@ pub fn gap_size(diff: &FileDiff, index: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::super::super::line_staging::hunk_buttons;
     use super::super::diff_metadata::{LoadedSide, hydrate, parse_patch_files};
+    use super::super::line_staging::hunk_buttons;
     use super::*;
 
     fn numbered(count: usize, changed: usize) -> String {
@@ -573,12 +590,12 @@ mod tests {
     }
 
     fn options<'a>(
-        style: DiffStyle,
+        split: bool,
         expanded: &'a Expanded,
         buttons: &'a [HunkButton],
     ) -> LayoutOptions<'a> {
         LayoutOptions {
-            style,
+            split,
             expanded,
             separators: Separators::LineInfo,
             can_load_files: true,
@@ -590,7 +607,7 @@ mod tests {
     fn says_how_many_lines_a_patch_hides_and_that_there_may_be_more_after_it() {
         let (partial, _) = diffs();
         let expanded = Expanded::new();
-        let layout = layout(&partial, options(DiffStyle::Unified, &expanded, &[]));
+        let layout = layout(&partial, options(false, &expanded, &[]));
         assert_eq!(
             layout.rows.first(),
             Some(&Row::Separator {
@@ -623,7 +640,7 @@ mod tests {
     fn pairs_a_removed_line_with_the_added_one_side_by_side() {
         let (partial, _) = diffs();
         let expanded = Expanded::new();
-        let layout = layout(&partial, options(DiffStyle::Split, &expanded, &[]));
+        let layout = layout(&partial, options(true, &expanded, &[]));
         assert_eq!(layout.rows.len(), 2 + 7);
         assert_eq!(
             layout.row_of(50, Side::Deletions),
@@ -641,7 +658,7 @@ mod tests {
             ExpandDirection::FromEnd,
             gap_size(&whole, 0),
         );
-        let rows = layout(&whole, options(DiffStyle::Unified, &expanded, &[]));
+        let rows = layout(&whole, options(false, &expanded, &[]));
         // Only 46 lines above: all of them, with no separator left.
         assert_eq!(rows.row_of(1, Side::Additions), Some(0));
         // 147 below, in a chunk of more than a hundred: up, and all.
@@ -658,7 +675,7 @@ mod tests {
             })
         );
         expand(&mut expanded, 1, ExpandDirection::All, gap_size(&whole, 1));
-        let rows = layout(&whole, options(DiffStyle::Unified, &expanded, &[]));
+        let rows = layout(&whole, options(false, &expanded, &[]));
         assert_eq!(rows.row_of(200, Side::Additions), Some(rows.rows.len() - 1));
     }
 
@@ -667,7 +684,7 @@ mod tests {
         let (partial, _) = diffs();
         let expanded = Expanded::new();
         let buttons = hunk_buttons(&partial);
-        let layout = layout(&partial, options(DiffStyle::Unified, &expanded, &buttons));
+        let layout = layout(&partial, options(false, &expanded, &buttons));
         assert_eq!(layout.rows[4], Row::HunkButton { hunk: 0 });
         assert_eq!(layout.row_of(50, Side::Deletions), Some(5));
     }

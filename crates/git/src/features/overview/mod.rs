@@ -4,5 +4,5 @@
 //! Ported from `packages/git/src/features/overview/`.
 
 pub(crate) mod commands;
-pub mod parse;
+pub(crate) mod parse;
 pub mod schema;

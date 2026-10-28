@@ -32,10 +32,10 @@ anyhow.workspace = true
 futures.workspace = true
 image.workspace = true
 log.workspace = true
-regex.workspace = true
 # Diffs: syntax highlighting, and the words that changed in a line (see `components::repository::diff`).
 similar.workspace = true
 syntect.workspace = true
+thiserror.workspace = true
 two-face.workspace = true
 
 # The Dock's icon, set as the app starts (see `identity.rs`).
@@ -49,8 +49,9 @@ objc2-foundation.workspace = true
 winresource.workspace = true
 
 [dev-dependencies]
+gitto-git = { workspace = true, features = ["test-support"] }
 gpui-kit = { workspace = true, features = ["syntect", "test-support"] }
 gitto-app-data = { workspace = true, features = ["test-support"] }
 serde_json.workspace = true
-uuid.workspace = true
 tempfile.workspace = true
+uuid.workspace = true

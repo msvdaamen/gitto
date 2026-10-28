@@ -12,23 +12,30 @@ use gpui_kit::{AnyElement, App, Entity, SharedString, TestSupportExt as _, Windo
 use super::repository_card::RepositoryCard;
 use super::summaries::RepositorySummary;
 use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::theme::breakpoints::SMALL;
 use gitto_app_kit::ui::{Icon, IconName, TextInput};
 
 type Handler = Rc<dyn Fn(&mut Window, &mut App) + 'static>;
 
-/// Below this window width the search box goes under the title (TS's `max-sm`).
-const SMALL: f32 = 640.;
+/// Whether `haystack` has `needle` in it, ignoring case: `needle` is already lowercase.
+fn contains_lowercase(haystack: &str, needle: &str) -> bool {
+    haystack.char_indices().any(|(at, _)| {
+        let mut lowered = haystack[at..].chars().flat_map(char::to_lowercase);
+        needle.chars().all(|c| lowered.next() == Some(c))
+    })
+}
 
-/// The summaries whose repository's name, path, branch or remote has `query` in it, ignoring
-/// case and the spaces around it; all of them for an empty query.
-pub fn filter_summaries(summaries: &[RepositorySummary], query: &str) -> Vec<RepositorySummary> {
+/// Where in `summaries` the repositories are whose name, path, branch or remote has `query` in
+/// it, ignoring case and the spaces around it; all of them for an empty query.
+pub fn filter_summaries(summaries: &[RepositorySummary], query: &str) -> Vec<usize> {
     let needle = query.trim().to_lowercase();
-    if needle.is_empty() {
-        return summaries.to_vec();
-    }
     summaries
         .iter()
-        .filter(|summary| {
+        .enumerate()
+        .filter(|(_, summary)| {
+            if needle.is_empty() {
+                return true;
+            }
             let branch = summary
                 .status
                 .as_ref()
@@ -47,11 +54,10 @@ pub fn filter_summaries(summaries: &[RepositorySummary], query: &str) -> Vec<Rep
                 branch,
                 remote,
             ]
-            .join(" ")
-            .to_lowercase()
-            .contains(&needle)
+            .into_iter()
+            .any(|field| contains_lowercase(field, &needle))
         })
-        .cloned()
+        .map(|(ix, _)| ix)
         .collect()
 }
 
@@ -87,7 +93,7 @@ impl RenderOnce for RepositoryList {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let palette = *cx.palette();
         let small = window.viewport_size().width < px(SMALL);
-        let query = self.search.read(cx).value().to_string();
+        let query = self.search.read(cx).value().trim().to_owned();
         let filtered = filter_summaries(&self.summaries, &query);
         let on_open_repository = self.on_open_repository;
 
@@ -154,7 +160,11 @@ impl RenderOnce for RepositoryList {
         } else {
             v_flex()
                 .gap_1p5()
-                .children(filtered.into_iter().map(RepositoryCard::new))
+                .children(
+                    filtered
+                        .into_iter()
+                        .map(|ix| RepositoryCard::new(self.summaries.clone(), ix)),
+                )
                 .into_any_element()
         };
 
@@ -197,18 +207,13 @@ fn empty(
 
 #[cfg(test)]
 mod tests {
-    use gitto_git::features::overview::schema::{HostedRemote, Overview};
-    use gitto_git::features::status::schema::{StatusCounts, StatusSummary};
-    use gitto_repository::Repository;
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{AppContext as _, Context, IntoElement, Render, TestAppContext, Window};
 
     use super::*;
+    use crate::components::home::test_support::{self as home, GITTO, NOTES};
     use crate::test_support;
     use gitto_app_data::state::router::{Route, Router};
-
-    const GITTO: &str = "0190a6c8-0000-7000-8000-000000000001";
-    const NOTES: &str = "0190a6c8-0000-7000-8000-000000000002";
 
     /// The card of the repository with `id`.
     fn card(id: &str) -> SharedString {
@@ -216,39 +221,12 @@ mod tests {
     }
 
     fn summary(id: &str, name: &str, branch: &str, remote: Option<&str>) -> RepositorySummary {
-        RepositorySummary {
-            repository: Repository {
-                id: id.into(),
-                name: name.into(),
-                path: format!("/src/{name}"),
-            },
-            status: Some(StatusSummary {
-                head: Head::Branch {
-                    name: branch.into(),
-                    sha: "abc".into(),
-                },
-                upstream: None,
-                ahead: 0,
-                behind: 0,
-                counts: StatusCounts {
-                    files: 2,
-                    staged: 0,
-                    unstaged: 2,
-                    conflicted: 0,
-                },
-            }),
-            overview: Some(Overview {
-                remote: remote.map(|url| HostedRemote {
-                    name: "origin".into(),
-                    url: url.into(),
-                }),
-                fetched_at: None,
-                committed_at: None,
-                activity: Vec::new(),
-            }),
-            error: None,
-            settled: true,
+        let summary = home::summary(id, name).branch(branch).changes(2);
+        match remote {
+            Some(url) => summary.remote(url),
+            None => summary,
         }
+        .build()
     }
 
     #[test]
@@ -260,7 +238,7 @@ mod tests {
         let names = |query: &str| -> Vec<String> {
             filter_summaries(&summaries, query)
                 .into_iter()
-                .map(|summary| summary.repository.name)
+                .map(|ix| summaries[ix].repository.name.clone())
                 .collect()
         };
         assert_eq!(names(""), ["gitto", "notes"]);
@@ -269,6 +247,15 @@ mod tests {
         assert_eq!(names("drafts"), ["notes"]);
         assert_eq!(names("github.com"), ["gitto"]);
         assert!(names("nowhere").is_empty());
+        // Each of them on its own, not run together.
+        assert!(names("gitto /src").is_empty());
+    }
+
+    #[test]
+    fn ignores_case_beyond_ascii() {
+        let summaries = [summary(GITTO, "Ärger", "main", None)];
+        assert_eq!(filter_summaries(&summaries, "ärg"), [0]);
+        assert_eq!(filter_summaries(&summaries, "ÄRG"), [0]);
     }
 
     #[test]
@@ -370,7 +357,7 @@ mod tests {
             window.render_frame(cx);
             assert!(window.try_find(card(GITTO)).is_none());
             assert!(window.try_find(card(NOTES)).is_some());
-            search.update(cx, |search, cx| search.set_value("nothing", window, cx));
+            search.update(cx, |search, cx| search.set_value(" nothing  ", window, cx));
         })
         .unwrap();
         cx.run_until_parked();
@@ -382,6 +369,25 @@ mod tests {
             );
         })
         .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn leaves_out_the_last_commit_below_the_small_breakpoint(cx: &mut TestAppContext) {
+        let _dir = test_support::init(cx, |services| services);
+        let (window, _) = render_with(vec![summary(GITTO, "gitto", "main", None)], true, cx);
+        // `index.css`'s `sm` is 700px, not Tailwind's 640px.
+        for (width, shown) in [(680., false), (720., true)] {
+            cx.simulate_window_resize(window, gpui_kit::size(px(width), px(800.)));
+            cx.update_window(window, |_, window, cx| {
+                window.render_frame(cx);
+                assert_eq!(
+                    window.try_find("last-commit").is_some(),
+                    shown,
+                    "at {width}px"
+                );
+            })
+            .unwrap();
+        }
     }
 
     #[gpui_kit::test]

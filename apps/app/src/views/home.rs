@@ -4,7 +4,7 @@ use gitto_repository::Repository;
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::v_flex;
 use gpui_kit::prelude::*;
-use gpui_kit::{App, Context, Entity, Subscription, Window, div, px, rems};
+use gpui_kit::{App, Context, Entity, SharedString, Subscription, Window, div, px, rems};
 
 use crate::components::home::recent_activity::RecentActivity;
 use crate::components::home::repository_list::RepositoryList;
@@ -15,6 +15,7 @@ use gitto_app_data::data::{AppChanged, AppData, AppPart};
 use gitto_app_data::state::clock::Clock;
 use gitto_app_data::state::router::{Route, Router};
 use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::theme::breakpoints::{LARGE, MEDIUM};
 
 /// The widest the page's content gets (`max-w-322.5`, 1290px), in rems.
 pub const CONTENT_MAX_WIDTH: f32 = 86.;
@@ -22,11 +23,6 @@ pub const CONTENT_MAX_WIDTH: f32 = 86.;
 pub const ASIDE_WIDTH: f32 = 21.33;
 /// The activity column's width below [`LARGE`] (280px), in rems.
 pub const ASIDE_WIDTH_NARROW: f32 = 18.67;
-
-/// Window widths where the layout changes, as TS's `lg` and `md`: below `LARGE` the activity
-/// column narrows, below `MEDIUM` it goes under the repositories.
-const LARGE: f32 = 1024.;
-const MEDIUM: f32 = 768.;
 
 /// The home page: a welcome, the repositories added to Gitto, and what was last done in them.
 /// Read without waiting: the page shows straight away, and fills in as they load.
@@ -99,6 +95,7 @@ impl Render for HomeView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = *cx.palette();
         let width = window.viewport_size().width;
+        // Below `lg` the activity column narrows, below `md` it goes under the repositories.
         let medium = width < px(MEDIUM);
         let aside_width = if width < px(LARGE) {
             ASIDE_WIDTH_NARROW
@@ -131,7 +128,7 @@ impl Render for HomeView {
                     .w_full()
                     .gap_6()
                     .child(WelcomeHero::new(
-                        user_name,
+                        user_name.flatten().map(SharedString::from),
                         summaries.clone(),
                         self.open_repository.read(cx).error().cloned(),
                         move |_, cx| open.update(cx, |open, cx| open.open(cx)),

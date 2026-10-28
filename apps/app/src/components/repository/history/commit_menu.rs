@@ -69,7 +69,7 @@ impl CommitMenu {
 
     /// The last commit of the checked-out branch; none with HEAD detached, or before the first.
     pub fn branch_tip(&self, cx: &App) -> Option<String> {
-        match &self.repository.read(cx).status().data()?.head {
+        match &self.repository.read(cx).status().data()?.summary.head {
             Head::Branch { sha, .. } => Some(sha.clone()),
             Head::Detached { .. } | Head::Unborn { .. } => None,
         }

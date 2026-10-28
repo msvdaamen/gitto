@@ -2,7 +2,7 @@
 name = "gitto-ui-logic"
 version = "0.1.0"
 edition.workspace = true
-description = "What Gitto's UI works out for itself, without GPUI: the history graph, its rows, labels and search, commit messages, and what to call things."
+description = "What Gitto's UI works out for itself, without GPUI: the history graph, its rows, labels and search, commit messages, the model of a diff, and what to call things."
 publish = false
 
 [lib]
@@ -12,4 +12,8 @@ name = "gitto_ui_logic"
 gitto-git.workspace = true
 indexmap.workspace = true
 memchr.workspace = true
+# Diffs: their patches' headers, and the diff of two whole files.
+regex.workspace = true
+similar.workspace = true
+thiserror.workspace = true
 url.workspace = true

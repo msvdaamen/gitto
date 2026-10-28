@@ -8,12 +8,12 @@ use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, ElementId, FontWeight, ListAlignment, ListState, SharedString, Window, div,
-    list, px, rems,
+    list, px,
 };
 
 use super::changed_file_list::{ChangedFileList, ROW_PITCH};
 use gitto_app_data::data::{DataError, Opaque};
-use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::theme::{PaletteExt as _, base_px};
 use gitto_app_kit::ui::{Icon, IconName, LineStats, SectionHeader};
 use gitto_ui_logic::git::changes::LineCounts;
 
@@ -145,6 +145,12 @@ impl DetailsList {
         }
     }
 
+    /// Its state: where it's scrolled to.
+    #[cfg(test)]
+    pub fn state(&self) -> &ListState {
+        &self.state
+    }
+
     /// The list `id`, of `top` (whose look `top_key` tells), and `files`.
     pub fn render(
         &mut self,
@@ -182,7 +188,7 @@ impl DetailsList {
                         .px_2p5()
                         .h(ROW_PITCH)
                         .when(row + 1 == count, |this| {
-                            this.h(ROW_PITCH + rems(0.8))
+                            this.h(ROW_PITCH + base_px(12.))
                                 .border_b_1()
                                 .border_color(palette.border)
                         })

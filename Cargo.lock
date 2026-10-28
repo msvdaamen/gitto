@@ -204,11 +204,11 @@ dependencies = [
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
- "regex",
  "serde_json",
  "similar",
  "syntect",
  "tempfile",
+ "thiserror 2.0.21",
  "two-face",
  "uuid",
  "winresource",
@@ -2151,7 +2151,7 @@ dependencies = [
 name = "gitto-db"
 version = "0.1.0"
 dependencies = [
- "blocking",
+ "async-channel",
  "dirs 6.0.0",
  "rusqlite",
  "smol",
@@ -2173,6 +2173,7 @@ dependencies = [
  "futures",
  "futures-lite",
  "libc",
+ "log",
  "memchr",
  "notify",
  "regex",
@@ -2193,11 +2194,9 @@ dependencies = [
  "futures",
  "gitto-db",
  "gitto-git",
- "serde",
- "serde_json",
  "smol",
  "tempfile",
- "uuid",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2207,6 +2206,9 @@ dependencies = [
  "gitto-git",
  "indexmap",
  "memchr",
+ "regex",
+ "similar",
+ "thiserror 2.0.21",
  "url",
 ]
 

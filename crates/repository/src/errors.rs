@@ -7,111 +7,97 @@ use std::fmt;
 use std::sync::Arc;
 
 use gitto_db::rusqlite;
+use gitto_git::RepositoryListError;
 
 /// What was done with the list of repositories when it failed: gitto-git's, whose
-/// `RepositoryListError` says the same as [`Error::List`] (see `lookup.rs`).
+/// `RepositoryListError` is what [`ListError`] says.
 pub use gitto_git::ListAction;
 
 /// What the repository crate's functions return.
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// Why a repository couldn't be added, or the list of them read or changed.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum Error {
     /// The folder someone tried to add isn't a git repository.
+    #[error("{path} is not a git repository.")]
     NotAGitRepository { path: String },
-    /// Gitto's list of repositories couldn't be read or changed, e.g. as its database is locked or
-    /// the disk is full: said with SQLite's reason (see [`reason`]). `cause` is its source.
-    List {
-        action: ListAction,
-        cause: Arc<rusqlite::Error>,
-    },
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Error::NotAGitRepository { path } => write!(f, "{path} is not a git repository."),
-            Error::List { action, cause } => write!(
-                f,
-                "Gitto couldn't {action} its list of repositories: {}",
-                reason(cause.as_ref())
-            ),
-        }
-    }
-}
-
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Error::NotAGitRepository { .. } => None,
-            Error::List { cause, .. } => Some(cause.as_ref()),
-        }
-    }
+    /// The folder someone tried to add has a path that isn't UTF-8, which Gitto can't keep in its
+    /// list: `path` is it, lossily.
+    #[error("Gitto can't add {path}, as its path isn't UTF-8.")]
+    PathNotUtf8 { path: String },
+    /// Gitto's list of repositories couldn't be read or changed.
+    #[error(transparent)]
+    List(#[from] ListError),
 }
 
 impl Error {
     /// A failure to `action` the list, because of `cause`.
     pub fn list(action: ListAction, cause: rusqlite::Error) -> Error {
-        Error::List {
-            action,
+        Error::List(ListError::new(action, cause))
+    }
+
+    /// Whether this is a bug to report rather than something to tell the user: a list that can't
+    /// be read or changed is (TS's `INTERNAL_SERVER_ERROR`), a folder that can't be added isn't
+    /// (`BAD_REQUEST`).
+    pub fn is_bug(&self) -> bool {
+        matches!(self, Error::List(_))
+    }
+}
+
+/// Gitto's list of repositories couldn't be read or changed, e.g. as its database is locked or the
+/// disk is full: said as gitto-git's `RepositoryListError` says it, with SQLite's reason, which
+/// is its source.
+///
+/// The reason is the [`rusqlite::Error`]'s message, which is SQLite's (in TS, the error
+/// node:sqlite threw, which Drizzle's own wrapped in its query). Its source is only SQLite's
+/// result code, said in general terms (`Error code 19: A constraint violation occurred` for
+/// `UNIQUE constraint failed: repositories.path`), so it isn't the reason.
+#[derive(Debug, Clone)]
+pub struct ListError {
+    list: RepositoryListError,
+    cause: Arc<rusqlite::Error>,
+}
+
+impl fmt::Display for ListError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.list.fmt(f)
+    }
+}
+
+/// By hand, as thiserror's `#[source]` would be the `Arc`, not the `rusqlite::Error` in it.
+impl std::error::Error for ListError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.cause.as_ref())
+    }
+}
+
+impl ListError {
+    /// A failure to `action` the list, because of `cause`.
+    pub fn new(action: ListAction, cause: rusqlite::Error) -> Self {
+        ListError {
+            list: RepositoryListError::with_reason(action, &cause.to_string()),
             cause: Arc::new(cause),
         }
     }
 
-    /// Whether this is a bug to report rather than something to tell the user: a list that can't
-    /// be read or changed is (TS's `INTERNAL_SERVER_ERROR`), a folder that isn't a repository
-    /// isn't (`BAD_REQUEST`).
-    pub fn is_bug(&self) -> bool {
-        matches!(self, Error::List { .. })
+    pub fn action(&self) -> ListAction {
+        self.list.action
     }
-}
 
-/// The innermost error's message, with a full stop.
-///
-/// In TS that's the error node:sqlite threw, with SQLite's message, which Drizzle's own wraps in
-/// its query. Here it's the [`rusqlite::Error`], whose message is SQLite's: its source is only
-/// SQLite's result code, said in general terms (`Error code 19: A constraint violation occurred`
-/// for `UNIQUE constraint failed: repositories.path`), so the chain is followed no further.
-pub fn reason(error: &(dyn std::error::Error + 'static)) -> String {
-    let mut inner = error;
-    while !inner.is::<rusqlite::Error>() {
-        match inner.source() {
-            Some(source) => inner = source,
-            None => break,
-        }
+    /// The error as gitto-git has it, for a repository it couldn't look up.
+    pub fn as_repository_list_error(&self) -> &RepositoryListError {
+        &self.list
     }
-    let message = inner.to_string();
-    let message = message.trim();
-    if message.ends_with(['.', '!', '?']) {
-        message.to_owned()
-    } else {
-        format!("{message}.")
+
+    pub fn cause(&self) -> &rusqlite::Error {
+        &self.cause
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// An error that wraps `source`, as Drizzle's query error wraps SQLite's.
-    #[derive(Debug)]
-    struct Wrapping {
-        message: &'static str,
-        source: Option<Box<dyn std::error::Error + 'static>>,
-    }
-
-    impl fmt::Display for Wrapping {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str(self.message)
-        }
-    }
-
-    impl std::error::Error for Wrapping {
-        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-            self.source.as_deref()
-        }
-    }
 
     fn sqlite_error(code: i32, message: Option<&str>) -> rusqlite::Error {
         rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(code), message.map(str::to_owned))
@@ -154,59 +140,48 @@ mod tests {
     }
 
     #[test]
-    fn takes_sqlites_message_through_the_list_error() {
-        let error = Error::list(
+    fn says_it_as_gitto_git_does() {
+        let error = ListError::new(
             ListAction::Update,
             sqlite_error(5, Some("database is locked")),
         );
-        assert_eq!(reason(&error), "database is locked.");
+        let list = error.as_repository_list_error();
+        assert_eq!(list.action, ListAction::Update);
+        assert_eq!(list.to_string(), error.to_string());
     }
 
     #[test]
-    fn takes_the_innermost_message() {
-        let error = Wrapping {
-            message: "Failed query: select 1",
-            source: Some(Box::new(Wrapping {
-                message: "disk I/O error",
-                source: None,
-            })),
-        };
-        assert_eq!(reason(&error), "disk I/O error.");
-    }
-
-    #[test]
-    fn stops_at_sqlites_error() {
-        let unique = || sqlite_error(19, Some("UNIQUE constraint failed: repositories.path"));
+    fn takes_sqlites_message_not_its_result_code() {
+        let unique = sqlite_error(19, Some("UNIQUE constraint failed: repositories.path"));
         // Its source, the result code, says it in general terms.
-        let code = std::error::Error::source(&unique()).unwrap().to_string();
+        let code = std::error::Error::source(&unique).unwrap().to_string();
         assert!(code.starts_with("Error code 19: "), "{code}");
-        let error = Wrapping {
-            message: "Failed query: insert into \"repositories\"",
-            source: Some(Box::new(unique())),
-        };
         assert_eq!(
-            reason(&error),
-            "UNIQUE constraint failed: repositories.path."
+            Error::list(ListAction::Update, unique).to_string(),
+            "Gitto couldn't update its list of repositories: UNIQUE constraint failed: \
+             repositories.path."
         );
         // Without a message from SQLite, the result code's is all there is.
         assert_eq!(
-            reason(&sqlite_error(5, None)),
-            "Error code 5: database is locked."
+            Error::list(ListAction::Read, sqlite_error(5, None)).to_string(),
+            "Gitto couldn't read its list of repositories: Error code 5: database is locked."
         );
     }
 
     #[test]
     fn trims_the_message_and_keeps_its_own_punctuation() {
-        let with = |message| Wrapping {
-            message,
-            source: None,
+        let reason = |message| {
+            Error::list(ListAction::Read, sqlite_error(1, Some(message)))
+                .to_string()
+                .trim_start_matches("Gitto couldn't read its list of repositories: ")
+                .to_owned()
         };
         assert_eq!(
-            reason(&with("  no such table: repositories \n")),
+            reason("  no such table: repositories \n"),
             "no such table: repositories."
         );
-        assert_eq!(reason(&with("Done.")), "Done.");
-        assert_eq!(reason(&with("Really!")), "Really!");
-        assert_eq!(reason(&with("Why?")), "Why?");
+        assert_eq!(reason("Done."), "Done.");
+        assert_eq!(reason("Really!"), "Really!");
+        assert_eq!(reason("Why?"), "Why?");
     }
 }

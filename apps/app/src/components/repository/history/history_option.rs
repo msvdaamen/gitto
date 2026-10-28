@@ -8,11 +8,11 @@ use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, Background, Context, Div, ElementId, FontWeight, Hsla, Role, SharedString,
-    TestSupportExt as _, Window, div, px, rems,
+    TestSupportExt as _, Window, div, px,
 };
 
 use super::columns::{LABEL_ICON, LABEL_LINE, LABEL_TEXT, ROW_HEIGHT};
-use gitto_app_kit::theme::{PaletteExt as _, mixed};
+use gitto_app_kit::theme::{PaletteExt as _, base_px, mixed};
 use gitto_app_kit::ui::{Icon, IconName, LineStats, Tone, menu_frame};
 use gitto_ui_logic::git::changes::LineCounts;
 
@@ -201,8 +201,8 @@ impl RenderOnce for RowKindBadge {
             .rounded_sm()
             .border_1()
             .border_color(mixed(palette.amber, 0.4, palette.border))
-            .px(rems(5. / 15.))
-            .py(rems(3. / 15.))
+            .px(base_px(5.))
+            .py(base_px(3.))
             .bg(background)
             .text_color(foreground)
             .text_size(LABEL_TEXT)

@@ -9,21 +9,17 @@ use gpui_kit::component::{Disableable as _, Selectable, Sizable as _, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{App, ClickEvent, ElementId, FontWeight, SharedString, Window, div, rems};
 
-use crate::views::repository::{LARGE, MEDIUM};
 use gitto_app_data::data::DataError;
 use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::theme::breakpoints::{LARGE, MEDIUM, SMALL};
 use gitto_app_kit::ui::{FailurePopover, Icon, IconName};
-
-/// The window width below which the toolbar's gaps tighten and the buttons hidden below `Small`
-/// go (`index.css`'s `sm` breakpoint).
-pub const SMALL: f32 = 700.;
 
 /// Below which window width a toolbar button is left out, to make room (TS's `hideBelow`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HideBelow {
-    /// [`SMALL`].
+    /// `sm`, below which the toolbar's gaps tighten too.
     Small,
-    /// `views::repository::LARGE`.
+    /// `lg`.
     Large,
 }
 

@@ -89,7 +89,10 @@ impl Footer {
 
 /// What the footer shows of a repository's status.
 fn summary(repository: &Repository) -> Option<StatusSummary> {
-    repository.status().data().map(|status| status.summary())
+    repository
+        .status()
+        .data()
+        .map(|status| status.summary.clone())
 }
 
 impl Render for Footer {

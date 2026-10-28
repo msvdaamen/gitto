@@ -36,15 +36,9 @@ fn storage_key(name: &str) -> String {
     format!("gitto-panel-width:{name}")
 }
 
-/// The width saved as `saved` (as `localStorage` had it), within `bounds`; the initial one if
-/// it's unreadable.
+/// The width saved as `saved`, a number, within `bounds`; the initial one if it's unreadable.
 fn parse_width(saved: Option<&str>, bounds: PanelBounds) -> f64 {
-    // As `Number()` reads it: blank is 0.
-    let value = saved.and_then(|saved| match saved.trim() {
-        "" => Some(0.0),
-        number => number.parse::<f64>().ok(),
-    });
-    match value {
+    match saved.and_then(|saved| saved.trim().parse::<f64>().ok()) {
         Some(value) if value.is_finite() => bounds.clamp(value),
         _ => f64::from(bounds.initial),
     }
@@ -85,8 +79,7 @@ impl PanelWidth {
         self.width = self.bounds.clamp(f64::from(width));
         if save {
             // Storage full or unavailable: the width still applies until the app closes.
-            let _ = self
-                .storage
+            self.storage
                 .set_item(&storage_key(self.name), self.width.to_string());
         }
     }
@@ -152,10 +145,12 @@ mod tests {
     #[test]
     fn ignores_unreadable_saved_widths() {
         let storage = Rc::new(LocalStorage::in_memory());
-        storage
-            .set_item("gitto-panel-width:sidebar", "wide")
-            .unwrap();
+        storage.set_item("gitto-panel-width:sidebar", "wide");
         assert_eq!(mount(&storage).width(), 220.);
+        let bounds = mount(&storage).bounds;
+        for saved in [" ", "NaN", "inf"] {
+            assert_eq!(parse_width(Some(saved), bounds), 220.);
+        }
     }
 
     #[test]

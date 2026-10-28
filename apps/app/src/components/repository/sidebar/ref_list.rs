@@ -13,37 +13,106 @@ use gitto_ui_logic::git::ref_tree::{RefTreeNode, build_ref_tree, flatten_ref_tre
 use gitto_ui_logic::git::stash::can_pop;
 use gitto_ui_logic::git::status::branch_name;
 use gitto_ui_logic::git::worktree::{can_open_worktree, describe_worktree, worktree_on};
+use gpui_kit::base::actions::{Confirm, SelectDown, SelectFirst, SelectLast, SelectUp};
 use gpui_kit::component::menu::PopupMenu;
-use gpui_kit::component::v_flex;
+use gpui_kit::component::{WindowExt as _, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, Context, ScrollStrategy, SharedString, Subscription, UniformListScrollHandle,
-    WeakEntity, Window, div,
+    AnyElement, App, Context, DismissEvent, Entity, FocusHandle, Focusable, KeyBinding,
+    ScrollStrategy, SharedString, Subscription, TestSupportExt as _, UniformListScrollHandle,
+    WeakEntity, Window, actions, div,
 };
 
-use super::base_px;
 use super::drop_stash_dialog::open_drop_stash_dialog;
 use super::remove_worktree_dialog::open_remove_worktree_dialog;
 use super::sidebar_row::{RowTag, SidebarFolder, SidebarRow};
 use super::sidebar_section::{RenderRows, SidebarSection};
 use super::stash_menu::StashMenu;
 use super::worktree_menu::WorktreeMenu;
-use crate::components::repository::branch_menu::{BranchMenuProvider, branch_menu};
+use crate::components::repository::branch_menu::BranchMenuProvider;
 use crate::components::repository::row_menu::RowMenu;
-use crate::views::repository::MEDIUM;
 use gitto_app_data::data::{Change, Part, Repository, Shown};
 use gitto_app_data::services::Services;
 use gitto_app_data::state::clock::Clock;
 use gitto_app_data::state::collapsed::Collapsed;
+use gitto_app_kit::theme::base_px;
 use gitto_app_kit::ui::{EmptyState, IconName, LoadingState};
 
-/// The sections, by the id their collapsed state is saved under.
-const LOCAL: &str = "local";
-const REMOTES: &str = "remotes";
-const TAGS: &str = "tags";
-const STASHES: &str = "stashes";
-const WORKTREES: &str = "worktrees";
-const SECTIONS: [&str; 5] = [LOCAL, REMOTES, TAGS, STASHES, WORKTREES];
+actions!(
+    ref_list,
+    [
+        /// Opens the menu of the row the keyboard's on, as right-clicking it does.
+        OpenRowMenu
+    ]
+);
+
+/// The key context the list's keys are bound in (see [`bind_keys`]).
+const KEY_CONTEXT: &str = "RefList";
+
+/// Binds the list's keys: the arrows, Home and End move through its rows; Enter uses the row it's
+/// on, as double-clicking it does (a folder, as clicking it does); Shift+F10 opens the row's
+/// menu, as right-clicking it does.
+pub fn bind_keys(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("up", SelectUp, Some(KEY_CONTEXT)),
+        KeyBinding::new("down", SelectDown, Some(KEY_CONTEXT)),
+        KeyBinding::new("home", SelectFirst, Some(KEY_CONTEXT)),
+        KeyBinding::new("end", SelectLast, Some(KEY_CONTEXT)),
+        KeyBinding::new("enter", Confirm { secondary: false }, Some(KEY_CONTEXT)),
+        KeyBinding::new("shift-f10", OpenRowMenu, Some(KEY_CONTEXT)),
+    ]);
+}
+
+/// The sidebar's sections, in the order they're shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Section {
+    Local,
+    Remotes,
+    Tags,
+    Stashes,
+    Worktrees,
+}
+
+impl Section {
+    pub const ALL: [Section; 5] = [
+        Section::Local,
+        Section::Remotes,
+        Section::Tags,
+        Section::Stashes,
+        Section::Worktrees,
+    ];
+
+    /// The id its collapsed state is saved under, which its parts' ids are made of too.
+    pub fn key(self) -> &'static str {
+        match self {
+            Section::Local => "local",
+            Section::Remotes => "remotes",
+            Section::Tags => "tags",
+            Section::Stashes => "stashes",
+            Section::Worktrees => "worktrees",
+        }
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Section::Local => "Local branches",
+            Section::Remotes => "Remotes",
+            Section::Tags => "Tags",
+            Section::Stashes => "Stashes",
+            Section::Worktrees => "Worktrees",
+        }
+    }
+
+    fn icon(self) -> IconName {
+        match self {
+            Section::Local => IconName::GitBranch,
+            Section::Remotes => IconName::Cloud,
+            Section::Tags => IconName::Tag,
+            Section::Stashes => IconName::Inbox,
+            Section::Worktrees => IconName::FolderGit2,
+        }
+    }
+}
 
 /// A line of a ref tree, as the sidebar shows it: a folder, or a branch (labelled with its last
 /// path segment).
@@ -131,6 +200,50 @@ const PARTS: &[Part] = &[
     Part::Changes,
 ];
 
+/// A row of the list, by what it shows: what the keyboard's on, and what its element's id is
+/// made of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RowKey {
+    /// A ref folder, by its path.
+    Folder(SharedString),
+    /// A local or remote branch, by its full ref name.
+    Branch(SharedString),
+    /// A tag, by its full ref name.
+    Tag(SharedString),
+    /// A stash, by its SHA.
+    Stash(SharedString),
+    /// A worktree, by its path.
+    Worktree(SharedString),
+}
+
+impl RowKey {
+    fn of_line(line: &TreeLine) -> RowKey {
+        match line {
+            TreeLine::Folder { path, .. } => RowKey::Folder(path.clone()),
+            TreeLine::Branch { branch, .. } => RowKey::Branch(branch.full_name.clone().into()),
+        }
+    }
+
+    /// The id of the row's element.
+    fn element_id(&self) -> SharedString {
+        match self {
+            RowKey::Folder(path) => format!("folder-{path}"),
+            RowKey::Branch(name) => format!("branch-{name}"),
+            RowKey::Tag(name) => format!("tag-{name}"),
+            RowKey::Stash(sha) => format!("stash-{sha}"),
+            RowKey::Worktree(path) => format!("worktree-{path}"),
+        }
+        .into()
+    }
+}
+
+/// A row's menu opened from the keyboard, until it's dismissed.
+struct KeyboardMenu {
+    row: RowKey,
+    menu: Entity<PopupMenu>,
+    _dismissed: Subscription,
+}
+
 /// The dialog open, asking about a stash or a worktree of a repository.
 enum Asking {
     Drop(RepositoryId, Stash),
@@ -148,25 +261,60 @@ struct Trees {
     remote_count: usize,
 }
 
-/// What every row of a render reads: which menu is open, the other worktrees, and the list to
-/// act on.
+/// The worktrees other than the one on show, picked again when the worktrees change.
+#[derive(Default)]
+struct OtherWorktrees {
+    of: Option<Arc<[Worktree]>>,
+    others: Rc<[Worktree]>,
+}
+
+/// What every row of a render reads: which menu is open, the other worktrees, the row the
+/// keyboard's on, and the list to act on.
 struct RowContext {
     list: WeakEntity<RefList>,
+    branch_menu: Entity<BranchMenuProvider>,
     /// The worktrees other than the one on show, whose files are these.
-    other_worktrees: Vec<Worktree>,
+    other_worktrees: Rc<[Worktree]>,
     branch_menu_for: Option<SharedString>,
     stash_menu_for: Option<SharedString>,
     worktree_menu_for: Option<SharedString>,
+    /// The row the keyboard's on, while it moves through the list.
+    outlined: Option<RowKey>,
+    /// A row's menu the keyboard opened, and the row.
+    keyboard_menu: Option<(RowKey, Entity<PopupMenu>)>,
     now: i64,
+}
+
+impl RowContext {
+    fn is_outlined(&self, row: &RowKey) -> bool {
+        self.outlined.as_ref() == Some(row)
+    }
+
+    fn keyboard_menu_of(&self, row: &RowKey) -> Option<Entity<PopupMenu>> {
+        self.keyboard_menu
+            .as_ref()
+            .filter(|(of, _)| of == row)
+            .map(|(_, menu)| menu.clone())
+    }
+
+    /// What clicking the row `row` does first: the keyboard goes on from it.
+    fn on_click(&self, row: RowKey) -> impl Fn(&mut Window, &mut App) + 'static {
+        let list = self.list.clone();
+        move |window, cx| {
+            let row = row.clone();
+            let _ = list.update(cx, |list, cx| list.click_row(row, window, cx));
+        }
+    }
 }
 
 /// The sidebar's sections: local branches, remotes, tags, stashes, worktrees (see
 /// `SidebarSection`). Double-clicking a branch switches to it; for a remote one, to the local
 /// branch tracking it. Right-clicking one opens a menu of what can be done with it, like creating
-/// a branch from it (`branch_menu`); right-clicking a stash, one to pop or delete it. A branch
-/// checked out in another worktree says so, and double-clicking it opens that worktree instead, as
-/// git won't switch to it here. Double-clicking a worktree opens it, as a repository of its own;
-/// right-clicking one opens a menu to open or remove it.
+/// a branch from it (the `BranchMenuProvider` it's given, which the page shares with the
+/// history); right-clicking a stash, one to pop or delete it. A branch checked out in another
+/// worktree says so, and double-clicking it opens that worktree instead, as git won't switch to it
+/// here. Double-clicking a worktree opens it, as a repository of its own; right-clicking one opens
+/// a menu to open or remove it.
 ///
 /// An entity: it shows the refs, the stashes and the worktrees of the repository it's given
 /// ([`set_repository`](Self::set_repository)), keeping what's on show while they reload, so the
@@ -174,11 +322,18 @@ struct RowContext {
 /// folders share one saved collapsed state; folder ids are full ref paths like
 /// `refs/heads/feature`, so they can't clash with the section ids. Tags and stashes start
 /// collapsed.
+///
+/// The keyboard reaches it all: each section's header is a tab stop, and the list itself one
+/// more, whose rows the arrow keys, Home and End move through, across the expanded sections; Enter
+/// uses the row it's on, as double-clicking it does, and Shift+F10 opens its menu (see
+/// [`bind_keys`]). Clicking a row puts the keyboard there. The rail's sections open in popovers,
+/// which aren't moved through.
 pub struct RefList {
     repository: Shown,
     collapsed: Collapsed,
     /// Counts the changes to `collapsed`, so the trees are made again.
     collapsed_revision: u64,
+    branch_menu: Entity<BranchMenuProvider>,
     /// The stash whose menu is open, by its SHA.
     stash_menu: RowMenu,
     /// The worktree whose menu is open, by its path.
@@ -186,33 +341,66 @@ pub struct RefList {
     asking: Option<Asking>,
     scrolls: [UniformListScrollHandle; 5],
     trees: Trees,
+    other_worktrees: OtherWorktrees,
+    /// Shown as a rail of icons, which the sidebar decides (see `RefsSidebar`).
+    rail: bool,
+    focus: FocusHandle,
+    /// The row the keyboard's on.
+    cursor: Option<RowKey>,
+    /// Whether the keyboard moved last, rather than the pointer: the cursor's row is outlined
+    /// then, while the list has the focus.
+    keyboard: bool,
+    keyboard_menu: Option<KeyboardMenu>,
     _subscriptions: Vec<Subscription>,
 }
 
+impl Focusable for RefList {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
+    }
+}
+
 impl RefList {
-    pub fn new(repository_id: RepositoryId, _: &mut Window, cx: &mut Context<Self>) -> Self {
+    /// The list of the repository `repository_id`, whose branches' menus are `branch_menu`'s.
+    pub fn new(
+        repository_id: RepositoryId,
+        branch_menu: Entity<BranchMenuProvider>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let clock = Clock::global(cx);
-        let mut subscriptions = vec![cx.observe(&clock, |_, _, cx| cx.notify())];
-        // Which branch's menu is open is the branch menus' (see `branch_menu`).
-        if let Some(provider) = BranchMenuProvider::current(cx) {
-            subscriptions.push(cx.observe(&provider, |_, _, cx| cx.notify()));
-        }
+        let subscriptions = vec![
+            cx.observe(&clock, |_, _, cx| cx.notify()),
+            // Which branch's menu is open is the branch menus'.
+            cx.observe(&branch_menu, |_, _, cx| cx.notify()),
+        ];
         RefList {
             repository: Shown::new(&repository_id, PARTS, cx),
             collapsed: Self::collapsed_of(&repository_id, cx),
             collapsed_revision: 0,
+            branch_menu,
             stash_menu: RowMenu::default(),
             worktree_menu: RowMenu::default(),
             asking: None,
             scrolls: Default::default(),
             trees: Trees::default(),
+            other_worktrees: OtherWorktrees::default(),
+            rail: false,
+            focus: cx.focus_handle().tab_stop(true),
+            cursor: None,
+            keyboard: false,
+            keyboard_menu: None,
             _subscriptions: subscriptions,
         }
     }
 
     fn collapsed_of(id: &RepositoryId, cx: &App) -> Collapsed {
         let storage = Rc::clone(Services::global(cx).storage());
-        Collapsed::new(id.to_string(), [(TAGS, true), (STASHES, true)], storage)
+        Collapsed::new(
+            id,
+            [(Section::Tags.key(), true), (Section::Stashes.key(), true)],
+            storage,
+        )
     }
 
     pub fn repository_id<'a>(&self, cx: &'a App) -> &'a RepositoryId {
@@ -235,8 +423,12 @@ impl RefList {
         self.collapsed_revision += 1;
         self.stash_menu.close(cx);
         self.worktree_menu.close(cx);
+        self.cursor = None;
+        self.keyboard = false;
+        if let Some(open) = self.keyboard_menu.take() {
+            open.menu.update(cx, |_, cx| cx.emit(DismissEvent));
+        }
         if self.asking.take().is_some() {
-            use gpui_kit::component::WindowExt as _;
             window.close_dialog(cx);
         }
         for scroll in &self.scrolls {
@@ -245,25 +437,47 @@ impl RefList {
         cx.notify();
     }
 
-    /// Whether the section or folder `id` is collapsed.
-    pub fn is_collapsed(&self, id: &str) -> bool {
-        self.collapsed.is_collapsed(id)
+    /// Shows the sections as a rail of icons, each opening its section in a popover, or not.
+    pub fn set_rail(&mut self, rail: bool, cx: &mut Context<Self>) {
+        if self.rail != rail {
+            self.rail = rail;
+            cx.notify();
+        }
     }
 
-    /// Collapses the section or folder `id`, or expands it.
-    pub fn toggle(&mut self, id: &str, cx: &mut Context<Self>) {
+    pub fn is_section_collapsed(&self, section: Section) -> bool {
+        self.collapsed.is_collapsed(section.key())
+    }
+
+    /// Whether the ref folder at `path` (e.g. `refs/remotes/origin`) is collapsed.
+    pub fn is_folder_collapsed(&self, path: &str) -> bool {
+        self.collapsed.is_collapsed(path)
+    }
+
+    /// Collapses `section`, or expands it.
+    pub fn toggle_section(&mut self, section: Section, cx: &mut Context<Self>) {
+        self.toggle(section.key(), cx);
+    }
+
+    /// Collapses the ref folder at `path`, or expands it.
+    pub fn toggle_folder(&mut self, path: &str, cx: &mut Context<Self>) {
+        self.toggle(path, cx);
+    }
+
+    /// Collapses the section or folder saved as `id`, or expands it.
+    fn toggle(&mut self, id: &str, cx: &mut Context<Self>) {
         self.collapsed.toggle(id);
         self.collapsed_revision += 1;
         cx.notify();
     }
 
-    /// Whether the section `id` shows something running on its items: popping or deleting a
-    /// stash, or adding, opening or removing a worktree.
-    pub fn is_section_busy(&self, id: &str, cx: &App) -> bool {
-        match id {
-            STASHES => StashMenu::is_busy(self.repository.read(cx)),
-            WORKTREES => WorktreeMenu::is_busy(self.repository.read(cx)),
-            _ => false,
+    /// Whether `section` shows something running on its items: popping or deleting a stash, or
+    /// adding, opening or removing a worktree.
+    pub fn is_section_busy(&self, section: Section, cx: &App) -> bool {
+        match section {
+            Section::Stashes => StashMenu::is_busy(self.repository.read(cx)),
+            Section::Worktrees => WorktreeMenu::is_busy(self.repository.read(cx)),
+            Section::Local | Section::Remotes | Section::Tags => false,
         }
     }
 
@@ -273,19 +487,28 @@ impl RefList {
     }
 
     /// The worktrees other than the one on show.
-    fn other_worktrees(&self, cx: &App) -> Vec<Worktree> {
-        self.repository
-            .read(cx)
-            .worktrees()
-            .data()
-            .map(|worktrees| {
-                worktrees
-                    .iter()
-                    .filter(|worktree| !worktree.current)
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default()
+    fn other_worktrees(&mut self, cx: &App) -> Rc<[Worktree]> {
+        let worktrees = self.repository.read(cx).worktrees().data().cloned();
+        let cached = &self.other_worktrees;
+        let fresh = match (&cached.of, &worktrees) {
+            (Some(of), Some(worktrees)) => Arc::ptr_eq(of, worktrees),
+            (None, None) => true,
+            _ => false,
+        };
+        if !fresh {
+            let others = worktrees
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .filter(|worktree| !worktree.current)
+                .cloned()
+                .collect();
+            self.other_worktrees = OtherWorktrees {
+                of: worktrees,
+                others,
+            };
+        }
+        Rc::clone(&self.other_worktrees.others)
     }
 
     /// Double-clicking the branch `reference`, by its full ref name: switches to it, or opens the
@@ -293,7 +516,7 @@ impl RefList {
     /// switch running, and why it failed; the worktrees' section, opening the worktree.
     pub fn activate_branch(&mut self, reference: &str, cx: &mut Context<Self>) {
         let others = self.other_worktrees(cx);
-        match worktree_on(Some(&others), reference) {
+        match worktree_on(&others, reference) {
             None => {
                 let reference = BranchRef::parse(reference);
                 self.repository.update(cx, |repository, cx| {
@@ -302,13 +525,9 @@ impl RefList {
                 });
             }
             Some(worktree) if can_open_worktree(worktree) => {
-                match BranchMenuProvider::current(cx) {
-                    Some(provider) => {
-                        let path = worktree.path.clone();
-                        provider.update(cx, |provider, cx| provider.open_worktree(path, cx));
-                    }
-                    None => WorktreeMenu::open(self.repository.entity(), worktree, cx),
-                }
+                let path = worktree.path.clone();
+                self.branch_menu
+                    .update(cx, |provider, cx| provider.open_worktree(path, cx));
             }
             Some(_) => {}
         }
@@ -405,9 +624,10 @@ impl RefList {
         else {
             return menu;
         };
-        let poppable = can_pop(
-            shown.status().data().map(|status| &status.counts),
-            stashes.map(|stashes| &stashes[..]),
+        // Not until both have loaded.
+        let poppable = matches!(
+            (shown.status().data(), stashes),
+            (Some(status), Some(stashes)) if can_pop(&status.summary.counts, stashes)
         );
         RowMenu::track(
             list.clone(),
@@ -500,47 +720,235 @@ impl RefList {
         };
     }
 
-    fn row_context(&self, cx: &mut Context<Self>) -> Rc<RowContext> {
+    /// The rows the keyboard moves through, in order, with their sections and places in them:
+    /// each expanded section's, as shown. None in the rail, whose sections open in popovers.
+    fn keyboard_rows(&mut self, cx: &App) -> Vec<(Section, usize, RowKey)> {
+        if self.rail || self.repository.read(cx).refs().is_pending() {
+            return Vec::new();
+        }
+        self.refresh_trees(cx);
+        let repository = self.repository.read(cx);
+        let mut rows = Vec::new();
+        for section in Section::ALL {
+            if self.is_section_collapsed(section) {
+                continue;
+            }
+            let keys: Vec<RowKey> = match section {
+                Section::Local => self.trees.local.iter().map(RowKey::of_line).collect(),
+                Section::Remotes => self.trees.remote.iter().map(RowKey::of_line).collect(),
+                Section::Tags => self
+                    .trees
+                    .tags
+                    .iter()
+                    .map(|tag| RowKey::Tag(tag.full_name.clone().into()))
+                    .collect(),
+                Section::Stashes => repository
+                    .stashes()
+                    .data()
+                    .iter()
+                    .flat_map(|stashes| stashes.iter())
+                    .map(|stash| RowKey::Stash(stash.sha.clone().into()))
+                    .collect(),
+                Section::Worktrees => repository
+                    .worktrees()
+                    .data()
+                    .iter()
+                    .flat_map(|worktrees| worktrees.iter())
+                    .map(|worktree| RowKey::Worktree(worktree.path.clone().into()))
+                    .collect(),
+            };
+            rows.extend(
+                keys.into_iter()
+                    .enumerate()
+                    .map(|(ix, key)| (section, ix, key)),
+            );
+        }
+        rows
+    }
+
+    /// The row the keyboard's on, if it's still shown.
+    fn cursor_row(&mut self, cx: &App) -> Option<RowKey> {
+        let cursor = self.cursor.clone()?;
+        self.keyboard_rows(cx)
+            .into_iter()
+            .any(|(_, _, key)| key == cursor)
+            .then_some(cursor)
+    }
+
+    /// A row was clicked: the keyboard goes on from it, and the list takes the focus. The rows
+    /// come and go as the list scrolls, and would take the focus with them. Not in the rail,
+    /// whose popover would lose it.
+    fn click_row(&mut self, row: RowKey, window: &mut Window, cx: &mut Context<Self>) {
+        self.cursor = Some(row);
+        self.keyboard = false;
+        if !self.rail {
+            self.focus.focus(window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Moves the keyboard to the row `to` picks, from the place of the one it's on (if it's
+    /// shown) among `count` rows, and scrolls it into view. Only while the list itself has the
+    /// focus, not a section's header.
+    fn move_cursor(
+        &mut self,
+        to: impl FnOnce(Option<usize>, usize) -> usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.focus.is_focused(window) {
+            cx.propagate();
+            return;
+        }
+        let rows = self.keyboard_rows(cx);
+        if rows.is_empty() {
+            return;
+        }
+        let current = self
+            .cursor
+            .as_ref()
+            .and_then(|cursor| rows.iter().position(|(_, _, key)| key == cursor));
+        let ix = to(current, rows.len()).min(rows.len() - 1);
+        let (section, in_section, key) = &rows[ix];
+        self.scrolls[*section as usize].scroll_to_item(*in_section, ScrollStrategy::Nearest);
+        self.cursor = Some(key.clone());
+        self.keyboard = true;
+        cx.notify();
+    }
+
+    fn select_up(&mut self, _: &SelectUp, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_cursor(
+            |current, _| current.map_or(0, |ix| ix.saturating_sub(1)),
+            window,
+            cx,
+        );
+    }
+
+    fn select_down(&mut self, _: &SelectDown, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_cursor(|current, _| current.map_or(0, |ix| ix + 1), window, cx);
+    }
+
+    fn select_first(&mut self, _: &SelectFirst, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_cursor(|_, _| 0, window, cx);
+    }
+
+    fn select_last(&mut self, _: &SelectLast, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_cursor(|_, count| count - 1, window, cx);
+    }
+
+    /// Enter: uses the row the keyboard's on, as double-clicking it does; a folder's toggled, as
+    /// clicking it does.
+    fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.focus.is_focused(window) {
+            cx.propagate();
+            return;
+        }
+        match self.cursor_row(cx) {
+            Some(RowKey::Folder(path)) => self.toggle_folder(&path, cx),
+            Some(RowKey::Branch(name)) => self.activate_branch(&name, cx),
+            Some(RowKey::Worktree(path)) => self.activate_worktree(&path, cx),
+            Some(RowKey::Tag(_) | RowKey::Stash(_)) | None => {}
+        }
+    }
+
+    /// Shift+F10: opens the menu of the row the keyboard's on, below it, as right-clicking it
+    /// does; nothing for a folder or a tag, which have none.
+    fn open_row_menu(&mut self, _: &OpenRowMenu, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.focus.is_focused(window) {
+            cx.propagate();
+            return;
+        }
+        let Some(row) = self.cursor_row(cx) else {
+            return;
+        };
+        type Build = Box<dyn FnOnce(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu>;
+        let list = cx.entity().downgrade();
+        let build: Build = match row.clone() {
+            RowKey::Branch(name) => {
+                let provider = self.branch_menu.clone();
+                Box::new(move |menu, _, cx| {
+                    BranchMenuProvider::build_menu(&provider, name, menu, cx)
+                })
+            }
+            RowKey::Stash(sha) => {
+                let list = list.clone();
+                Box::new(move |menu, _, cx| RefList::stash_menu(&list, sha, menu, cx))
+            }
+            RowKey::Worktree(path) => {
+                let list = list.clone();
+                Box::new(move |menu, _, cx| RefList::worktree_menu(&list, path, menu, cx))
+            }
+            RowKey::Folder(_) | RowKey::Tag(_) => return,
+        };
+        // Built outside this update: the menus read the list, and track themselves on it.
+        window.defer(cx, move |window, cx| {
+            let menu = PopupMenu::build(window, cx, build);
+            if menu.read(cx).is_empty() {
+                return;
+            }
+            menu.focus_handle(cx).focus(window, cx);
+            let _ = list.update(cx, |list, cx| {
+                let dismissed =
+                    cx.subscribe_in(&menu, window, |list, _, _: &DismissEvent, window, cx| {
+                        list.keyboard_menu = None;
+                        list.focus.focus(window, cx);
+                        cx.notify();
+                    });
+                list.keyboard_menu = Some(KeyboardMenu {
+                    row,
+                    menu,
+                    _dismissed: dismissed,
+                });
+                cx.notify();
+            });
+        });
+    }
+
+    fn row_context(&mut self, window: &Window, cx: &mut Context<Self>) -> Rc<RowContext> {
+        let outlined = self
+            .cursor
+            .clone()
+            .filter(|_| self.keyboard && self.focus.is_focused(window));
         Rc::new(RowContext {
             list: cx.entity().downgrade(),
             other_worktrees: self.other_worktrees(cx),
-            branch_menu_for: BranchMenuProvider::current(cx)
-                .and_then(|provider| provider.read(cx).open_for().cloned()),
+            branch_menu: self.branch_menu.clone(),
+            branch_menu_for: self.branch_menu.read(cx).open_for().cloned(),
             stash_menu_for: self.stash_menu.open_for().cloned(),
             worktree_menu_for: self.worktree_menu.open_for().cloned(),
+            outlined,
+            keyboard_menu: self
+                .keyboard_menu
+                .as_ref()
+                .map(|open| (open.row.clone(), open.menu.clone())),
             now: gitto_app_data::state::clock::now_ms(),
         })
     }
 
-    /// The section `id` of the list, collapsible under that id, counting `count` items in
-    /// `items` rows.
+    /// `section` of the list, counting `count` items in `items` rows.
     fn section(
         &self,
-        id: &'static str,
+        section: Section,
         count: usize,
         items: usize,
         render_rows: RenderRows,
         cx: &mut Context<Self>,
     ) -> SidebarSection {
-        let (title, icon) = match id {
-            LOCAL => ("Local branches", IconName::GitBranch),
-            REMOTES => ("Remotes", IconName::Cloud),
-            TAGS => ("Tags", IconName::Tag),
-            STASHES => ("Stashes", IconName::Inbox),
-            _ => ("Worktrees", IconName::FolderGit2),
-        };
         let list = cx.entity().downgrade();
-        let scroll = SECTIONS
-            .iter()
-            .position(|section| *section == id)
-            .map(|ix| &self.scrolls[ix]);
-        SidebarSection::new(id, title, icon, count, items, render_rows)
-            .collapsed(self.collapsed.is_collapsed(id))
-            .busy(self.is_section_busy(id, cx))
-            .when_some(scroll, |section, scroll| section.track_scroll(scroll))
-            .on_toggle(move |_, cx| {
-                let _ = list.update(cx, |list, cx| list.toggle(id, cx));
-            })
+        SidebarSection::new(
+            section.key(),
+            section.title(),
+            section.icon(),
+            count,
+            items,
+            render_rows,
+        )
+        .collapsed(self.is_section_collapsed(section))
+        .busy(self.is_section_busy(section, cx))
+        .track_scroll(&self.scrolls[section as usize])
+        .on_toggle(move |_, cx| {
+            let _ = list.update(cx, |list, cx| list.toggle_section(section, cx));
+        })
     }
 }
 
@@ -569,19 +977,17 @@ fn tree_row(line: &TreeLine, rows: &RowContext) -> AnyElement {
             collapsed,
         } => {
             let list = rows.list.clone();
+            let key = RowKey::Folder(path.clone());
+            let clicked = rows.on_click(key.clone());
             let path = path.clone();
-            SidebarFolder::new(
-                SharedString::from(format!("folder-{path}")),
-                name.clone(),
-                *count,
-                *depth,
-                *collapsed,
-            )
-            .on_toggle(move |_, cx| {
-                let path = path.clone();
-                let _ = list.update(cx, |list, cx| list.toggle(&path, cx));
-            })
-            .into_any_element()
+            SidebarFolder::new(key.element_id(), name.clone(), *count, *depth, *collapsed)
+                .outlined(rows.is_outlined(&key))
+                .on_toggle(move |window, cx| {
+                    clicked(window, cx);
+                    let path = path.clone();
+                    let _ = list.update(cx, |list, cx| list.toggle_folder(&path, cx));
+                })
+                .into_any_element()
         }
         TreeLine::Branch {
             branch,
@@ -591,11 +997,11 @@ fn tree_row(line: &TreeLine, rows: &RowContext) -> AnyElement {
     }
 }
 
-/// A local or remote branch's line in its tree, with its menu (see `branch_menu`). One checked
-/// out in another worktree has a folder after its name, and says which in its tooltip.
+/// A local or remote branch's line in its tree, with its menu (see `BranchMenuProvider`). One
+/// checked out in another worktree has a folder after its name, and says which in its tooltip.
 fn branch_row(branch: &Ref, label: &SharedString, depth: usize, rows: &RowContext) -> AnyElement {
     let full_name = SharedString::from(branch.full_name.clone());
-    let worktree = worktree_on(Some(&rows.other_worktrees), &branch.full_name);
+    let worktree = worktree_on(&rows.other_worktrees, &branch.full_name);
     let tag = worktree.map(|worktree| RowTag {
         icon: IconName::FolderGit2,
         label: format!("Checked out in {}", worktree.name).into(),
@@ -603,29 +1009,32 @@ fn branch_row(branch: &Ref, label: &SharedString, depth: usize, rows: &RowContex
     let list = rows.list.clone();
     let activated = full_name.clone();
     let menu_of = full_name.clone();
-    SidebarRow::new(
-        SharedString::from(format!("branch-{full_name}")),
-        IconName::GitBranch,
-        label.clone(),
-    )
-    .title(branch_title(branch, worktree))
-    .depth(depth)
-    .active(branch.current)
-    .highlighted(rows.branch_menu_for.as_ref() == Some(&full_name))
-    .tag(tag)
-    .meta(branch_meta(branch).map(Into::into))
-    .on_double_click(move |_, cx| {
-        let _ = list.update(cx, |list, cx| list.activate_branch(&activated, cx));
-    })
-    .menu(move |menu, window, cx| branch_menu(menu, menu_of.clone(), window, cx))
-    .into_any_element()
+    let provider = rows.branch_menu.clone();
+    let key = RowKey::Branch(full_name.clone());
+    SidebarRow::new(key.element_id(), IconName::GitBranch, label.clone())
+        .title(branch_title(branch, worktree))
+        .depth(depth)
+        .active(branch.current)
+        .highlighted(rows.branch_menu_for.as_ref() == Some(&full_name))
+        .tag(tag)
+        .meta(branch_meta(branch).map(Into::into))
+        .outlined(rows.is_outlined(&key))
+        .on_click(rows.on_click(key.clone()))
+        .on_double_click(move |_, cx| {
+            let _ = list.update(cx, |list, cx| list.activate_branch(&activated, cx));
+        })
+        .menu(move |menu, _, cx| {
+            BranchMenuProvider::build_menu(&provider, menu_of.clone(), menu, cx)
+        })
+        .keyboard_menu(rows.keyboard_menu_of(&key))
+        .into_any_element()
 }
 
 impl Render for RefList {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let rail = f32::from(window.viewport_size().width) < MEDIUM;
+        let rail = self.rail;
         self.refresh_trees(cx);
-        let rows = self.row_context(cx);
+        let rows = self.row_context(window, cx);
         let repository = self.repository.entity().clone();
         let refs = repository.read(cx).refs();
 
@@ -643,6 +1052,15 @@ impl Render for RefList {
         });
         let list = v_flex()
             .id("ref-list")
+            .test_support()
+            .track_focus(&self.focus)
+            .key_context(KEY_CONTEXT)
+            .on_action(cx.listener(Self::select_up))
+            .on_action(cx.listener(Self::select_down))
+            .on_action(cx.listener(Self::select_first))
+            .on_action(cx.listener(Self::select_last))
+            .on_action(cx.listener(Self::confirm))
+            .on_action(cx.listener(Self::open_row_menu))
             .size_full()
             .min_h_0()
             .when(rail, |list| list.items_center().gap_1().pt_2())
@@ -658,7 +1076,7 @@ impl Render for RefList {
 
         let local = self
             .section(
-                LOCAL,
+                Section::Local,
                 self.trees.local_count,
                 self.trees.local.len(),
                 tree_rows(Rc::clone(&self.trees.local), Rc::clone(&rows)),
@@ -667,7 +1085,7 @@ impl Render for RefList {
             .rail(rail);
         let remotes = self
             .section(
-                REMOTES,
+                Section::Remotes,
                 self.trees.remote_count,
                 self.trees.remote.len(),
                 tree_rows(Rc::clone(&self.trees.remote), Rc::clone(&rows)),
@@ -675,26 +1093,24 @@ impl Render for RefList {
             )
             .rail(rail);
         let tags = Rc::clone(&self.trees.tags);
-        let tags = self
-            .section(
-                TAGS,
-                tags.len(),
-                tags.len(),
-                Rc::new(move |range: Range<usize>, _, _| {
-                    in_view(&tags, range)
-                        .iter()
-                        .map(|tag| {
-                            SidebarRow::new(
-                                SharedString::from(format!("tag-{}", tag.full_name)),
-                                IconName::Tag,
-                                tag.name.clone(),
-                            )
+        let tag_rows = {
+            let tags = Rc::clone(&tags);
+            let rows = Rc::clone(&rows);
+            Rc::new(move |range: Range<usize>, _: &mut Window, _: &mut App| {
+                in_view(&tags, range)
+                    .iter()
+                    .map(|tag| {
+                        let key = RowKey::Tag(tag.full_name.clone().into());
+                        SidebarRow::new(key.element_id(), IconName::Tag, tag.name.clone())
+                            .outlined(rows.is_outlined(&key))
+                            .on_click(rows.on_click(key))
                             .into_any_element()
-                        })
-                        .collect()
-                }),
-                cx,
-            )
+                    })
+                    .collect()
+            })
+        };
+        let tags = self
+            .section(Section::Tags, tags.len(), tags.len(), tag_rows, cx)
             .rail(rail);
 
         let stashes: Arc<[Stash]> = repository
@@ -714,7 +1130,13 @@ impl Render for RefList {
             })
         };
         let stashes = self
-            .section(STASHES, stashes.len(), stashes.len(), stash_rows, cx)
+            .section(
+                Section::Stashes,
+                stashes.len(),
+                stashes.len(),
+                stash_rows,
+                cx,
+            )
             .rail(rail)
             .failure(StashMenu::failure(&repository, cx));
 
@@ -736,7 +1158,7 @@ impl Render for RefList {
         };
         let worktrees = self
             .section(
-                WORKTREES,
+                Section::Worktrees,
                 worktrees.len(),
                 worktrees.len(),
                 worktree_rows,
@@ -758,15 +1180,15 @@ fn stash_row(stash: &Stash, rows: &RowContext) -> AnyElement {
     let sha = SharedString::from(stash.sha.clone());
     let list = rows.list.clone();
     let menu_of = sha.clone();
-    SidebarRow::new(
-        SharedString::from(format!("stash-{sha}")),
-        IconName::Archive,
-        stash.message.clone(),
-    )
-    .title(stash_title(stash, rows.now))
-    .highlighted(rows.stash_menu_for.as_ref() == Some(&sha))
-    .menu(move |menu, _, cx| RefList::stash_menu(&list, menu_of.clone(), menu, cx))
-    .into_any_element()
+    let key = RowKey::Stash(sha.clone());
+    SidebarRow::new(key.element_id(), IconName::Archive, stash.message.clone())
+        .title(stash_title(stash, rows.now))
+        .highlighted(rows.stash_menu_for.as_ref() == Some(&sha))
+        .outlined(rows.is_outlined(&key))
+        .on_click(rows.on_click(key.clone()))
+        .menu(move |menu, _, cx| RefList::stash_menu(&list, menu_of.clone(), menu, cx))
+        .keyboard_menu(rows.keyboard_menu_of(&key))
+        .into_any_element()
 }
 
 /// A worktree's line, with its menu: the one on show active, one whose folder is gone faded.
@@ -776,8 +1198,9 @@ fn worktree_row(worktree: &Worktree, rows: &RowContext) -> AnyElement {
     let opened = list.clone();
     let menu_of = path.clone();
     let activated = path.clone();
+    let key = RowKey::Worktree(path.clone());
     SidebarRow::new(
-        SharedString::from(format!("worktree-{path}")),
+        key.element_id(),
         IconName::FolderGit2,
         worktree.name.clone(),
     )
@@ -786,11 +1209,14 @@ fn worktree_row(worktree: &Worktree, rows: &RowContext) -> AnyElement {
     .highlighted(rows.worktree_menu_for.as_ref() == Some(&path))
     .faded(worktree.prunable.is_some())
     .meta(Some(worktree_meta(worktree).into()))
+    .outlined(rows.is_outlined(&key))
+    .on_click(rows.on_click(key.clone()))
     // The section shows it running, and why it failed.
     .on_double_click(move |_, cx| {
         let _ = opened.update(cx, |list, cx| list.activate_worktree(&activated, cx));
     })
     .menu(move |menu, _, cx| RefList::worktree_menu(&list, menu_of.clone(), menu, cx))
+    .keyboard_menu(rows.keyboard_menu_of(&key))
     .into_any_element()
 }
 

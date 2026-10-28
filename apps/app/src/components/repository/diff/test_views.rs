@@ -7,14 +7,16 @@ use std::rc::Rc;
 
 use futures::FutureExt as _;
 use futures::channel::oneshot;
-use gitto_git::FileStatus;
-use gitto_git::features::conflicts::schema::{Conflict, ConflictSide, ConflictText};
+use gitto_git::features::conflicts::schema::{
+    Conflict, ConflictFile, ConflictSide, ConflictSides, ConflictText,
+};
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::features::diff::working_tree::WorkingTreeFile;
 use gitto_git::features::status::schema::{
-    Head, StatusCounts, StatusReply, Uncommitted, WorkingTreeFiles,
+    Head, StatusCounts, StatusReply, StatusSummary, Uncommitted, WorkingTreeFiles,
 };
-use gitto_git::input::{FileInput, FullSha, NonEmpty, RepositoryId, Sha};
+use gitto_git::input::{FileInput, FullSha, RepoPath, RepositoryId, Sha};
+use gitto_git::{ContentVersion, FileMode, FileStatus};
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
@@ -23,13 +25,13 @@ use gpui_kit::{
 
 use super::conflicts::conflict_resolution::ResolveFileMutation;
 use super::file_diff_view::{FileDiffEvent, FileDiffView};
-use super::file_editing::{FileIo, Reload};
+use super::file_editing::{FileIo, Overwrite, Reload};
 use crate::components::repository::test_support::{fake_git, repository_entity};
 use gitto_app_data::data::conflicts::FileToResolve;
 use gitto_app_data::data::file_diff::FilePatch;
 use gitto_app_data::data::git::{GitTask, RepositoryGit};
 use gitto_app_data::data::{DataError, Mutation, Repository};
-use gitto_ui_logic::git::diff_source::{DiffSource, diff_file_key};
+use gitto_ui_logic::git::diff_source::{DiffFileKey, DiffSource};
 
 pub fn id() -> RepositoryId {
     RepositoryId::parse("01890a5d-ac96-774b-bcce-b302099a8057").unwrap()
@@ -53,8 +55,8 @@ enum PatchAnswer {
 #[derive(Default)]
 pub struct DiffGit {
     status: RefCell<Option<Uncommitted>>,
-    /// By the file's key in its source (see `diff_file_key`).
-    patches: RefCell<HashMap<String, PatchAnswer>>,
+    /// By the file's key in its source (see [`DiffFileKey`]).
+    patches: RefCell<HashMap<DiffFileKey, PatchAnswer>>,
     conflicts: RefCell<HashMap<String, Conflict>>,
 }
 
@@ -75,14 +77,14 @@ impl DiffGit {
     }
 
     /// Reads the patch of the file `key` as `patch`, from now on.
-    pub fn set_patch(&self, key: String, patch: Result<String, DataError>) {
+    pub fn set_patch(&self, key: DiffFileKey, patch: Result<String, DataError>) {
         self.patches
             .borrow_mut()
             .insert(key, PatchAnswer::Now(patch));
     }
 
     /// Reads the patch of the file `key` once it's sent on the sender returned.
-    pub fn later(&self, key: String) -> oneshot::Sender<FilePatch> {
+    pub fn later(&self, key: DiffFileKey) -> oneshot::Sender<FilePatch> {
         let (send, receive) = oneshot::channel();
         self.patches
             .borrow_mut()
@@ -99,7 +101,7 @@ impl DiffGit {
     }
 
     fn patch(&self, source: DiffSource, file: &FileInput) -> GitTask<String> {
-        let key = diff_file_key(&source, &file.path);
+        let key = DiffFileKey::new(&source, &file.path);
         let mut patches = self.patches.borrow_mut();
         match patches.remove(&key) {
             Some(PatchAnswer::Now(patch)) => {
@@ -111,13 +113,19 @@ impl DiffGit {
                 Ok(patch.patch.to_string())
             }
             .boxed(),
-            None => async move { Err(DataError::msg(format!("No patch of {key}."))) }.boxed(),
+            None => async move {
+                Err(DataError::msg(format!(
+                    "No patch of {} in {:?}.",
+                    key.path, key.source
+                )))
+            }
+            .boxed(),
         }
     }
 }
 
 impl RepositoryGit for DiffGit {
-    fn status(&self, _: Option<String>) -> GitTask<StatusReply> {
+    fn status(&self, _: Option<ContentVersion>) -> GitTask<StatusReply> {
         let status = self.status.borrow().clone();
         async move {
             let status = status.ok_or_else(|| DataError::msg("No status in this test."))?;
@@ -144,7 +152,7 @@ impl RepositoryGit for DiffGit {
         self.patch(DiffSource::Staged, &file)
     }
 
-    fn conflict(&self, path: NonEmpty) -> GitTask<Conflict> {
+    fn conflict(&self, path: RepoPath) -> GitTask<Conflict> {
         let conflict = self.conflicts.borrow().get(path.as_str()).cloned();
         async move { conflict.ok_or_else(|| DataError::msg("Not conflicted.")) }.boxed()
     }
@@ -180,7 +188,7 @@ pub fn conflicted(path: &str) -> ChangedFile {
 
 pub fn side(oid: &str) -> ConflictSide {
     ConflictSide {
-        mode: "100644".into(),
+        mode: FileMode::Regular,
         oid: oid.into(),
     }
 }
@@ -188,16 +196,15 @@ pub fn side(oid: &str) -> ConflictSide {
 /// A conflict both sides changed as text, read at `version`.
 pub fn text_conflict(contents: &str, version: &str) -> Conflict {
     Conflict {
-        base: Some(side("b1")),
-        ours: Some(side("o1")),
-        theirs: Some(side("t1")),
-        text: Some(ConflictText {
+        sides: ConflictSides {
+            base: Some(side("b1")),
+            ours: Some(side("o1")),
+            theirs: Some(side("t1")),
+        },
+        file: ConflictFile::Text(ConflictText {
             contents: contents.into(),
             version: version.into(),
         }),
-        version: Some(version.into()),
-        binary: false,
-        unreadable: None,
     }
 }
 
@@ -208,18 +215,20 @@ pub fn set_changes(staged: Vec<ChangedFile>, unstaged: Vec<ChangedFile>, cx: &mu
         .filter(|file| file.status == FileStatus::Conflicted)
         .count() as u64;
     let status = Uncommitted {
-        head: Head::Branch {
-            name: "main".into(),
-            sha: "a1".into(),
-        },
-        upstream: None,
-        ahead: 0,
-        behind: 0,
-        counts: StatusCounts {
-            files: (staged.len() + unstaged.len()) as u64,
-            staged: staged.len() as u64,
-            unstaged: unstaged.len() as u64,
-            conflicted,
+        summary: StatusSummary {
+            head: Head::Branch {
+                name: "main".into(),
+                sha: "a1".into(),
+            },
+            upstream: None,
+            ahead: 0,
+            behind: 0,
+            counts: StatusCounts {
+                files: (staged.len() + unstaged.len()) as u64,
+                staged: staged.len() as u64,
+                unstaged: unstaged.len() as u64,
+                conflicted,
+            },
         },
         changes: WorkingTreeFiles {
             staged,
@@ -227,7 +236,7 @@ pub fn set_changes(staged: Vec<ChangedFile>, unstaged: Vec<ChangedFile>, cx: &mu
             uncounted: false,
             marker_free: Vec::new(),
         },
-        version: uuid::Uuid::new_v4().to_string(),
+        version: uuid::Uuid::new_v4().to_string().into(),
     };
     set_status(status, cx);
 }
@@ -258,7 +267,7 @@ pub fn set_patch(source: &DiffSource, file: &ChangedFile, patch: &str, cx: &mut 
 
 /// [`set_patch`], in the app.
 pub fn set_patch_in(source: &DiffSource, file: &ChangedFile, patch: &str, cx: &mut App) {
-    let key = diff_file_key(source, &file.path);
+    let key = DiffFileKey::new(source, &file.path);
     DiffGit::get(cx).set_patch(key.clone(), Ok(patch.to_owned()));
     let patch = FilePatch {
         key,
@@ -357,15 +366,15 @@ impl FakeTree {
                         .ok_or_else(|| DataError::msg("No such file.")),
                 )
             }),
-            save: Rc::new(move |_, path, contents, version, overwrite, _| {
+            save: Rc::new(move |_, path, request, _| {
                 let asked = Save {
                     path: path.into(),
-                    contents,
-                    version,
-                    overwrite,
+                    contents: request.contents,
+                    version: request.expected.to_string(),
+                    overwrite: request.overwrite == Overwrite::Always,
                 };
                 saves.borrow_mut().push(asked.clone());
-                Task::ready((reply.borrow_mut())(&asked))
+                Task::ready((reply.borrow_mut())(&asked).map(ContentVersion::from))
             }),
             reload: Rc::new(move |_, reload, _| reloads.borrow_mut().push(reload)),
         }

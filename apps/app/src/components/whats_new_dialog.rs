@@ -14,31 +14,52 @@ use gitto_app_kit::theme::PaletteExt as _;
 use gitto_app_kit::ui::dialog::LIST_WIDTH;
 use gitto_app_kit::ui::{Badge, DialogHeading, IconName, Tone};
 
-/// How a change is marked: breaking ones first, whatever their type.
-pub fn kind_of(change: &Change) -> (&'static str, Tone) {
-    if change.breaking {
-        ("Breaking", Tone::Coral)
-    } else if change.kind == ChangeType::Fix {
-        ("Fixed", Tone::Mint)
-    } else if change.kind == ChangeType::Perf {
-        ("Faster", Tone::Blue)
-    } else {
-        ("New", Tone::Purple)
+/// How a change is marked, in the order changes are listed: breaking ones first, whatever their
+/// type, then what's new, fixed and faster.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ChangeKind {
+    Breaking,
+    New,
+    Fixed,
+    Faster,
+}
+
+impl ChangeKind {
+    pub fn of(change: &Change) -> Self {
+        if change.breaking {
+            ChangeKind::Breaking
+        } else if change.kind == ChangeType::Fix {
+            ChangeKind::Fixed
+        } else if change.kind == ChangeType::Perf {
+            ChangeKind::Faster
+        } else {
+            ChangeKind::New
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ChangeKind::Breaking => "Breaking",
+            ChangeKind::New => "New",
+            ChangeKind::Fixed => "Fixed",
+            ChangeKind::Faster => "Faster",
+        }
+    }
+
+    pub fn tone(self) -> Tone {
+        match self {
+            ChangeKind::Breaking => Tone::Coral,
+            ChangeKind::New => Tone::Purple,
+            ChangeKind::Fixed => Tone::Mint,
+            ChangeKind::Faster => Tone::Blue,
+        }
     }
 }
 
-/// Breaking changes, then what's new, fixed and faster.
-const ORDER: [&str; 4] = ["Breaking", "New", "Fixed", "Faster"];
-
-/// A version's changes, in the order they're listed (see [`ORDER`]).
+/// A version's changes, in the order they're listed (see [`ChangeKind`]).
 pub fn sorted_changes(version: &VersionChanges) -> Vec<Change> {
     let mut changes = version.changes.clone();
-    changes.sort_by_key(|change| {
-        ORDER
-            .iter()
-            .position(|label| *label == kind_of(change).0)
-            .unwrap_or(ORDER.len())
-    });
+    changes.sort_by_key(ChangeKind::of);
     changes
 }
 
@@ -199,12 +220,17 @@ fn render_version(version: &VersionChanges, cx: &App) -> impl IntoElement + use<
                 .mt_2()
                 .gap_2()
                 .children(changes.into_iter().map(|change| {
-                    let (label, tone) = kind_of(&change);
+                    let kind = ChangeKind::of(&change);
                     h_flex()
                         .items_start()
                         .gap_2()
                         .text_sm()
-                        .child(div().w_16().flex_none().child(Badge::new(label).tone(tone)))
+                        .child(
+                            div()
+                                .w_16()
+                                .flex_none()
+                                .child(Badge::new(kind.label()).tone(kind.tone())),
+                        )
                         .child(
                             v_flex()
                                 .min_w_0()
@@ -443,7 +469,7 @@ mod tests {
         let labels = |version: &VersionChanges| -> Vec<(&'static str, String)> {
             sorted_changes(version)
                 .iter()
-                .map(|change| (kind_of(change).0, change.description.clone()))
+                .map(|change| (ChangeKind::of(change).label(), change.description.clone()))
                 .collect()
         };
         assert_eq!(
