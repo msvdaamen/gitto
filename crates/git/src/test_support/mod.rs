@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use crate::core::git_dirs::real_path;
 use crate::core::repo::{GitRepos, Repo};
-use crate::core::runner::lock;
+use crate::core::runner::{REPOSITORY_ENV, lock};
 use crate::core::trace::TARGET;
 
 /// Repositories for one test, in a temp directory of its own.
@@ -39,7 +39,7 @@ impl Default for Fixture {
 
 impl Fixture {
     pub fn new() -> Self {
-        clear_git_identity();
+        hermetic_env();
         let dir = tempfile::Builder::new()
             .prefix("gitto-git-")
             .tempdir()
@@ -144,22 +144,36 @@ impl Fixture {
     }
 }
 
-/// The tests create real repositories and commits. These variables override the repos' own
-/// `user.name`/`user.email`, so drop them to get the same authors on every machine.
-fn clear_git_identity() {
-    static CLEARED: Once = Once::new();
-    CLEARED.call_once(|| {
-        for key in [
-            "GIT_AUTHOR_NAME",
-            "GIT_AUTHOR_EMAIL",
-            "GIT_AUTHOR_DATE",
-            "GIT_COMMITTER_NAME",
-            "GIT_COMMITTER_EMAIL",
-            "GIT_COMMITTER_DATE",
-        ] {
-            // SAFETY: only tests get here, before their first git command; the standard library
-            // reads the environment (to spawn git) under the same lock that this takes.
-            unsafe { std::env::remove_var(key) };
+/// Makes git in the tests, the runner's and `git`'s, the same on every machine, whoever runs them
+/// and from where, once per test run: without the user's own settings (their global and system
+/// config: `tag.gpgSign`, `core.hooksPath`, `pull.rebase`, …), nor what the environment says
+/// about who commits, or which repository to use (a git hook running `cargo test` sets `GIT_DIR`,
+/// say).
+fn hermetic_env() {
+    static DONE: Once = Once::new();
+    DONE.call_once(|| {
+        // SAFETY: only tests get here, before their first git command; the standard library
+        // reads the environment (to spawn git) under the same lock that this takes.
+        unsafe {
+            std::env::set_var("GIT_CONFIG_NOSYSTEM", "1");
+            std::env::set_var("GIT_CONFIG_GLOBAL", "/dev/null");
+            // These override the repos' own `user.name`/`user.email`.
+            for key in [
+                "GIT_AUTHOR_NAME",
+                "GIT_AUTHOR_EMAIL",
+                "GIT_AUTHOR_DATE",
+                "GIT_COMMITTER_NAME",
+                "GIT_COMMITTER_EMAIL",
+                "GIT_COMMITTER_DATE",
+                "GIT_CONFIG",
+                "GIT_CONFIG_COUNT",
+                "GIT_CONFIG_PARAMETERS",
+            ]
+            .iter()
+            .chain(REPOSITORY_ENV)
+            {
+                std::env::remove_var(key);
+            }
         }
     });
 }
@@ -271,6 +285,18 @@ mod tests {
             git(path, ["status", "--porcelain", "-z"]),
             " M a file.txt\0?? new file.txt\0".trim()
         );
+    }
+
+    #[test]
+    fn git_has_only_the_repositorys_own_settings() {
+        let fx = Fixture::new();
+        let path = fx.create_repo("hermetic");
+        let settings = git(&path, ["config", "--list", "--show-scope"]);
+        assert!(
+            settings.lines().all(|line| line.starts_with("local\t")),
+            "{settings}"
+        );
+        assert_eq!(std::env::var_os("GIT_DIR"), None);
     }
 
     #[test]
