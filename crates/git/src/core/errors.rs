@@ -480,11 +480,16 @@ pub fn command_error(
     }
     // Some failures, like "nothing to commit", are only explained on stdout.
     let message = match (stderr.trim(), stdout.trim()) {
-        ("", "") => format!(
-            "git {} exited with code {}",
-            args.first().map_or("undefined", String::as_str),
-            exit_code.map_or_else(|| "null".to_owned(), |code| code.to_string()),
-        ),
+        ("", "") => {
+            let command = match args.first() {
+                Some(command) => format!("git {command}"),
+                None => "git".to_owned(),
+            };
+            match exit_code {
+                Some(code) => format!("{command} exited with code {code}"),
+                None => format!("{command} was stopped by a signal"),
+            }
+        }
         ("", stdout) => stdout.to_owned(),
         (stderr, _) => stderr.to_owned(),
     };
@@ -573,7 +578,11 @@ mod tests {
         assert_eq!(error.api(), ApiCode::InternalServerError);
 
         let error = command_error("/repo", &args(&["diff"]), None, "", "");
-        assert_eq!(error.message, "git diff exited with code null");
+        assert_eq!(error.message, "git diff was stopped by a signal");
+        let error = command_error("/repo", &args(&["diff"]), Some(3), "", "");
+        assert_eq!(error.message, "git diff exited with code 3");
+        let error = command_error("/repo", &[], Some(1), "", "");
+        assert_eq!(error.message, "git exited with code 1");
     }
 
     #[test]
