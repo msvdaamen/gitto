@@ -239,9 +239,16 @@ impl PatchViewer {
             self.relayout();
             cx.notify();
         }
-        if self.next.as_ref() != Some(&next) {
-            self.next = Some(next.clone());
-            self.show(next, cx);
+        match &mut self.next {
+            Some(kept) if *kept == next => {
+                // The same patch, loaded again: kept as it came, so it's told from the next one
+                // without comparing them.
+                kept.patch = next.patch;
+            }
+            _ => {
+                self.next = Some(next.clone());
+                self.show(next, cx);
+            }
         }
     }
 

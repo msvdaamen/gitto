@@ -9,7 +9,7 @@ use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::features::staging::patch_version::patch_version;
 use gitto_git::features::staging::schema::LineSelection;
 use gitto_ui::git::changes::is_nested_repository;
-use gitto_ui::git::patch::{has_hunks, staged_whole};
+use gitto_ui::git::patch::has_hunks;
 use gpui_kit::{App, Context, Entity, Subscription, Task};
 
 use super::file_diff_view::{FileDiffEvent, FileDiffView};
@@ -102,18 +102,19 @@ impl FileDiffView {
     /// What the viewer takes to stage lines, if the file's can be: an uncommitted one's, on show,
     /// unless it can only be staged whole (a link's, say).
     pub(super) fn line_staging(&self, cx: &App) -> Option<LineStaging> {
-        let data = self.view.current()?;
+        let prepared = self.view.current()?;
         if !self.view.source().is_uncommitted() || !self.view.shows_patch() {
             return None;
         }
-        if staged_whole(&data.patch) {
+        if prepared.staged_whole {
             return None;
         }
+        // The patch staged from is still on show, and another one's loaded: the one the lines
+        // leave, on its way.
         let shown = self.view.shown_patch().map(|shown| &shown.patch);
-        let left =
-            self.staging.staged_from.as_ref().is_some_and(|last| {
-                shown.is_some_and(|shown| shown == last) && data.patch != *last
-            });
+        let left = self.staging.staged_from.as_ref().is_some_and(|last| {
+            shown.is_some_and(|shown| shown == last) && prepared.data.patch != *last
+        });
         Some(LineStaging {
             action: self.staging_action(),
             busy: self.staging.is_staging(cx) || left,

@@ -20,7 +20,8 @@ use gpui_kit::{
 use super::conflict_viewer::{ConflictViewer, SaveFile};
 use super::file_staging::{FileStaging, StageFileMutation, StageLinesMutation};
 use super::patch_viewer::{PatchProps, PatchViewer, PatchViewerEvent};
-use super::shown_file::{ShownFile, patch_cache_key};
+use super::shown_file::{PreparedPatch, ShownFile, patch_cache_key};
+use super::viewer_actions::{CloseFileDiff, FILE_DIFF_VIEW};
 use super::viewer_runtime::{LoadFile, LoadedFile, prepare_patch};
 use crate::components::ui::{
     EmptyState, FileStatusBadge, Icon, IconButton, IconName, LineStats, LoadingState, Notice,
@@ -131,7 +132,7 @@ pub struct FileDiffView {
     focus: FocusHandle,
     viewer: Option<Entity<PatchViewer>>,
     /// The patch last given to the viewer, which it says is on show.
-    viewer_patch: Option<FilePatch>,
+    viewer_patch: Option<PreparedPatch>,
     /// Why a file's patch couldn't be shown, and its key: another file is tried afresh.
     viewer_error: Option<(String, String)>,
     conflict: Option<Entity<ConflictViewer>>,
@@ -307,7 +308,9 @@ impl FileDiffView {
         }
         // Another file's patch is only kept while it's on show: one isn't started with it.
         match view.patch() {
-            Some(data) if data.key == key || view.shown_patch().is_some() => Body::Patch,
+            Some(prepared) if prepared.data.key == key || view.shown_patch().is_some() => {
+                Body::Patch
+            }
             _ => Body::Loading,
         }
     }
@@ -349,7 +352,7 @@ impl FileDiffView {
 
     /// Gives the viewer the patch to show, making it the first time.
     fn show_patch(&mut self, cx: &mut Context<Self>) {
-        let Some(data) = self.view.patch() else {
+        let Some(prepared) = self.view.patch().cloned() else {
             return;
         };
         let viewer = match &self.viewer {
@@ -363,14 +366,14 @@ impl FileDiffView {
             }
         };
         let props = PatchProps {
-            patch: data.patch.clone(),
-            file_key: data.key.clone(),
-            cache_key: patch_cache_key(self.view.source(), &data),
+            patch: prepared.data.patch.clone(),
+            file_key: prepared.data.key.clone(),
+            cache_key: prepared.cache_key.clone(),
             style: DiffStyle::current(cx),
             staging: self.line_staging(cx),
         };
-        let load_file = self.load_file(&data);
-        self.viewer_patch = Some(data);
+        let load_file = self.load_file(&prepared.data);
+        self.viewer_patch = Some(prepared);
         viewer.update(cx, |viewer, cx| {
             viewer.set_load_file(load_file);
             viewer.set_props(props, cx);
@@ -401,10 +404,10 @@ impl FileDiffView {
     fn on_viewer(&mut self, event: &PatchViewerEvent, cx: &mut Context<Self>) {
         match event {
             PatchViewerEvent::Shown { file_key } => {
-                if let Some(data) = self.viewer_patch.clone()
-                    && data.key == *file_key
+                if let Some(prepared) = self.viewer_patch.clone()
+                    && prepared.data.key == *file_key
                 {
-                    self.view.patch_shown(&data, cx);
+                    self.view.patch_shown(&prepared, cx);
                 }
             }
             PatchViewerEvent::LoadingFiles(loading) => self.view.set_loading_files(*loading, cx),

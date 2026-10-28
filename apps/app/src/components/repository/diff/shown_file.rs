@@ -12,7 +12,7 @@ use gitto_git::input::RepositoryId;
 use gitto_ui::git::changes::{
     LineCounts, counts_of, has_patch, is_known_binary, is_nested_repository, total_lines,
 };
-use gitto_ui::git::patch::{PatchSummary, is_link, summarize_patch};
+use gitto_ui::git::patch::{PatchSummary, is_link, staged_whole, summarize_patch};
 use gpui_kit::{AppContext as _, Context, Entity};
 
 use crate::data::file_diff::{
@@ -33,6 +33,43 @@ pub fn patch_cache_key(source: &DiffSource, data: &FilePatch) -> String {
         format!("{}:{}", data.key, patch_version(&data.patch))
     } else {
         data.key.clone()
+    }
+}
+
+/// A loaded patch, with what the view reads of it worked out once, as it's loaded, rather than
+/// each time it's read: a patch can be megabytes, and an uncommitted one is loaded again whenever
+/// the working tree changes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreparedPatch {
+    pub data: FilePatch,
+    /// What the patch says of the changes, where the file's line counts may not: an
+    /// uncommitted file's can be older than its patch, and some files have none at all.
+    pub summary: Option<PatchSummary>,
+    /// Names it in the highlighting cache (see [`patch_cache_key`]).
+    pub cache_key: String,
+    /// Whether its lines can only be staged whole: it's of a whole file (see `staged_whole`).
+    pub staged_whole: bool,
+    /// Whether it's a symbolic link's.
+    pub link: bool,
+}
+
+impl PreparedPatch {
+    /// `data`, a patch of a file in `source`, prepared.
+    pub fn new(source: &DiffSource, data: FilePatch) -> Self {
+        let summary = (source.is_uncommitted() || data.file.additions.is_none())
+            .then(|| summarize_patch(&data.patch));
+        PreparedPatch {
+            summary,
+            cache_key: patch_cache_key(source, &data),
+            staged_whole: staged_whole(&data.patch),
+            link: is_link(&data.patch),
+            data,
+        }
+    }
+
+    /// Whether it's `data`, as loaded: the same patch, not another one alike.
+    fn is(&self, data: &FilePatch) -> bool {
+        self.data.key == data.key && Arc::ptr_eq(&self.data.patch, &data.patch)
     }
 }
 
@@ -74,6 +111,9 @@ pub struct ShownFile {
     patch_file: ChangedFile,
     patch_enabled: bool,
     patch_query: Query<FilePatch>,
+    /// The patch loaded last, as last synced: this file's, or the last one's while this one's
+    /// loads.
+    patch: Option<PreparedPatch>,
     /// The patch on show: going to another file, the last one stays on show until the new one's
     /// is loaded and highlighted; they're swapped at once, without flicker.
     shown_patch: Option<ShownPatch>,
@@ -104,6 +144,7 @@ impl ShownFile {
             shown_large: None,
             patch_enabled: false,
             patch_query,
+            patch: None,
             shown_patch: None,
             loading_files: false,
             files_error: None,
@@ -133,8 +174,8 @@ impl ShownFile {
         self.sync(cx);
     }
 
-    /// Brings what follows from the lists and the file up to date: its place in its list, and
-    /// what the patch's query is of.
+    /// Brings what follows from the lists and the file up to date: its place in its list, what
+    /// the patch's query is of, and the patch loaded, prepared once.
     pub fn sync<V: 'static>(&mut self, cx: &mut Context<V>) {
         let key = self.file_key();
         self.last_place = match self.found() {
@@ -155,6 +196,15 @@ impl ShownFile {
             self.patch_query.set_options(options, cx);
             self.patch_file = file;
             self.patch_enabled = enabled;
+        }
+        let loaded = self.patch_query.data();
+        let prepared = self.patch.as_ref();
+        if loaded
+            .as_ref()
+            .map(|data| prepared.is_some_and(|prepared| prepared.is(data)))
+            != Some(true)
+        {
+            self.patch = loaded.map(|data| PreparedPatch::new(&self.source, data));
         }
         let busy = self.shows_other() || self.loading_files;
         self.busy.update(cx, |delayed, cx| delayed.set(busy, cx));
@@ -258,8 +308,8 @@ impl ShownFile {
     }
 
     /// The patch loaded last: this file's, or the last one's while this one's loads.
-    pub fn patch(&self) -> Option<FilePatch> {
-        self.patch_query.data()
+    pub fn patch(&self) -> Option<&PreparedPatch> {
+        self.patch.as_ref()
     }
 
     /// Why the patch couldn't be loaded.
@@ -268,24 +318,21 @@ impl ShownFile {
     }
 
     /// The patch of this file, if it's loaded.
-    pub fn current(&self) -> Option<FilePatch> {
-        self.patch().filter(|data| data.key == self.file_key())
+    pub fn current(&self) -> Option<&PreparedPatch> {
+        self.patch()
+            .filter(|prepared| prepared.data.key == self.file_key())
     }
 
     /// What the patch says of the changes: an uncommitted file's line counts can be older than
-    /// its patch, and some files have none at all.
-    pub fn summary_of(&self, data: &FilePatch) -> Option<PatchSummary> {
-        (self.source.is_uncommitted() || data.file.additions.is_none())
-            .then(|| summarize_patch(&data.patch))
-    }
-
+    /// its patch, and some files have none at all (see [`PreparedPatch::summary`]).
     fn summary(&self) -> Option<PatchSummary> {
-        self.current().and_then(|data| self.summary_of(&data))
+        self.current().and_then(|prepared| prepared.summary)
     }
 
     /// Whether the file has no changes left on its side, as its patch says.
     pub fn empty(&self) -> bool {
-        self.current().is_some_and(|data| data.patch.is_empty())
+        self.current()
+            .is_some_and(|prepared| prepared.data.patch.is_empty())
     }
 
     pub fn binary(&self) -> bool {
@@ -400,13 +447,14 @@ impl ShownFile {
             && self.shows_patch()
             && !self.shows_other()
             && self.file().status != FileStatus::Deleted
-            && !self.current().is_some_and(|data| is_link(&data.patch))
+            && !self.current().is_some_and(|prepared| prepared.link)
     }
 
-    /// The patch `data` is on show.
-    pub fn patch_shown<V: 'static>(&mut self, data: &FilePatch, cx: &mut Context<V>) {
-        let counts = self
-            .summary_of(data)
+    /// The patch `prepared` is on show.
+    pub fn patch_shown<V: 'static>(&mut self, prepared: &PreparedPatch, cx: &mut Context<V>) {
+        let data = &prepared.data;
+        let counts = prepared
+            .summary
             .map(|summary| LineCounts {
                 additions: summary.additions,
                 deletions: summary.deletions,
