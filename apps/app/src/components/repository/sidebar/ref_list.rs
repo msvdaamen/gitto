@@ -214,12 +214,19 @@ struct Trees {
     remote_count: usize,
 }
 
+/// The worktrees other than the one on show, picked again when the worktrees change.
+#[derive(Default)]
+struct OtherWorktrees {
+    of: Option<Arc<[Worktree]>>,
+    others: Rc<[Worktree]>,
+}
+
 /// What every row of a render reads: which menu is open, the other worktrees, and the list to
 /// act on.
 struct RowContext {
     list: WeakEntity<RefList>,
     /// The worktrees other than the one on show, whose files are these.
-    other_worktrees: Vec<Worktree>,
+    other_worktrees: Rc<[Worktree]>,
     branch_menu_for: Option<SharedString>,
     stash_menu_for: Option<SharedString>,
     worktree_menu_for: Option<SharedString>,
@@ -257,6 +264,7 @@ pub struct RefList {
     asking: Option<Asking>,
     scrolls: [UniformListScrollHandle; 5],
     trees: Trees,
+    other_worktrees: OtherWorktrees,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -295,6 +303,7 @@ impl RefList {
             asking: None,
             scrolls: Default::default(),
             trees: Trees::default(),
+            other_worktrees: OtherWorktrees::default(),
             _subscriptions: subscriptions,
         }
     }
@@ -384,17 +393,28 @@ impl RefList {
     }
 
     /// The worktrees other than the one on show.
-    fn other_worktrees(&self) -> Vec<Worktree> {
-        self.worktrees
-            .data()
-            .map(|worktrees| {
-                worktrees
-                    .iter()
-                    .filter(|worktree| !worktree.current)
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default()
+    fn other_worktrees(&mut self) -> Rc<[Worktree]> {
+        let worktrees = self.worktrees.data();
+        let cached = &self.other_worktrees;
+        let fresh = match (&cached.of, &worktrees) {
+            (Some(of), Some(worktrees)) => Arc::ptr_eq(of, worktrees),
+            (None, None) => true,
+            _ => false,
+        };
+        if !fresh {
+            let others = worktrees
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .filter(|worktree| !worktree.current)
+                .cloned()
+                .collect();
+            self.other_worktrees = OtherWorktrees {
+                of: worktrees,
+                others,
+            };
+        }
+        Rc::clone(&self.other_worktrees.others)
     }
 
     /// Double-clicking the branch `reference`, by its full ref name: switches to it, or opens the
@@ -607,7 +627,7 @@ impl RefList {
         };
     }
 
-    fn row_context(&self, cx: &mut Context<Self>) -> Rc<RowContext> {
+    fn row_context(&mut self, cx: &mut Context<Self>) -> Rc<RowContext> {
         Rc::new(RowContext {
             list: cx.entity().downgrade(),
             other_worktrees: self.other_worktrees(),
