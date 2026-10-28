@@ -218,31 +218,12 @@ impl RepositoryToolbar {
         &self.repository_id
     }
 
-    /// Shows another repository's.
-    pub fn set_repository(
-        &mut self,
-        repository_id: RepositoryId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.repository_id == repository_id {
-            return;
-        }
-        self.status = status_query(&repository_id, cx);
-        self.repository_id = repository_id.clone();
-        let id = &repository_id;
-        self.pull
-            .update(cx, |button, cx| button.set_repository(id.clone(), cx));
-        self.push.update(cx, |button, cx| {
-            button.set_repository(id.clone(), window, cx)
-        });
-        self.branch.update(cx, |button, cx| {
-            button.set_repository(id.clone(), window, cx)
-        });
-        self.stash
-            .update(cx, |button, cx| button.set_repository(id.clone(), cx));
-        self.update_failures(cx);
-        cx.notify();
+    /// Puts `search` in the search box: the history's search, as the toolbar of the repository
+    /// on show before had it.
+    pub fn set_search(&mut self, search: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let search = SharedString::from(search.to_owned());
+        self.search
+            .update(cx, |input, cx| input.set_value(search, window, cx));
     }
 
     /// Which panels are open, for the toggles to show.
@@ -531,43 +512,37 @@ mod tests {
         seed(&a, cx);
         seed(&b, cx);
         let fetches = Rc::new(Fetches::default());
-        let shown = a.clone();
-        let (window, toolbar) = crate::test_support::open(cx, {
-            let fetches = Rc::clone(&fetches);
-            move |window, cx| {
-                let fetch =
-                    RepositoryOperation::new("fetch", move |id: RepositoryId, (), cx: &mut App| {
-                        fetches.calls.borrow_mut().push(id);
-                        let (settle, settled) = oneshot::channel();
-                        *fetches.settle.borrow_mut() = Some(settle);
-                        cx.background_spawn(async move {
-                            settled.await.unwrap_or(Err(QueryError::msg("dropped")))
-                        })
-                    });
-                RepositoryToolbar::with_fetch(shown, fetch, window, cx)
-            }
+        let (window, toolbar) = switch(&a, &fetches, cx);
+        (dir, a, b, fetches, window, toolbar)
+    }
+
+    /// The toolbar of the repository `id`, fetching into `fetches`, as the page makes it when
+    /// that repository comes on show.
+    fn switch(
+        id: &RepositoryId,
+        fetches: &Rc<Fetches>,
+        cx: &mut TestAppContext,
+    ) -> (AnyWindowHandle, Entity<RepositoryToolbar>) {
+        let shown = id.clone();
+        let fetches = Rc::clone(fetches);
+        let opened = crate::test_support::open(cx, move |window, cx| {
+            let fetch =
+                RepositoryOperation::new("fetch", move |id: RepositoryId, (), cx: &mut App| {
+                    fetches.calls.borrow_mut().push(id);
+                    let (settle, settled) = oneshot::channel();
+                    *fetches.settle.borrow_mut() = Some(settle);
+                    cx.background_spawn(async move {
+                        settled.await.unwrap_or(Err(QueryError::msg("dropped")))
+                    })
+                });
+            RepositoryToolbar::with_fetch(shown, fetch, window, cx)
         });
         cx.run_until_parked();
-        (dir, a, b, fetches, window, toolbar)
+        opened
     }
 
     fn fetch_button(toolbar: &Entity<RepositoryToolbar>, cx: &mut TestAppContext) -> ToolbarButton {
         toolbar.read_with(cx, |toolbar, cx| toolbar.fetch_button(cx))
-    }
-
-    fn switch(
-        toolbar: &Entity<RepositoryToolbar>,
-        id: &RepositoryId,
-        window: AnyWindowHandle,
-        cx: &mut TestAppContext,
-    ) {
-        cx.update_window(window, |_, window, cx| {
-            toolbar.update(cx, |toolbar, cx| {
-                toolbar.set_repository(id.clone(), window, cx)
-            })
-        })
-        .unwrap();
-        cx.run_until_parked();
     }
 
     #[gpui_kit::test]
@@ -585,9 +560,9 @@ mod tests {
         assert!(shown.is_busy());
 
         // Another repository's fetch is its own.
-        switch(&toolbar, &b, window, cx);
-        assert!(!fetch_button(&toolbar, cx).is_busy());
-        switch(&toolbar, &a, window, cx);
+        let (_, other) = switch(&b, &fetches, cx);
+        assert!(!fetch_button(&other, cx).is_busy());
+        let (window, toolbar) = switch(&a, &fetches, cx);
         assert!(fetch_button(&toolbar, cx).is_busy());
 
         let settle = fetches.settle.borrow_mut().take().unwrap();
@@ -617,7 +592,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn keeps_a_repositorys_fetch_failure_while_another_is_fetched(cx: &mut TestAppContext) {
-        let (_dir, a, b, fetches, window, toolbar) = render(cx);
+        let (_dir, a, b, fetches, window, _) = render(cx);
         let settle = |result: Result<(), QueryError>, cx: &mut TestAppContext| {
             let settle = fetches.settle.borrow_mut().take().unwrap();
             settle.send(result).unwrap();
@@ -627,14 +602,14 @@ mod tests {
         cx.update_window(window, |_, window, cx| window.click("fetch", cx))
             .unwrap();
         settle(Err(QueryError::msg("Could not resolve host.")), cx);
-        switch(&toolbar, &b, window, cx);
+        let (window, toolbar) = switch(&b, &fetches, cx);
         assert_eq!(fetch_button(&toolbar, cx).tooltip(), "Fetch all remotes");
         cx.update_window(window, |_, window, cx| window.click("fetch", cx))
             .unwrap();
         settle(Ok(()), cx);
         assert_eq!(*fetches.calls.borrow(), [a.clone(), b.clone()]);
 
-        switch(&toolbar, &a, window, cx);
+        let (_, toolbar) = switch(&a, &fetches, cx);
         assert_eq!(
             fetch_button(&toolbar, cx).tooltip(),
             "Fetch failed: Could not resolve host."

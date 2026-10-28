@@ -47,15 +47,6 @@ impl PullButton {
         &self.repository_id
     }
 
-    /// Shows another repository's.
-    pub fn set_repository(&mut self, repository_id: RepositoryId, cx: &mut Context<Self>) {
-        if self.repository_id != repository_id {
-            self.status = status_query(&repository_id, cx);
-            self.repository_id = repository_id;
-            cx.notify();
-        }
-    }
-
     /// The button as it is now. Until the status has loaded, it's disabled.
     pub fn button(&self, cx: &App) -> ToolbarButton {
         let id = self.repository_id.clone();
@@ -217,15 +208,15 @@ mod tests {
         set_status(&repo, status(), cx);
         set_status(&other, status(), cx);
         let (pulls, pull) = pulls();
-        let (window, button) = render(cx, &repo, pull);
+        let (window, button) = render(cx, &repo, pull.clone());
 
         cx.update_window(window, |_, window, cx| window.click("pull", cx))
             .unwrap();
         assert!(shown(&button, cx).is_busy());
 
         // Another repository's pull button isn't busy with it…
-        button.update(cx, |button, cx| button.set_repository(other.clone(), cx));
-        let shown_other = shown(&button, cx);
+        let (_, other_button) = render(cx, &other, pull.clone());
+        let shown_other = shown(&other_button, cx);
         assert!(!shown_other.is_disabled());
         assert!(!shown_other.is_busy());
 
@@ -237,11 +228,11 @@ mod tests {
             )))
             .unwrap();
         cx.run_until_parked();
-        assert!(shown(&button, cx).shown_failure().is_none());
+        assert!(shown(&other_button, cx).shown_failure().is_none());
 
-        // Back in that repository, it does.
-        button.update(cx, |button, cx| button.set_repository(repo.clone(), cx));
-        assert!(shown(&button, cx).shown_failure().is_some());
+        // That repository's, made again, does.
+        let (_, again) = render(cx, &repo, pull);
+        assert!(shown(&again, cx).shown_failure().is_some());
     }
 
     #[gpui_kit::test]
@@ -252,13 +243,13 @@ mod tests {
         set_status(&repo, status(), cx);
         set_status(&other, status(), cx);
         let (pulls, pull) = pulls();
-        let (window, button) = render(cx, &repo, pull);
+        let (window, _) = render(cx, &repo, pull.clone());
 
         cx.update_window(window, |_, window, cx| window.click("pull", cx))
             .unwrap();
-        button.update(cx, |button, cx| button.set_repository(other.clone(), cx));
-        button.update(cx, |button, cx| button.set_repository(repo.clone(), cx));
-        let shown = shown(&button, cx);
+        let _other = render(cx, &other, pull.clone());
+        let (window, again) = render(cx, &repo, pull);
+        let shown = shown(&again, cx);
         assert!(shown.is_busy());
         // A second click is ignored while it runs.
         cx.update_window(window, |_, window, cx| window.click("pull", cx))

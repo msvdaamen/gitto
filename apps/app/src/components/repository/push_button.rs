@@ -141,22 +141,6 @@ impl PushButton {
         &self.repository_id
     }
 
-    /// Shows another repository's.
-    pub fn set_repository(
-        &mut self,
-        repository_id: RepositoryId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.repository_id != repository_id {
-            self.target = push_target_query(&repository_id, cx);
-            self.status = status_query(&repository_id, cx);
-            self.repository_id = repository_id;
-            self.sync_dialog(window, cx);
-            cx.notify();
-        }
-    }
-
     /// Why the remote branch turned the last push down, if it did: asked about in the dialog
     /// rather than shown as a failure.
     pub fn rejected(&self, cx: &App) -> Option<Rejection> {

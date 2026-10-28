@@ -88,8 +88,14 @@ pub struct RepositoryView {
     details_open: bool,
     sidebar: PanelWidth,
     details: PanelWidth,
+    /// The repository's toolbar and operation bar: made again for another repository (see
+    /// [`set_repository`](Self::set_repository)).
     toolbar: Entity<RepositoryToolbar>,
+    _toolbar_events: Subscription,
     operation_bar: Entity<OperationBar>,
+    _operation_bar_events: Subscription,
+    /// What changing the working tree waits for (see [`before_change`](Self::before_change)).
+    before_change: BeforeChange,
     /// What the branch menus in the sidebar and the history share (TS's `BranchMenuProvider`
     /// around them).
     branch_menu: Entity<BranchMenuProvider>,
@@ -105,8 +111,10 @@ impl RepositoryView {
     pub fn new(repository_id: RepositoryId, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let storage = Rc::clone(Services::global(cx).storage());
         let id = repository_id.clone();
-        let toolbar = cx.new(|cx| RepositoryToolbar::new(id.clone(), window, cx));
-        let operation_bar = cx.new(|cx| OperationBar::new(id.clone(), window, cx));
+        let before_change = Self::before_change(cx.entity().downgrade());
+        let (toolbar, toolbar_events) = Self::toolbar(&id, window, cx);
+        let (operation_bar, operation_bar_events) =
+            Self::operation_bar(&id, before_change.clone(), window, cx);
         let branch_menu = cx.new(|cx| BranchMenuProvider::new(id.clone(), window, cx));
         let refs_sidebar =
             cx.new(|cx| RefsSidebar::new(id.clone(), branch_menu.clone(), window, cx));
@@ -118,9 +126,6 @@ impl RepositoryView {
         let subscriptions = vec![
             cx.observe_in(&settled, window, |this, _, window, cx| {
                 this.reconcile(window, cx)
-            }),
-            cx.subscribe_in(&toolbar, window, |this, _, event, _, cx| {
-                this.on_toolbar(event, cx)
             }),
             cx.subscribe_in(&history, window, |this, _, event, window, cx| match event {
                 HistoryEvent::Select(id) => this.select(id.clone(), window, cx),
@@ -139,15 +144,6 @@ impl RepositoryView {
                 },
             ),
             cx.subscribe_in(
-                &operation_bar,
-                window,
-                |this, _, event, window, cx| match event {
-                    OperationBarEvent::Resolve(file) => {
-                        this.resolve_conflicts(file.clone(), window, cx)
-                    }
-                },
-            ),
-            cx.subscribe_in(
                 &branch_menu,
                 window,
                 |this, _, event, window, cx| match event {
@@ -163,11 +159,9 @@ impl RepositoryView {
             }),
         ];
 
-        let before_change = Self::before_change(cx.entity().downgrade());
-        operation_bar.update(cx, |bar, _| bar.set_before_change(before_change.clone()));
         branch_menu.update(cx, |menu, _| menu.set_before_change(before_change.clone()));
         // Nor is another repository opened, or the home page, before the file's edits are saved.
-        Router::set_blocker(Some(before_change), cx);
+        Router::set_blocker(Some(before_change.clone()), cx);
 
         RepositoryView {
             repository_id,
@@ -182,7 +176,10 @@ impl RepositoryView {
             sidebar: PanelWidth::new("sidebar", SIDEBAR_BOUNDS, Rc::clone(&storage)),
             details: PanelWidth::new("details", DETAILS_BOUNDS, storage),
             toolbar,
+            _toolbar_events: toolbar_events,
             operation_bar,
+            _operation_bar_events: operation_bar_events,
+            before_change,
             branch_menu,
             refs_sidebar,
             history,
@@ -190,6 +187,38 @@ impl RepositoryView {
             pending: None,
             _subscriptions: subscriptions,
         }
+    }
+
+    /// The toolbar of the repository `id`, and the page's subscription to its events.
+    fn toolbar(
+        id: &RepositoryId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> (Entity<RepositoryToolbar>, Subscription) {
+        let toolbar = cx.new(|cx| RepositoryToolbar::new(id.clone(), window, cx));
+        let events = cx.subscribe_in(&toolbar, window, |this, _, event, _, cx| {
+            this.on_toolbar(event, cx)
+        });
+        (toolbar, events)
+    }
+
+    /// The operation bar of the repository `id`, continuing and aborting once `before_change`
+    /// lets them, and the page's subscription to its events.
+    fn operation_bar(
+        id: &RepositoryId,
+        before_change: BeforeChange,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> (Entity<OperationBar>, Subscription) {
+        let bar = cx.new(|cx| {
+            let mut bar = OperationBar::new(id.clone(), window, cx);
+            bar.set_before_change(before_change);
+            bar
+        });
+        let events = cx.subscribe_in(&bar, window, |this, _, event, window, cx| match event {
+            OperationBarEvent::Resolve(file) => this.resolve_conflicts(file.clone(), window, cx),
+        });
+        (bar, events)
     }
 
     /// Starts watching the repository `id`, which comes on show now.
@@ -219,7 +248,9 @@ impl RepositoryView {
         &self.repository_id
     }
 
-    /// Shows the repository `id` instead: its own selection (none), the panels as they are.
+    /// Shows the repository `id` instead: its own selection (none), the panels and the history's
+    /// search as they are. Its toolbar and operation bar are new: nothing of the other
+    /// repository's (a branch being named, the failures' order, a dialog) is left in them.
     pub fn set_repository(
         &mut self,
         id: RepositoryId,
@@ -231,11 +262,19 @@ impl RepositoryView {
         }
         self.repository_id = id.clone();
         self.watcher = Self::watch(&id, window, cx);
-        self.toolbar.update(cx, |toolbar, cx| {
-            toolbar.set_repository(id.clone(), window, cx)
+        let (toolbar, toolbar_events) = Self::toolbar(&id, window, cx);
+        let (sidebar, details) = (self.sidebar_open, self.details_open);
+        let search = self.search.clone();
+        toolbar.update(cx, |toolbar, cx| {
+            toolbar.set_panels(sidebar, details, cx);
+            toolbar.set_search(&search, window, cx);
         });
-        self.operation_bar
-            .update(cx, |bar, cx| bar.set_repository(id.clone(), cx));
+        self.toolbar = toolbar;
+        self._toolbar_events = toolbar_events;
+        let (operation_bar, operation_bar_events) =
+            Self::operation_bar(&id, self.before_change.clone(), window, cx);
+        self.operation_bar = operation_bar;
+        self._operation_bar_events = operation_bar_events;
         self.branch_menu
             .update(cx, |menu, cx| menu.set_repository(id.clone(), window, cx));
         self.refs_sidebar

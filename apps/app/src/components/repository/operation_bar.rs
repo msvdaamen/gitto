@@ -104,15 +104,6 @@ impl OperationBar {
         &self.repository_id
     }
 
-    pub fn set_repository(&mut self, repository_id: RepositoryId, cx: &mut Context<Self>) {
-        if self.repository_id != repository_id {
-            self.operation = operation_in_progress_query(&repository_id, cx);
-            self.conflicted = conflicted_files_query(&repository_id, cx);
-            self.repository_id = repository_id;
-            cx.notify();
-        }
-    }
-
     /// What continuing or aborting waits for: the edits to a file on show saved.
     pub fn set_before_change(&mut self, guard: BeforeChange) {
         self.before_change = Some(guard);
@@ -430,6 +421,7 @@ mod tests {
     struct Bar {
         _dir: tempfile::TempDir,
         window: AnyWindowHandle,
+        holder: Entity<Holder>,
         bar: Entity<OperationBar>,
         resolved: Rc<RefCell<Vec<ChangedFile>>>,
         saved: Rc<Cell<bool>>,
@@ -490,10 +482,12 @@ mod tests {
                 Holder { bar }
             }
         });
-        let bar = bar.read_with(cx, |holder, _| holder.bar.clone());
+        let holder = bar;
+        let bar = holder.read_with(cx, |holder, _| holder.bar.clone());
         Bar {
             _dir: dir,
             window,
+            holder,
             bar,
             resolved,
             saved,
@@ -630,16 +624,22 @@ mod tests {
     fn doesnt_abort_another_repositorys_operation_than_the_one_it_asked_about(
         cx: &mut TestAppContext,
     ) {
-        let bar = render(cx, Some(merge()), with_conflicts(status(), &["a.txt"], &[]));
+        let mut bar = render(cx, Some(merge()), with_conflicts(status(), &["a.txt"], &[]));
         click(&bar, "abort", cx);
         assert!(has_dialog(&bar, cx));
 
-        // Another repository, merging too, comes on show under the dialog.
+        // Another repository, merging too, comes on show under the dialog: its own bar takes this
+        // one's place.
         let other = repository_id();
         set_operation(&other, Some(merge()), cx);
         set_status(&other, with_conflicts(status(), &["b.txt"], &[]), cx);
-        bar.bar
-            .update(cx, |bar, cx| bar.set_repository(other.clone(), cx));
+        let actions = bar.bar.read_with(cx, |bar, _| bar.actions.clone());
+        let other_bar = cx.update(|cx| cx.new(|cx| OperationBar::with_actions(other, actions, cx)));
+        bar.holder.update(cx, |holder, cx| {
+            holder.bar = other_bar.clone();
+            cx.notify();
+        });
+        drop(std::mem::replace(&mut bar.bar, other_bar));
         cx.run_until_parked();
         click_last_label(&bar, "Abort", cx);
         assert!(bar.calls.aborted.borrow().is_empty());

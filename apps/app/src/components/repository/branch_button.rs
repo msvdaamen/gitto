@@ -63,24 +63,6 @@ impl BranchButton {
         &self.repository_id
     }
 
-    /// Shows another repository's: the popover names a branch for the repository it was opened
-    /// in.
-    pub fn set_repository(
-        &mut self,
-        repository_id: RepositoryId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.repository_id != repository_id {
-            self.status = status_query(&repository_id, cx);
-            self.repository_id = repository_id;
-            self.open = false;
-            self.name
-                .update(cx, |name, cx| name.set_value("", window, cx));
-            cx.notify();
-        }
-    }
-
     pub fn is_open(&self) -> bool {
         self.open
     }
@@ -370,25 +352,17 @@ mod tests {
 
         // Another repository's button can be used meanwhile, and opening it changes nothing in
         // "a".
-        cx.update_window(window, |_, window, cx| {
-            button.update(cx, |button, cx| {
-                button.set_repository(b.clone(), window, cx)
-            })
-        })
-        .unwrap();
-        let shown = button.read_with(cx, |button, cx| button.button(cx));
+        let (other_window, other) = render(cx, &b, &creates);
+        let shown = other.read_with(cx, |button, cx| button.button(cx));
         assert!(!shown.is_busy());
         assert!(!shown.is_disabled());
-        click(window, "branch", cx);
-        assert!(button.read_with(cx, |button, _| button.is_open()));
-        press(window, "escape", cx);
+        click(other_window, "branch", cx);
+        assert!(other.read_with(cx, |button, _| button.is_open()));
+        press(other_window, "escape", cx);
 
-        cx.update_window(window, |_, window, cx| {
-            button.update(cx, |button, cx| {
-                button.set_repository(a.clone(), window, cx)
-            })
-        })
-        .unwrap();
+        // "a"'s, made again, is still creating it, and says why that failed.
+        drop(button);
+        let (_, button) = render(cx, &a, &creates);
         assert!(button.read_with(cx, |button, cx| button.button(cx).is_busy()));
         let settle = creates.settle.borrow_mut().remove(0);
         settle
