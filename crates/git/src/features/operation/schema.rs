@@ -43,7 +43,8 @@ pub enum Operation {
     Rebase {
         /// The branch being rebased; `None` if it's a detached HEAD.
         branch: Option<String>,
-        onto: String,
+        /// What it rebases onto; `None` if git's record of it can't be read.
+        onto: Option<String>,
         /// The commit being replayed, of how many.
         steps: Option<Steps>,
     },
@@ -165,7 +166,7 @@ mod tests {
         );
         let rebase = Operation::Rebase {
             branch: None,
-            onto: "main".into(),
+            onto: Some("main".into()),
             steps: Some(Steps { step: 1, total: 2 }),
         };
         assert_eq!(

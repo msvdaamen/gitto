@@ -105,18 +105,26 @@ pub async fn get_operation(repo: &Repo) -> Result<Option<Operation>> {
             }
         }
         OperationKind::Rebase => {
-            // `rebase-merge` for the merge backend, git's default; `rebase-apply` for the apply one.
-            let merging = read_state(git_dir.join("rebase-merge").join("onto"))
-                .await
-                .is_some();
+            // `rebase-merge` for the merge backend, git's default, which has `onto` there;
+            // `rebase-apply` for the apply one.
+            let (merging, onto) = match state("rebase-merge/onto").await {
+                Some(onto) => (true, Some(onto)),
+                None => (false, state("rebase-apply/onto").await),
+            };
             let dir = if merging {
                 "rebase-merge"
             } else {
                 "rebase-apply"
             };
+            let onto_name = async {
+                match &onto {
+                    Some(onto) => Some(ref_name(&run, onto).await),
+                    None => None,
+                }
+            };
             let (head_name, onto, step, total) = futures::join!(
                 state(&format!("{dir}/head-name")),
-                state(&format!("{dir}/onto")),
+                onto_name,
                 state(&format!(
                     "{dir}/{}",
                     if merging { "msgnum" } else { "next" }
@@ -128,7 +136,7 @@ pub async fn get_operation(repo: &Repo) -> Result<Option<Operation>> {
                     .as_deref()
                     .and_then(|name| name.strip_prefix("refs/heads/"))
                     .map(str::to_owned),
-                onto: ref_name(&run, onto.as_deref().unwrap_or_default()).await,
+                onto,
                 steps: steps(step.as_deref(), total.as_deref()),
             }
         }
@@ -167,11 +175,9 @@ fn steps(step: Option<&str>, total: Option<&str>) -> Option<Steps> {
 }
 
 /// The shortest name of the commit `sha`, as the user knows it: a branch pointing at it, or else a
-/// remote-tracking branch or a tag, or else its abbreviated SHA.
+/// remote-tracking branch or a tag, or else its abbreviated SHA; or `sha` itself, if git can't
+/// say.
 async fn ref_name(run: &GitCommand, sha: &str) -> String {
-    if sha.is_empty() {
-        return String::new();
-    }
     let points_at = format!("--points-at={sha}");
     let refs = run
         .run([
@@ -568,7 +574,7 @@ mod tests {
                 get_operation(&repo).await.unwrap(),
                 Some(Operation::Rebase {
                     branch: Some("side".into()),
-                    onto: "main".into(),
+                    onto: Some("main".into()),
                     steps: Some(Steps { step: 1, total: 2 }),
                 })
             );
@@ -601,6 +607,22 @@ mod tests {
             assert_eq!(
                 git(&path, ["log", "--format=%s", "main..side"]),
                 "theirs again\ntheirs"
+            );
+        });
+    }
+
+    #[test]
+    fn a_rebase_says_it_doesnt_know_what_its_onto_when_gits_record_of_that_cant_be_read() {
+        let fx = Fixture::new();
+        let path = create_rebase(&fx, "op-rebase-onto");
+        fs::remove_file(path.join(".git").join("rebase-merge").join("onto")).unwrap();
+        fs::write(path.join(".git").join("rebase-merge").join("onto"), "\n").unwrap();
+        smol::block_on(async {
+            let repo = fx.repos.open("op-rebase-onto").await.unwrap();
+            let operation = get_operation(&repo).await.unwrap();
+            assert!(
+                matches!(operation, Some(Operation::Rebase { onto: None, .. })),
+                "{operation:?}"
             );
         });
     }
