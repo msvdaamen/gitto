@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use super::blockers::Action;
-use super::config::{map_ref, push_remote, read_config, remote_names};
+use super::config::{PushDefault, map_ref, read_config};
 use super::progress::why_detached;
 use super::schema::PushTarget;
 use crate::core::errors::{Error, Result};
@@ -30,7 +30,7 @@ struct PushPlan {
     set_upstream: bool,
 }
 
-/// Where the checked-out branch is pushed: to its remote (see `push_remote`), where the remote's
+/// Where the checked-out branch is pushed: to its remote (see `BranchConfig::push_remote`), where the remote's
 /// push refspecs say if it has any, and otherwise under the same name, as `git push` does by
 /// default; or under its upstream's name if `push.default` says to push to the upstream, and
 /// that's on the same remote. Only ever the one branch, whatever `push.default` says: the Push
@@ -54,17 +54,17 @@ async fn plan_push(repo: &Repo) -> Result<PushPlan> {
             "{branch} has no commits to push yet."
         )));
     }
-    let Some(remote) = push_remote(&config, &branch) else {
+    let settings = config.branch(&branch);
+    let Some(remote) = settings.push_remote() else {
         return Err(Error::PushBlocked(
             "There's no remote to push to.".to_owned(),
         ));
     };
 
     let local = format!("refs/heads/{branch}");
-    let upstream_remote = config.get(&format!("branch.{branch}.remote"));
-    let merge = config.get(&format!("branch.{branch}.merge"));
-    let push_default = config.get("push.default").map(str::to_lowercase);
-    let push_specs = config.all(&format!("remote.{remote}.push"));
+    let upstream_remote = settings.remote();
+    let merge = settings.merge();
+    let push_specs = config.remote(&remote).push_specs();
     let reference = if !push_specs.is_empty() {
         match map_ref(push_specs, &local, true) {
             Some(reference) => reference,
@@ -77,20 +77,16 @@ async fn plan_push(repo: &Repo) -> Result<PushPlan> {
     } else if let Some(merge) = merge.filter(|merge| {
         merge.starts_with("refs/heads/")
             && upstream_remote == Some(remote.as_str())
-            && matches!(push_default.as_deref(), Some("upstream" | "tracking"))
+            && config.push_default() == Some(PushDefault::Upstream)
     }) {
         merge.to_owned()
     } else {
         local
     };
     // A URL, rather than a remote's name, has no settings, so no remote-tracking branches.
-    let named = remote_names(&config, &["url", "pushurl"]).contains(&remote);
+    let named = config.remote_names(&["url", "pushurl"]).contains(&remote);
     let tracking = if named {
-        map_ref(
-            config.all(&format!("remote.{remote}.fetch")),
-            &reference,
-            false,
-        )
+        map_ref(config.remote(&remote).fetch_specs(), &reference, false)
     } else {
         None
     };

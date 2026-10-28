@@ -6,10 +6,7 @@ use std::path::{Path, PathBuf};
 use futures::FutureExt;
 
 use super::blockers::{Action, no_upstream};
-use super::config::{
-    RemoteConfig, is_false, makes_merge_commit, read_config, rebase_setting, rebases,
-    remotes_to_fetch,
-};
+use super::config::{PullFf, PullRebase, RemoteConfig, read_config};
 use super::progress::{in_progress, interruption, progress, why_detached};
 use crate::core::errors::{Error, GitError, GitErrorKind, Result};
 use crate::core::git_dirs::{GitDirs, git_dirs};
@@ -96,12 +93,12 @@ pub async fn pull(repo: &Repo) -> Result<()> {
     let git_dir = dirs?.git_dir;
     // Its merge commit is worded unless the pull will rebase, or only fast-forward, which makes
     // none (as the settings say before fetching).
-    let word = makes_merge_commit(&settings, &branch);
+    let word = settings.branch(&branch).makes_merge_commit();
     let fetched = fetch_upstream(repo, &git_dir, &upstream, word).await?;
 
     let integrated = integrate(repo, &git_dir, &branch, &upstream, fetched).await;
     // Also after a merge that stopped at conflicts, say: the remotes are fetched all the same.
-    fetch_after_pull(repo, remotes_to_fetch(&settings, &upstream.remote));
+    fetch_after_pull(repo, settings.remotes_to_fetch(&upstream.remote));
     integrated
 }
 
@@ -129,7 +126,7 @@ pub async fn pull_branch(repo: &Repo, branch: &str) -> Result<()> {
     fetch_upstream(repo, &git_dir, &upstream, false).await?;
 
     let forwarded = fast_forward(repo, branch, &upstream).await;
-    fetch_after_pull(repo, remotes_to_fetch(&config, &upstream.remote));
+    fetch_after_pull(repo, config.remotes_to_fetch(&upstream.remote));
     forwarded
 }
 
@@ -144,8 +141,9 @@ fn short_name(reference: &str) -> &str {
 /// Checks that `config` still has `branch` pull from `upstream`, as it did before fetching; fails
 /// with `Error::RepositoryChanged` if it doesn't.
 fn check_still_tracks(config: &RemoteConfig, branch: &str, upstream: &Upstream) -> Result<()> {
-    if config.get(&format!("branch.{branch}.remote")) == Some(upstream.remote.as_str())
-        && config.get(&format!("branch.{branch}.merge")) == Some(upstream.merge.as_str())
+    let settings = config.branch(branch);
+    if settings.remote() == Some(upstream.remote.as_str())
+        && settings.merge() == Some(upstream.merge.as_str())
     {
         return Ok(());
     }
@@ -305,20 +303,17 @@ async fn read_upstream(run: &GitCommand, branch: &str, config: &RemoteConfig) ->
     // From the config: a branch without commits yet has no ref to ask for its upstream. A remote
     // given as a URL, rather than one with a name (and so a URL setting), has no remote-tracking
     // branches.
-    let remote = config
-        .get(&format!("branch.{branch}.remote"))
-        .filter(|remote| !remote.is_empty());
-    let merge = config
-        .get(&format!("branch.{branch}.merge"))
-        .filter(|merge| !merge.is_empty());
+    let settings = config.branch(branch);
+    let remote = settings.remote().filter(|remote| !remote.is_empty());
+    let merge = settings.merge().filter(|merge| !merge.is_empty());
     let (Some(remote), Some(merge)) = (remote, merge) else {
         return Err(Error::NoUpstream(no_upstream(branch)));
     };
-    if remote != "." && !config.has(&format!("remote.{remote}.url")) {
+    if remote != "." && !config.remote(remote).has_url() {
         return Err(Error::NoUpstream(no_upstream(branch)));
     }
     // `git pull` merges them all at once; only one is merged here.
-    if config.all(&format!("branch.{branch}.merge")).len() > 1 {
+    if settings.merges().len() > 1 {
         return Err(Error::NoUpstream(format!(
             "{branch} tracks several branches, which only git pull, in a terminal, merges at once."
         )));
@@ -502,12 +497,11 @@ fn integrate_args(
     fetched: Option<&Fetched>,
     has_head: bool,
 ) -> Vec<String> {
-    let ff = config.get("pull.ff").map(str::to_lowercase);
+    let settings = config.branch(branch);
     // A branch without commits yet has nothing to rebase: it's merged, which just moves it there.
-    if has_head && rebases(config, branch) {
-        let rebase = rebase_setting(config, branch);
+    if has_head && settings.rebases() {
         let mut args = vec!["rebase".to_owned(), "--quiet".to_owned()];
-        if matches!(rebase.as_deref(), Some("merges" | "m")) {
+        if settings.rebase() == Some(PullRebase::Merges) {
             args.push("--rebase-merges".to_owned());
         }
         // From where the branch forked from its upstream, like `git pull --rebase`.
@@ -515,12 +509,12 @@ fn integrate_args(
         args.push(tracking.to_owned());
         return args;
     }
-    let ff_args: &[&str] = match ff.as_deref() {
+    let ff_args: &[&str] = match config.pull_ff() {
         _ if !has_head => &[],
         None => &[],
-        Some("only") => &["--ff-only"],
-        Some(ff) if is_false(ff) => &["--no-ff"],
-        Some(_) => &["--ff"],
+        Some(PullFf::Only) => &["--ff-only"],
+        Some(PullFf::No) => &["--no-ff"],
+        Some(PullFf::Yes) => &["--ff"],
     };
     let mut args: Vec<String> = ["merge", "--quiet", "--no-edit"].map(str::to_owned).into();
     // Its log, if `merge.log` wants one, is already in the message, and its comments are git's
