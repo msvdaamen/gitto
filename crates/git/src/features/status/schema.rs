@@ -140,27 +140,11 @@ pub struct StatusSummary {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Uncommitted {
-    pub head: Head,
-    pub upstream: Option<String>,
-    pub ahead: u64,
-    pub behind: u64,
-    pub counts: StatusCounts,
+    #[serde(flatten)]
+    pub summary: StatusSummary,
     pub changes: WorkingTreeFiles,
     /// Changes whenever anything above does, so a caller can ask to skip a status it already has.
     pub version: String,
-}
-
-impl Uncommitted {
-    /// The summary alone, without the changed files.
-    pub fn summary(&self) -> StatusSummary {
-        StatusSummary {
-            head: self.head.clone(),
-            upstream: self.upstream.clone(),
-            ahead: self.ahead,
-            behind: self.behind,
-            counts: self.counts,
-        }
-    }
 }
 
 /// What `status.get` answers (the contract's output): `{ unchanged: true }` when the caller

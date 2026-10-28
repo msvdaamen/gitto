@@ -8,7 +8,8 @@ use sha1_smol::Sha1;
 
 use super::parse::{STATUS_ARGS, parse_status};
 use super::schema::{
-    Status, StatusCounts, StatusFile, StatusReply, Unchanged, Uncommitted, WorkingTreeFiles,
+    Status, StatusCounts, StatusFile, StatusReply, StatusSummary, Unchanged, Uncommitted,
+    WorkingTreeFiles,
 };
 use crate::core::errors::Result;
 use crate::core::repo::Repo;
@@ -85,11 +86,13 @@ async fn read_status(repo: &Repo) -> Result<(Uncommitted, String)> {
         hash.update(b"\0");
     }
     let uncommitted = Uncommitted {
-        head,
-        upstream,
-        ahead,
-        behind,
-        counts: count_files(&files),
+        summary: StatusSummary {
+            head,
+            upstream,
+            ahead,
+            behind,
+            counts: count_files(&files),
+        },
         changes: WorkingTreeFiles {
             staged: changes.staged,
             unstaged: changes.unstaged,
@@ -294,14 +297,14 @@ mod tests {
             let repo = fx.create_history_repo("history").await;
             let status = get_status(&repo).await.unwrap();
             assert!(
-                matches!(&status.head, Head::Branch { name, .. } if name == "main"),
+                matches!(&status.summary.head, Head::Branch { name, .. } if name == "main"),
                 "{:?}",
-                status.head
+                status.summary.head
             );
-            assert_eq!(status.upstream, None);
-            assert_eq!((status.ahead, status.behind), (0, 0));
+            assert_eq!(status.summary.upstream, None);
+            assert_eq!((status.summary.ahead, status.summary.behind), (0, 0));
             assert_eq!(
-                status.counts,
+                status.summary.counts,
                 StatusCounts {
                     files: 2,
                     staged: 0,
@@ -372,13 +375,13 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(
-                status.head,
+                status.summary.head,
                 Head::Unborn {
                     name: "main".into()
                 }
             );
             assert_eq!(
-                status.counts,
+                status.summary.counts,
                 StatusCounts {
                     files: 0,
                     staged: 0,
@@ -524,7 +527,7 @@ mod tests {
             let repo = fx.repos.open("conflict").await.unwrap();
 
             let Uncommitted {
-                changes, counts, ..
+                changes, summary, ..
             } = get_status(&repo).await.unwrap();
             assert_eq!(changes, full_diffs(&repo).await);
             // Conflicted on both sides, as it is when there are too many files to diff.
@@ -536,7 +539,7 @@ mod tests {
             assert_eq!(changes.staged[0].path, "file.txt");
             assert_eq!(changes.staged[0].status, FileStatus::Conflicted);
             assert_eq!(
-                counts,
+                summary.counts,
                 StatusCounts {
                     files: 1,
                     staged: 0,

@@ -36,9 +36,8 @@ pub struct ConflictText {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Conflict {
-    pub base: Option<ConflictSide>,
-    pub ours: Option<ConflictSide>,
-    pub theirs: Option<ConflictSide>,
+    #[serde(flatten)]
+    pub sides: ConflictSides,
     /// The file in the working tree as text, conflict markers and all, with its version (see
     /// `read_working_tree_file`); `None` if it isn't text that can be shown (see `unreadable`).
     pub text: Option<ConflictText>,
@@ -50,17 +49,6 @@ pub struct Conflict {
     pub binary: bool,
     /// Why the file in the working tree isn't `text`, e.g. it's too large; `None` if it is.
     pub unreadable: Option<String>,
-}
-
-impl Conflict {
-    /// Its sides alone.
-    pub fn sides(&self) -> ConflictSides {
-        ConflictSides {
-            base: self.base.clone(),
-            ours: self.ours.clone(),
-            theirs: self.theirs.clone(),
-        }
-    }
 }
 
 /// Which side of a conflict to keep whole (TS's `z.enum(["ours", "theirs"])`).

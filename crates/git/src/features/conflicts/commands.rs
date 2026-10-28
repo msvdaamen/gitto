@@ -81,9 +81,7 @@ pub async fn get_conflict(repo: &Repo, path: &str) -> Result<Conflict> {
     let run = repo.git();
     let (sides, file) = futures::try_join!(read_sides(&run, path), read_text(repo, path))?;
     Ok(Conflict {
-        base: sides.base,
-        ours: sides.ours,
-        theirs: sides.theirs,
+        sides,
         text: file.text,
         version: file.version,
         binary: file.binary,
@@ -181,7 +179,7 @@ pub async fn keep_side(repo: &Repo, path: &str, side: Side, shown: &ShownConflic
     check_path(path)?;
     repo.exclusive(|run| async move {
         let sides = read_sides(&run, path).await?;
-        if !same_sides(&sides, &shown.sides) {
+        if sides != shown.sides {
             return Err(Error::ConflictChanged {
                 path: path.to_owned(),
             });
@@ -245,18 +243,6 @@ async fn check_version(repo: &Repo, path: &str, version: &str) -> Result<()> {
         });
     }
     Ok(())
-}
-
-fn same_sides(a: &ConflictSides, b: &ConflictSides) -> bool {
-    same_side(&a.base, &b.base) && same_side(&a.ours, &b.ours) && same_side(&a.theirs, &b.theirs)
-}
-
-fn same_side(a: &Option<ConflictSide>, b: &Option<ConflictSide>) -> bool {
-    match (a, b) {
-        (Some(a), Some(b)) => a.mode == b.mode && a.oid == b.oid,
-        (None, None) => true,
-        _ => false,
-    }
 }
 
 /// Marks the conflicted file at `path` resolved, as it is in the working tree: stages it, or its
@@ -658,7 +644,7 @@ mod tests {
     /// What the user saw of `conflict`, to resolve it by.
     fn shown(conflict: &Conflict) -> ShownConflict {
         ShownConflict {
-            sides: conflict.sides(),
+            sides: conflict.sides.clone(),
             version: conflict.version.clone(),
         }
     }
@@ -693,9 +679,11 @@ mod tests {
             assert_eq!(
                 conflict,
                 Conflict {
-                    base: side(FileMode::Regular, oid(&path, ":1:f.txt")),
-                    ours: side(FileMode::Regular, oid(&path, ":2:f.txt")),
-                    theirs: side(FileMode::Regular, oid(&path, ":3:f.txt")),
+                    sides: ConflictSides {
+                        base: side(FileMode::Regular, oid(&path, ":1:f.txt")),
+                        ours: side(FileMode::Regular, oid(&path, ":2:f.txt")),
+                        theirs: side(FileMode::Regular, oid(&path, ":3:f.txt")),
+                    },
                     text: Some(ConflictText {
                         contents,
                         version: version.clone(),
@@ -925,7 +913,7 @@ mod tests {
             );
             git(&path, ["add", "f.txt"]);
             let unversioned = ShownConflict {
-                sides: conflict.sides(),
+                sides: conflict.sides.clone(),
                 version: None,
             };
             let error = keep_side(&repo, "f.txt", Side::Ours, &unversioned)
@@ -953,9 +941,9 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("deleted-by-them").await.unwrap();
             let conflict = get_conflict(&repo, "f.txt").await.unwrap();
-            assert_eq!(conflict.base.unwrap().oid, oid(&path, ":1:f.txt"));
-            assert_eq!(conflict.ours.unwrap().oid, oid(&path, ":2:f.txt"));
-            assert_eq!(conflict.theirs, None);
+            assert_eq!(conflict.sides.base.unwrap().oid, oid(&path, ":1:f.txt"));
+            assert_eq!(conflict.sides.ours.unwrap().oid, oid(&path, ":2:f.txt"));
+            assert_eq!(conflict.sides.theirs, None);
             // Git leaves ours in the working tree, without markers.
             assert_eq!(conflict.text.unwrap().contents, "one\nours\n");
         });
@@ -999,9 +987,9 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("deleted-by-us").await.unwrap();
             let conflict = get_conflict(&repo, "f.txt").await.unwrap();
-            assert_eq!(conflict.ours, None);
+            assert_eq!(conflict.sides.ours, None);
             assert_eq!(
-                conflict.theirs.as_ref().unwrap().oid,
+                conflict.sides.theirs.as_ref().unwrap().oid,
                 oid(&path, ":3:f.txt")
             );
 
@@ -1030,9 +1018,9 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("added-by-both").await.unwrap();
             let conflict = get_conflict(&repo, "new.txt").await.unwrap();
-            assert_eq!(conflict.base, None);
-            assert_eq!(conflict.ours.unwrap().mode, FileMode::Regular);
-            assert_eq!(conflict.theirs.unwrap().mode, FileMode::Regular);
+            assert_eq!(conflict.sides.base, None);
+            assert_eq!(conflict.sides.ours.unwrap().mode, FileMode::Regular);
+            assert_eq!(conflict.sides.theirs.unwrap().mode, FileMode::Regular);
             assert_eq!(
                 conflict.text.unwrap().contents,
                 "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> side\n"
@@ -1156,8 +1144,14 @@ mod tests {
             let repo = fx.repos.open("link-conflict").await.unwrap();
 
             let conflict = get_conflict(&repo, "config").await.unwrap();
-            assert_eq!(conflict.ours.as_ref().unwrap().mode, FileMode::Symlink);
-            assert_eq!(conflict.theirs.as_ref().unwrap().mode, FileMode::Symlink);
+            assert_eq!(
+                conflict.sides.ours.as_ref().unwrap().mode,
+                FileMode::Symlink
+            );
+            assert_eq!(
+                conflict.sides.theirs.as_ref().unwrap().mode,
+                FileMode::Symlink
+            );
             assert_eq!(conflict.text, None);
             assert_eq!(conflict.version, None);
             assert_eq!(conflict.unreadable, None);
@@ -1185,9 +1179,9 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("not-conflicted").await.unwrap();
             let conflict = get_conflict(&repo, "f.txt").await.unwrap();
-            assert_eq!(conflict.base, None);
-            assert_eq!(conflict.ours, None);
-            assert_eq!(conflict.theirs, None);
+            assert_eq!(conflict.sides.base, None);
+            assert_eq!(conflict.sides.ours, None);
+            assert_eq!(conflict.sides.theirs, None);
             assert_eq!(conflict.text.unwrap().contents, "one\nours\nthree\n");
         });
     }
