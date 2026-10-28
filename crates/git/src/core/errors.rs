@@ -514,9 +514,15 @@ impl RepositoryListError {
         while let Some(source) = inner.source() {
             inner = source;
         }
+        RepositoryListError::with_reason(action, &inner.to_string())
+    }
+
+    /// The list couldn't be `action`ed, for `reason`: said trimmed, with a full stop if it has
+    /// none.
+    pub fn with_reason(action: ListAction, reason: &str) -> Self {
         RepositoryListError {
             action,
-            reason: sentence(&inner.to_string()),
+            reason: sentence(reason),
         }
     }
 }
@@ -730,6 +736,10 @@ mod tests {
         assert_eq!(
             RepositoryListError::new(ListAction::Update, &full).to_string(),
             "Gitto couldn't update its list of repositories: disk is full!"
+        );
+        assert_eq!(
+            RepositoryListError::with_reason(ListAction::Read, " no such table \n").reason,
+            "no such table."
         );
     }
 

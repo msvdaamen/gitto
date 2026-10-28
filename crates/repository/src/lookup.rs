@@ -8,7 +8,6 @@ use futures::future::BoxFuture;
 use gitto_git::input::RepositoryId;
 use gitto_git::{RepositoryListError, RepositoryLookup};
 
-use crate::errors::{Error, ListAction, reason};
 use crate::service::RepositoryService;
 
 /// Finds a repository's folder by its id, so `gitto_git::GitApi::new(service)` opens the
@@ -21,24 +20,11 @@ impl RepositoryLookup for RepositoryService {
     ) -> BoxFuture<'a, Result<Option<PathBuf>, RepositoryListError>> {
         Box::pin(async move {
             let repository = self
-                .get_repository(repository_id)
+                .find(repository_id)
                 .await
-                .map_err(|error| list_error(&error))?;
+                .map_err(|error| error.as_repository_list_error().clone())?;
             Ok(repository.map(|repository| PathBuf::from(repository.path)))
         })
-    }
-}
-
-/// `error` as gitto-git says it: the same message, as both say it as `packages/repository` did.
-fn list_error(error: &Error) -> RepositoryListError {
-    let action = match error {
-        Error::List { action, .. } => *action,
-        // Looking a repository up only reads the list, which is all that can fail then.
-        Error::NotAGitRepository { .. } => ListAction::Read,
-    };
-    RepositoryListError {
-        action,
-        reason: reason(error),
     }
 }
 
@@ -183,19 +169,5 @@ mod tests {
                     .to_owned()
             )
         );
-    }
-
-    #[test]
-    fn says_list_errors_as_the_repository_service_does() {
-        let error = Error::list(
-            ListAction::Update,
-            gitto_db::rusqlite::Error::SqliteFailure(
-                gitto_db::rusqlite::ffi::Error::new(5),
-                Some("database is locked".to_owned()),
-            ),
-        );
-        let list = list_error(&error);
-        assert_eq!(list.action, ListAction::Update);
-        assert_eq!(list.to_string(), error.to_string());
     }
 }

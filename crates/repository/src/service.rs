@@ -6,7 +6,7 @@ use std::path::{Component, Path, PathBuf};
 use gitto_db::rusqlite;
 use gitto_git::input::RepositoryId;
 
-use crate::errors::{Error, ListAction, Result};
+use crate::errors::{Error, ListAction, ListError, Result};
 use crate::store::RepositoryStore;
 use crate::types::Repository;
 
@@ -30,7 +30,15 @@ impl RepositoryService {
 
     /// The repository with `id`; `None` if there's none.
     pub async fn get_repository(&self, id: &RepositoryId) -> Result<Option<Repository>> {
-        listed(ListAction::Read, self.store.get_by_id(id).await)
+        Ok(self.find(id).await?)
+    }
+
+    /// The repository with `id`, as `get_repository` has it, failing only as the list can.
+    pub(crate) async fn find(&self, id: &RepositoryId) -> Result<Option<Repository>, ListError> {
+        self.store
+            .get_by_id(id)
+            .await
+            .map_err(|cause| ListError::new(ListAction::Read, cause))
     }
 
     /// Adds the git repository at `path` after the others; returns the existing entry if it was
@@ -416,11 +424,11 @@ mod tests {
             error.to_string(),
             "Gitto couldn't update its list of repositories: database or disk is full."
         );
-        let Error::List { action, cause } = &error else {
+        let Error::List(list) = &error else {
             panic!("not a list error: {error:?}");
         };
-        assert_eq!(*action, ListAction::Update);
-        assert_eq!(cause.to_string(), "database or disk is full");
+        assert_eq!(list.action(), ListAction::Update);
+        assert_eq!(list.cause().to_string(), "database or disk is full");
     }
 
     #[test]

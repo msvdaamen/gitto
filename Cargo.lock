@@ -2028,6 +2028,7 @@ dependencies = [
  "gitto-git",
  "smol",
  "tempfile",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
