@@ -192,11 +192,9 @@ name = "app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-fs",
  "futures",
  "gitto-app-data",
  "gitto-app-kit",
- "gitto-db",
  "gitto-git",
  "gitto-repository",
  "gitto-ui-logic",
@@ -207,13 +205,10 @@ dependencies = [
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
  "regex",
- "serde",
  "serde_json",
  "similar",
- "smol",
  "syntect",
  "tempfile",
- "thiserror 2.0.21",
  "two-face",
  "uuid",
  "winresource",
@@ -2215,7 +2210,6 @@ dependencies = [
  "gitto-git",
  "indexmap",
  "memchr",
- "serde_json",
  "url",
 ]
 

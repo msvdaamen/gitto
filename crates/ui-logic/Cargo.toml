@@ -12,5 +12,4 @@ name = "gitto_ui_logic"
 gitto-git.workspace = true
 indexmap.workspace = true
 memchr.workspace = true
-serde_json.workspace = true
 url.workspace = true

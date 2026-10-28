@@ -20,7 +20,6 @@ path = "src/main.rs"
 gpui-kit = { workspace = true, features = ["syntect"] }
 
 # What the UI shows and changes, called directly (there's no RPC).
-gitto-db.workspace = true
 gitto-git.workspace = true
 gitto-repository.workspace = true
 # The UI's pure logic (TS's `apps/ui/src/git/*.ts` and the like).
@@ -30,20 +29,14 @@ gitto-app-data.workspace = true
 gitto-app-kit.workspace = true
 
 anyhow.workspace = true
-async-fs.workspace = true
 futures.workspace = true
 image.workspace = true
 log.workspace = true
 regex.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-smol.workspace = true
-thiserror.workspace = true
 # Diffs: syntax highlighting, and the words that changed in a line (see `components::repository::diff`).
 similar.workspace = true
 syntect.workspace = true
 two-face.workspace = true
-uuid.workspace = true
 
 # The Dock's icon, set as the app starts (see `identity.rs`).
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -57,4 +50,6 @@ winresource.workspace = true
 
 [dev-dependencies]
 gpui-kit = { workspace = true, features = ["syntect", "test-support"] }
+serde_json.workspace = true
+uuid.workspace = true
 tempfile.workspace = true
