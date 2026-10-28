@@ -116,6 +116,7 @@ pub struct Tabs {
     /// The repository last tried to be removed, and why that failed.
     removing: Option<String>,
     remove_error: Option<QueryError>,
+    /// Each repository's tab's, made and dropped as the list of repositories changes.
     focus: HashMap<String, FocusHandle>,
     _subscriptions: Vec<Subscription>,
 }
@@ -128,10 +129,11 @@ impl Tabs {
             cx.observe(&Router::global(cx), |_, _, cx| cx.notify()),
             cx.observe(&open_repository, |_, _, cx| cx.notify()),
             cx.observe(repositories.entry(), |tabs, _, cx| {
-                tabs.forget_saved_order(cx)
+                tabs.forget_saved_order(cx);
+                tabs.sync_focus(cx);
             }),
         ];
-        Tabs {
+        let mut tabs = Tabs {
             repositories,
             open_repository,
             moved_order: None,
@@ -141,6 +143,20 @@ impl Tabs {
             remove_error: None,
             focus: HashMap::new(),
             _subscriptions: subscriptions,
+        };
+        tabs.sync_focus(cx);
+        tabs
+    }
+
+    /// Gives each repository listed its tab's focus handle, and forgets those of the
+    /// repositories removed.
+    fn sync_focus(&mut self, cx: &mut Context<Self>) {
+        let listed = self.saved_order();
+        self.focus.retain(|id, _| listed.contains(id));
+        for id in listed {
+            self.focus
+                .entry(id)
+                .or_insert_with(|| cx.focus_handle().tab_stop(true));
         }
     }
 
@@ -290,11 +306,7 @@ impl Tabs {
     ) -> impl IntoElement + use<> {
         let palette = *cx.palette();
         let id = repository.id.clone();
-        let focus = self
-            .focus
-            .entry(id.clone())
-            .or_insert_with(|| cx.focus_handle().tab_stop(true))
-            .clone();
+        let focus = self.focus.get(&id).cloned();
         let error = if self.moved.as_deref() == Some(id.as_str()) && self.move_error.is_some() {
             Some(("Move", self.move_error.clone()))
         } else if self.removing.as_deref() == Some(id.as_str()) {
@@ -309,7 +321,7 @@ impl Tabs {
             .max_w(rems(12.))
             .border_r_1()
             .border_color(palette.border_soft)
-            .track_focus(&focus)
+            .when_some(focus, |this, focus| this.track_focus(&focus))
             .key_context(KEY_CONTEXT)
             .aria_label(name.clone())
             .aria_keyshortcuts(shortcuts)
@@ -526,6 +538,7 @@ mod ui_tests {
 
     use super::*;
     use crate::data::repositories::RepositorySource;
+    use crate::data::{QueryClient, keys};
     use crate::test_support;
 
     /// The repositories as saved, which `reorder` changes, unless it's told to fail (TS's mocked
@@ -644,6 +657,22 @@ mod ui_tests {
             })
             .unwrap();
         assert!(focused);
+    }
+
+    #[gpui_kit::test]
+    fn forgets_the_focus_of_a_removed_repositorys_tab(cx: &mut TestAppContext) {
+        let (_dir, saved, ids, _, host) = render_tabs(cx);
+        saved.repositories.borrow_mut().remove(0);
+        drop(cx.update(|cx| QueryClient::invalidate(&keys::repositories(), cx)));
+        cx.run_until_parked();
+
+        let mut focused: Vec<String> = host.read_with(cx, |host, cx| {
+            host.tabs.read(cx).focus.keys().cloned().collect()
+        });
+        focused.sort();
+        let mut listed = ids[1..].to_vec();
+        listed.sort();
+        assert_eq!(focused, listed);
     }
 
     #[gpui_kit::test]
