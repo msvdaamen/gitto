@@ -12,12 +12,12 @@ use futures::Stream;
 use futures::future::join_all;
 
 use super::batches::Batches;
-use super::generator::{Yielder, generate};
 use super::git_dirs::{classify, inside};
 use super::schema::GitDirChange;
+use super::stream::{Watched, watch_stream};
 use super::watcher::{self, OnEvents, Subscribe, Subscription};
 use crate::core::errors::Result;
-use crate::core::git_dirs::{GitDirs, git_dirs, real_path};
+use crate::core::git_dirs::{git_dirs, real_path};
 use crate::core::repo::Repo;
 use crate::core::runner::RunOptions;
 use crate::core::trace::{trace, tracing};
@@ -39,84 +39,108 @@ fn watch_git_dir_with(
     repo: Repo,
     subscribe: Subscribe,
 ) -> impl Stream<Item = Result<Vec<GitDirChange>>> + Send + Unpin + 'static + use<> {
-    generate(move |yielder| async move {
-        let changes = Arc::new(Batches::new());
-        let mut subscriptions = Vec::new();
-        let watched = git_dir_changes(&repo, &subscribe, &changes, &mut subscriptions, &yielder);
-        let result = watched.await;
-        changes.close();
-        join_all(subscriptions.into_iter().map(Subscription::unsubscribe)).await;
-        if let Err(error) = result {
-            yielder.put(Err(error)).await;
-        }
-    })
+    watch_stream(GitDir::start(repo, subscribe))
 }
 
-async fn git_dir_changes(
-    repo: &Repo,
-    subscribe: &Subscribe,
-    changes: &Arc<Batches<GitDirChange>>,
-    subscriptions: &mut Vec<Subscription>,
-    yielder: &Yielder<Result<Vec<GitDirChange>>>,
-) -> Result<()> {
-    let dirs = Arc::new(git_dirs(repo).await?);
-    // A linked worktree has its own git directory (inside the shared one) for HEAD and the index.
-    let roots =
-        if dirs.git_dir == dirs.common_dir || inside(&dirs.common_dir, &dirs.git_dir).is_some() {
+/// The git directory being watched.
+struct GitDir {
+    repo: Repo,
+    changes: Arc<Batches<GitDirChange>>,
+    subscriptions: Vec<Subscription>,
+}
+
+impl GitDir {
+    async fn start(repo: Repo, subscribe: Subscribe) -> Result<GitDir> {
+        let dirs = Arc::new(git_dirs(&repo).await?);
+        // A linked worktree has its own git directory (inside the shared one) for HEAD and the
+        // index.
+        let roots = if dirs.git_dir == dirs.common_dir
+            || inside(&dirs.common_dir, &dirs.git_dir).is_some()
+        {
             vec![dirs.common_dir.clone()]
         } else {
             vec![dirs.common_dir.clone(), dirs.git_dir.clone()]
         };
 
-    let subscribed = join_all(roots.into_iter().map(|root| {
-        let ignore = GIT_DIR_IGNORED.iter().map(|name| root.join(name)).collect();
-        let (changes, dirs) = (Arc::clone(changes), Arc::clone(&dirs));
-        let on_events: OnEvents = Box::new(move |events| match events {
-            Err(error) => changes.fail(error),
-            Ok(paths) => changes.add_all(
-                paths
-                    .iter()
-                    .filter_map(|path| classify(&dirs, path))
-                    .collect(),
-            ),
-        });
-        subscribe(root, ignore, on_events)
-    }))
-    .await;
-    // All the subscriptions that worked are kept (and so unsubscribed), even if one failed.
-    let mut failed = None;
-    for result in subscribed {
-        match result {
-            Ok(subscription) => subscriptions.push(subscription),
-            Err(error) => {
-                failed.get_or_insert(error);
+        let changes = Arc::new(Batches::new());
+        let subscribed = join_all(roots.into_iter().map(|root| {
+            let ignore = GIT_DIR_IGNORED.iter().map(|name| root.join(name)).collect();
+            let (changes, dirs) = (Arc::clone(&changes), Arc::clone(&dirs));
+            let on_events: OnEvents = Box::new(move |events| match events {
+                Err(error) => changes.fail(error),
+                Ok(paths) => changes.add_all(
+                    paths
+                        .iter()
+                        .filter_map(|path| classify(&dirs, path))
+                        .collect(),
+                ),
+            });
+            subscribe(root, ignore, on_events)
+        }))
+        .await;
+        let mut watched = GitDir {
+            repo,
+            changes,
+            subscriptions: Vec::new(),
+        };
+        // All the subscriptions that worked are kept (and so unsubscribed), even if one failed.
+        let mut failed = None;
+        for result in subscribed {
+            match result {
+                Ok(subscription) => watched.subscriptions.push(subscription),
+                Err(error) => {
+                    failed.get_or_insert(error);
+                }
             }
         }
+        match failed {
+            Some(error) => {
+                watched.stop().await;
+                Err(error)
+            }
+            None => Ok(watched),
+        }
     }
-    if let Some(error) = failed {
-        return Err(error);
+}
+
+impl Watched for GitDir {
+    type Item = Vec<GitDirChange>;
+
+    async fn next(&mut self) -> Option<Result<Vec<GitDirChange>>> {
+        while let Some(batch) = self.changes.next().await {
+            let unique = match batch {
+                Ok(batch) => unique(batch),
+                Err(error) => return Some(Err(error)),
+            };
+            if !unique.contains(&GitDirChange::Refs) && has_status(&self.repo).await {
+                trace(format_args!(
+                    "index written in {}, with nothing the UI doesn't have",
+                    self.repo.path().display()
+                ));
+                continue;
+            }
+            if tracing() {
+                let names: Vec<&str> = unique.iter().map(|change| change.as_str()).collect();
+                trace(format_args!(
+                    "git dir changed in {}: {}",
+                    self.repo.path().display(),
+                    names.join(", ")
+                ));
+            }
+            return Some(Ok(unique));
+        }
+        None
     }
 
-    while let Some(batch) = changes.next().await {
-        let unique = unique(batch?);
-        if !unique.contains(&GitDirChange::Refs) && has_status(repo).await {
-            trace(format_args!(
-                "index written in {}, with nothing the UI doesn't have",
-                repo.path().display()
-            ));
-            continue;
-        }
-        if tracing() {
-            let names: Vec<&str> = unique.iter().map(|change| change.as_str()).collect();
-            trace(format_args!(
-                "git dir changed in {}: {}",
-                repo.path().display(),
-                names.join(", ")
-            ));
-        }
-        yielder.put(Ok(unique)).await;
+    async fn stop(self) {
+        self.changes.close();
+        join_all(
+            self.subscriptions
+                .into_iter()
+                .map(Subscription::unsubscribe),
+        )
+        .await;
     }
-    Ok(())
 }
 
 /// `values` without repeats, in the order they first came (as a JS `Set` keeps them).
@@ -159,33 +183,7 @@ fn watch_working_tree_with(
     repo: Repo,
     subscribe: Subscribe,
 ) -> impl Stream<Item = Result<()>> + Send + Unpin + 'static + use<> {
-    generate(move |yielder| async move {
-        let started = futures::try_join!(real_path(repo.path()), git_dirs(&repo));
-        let (root, dirs) = match started {
-            Ok(started) => started,
-            Err(error) => return yielder.put(Err(error)).await,
-        };
-        let mut tree = WorkingTree {
-            repo,
-            subscribe,
-            root,
-            git_dir: dirs.git_dir.clone(),
-            changes: Arc::new(Batches::new()),
-            subscription: None,
-            excludes: None,
-            ignored: HashSet::new(),
-        };
-        let result = tree.changes(&dirs, &yielder).await;
-        tree.changes.close();
-        let unsubscribed = [tree.subscription.take(), tree.excludes.take()]
-            .into_iter()
-            .flatten()
-            .map(Subscription::unsubscribe);
-        join_all(unsubscribed).await;
-        if let Err(error) = result {
-            yielder.put(Err(error)).await;
-        }
-    })
+    watch_stream(WorkingTree::start(repo, subscribe))
 }
 
 /// The working tree being watched.
@@ -201,15 +199,32 @@ struct WorkingTree {
     excludes: Option<Subscription>,
     /// What the current subscription leaves out.
     ignored: HashSet<String>,
+    /// Ignored paths that changed in the batch last yielded for, to leave out before the next.
+    dropped: Vec<String>,
 }
 
 impl WorkingTree {
-    async fn changes(&mut self, dirs: &GitDirs, yielder: &Yielder<Result<()>>) -> Result<()> {
-        self.watch_tree(None).await?;
+    async fn start(repo: Repo, subscribe: Subscribe) -> Result<WorkingTree> {
+        let (root, dirs) = futures::try_join!(real_path(repo.path()), git_dirs(&repo))?;
+        let mut tree = WorkingTree {
+            repo,
+            subscribe,
+            root,
+            git_dir: dirs.git_dir.clone(),
+            changes: Arc::new(Batches::new()),
+            subscription: None,
+            excludes: None,
+            ignored: HashSet::new(),
+            dropped: Vec::new(),
+        };
+        if let Err(error) = tree.watch_tree(None).await {
+            tree.stop().await;
+            return Err(error);
+        }
         // `.git/info/exclude` has ignore rules too. Fine to miss if `info` doesn't exist.
         if let Some(info) = dirs.exclude_file.parent() {
             let name = dirs.exclude_file.file_name().map(ToOwned::to_owned);
-            let changes = Arc::clone(&self.changes);
+            let changes = Arc::clone(&tree.changes);
             let on_events: OnEvents = Box::new(move |events| {
                 if let Ok(paths) = events
                     && paths.iter().any(|path| path.file_name() == name.as_deref())
@@ -217,13 +232,35 @@ impl WorkingTree {
                     changes.add(TreeChange::Excludes);
                 }
             });
-            self.excludes = (self.subscribe)(info.to_owned(), Vec::new(), on_events)
+            tree.excludes = (tree.subscribe)(info.to_owned(), Vec::new(), on_events)
                 .await
                 .ok();
         }
+        Ok(tree)
+    }
+}
+
+impl Watched for WorkingTree {
+    type Item = ();
+
+    async fn next(&mut self) -> Option<Result<()>> {
+        // Nothing was watched while it started over (the new subscription can't start before the
+        // old one stops, see `watch_tree`), so what changed meanwhile is refetched, once per new
+        // folder.
+        if !self.dropped.is_empty() {
+            let dropped = std::mem::take(&mut self.dropped);
+            match self.leave_out_new_ignored_folders(&dropped).await {
+                Ok(true) => return Some(Ok(())),
+                Ok(false) => {}
+                Err(error) => return Some(Err(error)),
+            }
+        }
 
         while let Some(batch) = self.changes.next().await {
-            let batch = batch?;
+            let batch = match batch {
+                Ok(batch) => batch,
+                Err(error) => return Some(Err(error)),
+            };
             let has_excludes = batch.contains(&TreeChange::Excludes);
             let paths: Vec<String> = unique(batch)
                 .into_iter()
@@ -237,9 +274,7 @@ impl WorkingTree {
                     "ignore rules changed in {}",
                     self.root.display()
                 ));
-                self.watch_tree(None).await?;
-                yielder.put(Ok(())).await;
-                continue;
+                return Some(self.watch_tree(None).await);
             }
 
             // Only a snapshot of what git ignores is left out, so a folder it ignores that's new
@@ -265,22 +300,34 @@ impl WorkingTree {
                     first.join(", ")
                 ));
             }
-            if !shown.is_empty() {
-                yielder.put(Ok(())).await;
+            let has_shown = !shown.is_empty();
+            self.dropped = dropped.into_iter().collect();
+            if has_shown {
+                return Some(Ok(()));
             }
-            // Nothing was watched while it started over (the new subscription can't start before
-            // the old one stops, see `watch_tree`), so what changed meanwhile is refetched, once
-            // per new folder.
-            if !dropped.is_empty() {
-                let dropped: Vec<String> = dropped.into_iter().collect();
-                if self.leave_out_new_ignored_folders(&dropped).await? {
-                    yielder.put(Ok(())).await;
+            if !self.dropped.is_empty() {
+                let dropped = std::mem::take(&mut self.dropped);
+                match self.leave_out_new_ignored_folders(&dropped).await {
+                    Ok(true) => return Some(Ok(())),
+                    Ok(false) => {}
+                    Err(error) => return Some(Err(error)),
                 }
             }
         }
-        Ok(())
+        None
     }
 
+    async fn stop(mut self) {
+        self.changes.close();
+        let unsubscribed = [self.subscription.take(), self.excludes.take()]
+            .into_iter()
+            .flatten()
+            .map(Subscription::unsubscribe);
+        join_all(unsubscribed).await;
+    }
+}
+
+impl WorkingTree {
     /// Watches the tree, starting over if it's being watched.
     ///
     /// Everything git ignores (e.g. `node_modules`) is left out, so it's never walked or watched,

@@ -4,7 +4,7 @@
 
 mod batches;
 pub mod commands;
-mod generator;
 pub mod git_dirs;
 pub mod schema;
+mod stream;
 mod watcher;
