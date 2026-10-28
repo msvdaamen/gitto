@@ -16,18 +16,15 @@ use crate::components::ui::{FailurePopover, Icon, IconName};
 use crate::data::QueryError;
 use crate::state::clock::relative_time;
 use crate::theme::PaletteExt as _;
+use crate::theme::breakpoints::MEDIUM;
 
 type Handler = Rc<dyn Fn(&mut Window, &mut App) + 'static>;
-
-/// Below this window width the sync status is left out, and the mascot moves to the corner
-/// (TS's `max-md`).
-const MEDIUM: f32 = 768.;
 
 /// The home page banner: a greeting, a way to open a repository, and whether all are in sync.
 #[derive(IntoElement)]
 pub struct WelcomeHero {
-    /// The name the user commits with: `Some(None)` if they haven't set one, `None` until loaded.
-    pub(crate) user_name: Option<Option<String>>,
+    /// The name the user commits with: `None` if they haven't set one, or until it's loaded.
+    pub(crate) user_name: Option<SharedString>,
     pub(crate) summaries: Rc<[RepositorySummary]>,
     /// Why the last repository couldn't be opened, under the button, until it's dismissed.
     pub(crate) open_error: Option<QueryError>,
@@ -37,7 +34,7 @@ pub struct WelcomeHero {
 
 impl WelcomeHero {
     pub fn new(
-        user_name: Option<Option<String>>,
+        user_name: Option<SharedString>,
         summaries: Rc<[RepositorySummary]>,
         open_error: Option<QueryError>,
         on_open_repository: impl Fn(&mut Window, &mut App) + 'static,
@@ -69,9 +66,9 @@ pub fn greeting(user_name: Option<&str>) -> String {
 impl RenderOnce for WelcomeHero {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let palette = *cx.palette();
+        // Below `md` the sync status is left out, and the mascot moves to the corner.
         let narrow = window.viewport_size().width < px(MEDIUM);
-        let greeting: SharedString =
-            greeting(self.user_name.as_ref().and_then(|name| name.as_deref())).into();
+        let greeting: SharedString = greeting(self.user_name.as_deref()).into();
         let lead = if self.summaries.is_empty() {
             "Open a git repository to get started, or shape something new."
         } else {
