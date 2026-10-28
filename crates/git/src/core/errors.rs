@@ -352,6 +352,13 @@ pub enum Error {
     #[error("{path} no longer exists.")]
     FolderNotFound { path: String },
 
+    /// The system's limit on watched folders is reached (inotify's `max_user_watches` on Linux),
+    /// so changes to the repository's files aren't followed.
+    #[error(
+        "Gitto can't follow changes to this repository's files: the system's limit on watched folders is reached. On Linux, raising fs.inotify.max_user_watches lifts it."
+    )]
+    WatchLimitReached,
+
     /// Input that isn't valid (see `crate::input`), as zod refused it in TS.
     #[error("{0}")]
     InvalidInput(String),
@@ -390,7 +397,8 @@ impl Error {
             | Error::DiscardBlocked(_)
             | Error::WorktreeRemovalBlocked(_)
             | Error::BranchDeletionBlocked(_)
-            | Error::EditorNeeded(_) => PreconditionFailed,
+            | Error::EditorNeeded(_)
+            | Error::WatchLimitReached => PreconditionFailed,
             Error::PullInterrupted(_)
             | Error::StashConflict(_)
             | Error::ChangesStashed(_)

@@ -315,9 +315,11 @@ fn watch_folders(
     Ok(())
 }
 
-/// A watcher's failure, as a file system one: TS's errors from `@parcel/watcher`, uncaught.
+/// A watcher's failure: running out of watches, which the UI can explain, or else a file system
+/// one (TS's errors from `@parcel/watcher`, uncaught).
 fn watch_error(error: notify::Error) -> Error {
     match error.kind {
+        notify::ErrorKind::MaxFilesWatch => Error::WatchLimitReached,
         notify::ErrorKind::Io(error) => Error::from(error),
         _ => Error::from(io::Error::other(error.to_string())),
     }
@@ -425,6 +427,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (missing, _) = root(&dir.path().join("missing"), Vec::new());
         assert!(smol::block_on(subscribe(vec![missing])).is_err());
+    }
+
+    #[test]
+    fn running_out_of_watches_is_an_error_of_its_own() {
+        let error = watch_error(notify::Error::new(notify::ErrorKind::MaxFilesWatch));
+        assert!(matches!(error, Error::WatchLimitReached), "{error:?}");
+        assert!(!error.api().is_bug());
     }
 
     #[test]

@@ -428,15 +428,25 @@ async fn ignored_among(repo: &Repo, paths: &[String]) -> HashSet<String> {
         return HashSet::new();
     }
     let stdin: String = paths.iter().map(|path| format!("{path}\0")).collect();
-    // Exits with 1 when none are; on any failure, nothing's dropped. check-ignore refuses literal
-    // pathspecs, but takes its paths as plain paths anyway.
-    let output = repo
+    // check-ignore refuses literal pathspecs, but takes its paths as plain paths anyway.
+    let checked = repo
         .read_with(
             ["check-ignore", "-z", "--stdin"],
             RunOptions::default().stdin(stdin).glob_pathspecs(),
         )
-        .await
-        .unwrap_or_default();
+        .await;
+    let output = match checked {
+        Ok(output) => output,
+        // When none are.
+        Err(error) if error.is_exit(1) => String::new(),
+        Err(error) => {
+            trace(format_args!(
+                "couldn't tell what's ignored in {}, so nothing is dropped: {error}",
+                repo.path().display()
+            ));
+            String::new()
+        }
+    };
     output
         .split('\0')
         .filter(|path| !path.is_empty())
@@ -462,7 +472,7 @@ pub async fn ignored_paths(repo: &Repo) -> Vec<String> {
 async fn list_ignored(repo: &Repo) -> Vec<String> {
     // Without renames, each entry is one field; submodules aren't looked into, as only what's
     // ignored here is read.
-    let output = repo
+    let listed = repo
         .read([
             "status",
             "--porcelain=v2",
@@ -472,8 +482,16 @@ async fn list_ignored(repo: &Repo) -> Vec<String> {
             "--no-renames",
             "--ignore-submodules=all",
         ])
-        .await
-        .unwrap_or_default();
+        .await;
+    // Then nothing's left out, and all of it is watched, `node_modules` and all: more watches,
+    // but no change missed.
+    let output = listed.unwrap_or_else(|error| {
+        trace(format_args!(
+            "couldn't list what's ignored in {}, so all of it is watched: {error}",
+            repo.path().display()
+        ));
+        String::new()
+    });
     output
         .split('\0')
         .filter_map(|entry| entry.strip_prefix("! "))
