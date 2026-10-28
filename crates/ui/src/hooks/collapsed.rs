@@ -15,26 +15,16 @@ pub fn storage_key(repository_id: &RepositoryId) -> String {
     format!("gitto-sidebar-collapsed:{repository_id}")
 }
 
-/// The state saved as `saved` (JSON, as `localStorage` had it); none if it's unreadable.
+/// The state saved as `saved`, a JSON object of booleans; none if it's unreadable, and an id
+/// saved as anything but a boolean has none.
 pub fn parse_state(saved: Option<&str>) -> CollapsedState {
     let Some(Ok(Value::Object(saved))) = saved.map(serde_json::from_str::<Value>) else {
         return CollapsedState::new();
     };
     saved
         .into_iter()
-        .filter_map(|(id, value)| truthiness(&value).map(|collapsed| (id, collapsed)))
+        .filter_map(|(id, value)| value.as_bool().map(|collapsed| (id, collapsed)))
         .collect()
-}
-
-/// Whether JavaScript takes `value` as true; `None` for `null`, which `??` passes over.
-fn truthiness(value: &Value) -> Option<bool> {
-    match value {
-        Value::Null => None,
-        Value::Bool(value) => Some(*value),
-        Value::Number(number) => Some(number.as_f64().is_some_and(|n| n != 0.0 && !n.is_nan())),
-        Value::String(text) => Some(!text.is_empty()),
-        Value::Array(_) | Value::Object(_) => Some(true),
-    }
 }
 
 /// Which sidebar sections and folders are collapsed in a repository, saved in a [`Storage`] so it
@@ -171,5 +161,11 @@ mod tests {
         assert_eq!(state, defaults(&[("tags", false), ("remotes", true)]));
         assert!(parse_state(Some("[true]")).is_empty());
         assert!(parse_state(None).is_empty());
+    }
+
+    #[test]
+    fn has_no_state_for_an_id_saved_as_anything_but_a_boolean() {
+        let state = parse_state(Some(r#"{"tags":true,"one":1,"yes":"yes","list":[true]}"#));
+        assert_eq!(state, defaults(&[("tags", true)]));
     }
 }
