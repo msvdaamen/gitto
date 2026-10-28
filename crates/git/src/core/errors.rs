@@ -10,6 +10,8 @@ use std::fmt;
 use std::io;
 use std::sync::Arc;
 
+use crate::input::RepositoryId;
+
 /// What the git crate's functions return.
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -363,7 +365,7 @@ pub enum Error {
 
     /// No repository with that id has been added to Gitto.
     #[error("Repository not found.")]
-    RepositoryNotFound { repository_id: String },
+    RepositoryNotFound { repository_id: RepositoryId },
 
     /// Gitto's list of repositories couldn't be read, to find one by its id: a bug, said with why.
     #[error("{0}")]

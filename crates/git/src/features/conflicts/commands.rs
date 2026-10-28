@@ -18,7 +18,8 @@ use crate::features::diff::limits::MAX_BLOB_BYTES;
 use crate::features::diff::working_tree::{
     decode_utf8, read_working_tree_bytes, scan_working_tree_file,
 };
-use crate::input::NonEmpty;
+use crate::input::RepoPath;
+use crate::schema::Version;
 
 /// A submodule's mode in the index: its commit, rather than a file.
 const SUBMODULE: &str = "160000";
@@ -67,7 +68,7 @@ async fn unmerged_paths(run: &GitCommand) -> Result<Vec<String>> {
 
 /// The conflicted file at `path`: its sides, and the file in the working tree, as text to resolve
 /// its conflicts in if it's text, with its version, which writing it checks it still has.
-pub async fn get_conflict(repo: &Repo, path: &NonEmpty) -> Result<Conflict> {
+pub async fn get_conflict(repo: &Repo, path: &RepoPath) -> Result<Conflict> {
     let path = path.as_str();
     let run = repo.git();
     let (sides, file) = futures::try_join!(read_sides(&run, path), read_text(repo, path))?;
@@ -85,13 +86,13 @@ pub async fn get_conflict(repo: &Repo, path: &NonEmpty) -> Result<Conflict> {
 /// What `read_text` has of the file in the working tree: `Conflict`'s fields but its sides.
 struct FileText {
     text: Option<ConflictText>,
-    version: Option<String>,
+    version: Option<Version>,
     binary: bool,
     unreadable: Option<String>,
 }
 
 impl FileText {
-    fn none(version: Option<String>, unreadable: Option<String>) -> Self {
+    fn none(version: Option<Version>, unreadable: Option<String>) -> Self {
         FileText {
             text: None,
             version,
@@ -114,9 +115,7 @@ async fn read_text(repo: &Repo, path: &str) -> Result<FileText> {
             // Still with a version, which keeping a side checks first: when it last changed,
             // rather than its bytes, which this is read again for whenever the working tree
             // changes.
-            let version = stamp_of(repo, path)
-                .await
-                .map(|stamp| format!("{STAMPED}{stamp}"));
+            let version = stamped(repo, path).await;
             return Ok(FileText::none(
                 version,
                 Some("This file is too large to show.".to_owned()),
@@ -160,7 +159,7 @@ async fn read_text(repo: &Repo, path: &str) -> Result<FileText> {
 pub struct ShownConflict {
     pub sides: ConflictSides,
     /// The version of the file in the working tree, if there was one to check; see `get_conflict`.
-    pub version: Option<String>,
+    pub version: Option<Version>,
 }
 
 /// Resolves the conflict in the file at `path` by keeping one side whole, `side`, and marks it
@@ -170,7 +169,7 @@ pub struct ShownConflict {
 /// `Error::FileChangedOnDisk` if the file changed on disk since, which keeping a side would lose.
 pub async fn keep_side(
     repo: &Repo,
-    path: &NonEmpty,
+    path: &RepoPath,
     side: Side,
     shown: &ShownConflict,
 ) -> Result<()> {
@@ -219,17 +218,22 @@ pub async fn keep_side(
 /// Starts a version that's when a file last changed (see `stamp_of`), not what's in it.
 const STAMPED: &str = "stamp:";
 
+/// The version of the file at `path` that's when it last changed (see `stamp_of`); `None` if
+/// there's no file there.
+async fn stamped(repo: &Repo, path: &str) -> Option<Version> {
+    let stamp = stamp_of(repo, path).await?;
+    Some(Version::from(format!("{STAMPED}{stamp}")))
+}
+
 /// Fails with `Error::FileChangedOnDisk` if the file at `path` in the working tree isn't at
 /// `version` any more, or is gone. Read a piece at a time, however large it is.
-async fn check_version(repo: &Repo, path: &str, version: &str) -> Result<()> {
+async fn check_version(repo: &Repo, path: &str, version: &Version) -> Result<()> {
     let now = if version.starts_with(STAMPED) {
-        stamp_of(repo, path)
-            .await
-            .map(|stamp| format!("{STAMPED}{stamp}"))
+        stamped(repo, path).await
     } else {
         scan_working_tree_file(repo, path, |_| {}, u64::MAX).await?
     };
-    if now.as_deref() != Some(version) {
+    if now.as_ref() != Some(version) {
         return Err(Error::FileChangedOnDisk {
             path: path.to_owned(),
             how: if now.is_some() {
@@ -261,10 +265,11 @@ fn same_side(a: &Option<ConflictSide>, b: &Option<ConflictSide>) -> bool {
 /// saw. Does nothing if it isn't conflicted any more, e.g. as it was staged in a terminal.
 pub async fn mark_resolved(
     repo: &Repo,
-    path: &NonEmpty,
-    version: Option<&str>,
+    path: &RepoPath,
+    version: Option<&Version>,
     with_markers: bool,
 ) -> Result<()> {
+    let shown = path;
     let path = path.as_str();
     repo.exclusive(|run| async move {
         let sides = read_sides(&run, path).await?;
@@ -275,7 +280,7 @@ pub async fn mark_resolved(
             check_version(repo, path, version).await?;
         }
         if !with_markers {
-            refuse_conflict_markers(repo, &run, Some(&[path.to_owned()])).await?;
+            refuse_conflict_markers(repo, &run, Some(std::slice::from_ref(shown))).await?;
         }
         run.run(["add", "--all", "--", path]).await?;
         Ok(())
@@ -289,7 +294,7 @@ pub async fn mark_resolved(
 pub async fn refuse_conflict_markers(
     repo: &Repo,
     run: &GitCommand,
-    paths: Option<&[String]>,
+    paths: Option<&[RepoPath]>,
 ) -> Result<()> {
     let unmerged = unmerged_paths(run).await?;
     if unmerged.is_empty() {
@@ -301,7 +306,7 @@ pub async fn refuse_conflict_markers(
             .into_iter()
             .filter(|path| {
                 paths.iter().any(|given| {
-                    path == given
+                    path == given.as_str()
                         || path
                             .strip_prefix(given.as_str())
                             .is_some_and(|rest| rest.starts_with('/'))
@@ -618,10 +623,14 @@ mod tests {
                 version: text.version.clone(),
                 overwrite: false,
             };
-            let version =
-                save_working_tree_file(&repo, "f.txt", "one\nours\ntheirs\nthree\n", &expected)
-                    .await
-                    .unwrap();
+            let version = save_working_tree_file(
+                &repo,
+                &valid("f.txt"),
+                "one\nours\ntheirs\nthree\n",
+                &expected,
+            )
+            .await
+            .unwrap();
             // Resolved in the working tree, but not marked so yet.
             assert_eq!(status_marker_free(&repo).await, ["f.txt"]);
             assert_eq!(

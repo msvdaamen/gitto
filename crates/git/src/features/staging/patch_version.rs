@@ -3,12 +3,14 @@
 //! which the renderer shared: the name is the one it made, counted in UTF-16 code units as
 //! JavaScript counts a string's characters.
 
+use crate::schema::Version;
+
 /// Names `patch` by what's in it: its length, a hash of its text, and its header, which has the
 /// object names of both sides on its `index` line (git hashes the working tree's side for it).
 /// Another patch of the same file, as after a save, gets another name.
-pub fn patch_version(patch: &str) -> String {
+pub fn patch_version(patch: &str) -> Version {
     let length = patch.encode_utf16().count();
-    format!("{length}:{}:{}", hash(patch), patch_header(patch))
+    Version::from(format!("{length}:{}:{}", hash(patch), patch_header(patch)))
 }
 
 /// `patch` up to its first hunk: the whole of it when it has none.

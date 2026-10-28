@@ -13,7 +13,7 @@ use crate::core::repo::{GitCommand, Repo, current_branch, has_conflicts, ref_exi
 use crate::core::runner::RunOptions;
 use crate::features::operation::commands::operation_under_way;
 use crate::features::remote::commands::fetched_name;
-use crate::input::{BranchRef, NonEmpty};
+use crate::input::{BranchRef, BranchShortName};
 
 /// Merges the branch `ref` (a full ref name, local or remote) into the checked-out branch, `into`,
 /// the one the user saw: fails with `Error::RepositoryChanged` if another is checked out by now.
@@ -35,7 +35,7 @@ use crate::input::{BranchRef, NonEmpty};
 pub async fn merge_branch(
     repo: &Repo,
     reference: &BranchRef,
-    into: &NonEmpty,
+    into: &BranchShortName,
 ) -> Result<MergeOutcome> {
     let (reference, into) = (reference.as_str(), into.as_str());
     let Some(target) = branch_name(reference) else {

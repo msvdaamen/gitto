@@ -17,6 +17,7 @@ use crate::features::diff::commands::{
     get_unstaged_file_patch_bytes,
 };
 use crate::input::{FileInput, Paths};
+use crate::schema::Version;
 
 /// Paths go to git's stdin, NUL-separated, rather than on the command line, which holds only so
 /// many (32k characters on Windows).
@@ -144,7 +145,7 @@ pub async fn stage_lines(
     repo: &Repo,
     file: &FileInput,
     untracked: bool,
-    version: &str,
+    version: &Version,
     selection: &LineSelection,
 ) -> Result<String> {
     apply_lines(
@@ -164,7 +165,7 @@ pub async fn stage_lines(
 pub async fn unstage_lines(
     repo: &Repo,
     file: &FileInput,
-    version: &str,
+    version: &Version,
     selection: &LineSelection,
 ) -> Result<String> {
     apply_lines(
@@ -205,7 +206,7 @@ fn latin1_bytes(text: &str) -> Vec<u8> {
 /// as text (`read_text`), which saves the UI asking for it.
 async fn apply_lines<B, BF, T, TF>(
     repo: &Repo,
-    version: &str,
+    version: &Version,
     selection: &LineSelection,
     action: LineAction,
     read_bytes: B,
@@ -220,7 +221,7 @@ where
     let verb = action.verb();
     repo.exclusive(|run| async move {
         let patch = read_bytes().await?;
-        if patch_version(&String::from_utf8_lossy(&patch)) != version {
+        if patch_version(&String::from_utf8_lossy(&patch)) != *version {
             return Err(Error::PatchChanged { action: verb });
         }
         let Some(lines) = lines_patch(&latin1(&patch), selection, action)? else {
@@ -282,7 +283,7 @@ mod tests {
     use crate::features::status::schema::WorkingTreeFiles;
     use crate::schema::FileStatus::{self, *};
     use crate::test_support::status::status_entries;
-    use crate::test_support::{Fixture, git, non_utf8_names};
+    use crate::test_support::{Fixture, git, non_utf8_names, valid};
 
     fn strings(paths: &[&str]) -> Paths {
         Paths::parse(paths.iter().copied()).unwrap()
@@ -290,8 +291,8 @@ mod tests {
 
     fn file(path: &str, orig_path: Option<&str>) -> FileInput {
         FileInput {
-            path: path.to_owned(),
-            orig_path: orig_path.map(str::to_owned),
+            path: valid(path),
+            orig_path: orig_path.map(valid),
         }
     }
 

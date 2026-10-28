@@ -19,26 +19,27 @@ use super::runner::{
     CommitGraphs, IndexRefreshes, RunOptions, ShownStatuses, WriteQueue, lock, os_args,
     run_git_bytes,
 };
+use crate::input::RepositoryId;
 
 /// Finds the folder of a repository that's been added to Gitto, by its id (TS's
-/// `RepositoryService.getRepository`). A function `Fn(&str) -> Option<PathBuf>`, which can't fail,
-/// is one.
+/// `RepositoryService.getRepository`). A function `Fn(&RepositoryId) -> Option<PathBuf>`, which
+/// can't fail, is one.
 pub trait RepositoryLookup: Send + Sync + 'static {
     /// The folder of the repository with `repository_id`; `None` if there's none. Fails if Gitto's
     /// list of repositories couldn't be read, as its database is locked, say, saying why.
     fn repository_path<'a>(
         &'a self,
-        repository_id: &'a str,
+        repository_id: &'a RepositoryId,
     ) -> BoxFuture<'a, Result<Option<PathBuf>, RepositoryListError>>;
 }
 
 impl<F> RepositoryLookup for F
 where
-    F: Fn(&str) -> Option<PathBuf> + Send + Sync + 'static,
+    F: Fn(&RepositoryId) -> Option<PathBuf> + Send + Sync + 'static,
 {
     fn repository_path<'a>(
         &'a self,
-        repository_id: &'a str,
+        repository_id: &'a RepositoryId,
     ) -> BoxFuture<'a, Result<Option<PathBuf>, RepositoryListError>> {
         Box::pin(std::future::ready(Ok(self(repository_id))))
     }
@@ -90,14 +91,11 @@ impl GitRepos {
     /// (`Error::RepositoryNotFound`, `Error::FolderNotFound`), and so is any if the list of
     /// repositories couldn't be read (`Error::RepositoryList`). What's kept for it is made once.
     ///
-    /// Takes any id, for tests: the UI opens repositories by their [`RepositoryId`] with
-    /// `GitApi::open`, which also checks the installed git.
-    ///
-    /// [`RepositoryId`]: crate::input::RepositoryId
-    pub async fn open(&self, repository_id: &str) -> Result<Repo> {
+    /// The UI opens repositories with `GitApi::open`, which also checks the installed git.
+    pub async fn open(&self, repository_id: &RepositoryId) -> Result<Repo> {
         let Some(path) = self.inner.lookup.repository_path(repository_id).await? else {
             return Err(Error::RepositoryNotFound {
-                repository_id: repository_id.to_owned(),
+                repository_id: repository_id.clone(),
             });
         };
         // Checked up front: git can't start in a missing folder, and spawning it reports that as
@@ -618,7 +616,7 @@ mod tests {
         impl RepositoryLookup for Locked {
             fn repository_path<'a>(
                 &'a self,
-                _: &'a str,
+                _: &'a RepositoryId,
             ) -> BoxFuture<'a, Result<Option<PathBuf>, RepositoryListError>> {
                 let locked = std::io::Error::other("database is locked");
                 let error = RepositoryListError::new(ListAction::Read, &locked);
@@ -626,7 +624,7 @@ mod tests {
             }
         }
 
-        let error = smol::block_on(GitRepos::new(Locked).open("any"))
+        let error = smol::block_on(GitRepos::new(Locked).open(&RepositoryId::generate()))
             .err()
             .unwrap();
         assert!(matches!(error, Error::RepositoryList(_)), "{error:?}");

@@ -5,6 +5,7 @@
 use std::path::PathBuf;
 
 use futures::future::BoxFuture;
+use gitto_git::input::RepositoryId;
 use gitto_git::{RepositoryListError, RepositoryLookup};
 
 use crate::errors::{Error, ListAction, reason};
@@ -16,11 +17,11 @@ use crate::service::RepositoryService;
 impl RepositoryLookup for RepositoryService {
     fn repository_path<'a>(
         &'a self,
-        repository_id: &'a str,
+        repository_id: &'a RepositoryId,
     ) -> BoxFuture<'a, Result<Option<PathBuf>, RepositoryListError>> {
         Box::pin(async move {
             let repository = self
-                .get_repository(repository_id)
+                .get_repository(&repository_id.to_string())
                 .await
                 .map_err(|error| list_error(&error))?;
             Ok(repository.map(|repository| PathBuf::from(repository.path)))
@@ -51,7 +52,6 @@ mod tests {
     use gitto_db::Db;
     use gitto_git::features::status::commands::get_status_since;
     use gitto_git::features::status::schema::{Head, StatusReply};
-    use gitto_git::input::RepositoryId;
     use gitto_git::{ApiCode, ApiError, Error as GitError, GitApi};
 
     use super::*;
@@ -157,7 +157,7 @@ mod tests {
         assert_eq!(error.code(), ApiCode::NotFound);
         assert!(!error.is_bug());
         assert!(
-            matches!(error.error(), GitError::RepositoryNotFound { repository_id } if repository_id == missing.as_str()),
+            matches!(error.error(), GitError::RepositoryNotFound { repository_id } if *repository_id == missing),
             "{:?}",
             error.error()
         );

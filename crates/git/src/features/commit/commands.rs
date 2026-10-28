@@ -536,6 +536,5 @@ mod tests {
             "The message is empty."
         );
         assert_eq!(Message::parse(" a\n").unwrap().as_str(), " a\n");
-        assert!(serde_json::from_str::<Message>("\"\"").is_err());
     }
 }

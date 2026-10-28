@@ -23,4 +23,4 @@ pub use crate::core::errors::{
 pub use crate::core::repo::{GitCommand, GitRepos, Repo, RepositoryLookup};
 pub use crate::core::runner::RunOptions;
 pub use crate::core::version::GitVersion;
-pub use crate::schema::{FileStatus, GitInstall};
+pub use crate::schema::{FileStatus, GitInstall, Version};

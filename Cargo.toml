@@ -19,6 +19,7 @@ event-listener = "5.4.2"
 futures = "0.3.34"
 futures-lite = "2.6.1"
 libc = "0.2.191"
+log = { version = "0.4.34", features = ["std"] }
 memchr = "2.8.3"
 notify = "8.2.0"
 regex = "1.13.1"

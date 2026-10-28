@@ -1,8 +1,7 @@
 //! Input the features take from the UI, checked when it's made. Ported from
 //! `packages/git/src/input.ts`, and the checks of each feature's `contract.ts`: their zod schemas
 //! are the newtypes here, so a feature can't be called with input the contract refused. Each is
-//! made with `parse` (or `TryFrom<String>`, which serde uses), fails with `Error::InvalidInput`
-//! saying why, and derefs to what it holds (a string's pass as git arguments, `AsRef<OsStr>`).
+//! made with `parse` (or `TryFrom<String>`), fails with `Error::InvalidInput` saying why, and derefs to what it holds (a string's pass as git arguments, `AsRef<OsStr>`).
 //!
 //! TS's `RepositoryInput` (a procedure's `repositoryId`) is [`RepositoryId`]: the features take
 //! the `Repo` that `GitApi::open` opens with it instead (see `crate::api`).
@@ -13,16 +12,16 @@
 use std::ffi::OsStr;
 use std::fmt;
 use std::ops::Deref;
+use std::str::FromStr;
 
-use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::core::errors::{Error, Result};
 
 macro_rules! checked_string {
     ($(#[$doc:meta])* $name:ident, $valid:expr, $message:expr) => {
         $(#[$doc])*
-        #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-        #[serde(try_from = "String", into = "String")]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
         pub struct $name(String);
 
         impl $name {
@@ -97,12 +96,67 @@ macro_rules! checked_string {
     };
 }
 
-checked_string!(
-    /// A repository's id in Gitto: a UUIDv7, hyphenated.
-    RepositoryId,
-    is_uuid_v7,
-    |value| format!("Not a repository id. ({value:?})")
-);
+/// A repository's id in Gitto: a UUIDv7, written hyphenated. Read in either case, and shown in
+/// lower case, so an id is the same `RepositoryId` however it was written.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct RepositoryId(Uuid);
+
+impl RepositoryId {
+    /// A new id, for a repository being added to Gitto.
+    pub fn generate() -> Self {
+        RepositoryId(Uuid::now_v7())
+    }
+
+    /// `value`, if it's a hyphenated UUIDv7; `Error::InvalidInput` otherwise.
+    pub fn parse(value: impl AsRef<str>) -> Result<Self> {
+        let value = value.as_ref();
+        // Only the hyphenated form: `Uuid` also reads the simple, braced and URN ones.
+        Uuid::try_parse(value)
+            .ok()
+            .filter(|uuid| {
+                value.len() == 36
+                    && uuid.get_version_num() == 7
+                    && uuid.get_variant() == uuid::Variant::RFC4122
+            })
+            .map(RepositoryId)
+            .ok_or_else(|| Error::InvalidInput(format!("Not a repository id. ({value:?})")))
+    }
+
+    pub fn as_uuid(&self) -> &Uuid {
+        &self.0
+    }
+}
+
+impl FromStr for RepositoryId {
+    type Err = Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        Self::parse(value)
+    }
+}
+
+impl TryFrom<String> for RepositoryId {
+    type Error = Error;
+
+    fn try_from(value: String) -> Result<Self> {
+        Self::parse(value)
+    }
+}
+
+impl TryFrom<&str> for RepositoryId {
+    type Error = Error;
+
+    fn try_from(value: &str) -> Result<Self> {
+        Self::parse(value)
+    }
+}
+
+/// Hyphenated, in lower case.
+impl fmt::Display for RepositoryId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0.hyphenated(), f)
+    }
+}
 
 checked_string!(
     /// A local or remote branch, by its full ref name (`refs/heads/…` or `refs/remotes/…`).
@@ -141,11 +195,17 @@ impl From<FullSha> for Sha {
 }
 
 checked_string!(
-    /// A string that isn't empty (zod's `z.string().min(1)`), e.g. a branch's short name the UI
-    /// saw checked out, or a conflicted file's path.
-    NonEmpty,
+    /// A file's path in the repository, as git names it: not empty, e.g. a conflicted file's.
+    RepoPath,
     |value| !value.is_empty(),
-    |_| "Too small: expected string to have >=1 characters".to_owned()
+    |_| "The path is empty.".to_owned()
+);
+
+checked_string!(
+    /// A local branch, by its short name: not empty, e.g. the one the UI saw checked out.
+    BranchShortName,
+    |value| !value.is_empty(),
+    |_| "The branch name is empty.".to_owned()
 );
 
 checked_string!(
@@ -173,9 +233,8 @@ checked_string!(
 
 /// Paths of files in the repository: at least one, none of them empty (the staging contract's
 /// `z.array(z.string().min(1)).min(1)`).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(try_from = "Vec<String>", into = "Vec<String>")]
-pub struct Paths(Vec<String>);
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Paths(Vec<RepoPath>);
 
 impl Paths {
     /// `paths`, if there's one and none is empty; `Error::InvalidInput` otherwise.
@@ -184,17 +243,17 @@ impl Paths {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        let paths: Vec<String> = paths.into_iter().map(Into::into).collect();
+        let paths = paths
+            .into_iter()
+            .map(RepoPath::parse)
+            .collect::<Result<Vec<_>>>()?;
         if paths.is_empty() {
             return Err(Error::InvalidInput("No paths.".to_owned()));
-        }
-        if paths.iter().any(String::is_empty) {
-            return Err(Error::InvalidInput("Not a path.".to_owned()));
         }
         Ok(Paths(paths))
     }
 
-    pub fn as_slice(&self) -> &[String] {
+    pub fn as_slice(&self) -> &[RepoPath] {
         &self.0
     }
 }
@@ -207,16 +266,16 @@ impl TryFrom<Vec<String>> for Paths {
     }
 }
 
-impl From<Paths> for Vec<String> {
-    fn from(paths: Paths) -> Vec<String> {
+impl From<Paths> for Vec<RepoPath> {
+    fn from(paths: Paths) -> Vec<RepoPath> {
         paths.0
     }
 }
 
 impl Deref for Paths {
-    type Target = [String];
+    type Target = [RepoPath];
 
-    fn deref(&self) -> &[String] {
+    fn deref(&self) -> &[RepoPath] {
         &self.0
     }
 }
@@ -235,29 +294,17 @@ fn is_lower_hex(value: &str) -> bool {
         .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-/// zod's `uuidv7`: `xxxxxxxx-xxxx-7xxx-[89ab]xxx-xxxxxxxxxxxx`, in either case.
-fn is_uuid_v7(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    bytes.len() == 36
-        && bytes.iter().enumerate().all(|(i, b)| match i {
-            8 | 13 | 18 | 23 => *b == b'-',
-            14 => *b == b'7',
-            19 => matches!(b.to_ascii_lowercase(), b'8' | b'9' | b'a' | b'b'),
-            _ => b.is_ascii_hexdigit(),
-        })
-}
-
 /// A file, by its path in the repository and, for a rename, its previous one.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FileInput {
-    pub path: String,
-    pub orig_path: Option<String>,
+    pub path: RepoPath,
+    pub orig_path: Option<RepoPath>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::valid;
 
     fn invalid(error: Error) -> String {
         assert!(matches!(error, Error::InvalidInput(_)), "{error:?}");
@@ -299,12 +346,30 @@ mod tests {
     #[test]
     fn repository_ids_are_uuid_v7() {
         assert!(RepositoryId::parse("01890a5d-ac96-774b-bcce-b302099a8057").is_ok());
-        assert!(RepositoryId::parse("01890A5D-AC96-774B-BCCE-B302099A8057").is_ok());
         assert!(RepositoryId::parse(uuid::Uuid::now_v7().to_string()).is_ok());
+        let generated = RepositoryId::generate();
+        assert_eq!(
+            RepositoryId::parse(generated.to_string()).unwrap(),
+            generated
+        );
         // A UUIDv4, and one with the wrong variant.
         assert!(RepositoryId::parse("01890a5d-ac96-474b-bcce-b302099a8057").is_err());
         assert!(RepositoryId::parse("01890a5d-ac96-774b-ccce-b302099a8057").is_err());
-        assert!(RepositoryId::parse("missing").is_err());
+        // Only hyphenated.
+        assert!(RepositoryId::parse("01890a5dac96774bbcceb302099a8057").is_err());
+        assert!(RepositoryId::parse("{01890a5d-ac96-774b-bcce-b302099a8057}").is_err());
+        assert_eq!(
+            invalid(RepositoryId::parse("missing").unwrap_err()),
+            "Not a repository id. (\"missing\")"
+        );
+    }
+
+    #[test]
+    fn repository_ids_are_the_same_in_either_case() {
+        let lower = RepositoryId::parse("01890a5d-ac96-774b-bcce-b302099a8057").unwrap();
+        let upper = RepositoryId::parse("01890A5D-AC96-774B-BCCE-B302099A8057").unwrap();
+        assert_eq!(upper, lower);
+        assert_eq!(upper.to_string(), "01890a5d-ac96-774b-bcce-b302099a8057");
     }
 
     #[test]
@@ -329,40 +394,30 @@ mod tests {
     }
 
     #[test]
-    fn non_empty_strings_may_be_whitespace() {
-        assert!(NonEmpty::parse(" ").is_ok());
+    fn paths_and_branch_names_may_be_whitespace_but_not_empty() {
+        assert!(RepoPath::parse(" ").is_ok());
         assert_eq!(
-            invalid(NonEmpty::parse("").unwrap_err()),
-            "Too small: expected string to have >=1 characters"
+            invalid(RepoPath::parse("").unwrap_err()),
+            "The path is empty."
+        );
+        assert!(BranchShortName::parse(" ").is_ok());
+        assert_eq!(
+            invalid(BranchShortName::parse("").unwrap_err()),
+            "The branch name is empty."
         );
     }
 
     #[test]
     fn paths_are_one_or_more_and_none_empty() {
         let paths = Paths::parse(["a", "b c"]).unwrap();
-        assert_eq!(&*paths, ["a", "b c"]);
+        assert_eq!(paths.as_slice(), [valid::<RepoPath>("a"), valid("b c")]);
         assert_eq!(
             invalid(Paths::parse(Vec::<String>::new()).unwrap_err()),
             "No paths."
         );
-        assert_eq!(invalid(Paths::parse(["a", ""]).unwrap_err()), "Not a path.");
-    }
-
-    #[test]
-    fn input_is_checked_when_its_deserialized() {
-        let sha: Result<Sha, _> = serde_json::from_str("\"zzzz\"");
-        assert!(sha.is_err());
-        let paths: Result<Paths, _> = serde_json::from_str("[]");
-        assert!(paths.is_err());
-        let name: Result<BranchName, _> = serde_json::from_str("\" \"");
-        assert!(name.is_err());
-        let id: RepositoryId =
-            serde_json::from_str("\"01890a5d-ac96-774b-bcce-b302099a8057\"").unwrap();
         assert_eq!(
-            serde_json::to_string(&id).unwrap(),
-            "\"01890a5d-ac96-774b-bcce-b302099a8057\""
+            invalid(Paths::parse(["a", ""]).unwrap_err()),
+            "The path is empty."
         );
-        let file: FileInput = serde_json::from_str(r#"{"path":"a","origPath":null}"#).unwrap();
-        assert_eq!(file.path, "a");
     }
 }
