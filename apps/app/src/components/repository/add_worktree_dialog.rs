@@ -84,6 +84,10 @@ impl AddWorktreeDialog {
             cx.observe_global::<Operations>(|_, cx| cx.notify()),
             cx.subscribe_in(&folder, window, on_input),
             cx.subscribe_in(&new_branch, window, on_input),
+            // The worktrees and refs, which say whether a new branch has to be named, notify it.
+            cx.observe_in(&cx.entity(), window, |this, _, window, cx| {
+                this.update_placeholder(window, cx)
+            }),
         ];
         AddWorktreeDialog {
             repositories: repositories_query(cx),
@@ -220,6 +224,7 @@ impl AddWorktreeDialog {
                 .update(cx, |input, cx| input.set_value(suggested, window, cx));
         }
         self.branch.update(Some(branch));
+        self.update_placeholder(window, cx);
         if self.open {
             cx.notify();
             return;
@@ -242,39 +247,40 @@ impl AddWorktreeDialog {
                     });
                     true
                 })
-                .child(Self::render_form(&shown, window, cx))
+                .child(Self::render_form(&shown, cx))
         });
         focus.focus(window, cx);
         cx.notify();
     }
 
-    fn render_form(this: &Entity<Self>, window: &mut Window, cx: &mut App) -> impl IntoElement {
+    /// Names the branch kept in the new branch's placeholder, unless one has to be named.
+    fn update_placeholder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let placeholder: SharedString = if self.needs_new_branch() {
+            NAME_PLACEHOLDER.into()
+        } else {
+            format!("Keep {}", self.name()).into()
+        };
+        if self.placeholder != placeholder {
+            self.placeholder = placeholder.clone();
+            self.new_branch.update(cx, |input, cx| {
+                input.set_placeholder(placeholder, window, cx)
+            });
+        }
+    }
+
+    fn render_form(this: &Entity<Self>, cx: &mut App) -> impl IntoElement {
         let palette = *cx.palette();
-        let (summary, needs_new_branch, name, folder, new_branch, valid, blocked) = {
+        let (summary, needs_new_branch, folder, new_branch, valid, blocked) = {
             let shown = this.read(cx);
             (
                 shown.summary(),
                 shown.needs_new_branch(),
-                shown.name(),
                 shown.folder.clone(),
                 shown.new_branch.clone(),
                 shown.is_valid(cx),
                 WorktreeActions::add_is_blocked(&shown.repository_id, cx),
             )
         };
-        let placeholder: SharedString = if needs_new_branch {
-            NAME_PLACEHOLDER.into()
-        } else {
-            format!("Keep {name}").into()
-        };
-        if this.read(cx).placeholder != placeholder {
-            this.update(cx, |this, cx| {
-                this.placeholder = placeholder.clone();
-                this.new_branch.update(cx, |input, cx| {
-                    input.set_placeholder(placeholder, window, cx)
-                });
-            });
-        }
         let naming = !Self::typed(&new_branch, cx).is_empty();
         let browse = this.downgrade();
         let submit = this.downgrade();
@@ -563,6 +569,30 @@ mod tests {
         })
         .unwrap();
         assert!(dialog.read_with(cx, |dialog, cx| dialog.is_valid(cx)));
+    }
+
+    #[gpui_kit::test]
+    fn names_the_branch_kept_in_the_placeholder_until_one_has_to_be_named(cx: &mut TestAppContext) {
+        let adds = Rc::new(RefCell::new(Vec::new()));
+        let (_dir, window, dialog) = render(cx, &adds);
+        let placeholder = |cx: &mut TestAppContext| {
+            dialog.read_with(cx, |dialog, _| dialog.placeholder.to_string())
+        };
+        open(window, &dialog, "refs/heads/topic", cx);
+        assert_eq!(placeholder(cx), "Keep topic");
+
+        // Checked out elsewhere meanwhile: one has to be named.
+        let id = dialog.read_with(cx, |dialog, _| dialog.repository_id.clone());
+        set_worktrees(
+            &id,
+            vec![
+                worktree("/work/gitto", Some("refs/heads/main"), true),
+                worktree("/work/gitto-topic", Some("refs/heads/topic"), false),
+            ],
+            cx,
+        );
+        cx.run_until_parked();
+        assert_eq!(placeholder(cx), NAME_PLACEHOLDER);
     }
 
     #[gpui_kit::test]
