@@ -111,6 +111,10 @@ pub struct HistoryRefLabels {
 /// The count of the labels a row has no room for, and the list of them it opens. The list
 /// neither takes the focus from the history, nor closes as it's clicked: it's only hovered, and
 /// its owner closes it once the pointer's been off it for a moment.
+///
+/// Not Kit's `HoverCard`, though it opens and closes on hover with delays too: it keeps whether
+/// it's open itself, with no way for its owner to say, and the list has to stay open while the
+/// menu of a branch in it is open, which the pointer leaves the list for.
 pub struct MoreLabels {
     /// Whether the list is open.
     pub open: bool,
