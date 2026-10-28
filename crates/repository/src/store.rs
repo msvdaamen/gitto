@@ -89,10 +89,8 @@ fn get_by(
     value: &str,
 ) -> rusqlite::Result<Option<Repository>> {
     conn.query_row(
-        &format!(
-            r#"select {COLUMNS} from "repositories" where "repositories"."{column}" = ? limit ?"#
-        ),
-        params![value, 1],
+        &format!(r#"select {COLUMNS} from "repositories" where "repositories"."{column}" = ?"#),
+        [value],
         repository,
     )
     .optional()
@@ -115,19 +113,24 @@ fn delete(conn: &Connection, id: &str) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// `index` as a position, SQLite's integer: one that doesn't fit, which no list's can, fails.
+fn position(index: usize) -> rusqlite::Result<i64> {
+    i64::try_from(index).map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))
+}
+
 fn reorder(conn: &mut Connection, ids: &[String]) -> rusqlite::Result<()> {
     // Past the end of `ids`, so any repository missing from it lands after the ones in it.
-    let rest = ids.len() as i64;
+    let rest = position(ids.len())?;
     // `begin`, as Drizzle: deferred.
     let tx = conn.transaction()?;
     tx.execute(
         r#"update "repositories" set "position" = "repositories"."position" + ?"#,
         [rest],
     )?;
-    for (position, id) in ids.iter().enumerate() {
+    for (index, id) in ids.iter().enumerate() {
         tx.execute(
             r#"update "repositories" set "position" = ? where "repositories"."id" = ?"#,
-            params![position as i64, id],
+            params![position(index)?, id],
         )?;
     }
     tx.commit()
