@@ -62,7 +62,6 @@ mod tests {
 
     fn stash() -> HistoryRow {
         HistoryRow::Stash(StashRow {
-            id: "stash:f00dfeed".into(),
             sha: "f00dfeed".into(),
             repository_id: RepositoryId::generate(),
             graph: None,
