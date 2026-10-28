@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use crate::core::git_dirs::real_path;
 use crate::core::repo::{GitRepos, Repo};
 use crate::core::runner::lock;
+use crate::core::trace::TARGET;
 
 /// Repositories for one test, in a temp directory of its own.
 pub struct Fixture {
@@ -178,6 +179,38 @@ where
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+/// Records the warnings the crate logs (see `crate::core::trace::TARGET`) from now on: the function
+/// returned says which have been, by their message. It's every test's, so a test that checks for a
+/// warning has to make it say what only it would.
+pub fn logged_warnings() -> impl Fn() -> Vec<String> {
+    static WARNINGS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    struct Recorder;
+
+    impl log::Log for Recorder {
+        fn enabled(&self, metadata: &log::Metadata) -> bool {
+            metadata.level() <= log::Level::Warn && metadata.target().starts_with(TARGET)
+        }
+
+        fn log(&self, record: &log::Record) {
+            if self.enabled(record.metadata()) {
+                lock(&WARNINGS).push(record.args().to_string());
+            }
+        }
+
+        fn flush(&self) {}
+    }
+
+    static RECORDER: Recorder = Recorder;
+    static INSTALLED: Once = Once::new();
+    INSTALLED.call_once(|| {
+        log::set_logger(&RECORDER).expect("no other logger in the tests");
+        log::set_max_level(log::LevelFilter::Warn);
+    });
+    let from = lock(&WARNINGS).len();
+    move || lock(&WARNINGS)[from..].to_vec()
 }
 
 /// Whether the file system takes a file name that isn't UTF-8, as Linux's do: macOS's APFS
