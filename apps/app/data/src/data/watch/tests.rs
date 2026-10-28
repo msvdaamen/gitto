@@ -15,7 +15,7 @@ use gitto_git::features::status::schema::{
 
 use super::*;
 use crate::data::git::{GitTask, RepositoryGit};
-use crate::data::{Field, Repository};
+use crate::data::{Field, Repositories, Repository};
 
 /// A watch stream whose items the test pushes; counts how many are open.
 struct Procedure<T> {
@@ -209,7 +209,7 @@ impl Watched {
 
 fn watch(focused: bool, cx: &mut TestAppContext) -> Watched {
     let git = Rc::new(Git::default());
-    let _repository = open(&git, cx);
+    let repository = open(&git, cx);
     git.status.set(0);
     git.refs.set(0);
     let streams = Rc::new(Streams {
@@ -218,7 +218,7 @@ fn watch(focused: bool, cx: &mut TestAppContext) -> Watched {
     });
     let watcher = cx.new({
         let streams: Rc<dyn WatchStreams> = streams.clone();
-        move |cx| RepositoryWatcher::new(repository_id(), streams, focused, cx)
+        move |cx| RepositoryWatcher::new(&repository, streams, focused, cx)
     });
     cx.run_until_parked();
     let mut watched = Watched {
@@ -252,10 +252,26 @@ fn doesnt_refetch_what_was_loaded_while_switching_to_the_repository(cx: &mut Tes
         git_dir: Procedure::new(),
         working_tree: Procedure::new(),
     });
-    let watcher = cx.new(|cx| RepositoryWatcher::new(repository_id(), streams, true, cx));
+    let watcher = cx.new(|cx| RepositoryWatcher::new(&repository, streams, true, cx));
     cx.run_until_parked();
     assert_eq!((git.refs.get(), git.log.get()), (2, 1));
     drop(watcher);
+}
+
+#[gpui_kit::test]
+fn doesnt_open_again_a_repository_removed_while_it_was_watched(cx: &mut TestAppContext) {
+    let mut watched = watch(true, cx);
+    cx.update(|cx| Repositories::close(repository_id().as_str(), cx));
+    cx.run_until_parked();
+
+    watched.streams.git_dir.push(vec![GitDirChange::Refs]);
+    cx.run_until_parked();
+    assert_eq!(watched.reloaded(), Reloaded::Nothing);
+    assert!(
+        cx.update(|cx| Repositories::get(repository_id().as_str(), cx))
+            .is_none()
+    );
+    watched.cleanup(cx);
 }
 
 #[gpui_kit::test]

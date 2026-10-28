@@ -21,8 +21,8 @@ use crate::components::repository::history::history_table::{HistoryEvent, Histor
 use crate::components::repository::operation_bar::{OperationBar, OperationBarEvent};
 use crate::components::repository::sidebar::refs_sidebar::RefsSidebar;
 use crate::components::repository::toolbar::{RepositoryToolbar, ToolbarEvent};
-use gitto_app_data::data::RepositoryWatcher;
 use gitto_app_data::data::watch::WatchStreams;
+use gitto_app_data::data::{Repositories, RepositoryWatcher};
 use gitto_app_data::services::Services;
 use gitto_app_data::state::panel_width::{PanelBounds, PanelWidth};
 use gitto_app_data::state::router::Router;
@@ -234,8 +234,8 @@ impl RepositoryView {
     ) -> Entity<RepositoryWatcher> {
         let git = Rc::clone(streams);
         let focused = window.is_window_active();
-        let id = id.clone();
-        cx.new(|cx| RepositoryWatcher::new(id, git, focused, cx))
+        let repository = Repositories::open(id, cx);
+        cx.new(|cx| RepositoryWatcher::new(&repository, git, focused, cx))
     }
 
     /// What closing the file, or opening another, waits for: its edits saved (see

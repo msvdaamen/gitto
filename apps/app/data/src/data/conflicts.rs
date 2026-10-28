@@ -42,9 +42,11 @@ pub fn resolve_file_mutation(cx: &mut App) -> Entity<Mutation<FileToResolve>> {
                 path,
                 resolution,
             } = file;
-            Repositories::open(&id, cx).update(cx, |repository, cx| {
-                repository.resolve_file(path, resolution, cx)
-            })
+            Repositories::update_opened(
+                &id,
+                |repository, cx| repository.resolve_file(path, resolution, cx),
+                cx,
+            )
         },
         cx,
     )

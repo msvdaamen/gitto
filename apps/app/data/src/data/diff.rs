@@ -103,7 +103,7 @@ impl FilesOnShow {
 /// A file's contents by their object name, e.g. to show more of it around a patch's changes
 /// (`fetchBlob`).
 pub fn fetch_blob(id: &RepositoryId, oid: &str, cx: &mut App) -> Task<Result<String, DataError>> {
-    Repositories::open(id, cx).update(cx, |repository, cx| repository.fetch_blob(oid, cx))
+    Repositories::update_opened(id, |repository, cx| repository.fetch_blob(oid, cx), cx)
 }
 
 /// The lists in the uncommitted changes: what's staged for the next commit and what isn't, and

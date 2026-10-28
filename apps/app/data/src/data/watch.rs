@@ -13,9 +13,9 @@ use futures::stream::BoxStream;
 use gitto_git::features::watch::schema::GitDirChange;
 use gitto_git::input::RepositoryId;
 use gitto_git::{ApiError, GitApi};
-use gpui_kit::{AppContext as _, Context, Task};
+use gpui_kit::{AppContext as _, Context, Entity, Task, WeakEntity};
 
-use super::repository::Repositories;
+use super::repository::Repository;
 
 /// How long the working tree stays watched after the window loses focus. Starting to watch walks
 /// the whole tree, so switching to an editor and back shouldn't start over every time.
@@ -51,6 +51,8 @@ impl WatchStreams for GitApi {
 /// reload, when the window gets focus.
 pub struct RepositoryWatcher {
     id: RepositoryId,
+    /// What it loads again: once the repository's removed from Gitto, nothing.
+    repository: WeakEntity<Repository>,
     streams: Rc<dyn WatchStreams>,
     focused: bool,
     git_dir: Watch,
@@ -61,16 +63,16 @@ pub struct RepositoryWatcher {
 }
 
 impl RepositoryWatcher {
-    /// Starts watching the repository `id`, which just came on show, with the window focused or
-    /// not.
+    /// Starts watching `repository`, which just came on show, with the window focused or not.
     pub fn new(
-        id: RepositoryId,
+        repository: &Entity<Repository>,
         streams: Rc<dyn WatchStreams>,
         focused: bool,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut watcher = RepositoryWatcher {
-            id,
+            id: repository.read(cx).id().clone(),
+            repository: repository.downgrade(),
             streams,
             focused,
             git_dir: Watch::new("the git directory"),
@@ -81,9 +83,7 @@ impl RepositoryWatcher {
         // Nothing watched the repository until now, so what was loaded from it before (when it was
         // last on show) may be out of date. What's loading isn't loaded twice: it's loading since
         // it came on show (see `Repository::reload_when_shown`).
-        if let Some(repository) = Repositories::get(&watcher.id, cx) {
-            repository.update(cx, |repository, cx| repository.reload_when_shown(cx));
-        }
+        repository.update(cx, |repository, cx| repository.reload_when_shown(cx));
         watcher.watch_git_dir(cx);
         watcher.focus_changed(None, cx);
         watcher
@@ -129,13 +129,13 @@ impl RepositoryWatcher {
     }
 
     fn reload_all(&self, cx: &mut Context<Self>) {
-        Repositories::open(&self.id, cx).update(cx, |repository, cx| {
+        let _ = self.repository.update(cx, |repository, cx| {
             drop(repository.reload_all(cx));
         });
     }
 
     fn reload_uncommitted(&self, cx: &mut Context<Self>) {
-        Repositories::open(&self.id, cx).update(cx, |repository, cx| {
+        let _ = self.repository.update(cx, |repository, cx| {
             drop(repository.reload_uncommitted(cx));
         });
     }

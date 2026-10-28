@@ -23,7 +23,7 @@ pub enum StagingTarget {
 pub fn stage_mutation(cx: &mut App) -> Entity<Mutation<(RepositoryId, StagingTarget)>> {
     Mutation::new(
         |(id, target): (RepositoryId, StagingTarget), cx: &mut App| {
-            Repositories::open(&id, cx).update(cx, |repository, cx| repository.stage(target, cx))
+            Repositories::update_opened(&id, |repository, cx| repository.stage(target, cx), cx)
         },
         cx,
     )
@@ -33,7 +33,7 @@ pub fn stage_mutation(cx: &mut App) -> Entity<Mutation<(RepositoryId, StagingTar
 pub fn unstage_mutation(cx: &mut App) -> Entity<Mutation<(RepositoryId, StagingTarget)>> {
     Mutation::new(
         |(id, target): (RepositoryId, StagingTarget), cx: &mut App| {
-            Repositories::open(&id, cx).update(cx, |repository, cx| repository.unstage(target, cx))
+            Repositories::update_opened(&id, |repository, cx| repository.unstage(target, cx), cx)
         },
         cx,
     )
@@ -55,7 +55,7 @@ pub enum DiscardTarget {
 pub fn discard_mutation(cx: &mut App) -> Entity<Mutation<(RepositoryId, DiscardTarget)>> {
     Mutation::new(
         |(id, target): (RepositoryId, DiscardTarget), cx: &mut App| {
-            Repositories::open(&id, cx).update(cx, |repository, cx| repository.discard(target, cx))
+            Repositories::update_opened(&id, |repository, cx| repository.discard(target, cx), cx)
         },
         cx,
     )
@@ -88,9 +88,11 @@ pub fn stage_file_mutation(cx: &mut App) -> Entity<Mutation<FileToStage>> {
                 file,
             } = input;
             let paths = staging_paths(std::slice::from_ref(&file));
-            Repositories::open(&id, cx).update(cx, |repository, cx| {
-                repository.stage_file(action, paths, cx)
-            })
+            Repositories::update_opened(
+                &id,
+                |repository, cx| repository.stage_file(action, paths, cx),
+                cx,
+            )
         },
         cx,
     )
@@ -123,9 +125,11 @@ pub fn stage_lines_mutation(cx: &mut App) -> Entity<Mutation<LinesToStage, Strin
                 version,
                 lines,
             } = input;
-            Repositories::open(&id, cx).update(cx, |repository, cx| {
-                repository.stage_lines(action, file, version, lines, cx)
-            })
+            Repositories::update_opened(
+                &id,
+                |repository, cx| repository.stage_lines(action, file, version, lines, cx),
+                cx,
+            )
         },
         cx,
     )

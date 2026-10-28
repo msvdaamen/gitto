@@ -1226,6 +1226,11 @@ fn failed<T: Send + 'static>(error: DataError) -> GitTask<T> {
     async move { Err(error) }.boxed()
 }
 
+/// Why a change to a repository that was removed from Gitto failed.
+pub(crate) fn removed() -> DataError {
+    DataError::msg("The repository was removed from Gitto.")
+}
+
 /// What `loaded` has, or why it doesn't: for one that was just loaded.
 fn loaded_result<T: Clone>(loaded: Option<&Loaded<T>>) -> Result<T, DataError> {
     let loaded = loaded.ok_or_else(|| DataError::msg("It was dropped as it loaded."))?;
@@ -1269,6 +1274,20 @@ impl Repositories {
             .open
             .insert(id.clone(), repository.clone());
         repository
+    }
+
+    /// Runs `change` on the repository `id`, as git's part of a change a view makes: one that was
+    /// removed from Gitto meanwhile isn't opened again (as [`open`](Self::open) would), and the
+    /// change fails.
+    pub fn update_opened<R: 'static>(
+        id: &RepositoryId,
+        change: impl FnOnce(&mut Repository, &mut Context<Repository>) -> Task<Result<R, DataError>>,
+        cx: &mut App,
+    ) -> Task<Result<R, DataError>> {
+        match Repositories::get(id, cx) {
+            Some(repository) => repository.update(cx, change),
+            None => Task::ready(Err(removed())),
+        }
     }
 
     /// The repository `id`, if it's been opened.
@@ -1766,5 +1785,25 @@ mod tests {
             ChangeState::default()
         );
         assert_eq!(git.refs.get(), 2);
+    }
+
+    #[gpui_kit::test]
+    fn doesnt_open_again_a_repository_removed_before_a_change_to_it(cx: &mut TestAppContext) {
+        let git: Rc<dyn RepositoryGit> = Rc::new(Git::default());
+        cx.update(|cx| Repositories::insert(&repository_id(), git, cx));
+        cx.update(|cx| Repositories::close(repository_id().as_str(), cx));
+        let changed = cx.update(|cx| {
+            Repositories::update_opened(
+                &repository_id(),
+                |_, _| Task::ready(Ok::<_, DataError>(())),
+                cx,
+            )
+        });
+        let error = changed.now_or_never().unwrap().unwrap_err();
+        assert_eq!(error.to_string(), "The repository was removed from Gitto.");
+        assert!(
+            cx.update(|cx| Repositories::get(repository_id().as_str(), cx))
+                .is_none()
+        );
     }
 }

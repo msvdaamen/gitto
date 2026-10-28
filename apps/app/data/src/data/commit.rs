@@ -46,8 +46,11 @@ impl Reword {
 pub fn create_commit_mutation(cx: &mut App) -> Entity<Mutation<(RepositoryId, NewCommit)>> {
     Mutation::new(
         |(id, commit): (RepositoryId, NewCommit), cx: &mut App| {
-            Repositories::open(&id, cx)
-                .update(cx, |repository, cx| repository.create_commit(commit, cx))
+            Repositories::update_opened(
+                &id,
+                |repository, cx| repository.create_commit(commit, cx),
+                cx,
+            )
         },
         cx,
     )
@@ -58,8 +61,11 @@ pub fn create_commit_mutation(cx: &mut App) -> Entity<Mutation<(RepositoryId, Ne
 pub fn reword_commit_mutation(cx: &mut App) -> Entity<Mutation<(RepositoryId, Reword), String>> {
     Mutation::new(
         |(id, reword): (RepositoryId, Reword), cx: &mut App| {
-            Repositories::open(&id, cx)
-                .update(cx, |repository, cx| repository.reword_commit(reword, cx))
+            Repositories::update_opened(
+                &id,
+                |repository, cx| repository.reword_commit(reword, cx),
+                cx,
+            )
         },
         cx,
     )

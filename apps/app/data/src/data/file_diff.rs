@@ -15,7 +15,7 @@ use super::error::DataError;
 use super::keyed::Hold;
 use super::loaded::Loaded;
 use super::opaque::Opaque;
-use super::repository::{Field, Repositories, Repository};
+use super::repository::{Field, Repositories, Repository, removed};
 use gitto_ui_logic::git::diff_source::{DiffSource, is_uncommitted};
 
 /// One file's patch in a source, with the file and its `DiffSource::file_key`, so what's shown can
@@ -154,9 +154,11 @@ pub fn fetch_file_patch(
     file: &ChangedFile,
     cx: &mut App,
 ) -> Task<Result<FilePatch, DataError>> {
-    Repositories::open(id, cx).update(cx, |repository, cx| {
-        repository.fetch_patch(source, file, cx)
-    })
+    Repositories::update_opened(
+        id,
+        |repository, cx| repository.fetch_patch(source, file, cx),
+        cx,
+    )
 }
 
 /// A file's contents in the working tree, with their version, to show more of its unstaged
@@ -167,7 +169,10 @@ pub fn fetch_working_tree_file(
     path: &str,
     cx: &mut App,
 ) -> Task<Result<WorkingTreeFile, DataError>> {
-    let git = Repositories::open(id, cx).read(cx).git().clone();
+    let Some(repository) = Repositories::get(id, cx) else {
+        return Task::ready(Err(removed()));
+    };
+    let git = repository.read(cx).git().clone();
     cx.background_spawn(git.working_tree_file(path.to_owned()))
 }
 
@@ -182,7 +187,10 @@ pub fn save_working_tree_file(
     overwrite: bool,
     cx: &mut App,
 ) -> Task<Result<String, DataError>> {
-    let git = Repositories::open(id, cx).read(cx).git().clone();
+    let Some(repository) = Repositories::get(id, cx) else {
+        return Task::ready(Err(removed()));
+    };
+    let git = repository.read(cx).git().clone();
     let expected = SaveExpectation { version, overwrite };
     cx.background_spawn(git.save_working_tree_file(path.to_owned(), contents, expected))
 }
