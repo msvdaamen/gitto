@@ -7,6 +7,8 @@
 use std::ops::Range;
 use std::sync::Arc;
 
+use gitto_ui::diff::diff_metadata::{ChangeType, FileDiff, HunkContent, Side};
+use gitto_ui::diff::patch_files::fit_to_patch;
 use gpui_kit::component::input::{
     EditorState, InputEvent, RangeDecoration, RangeDecorationCollection, RangeDecorationStyle,
 };
@@ -14,9 +16,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::{App, Context, Entity, EventEmitter, Subscription, Window, div};
 
 use super::conflict_whole_file::{code_editor, render_code_editor, reveal_line};
-use super::diff_metadata::{ChangeType, FileDiff, HunkContent, Side};
 use super::file_editing::EditSession;
-use super::patch_files::fit_to_patch;
 use super::viewer_runtime::{LoadFile, LoadedFile};
 use crate::components::ui::LoadingState;
 use crate::theme::PaletteExt as _;
@@ -75,7 +75,7 @@ pub fn editable_text(diff: &FileDiff, read: LoadedFile) -> Result<(String, Strin
     let contents = if diff.kind == ChangeType::New && !diff.is_partial {
         contents
     } else {
-        fit_to_patch(diff, Side::Additions, &contents)?
+        fit_to_patch(diff, Side::Additions, &contents).map_err(|error| error.to_string())?
     };
     Ok((contents, version))
 }
@@ -201,7 +201,8 @@ impl Render for PatchEditor {
 
 #[cfg(test)]
 mod tests {
-    use super::super::diff_metadata::parse_patch_files;
+    use gitto_ui::diff::diff_metadata::parse_patch_files;
+
     use super::*;
 
     #[test]

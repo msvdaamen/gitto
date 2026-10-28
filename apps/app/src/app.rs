@@ -75,6 +75,7 @@ pub fn init(services: Services, route: Route, cx: &mut App) {
     crate::data::init(cx);
     Router::init(route, cx);
     cx.bind_keys([KeyBinding::new("secondary-q", Quit, None)]);
+    cx.bind_keys(crate::components::repository::diff::viewer_actions::key_bindings());
     cx.on_action(|_: &Quit, cx| cx.quit());
 }
 

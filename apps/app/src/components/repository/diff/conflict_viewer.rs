@@ -10,6 +10,9 @@ use std::sync::Arc;
 
 use futures::FutureExt as _;
 use futures::future::Shared;
+use gitto_ui::diff::diff_metadata::Side;
+use gitto_ui::diff::patch_files::Expanded;
+use gitto_ui::diff::viewer_rows::{ExpandDirection, SeparatorButtons, expand};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex};
@@ -28,14 +31,11 @@ use super::conflict_diff::{
 };
 use super::conflict_rows::{ConflictRow, LineRole, actions_row, conflict_rows};
 use super::conflict_whole_file::WholeFile;
-use super::diff_metadata::Side;
 use super::file_editing::EditSession;
 use super::highlight::DiffHighlights;
-use super::patch_files::Expanded;
 use super::patch_viewer::{
     DrawnLine, FONT_REMS, ROW_REMS, code_char_width, scroll_list_by, widest_line,
 };
-use super::viewer_rows::{ExpandDirection, SeparatorButtons, expand};
 use super::viewer_runtime::{HIGHLIGHT_WAIT, SharedHighlights, ViewHighlights, ViewerRuntime};
 use crate::components::ui::{Icon, IconName};
 use crate::data::QueryError;

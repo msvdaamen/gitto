@@ -2,18 +2,17 @@
 //! selection at a time (see `PatchViewer`); one at a time. Once that leaves it without changes on
 //! its side, the next file in its list opens. Ported from `file-staging.tsx`.
 
-use std::rc::Rc;
 use std::sync::Arc;
 
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::features::staging::patch_version::patch_version;
 use gitto_git::features::staging::schema::LineSelection;
 use gitto_ui::git::changes::is_nested_repository;
-use gitto_ui::git::patch::{has_hunks, staged_whole};
+use gitto_ui::git::patch::has_hunks;
 use gpui_kit::{App, Context, Entity, Subscription, Task};
 
 use super::file_diff_view::{FileDiffEvent, FileDiffView};
-use super::line_picker::{LineStaging, StageLines};
+use super::line_picker::LineStaging;
 use crate::data::staging::{
     FileToStage, LinesToStage, StageAction, stage_file_mutation, stage_lines_mutation,
 };
@@ -36,8 +35,6 @@ pub struct FileStaging {
     staged_from: Option<Arc<str>>,
     /// Why the last lines, or the whole file, couldn't be staged, and of which file (its key).
     error: Option<(String, String)>,
-    /// What the viewer stages lines with, made once, so it's the same staging each time.
-    stage: StageLines,
     _subscriptions: [Subscription; 2],
 }
 
@@ -55,11 +52,6 @@ impl FileStaging {
         stage_file: StageFileMutation,
         cx: &mut Context<FileDiffView>,
     ) -> Self {
-        let view = cx.entity().downgrade();
-        let stage: StageLines = Rc::new(move |from, lines, cx: &mut App| {
-            view.update(cx, |view, cx| view.stage_lines(from, lines, cx))
-                .unwrap_or_else(|_| Task::ready(Err(QueryError::msg("The file was closed."))))
-        });
         let subscriptions = [
             cx.observe(&stage_lines, |_, _, cx| cx.notify()),
             cx.observe(&stage_file, |_, _, cx| cx.notify()),
@@ -70,7 +62,6 @@ impl FileStaging {
             staging_whole: false,
             staged_from: None,
             error: None,
-            stage,
             _subscriptions: subscriptions,
         }
     }
@@ -102,7 +93,7 @@ impl FileDiffView {
     /// What the viewer takes to stage lines, if the file's can be: an uncommitted one's, on show,
     /// unless it can only be staged whole (a link's, say).
     pub(super) fn line_staging(&self, cx: &App) -> Option<LineStaging> {
-        let data = self.view.current()?;
+        let prepared = self.view.current()?;
         // Not while it's edited: its lines are the editor's.
         if !self.view.source().is_uncommitted()
             || self.view.is_editing()
@@ -110,18 +101,18 @@ impl FileDiffView {
         {
             return None;
         }
-        if staged_whole(&data.patch) {
+        if prepared.staged_whole {
             return None;
         }
+        // The patch staged from is still on show, and another one's loaded: the one the lines
+        // leave, on its way.
         let shown = self.view.shown_patch().map(|shown| &shown.patch);
-        let left =
-            self.staging.staged_from.as_ref().is_some_and(|last| {
-                shown.is_some_and(|shown| shown == last) && data.patch != *last
-            });
+        let left = self.staging.staged_from.as_ref().is_some_and(|last| {
+            shown.is_some_and(|shown| shown == last) && prepared.data.patch != *last
+        });
         Some(LineStaging {
             action: self.staging_action(),
             busy: self.staging.is_staging(cx) || left,
-            stage: Rc::clone(&self.staging.stage),
         })
     }
 
@@ -129,7 +120,7 @@ impl FileDiffView {
     /// staged, and fails if they couldn't be. Once that leaves none, on to the next file.
     pub(super) fn stage_lines(
         &mut self,
-        from: String,
+        from: Arc<str>,
         lines: LineSelection,
         cx: &mut Context<Self>,
     ) -> Task<Result<(), QueryError>> {
@@ -163,7 +154,7 @@ impl FileDiffView {
             let _ = this.update(cx, |this, cx| {
                 // The patch staged from stays on show until the one they leave is highlighted;
                 // once there are none left, so does this file's until the next one's is in.
-                this.staging.staged_from = Some(from.into());
+                this.staging.staged_from = Some(from);
                 if !has_hunks(&left) {
                     let target = this.view.target();
                     this.move_on(&key, target, cx);

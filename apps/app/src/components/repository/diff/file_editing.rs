@@ -12,7 +12,7 @@ use gitto_git::input::RepositoryId;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, App, Context, Entity, KeyDownEvent, Task, Window, div};
+use gpui_kit::{AnyElement, App, Context, Entity, Task, Window, div};
 
 use super::autosave::{AUTOSAVE_DELAY, Autosave, SaveFile, SaveState};
 use super::file_diff_view::FileDiffView;
@@ -270,21 +270,11 @@ impl FileDiffView {
         receive
     }
 
-    /// Escape leaves edit mode, before the editor takes it: only when there's a selection to
-    /// collapse is it left to the editor.
-    pub(super) fn capture_escape(
-        &mut self,
-        event: &KeyDownEvent,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let keystroke = &event.keystroke;
-        if keystroke.key != "escape"
-            || !self.editing.editing
-            || self.editing.asking.is_some()
-            || keystroke.modifiers.modified()
-        {
-            return;
+    /// Escape (`CloseFileDiff`) leaves edit mode, rather than the file: only when there's a
+    /// selection to collapse is it left to the editor. Whether it was for edit mode.
+    pub(super) fn escape_editing(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.editing.editing || self.editing.asking.is_some() {
+            return false;
         }
         let selection = self
             .patch_editor
@@ -295,10 +285,11 @@ impl FileDiffView {
                 .viewer()
                 .is_some_and(|viewer| viewer.read(cx).has_selection(cx));
         if selection {
-            return;
+            cx.propagate();
+        } else {
+            drop(self.leave(cx));
         }
-        cx.stop_propagation();
-        drop(self.leave(cx));
+        true
     }
 
     /// Editing started (with the version of the file the edits are of), or stopped.

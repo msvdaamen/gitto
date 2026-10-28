@@ -39,7 +39,8 @@ anyhow = "1.0.104"
 log = { version = "0.4.34", features = ["std"] }
 
 # apps/app's diffs: syntax highlighting as gpui-kit's `syntect` feature does it (the same syntect
-# and syntax set), and the words that changed between a removed line and the line added for it.
+# and syntax set), and the words that changed between a removed line and the line added for it
+# (and, in crates/ui, the diff of two whole files).
 similar = "2.7.0"
 syntect = { version = "5.3.0", default-features = false, features = [
   "parsing",

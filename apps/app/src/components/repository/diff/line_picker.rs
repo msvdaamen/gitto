@@ -4,38 +4,19 @@
 //! is `line_staging`'s. Ported from `line-picker.tsx`; the viewer draws the selection and the
 //! buttons, and scrolls to what this says to reveal.
 
-use std::rc::Rc;
+use gitto_ui::diff::diff_metadata::Side;
+use gitto_ui::diff::line_staging::{ChangedLine, ChangedRow, SelectedRange, range_of};
+use gitto_ui::diff::viewer_rows::Layout;
 
-use gitto_git::features::staging::schema::LineSelection;
-use gpui_kit::{App, Task};
-
-use super::diff_metadata::{FileDiff, Side};
-use super::line_staging::{
-    ChangedLine, ChangedRow, SelectedRange, changed_lines, changed_rows, range_of, selected_lines,
-};
-use super::viewer_rows::Layout;
-use crate::data::QueryError;
 use crate::data::staging::StageAction;
 
-/// Stages `lines` of `patch`, the patch on show they were picked from; resolves once they're
-/// staged, and fails if they couldn't be.
-pub type StageLines = Rc<dyn Fn(String, LineSelection, &mut App) -> Task<Result<(), QueryError>>>;
-
-/// Staging or unstaging lines of the patch on show, which can then be picked (`LineStaging`).
-#[derive(Clone)]
+/// Staging or unstaging lines of the patch on show, which can then be picked (`LineStaging`):
+/// the viewer asks its owner to stage those picked (see `PatchViewerEvent::StageLines`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LineStaging {
     pub action: StageAction,
     /// Lines are being staged: no others are until the patch that leaves is on show.
     pub busy: bool,
-    pub stage: StageLines,
-}
-
-impl PartialEq for LineStaging {
-    fn eq(&self, other: &Self) -> bool {
-        self.action == other.action
-            && self.busy == other.busy
-            && Rc::ptr_eq(&self.stage, &other.stage)
-    }
 }
 
 /// Where the keyboard staged lines from, by the line numbers of the side the patch leaves as it
@@ -99,8 +80,6 @@ pub enum PickerKey {
 /// moves to the change that's in their place.
 #[derive(Debug, Default)]
 pub struct LinePicker {
-    /// The changed lines of the diff on show.
-    lines: Vec<ChangedLine>,
     selection: Option<SelectedRange>,
     /// The changed lines selected.
     picked: Vec<ChangedLine>,
@@ -130,19 +109,20 @@ impl LinePicker {
         self.staged_at
     }
 
-    /// The changed line `number` of `side`, if it's one.
-    pub fn changed_line(&self, number: usize, side: Side) -> Option<ChangedLine> {
-        self.lines
-            .iter()
-            .find(|line| line.side == side && line.line_number == number)
-            .copied()
-    }
-
     /// Selects `range`, or nothing.
     pub fn select(&mut self, range: Option<SelectedRange>, layout: &Layout) {
         self.by_hunk = false;
         self.picked = match &range {
-            Some(range) => selected_lines(&self.lines, range, &row_of(layout)),
+            Some(range) => {
+                let (top, bottom, _) = Self::selected_rows(range, layout);
+                match (
+                    layout.row_of(range.start, range.side),
+                    layout.row_of(range.end, range.end_side),
+                ) {
+                    (Some(_), Some(_)) => layout.changed().in_rows(top, bottom),
+                    _ => Vec::new(),
+                }
+            }
             None => Vec::new(),
         };
         self.selection = range;
@@ -164,26 +144,18 @@ impl LinePicker {
         }
     }
 
-    /// The changed lines of the hunk `hunk`.
-    pub fn hunk_lines(&self, hunk: usize) -> Vec<ChangedLine> {
-        self.lines
-            .iter()
-            .filter(|line| line.hunk == hunk)
-            .copied()
-            .collect()
-    }
-
-    /// Selects the changes of `line`'s hunk, to go through them a hunk at a time.
-    fn select_hunk(&mut self, line: &ChangedLine, layout: &Layout) -> Vec<ChangedRow> {
-        let hunk: Vec<ChangedRow> = changed_rows(&self.lines, &row_of(layout))
-            .into_iter()
-            .filter(|row| row.line.hunk == line.hunk)
-            .collect();
-        if let (Some(first), Some(last)) = (hunk.first(), hunk.last()) {
-            self.select(Some(range_of(&first.line, &last.line)), layout);
-            self.by_hunk = true;
-        }
-        hunk
+    /// Selects the changes of `line`'s hunk, to go through them a hunk at a time; says where
+    /// they start and end.
+    fn select_hunk(
+        &mut self,
+        line: &ChangedLine,
+        layout: &Layout,
+    ) -> Option<(ChangedLine, ChangedLine)> {
+        let hunk = layout.changed().hunk_rows(line.hunk);
+        let (first, last) = (hunk.first()?.line, hunk.last()?.line);
+        self.select(Some(range_of(&first, &last)), layout);
+        self.by_hunk = true;
+        Some((first, last))
     }
 
     /// `changed`, to stage with `action`, unless there are none. Remembers where the keyboard
@@ -230,12 +202,10 @@ impl LinePicker {
     /// staged, if it did, and says which to reveal.
     pub fn shown(
         &mut self,
-        diff: &FileDiff,
         same_file: bool,
         pickable: bool,
         layout: &Layout,
     ) -> Option<ChangedLine> {
-        self.lines = changed_lines(diff);
         self.hovered = None;
         self.select(None, layout);
         self.reselect(same_file, pickable, layout)
@@ -255,7 +225,7 @@ impl LinePicker {
         if !pickable {
             return None;
         }
-        let rows = changed_rows(&self.lines, &row_of(layout));
+        let rows = layout.changed().rows();
         let target = if same_file {
             rows.iter()
                 .find(|row| row.line.position(at.side) >= at.position)
@@ -274,16 +244,15 @@ impl LinePicker {
 
     /// The first changed row from the top of the view, or the last one above its bottom.
     fn in_view(&self, down: bool, layout: &Layout, viewport: Viewport) -> Option<ChangedRow> {
-        let rows = changed_rows(&self.lines, &row_of(layout));
+        let rows = layout.changed().rows();
         if down {
-            rows.iter()
-                .find(|row| row.row as f32 >= viewport.top)
-                .or(rows.last())
-                .copied()
+            let below = rows.partition_point(|row| (row.row as f32) < viewport.top);
+            rows.get(below).or(rows.last()).copied()
         } else {
-            rows.iter()
-                .rev()
-                .find(|row| (row.row as f32) < viewport.top + viewport.rows)
+            let above = rows.partition_point(|row| (row.row as f32) < viewport.top + viewport.rows);
+            above
+                .checked_sub(1)
+                .and_then(|ix| rows.get(ix))
                 .or(rows.first())
                 .copied()
         }
@@ -305,7 +274,7 @@ impl LinePicker {
         layout: &Layout,
         viewport: Viewport,
     ) -> Option<ChangedLine> {
-        let rows = changed_rows(&self.lines, &row_of(layout));
+        let rows = layout.changed().rows();
         let target = match self.selection {
             None => self.in_view(down, layout, viewport),
             Some(selected) => {
@@ -318,9 +287,12 @@ impl LinePicker {
                     top
                 };
                 if down {
-                    rows.iter().find(|row| row.row > from).copied()
+                    rows.get(rows.partition_point(|row| row.row <= from))
+                        .copied()
                 } else {
-                    rows.iter().rev().find(|row| row.row < from).copied()
+                    rows.partition_point(|row| row.row < from)
+                        .checked_sub(1)
+                        .map(|ix| rows[ix])
                 }
             }
         }?;
@@ -343,34 +315,32 @@ impl LinePicker {
         layout: &Layout,
         viewport: Viewport,
     ) -> Option<(ChangedLine, ChangedLine)> {
-        let rows = changed_rows(&self.lines, &row_of(layout));
+        let rows = layout.changed().rows();
+        // The first row of the hunk the row `ix` is in.
+        let hunk_start = |ix: usize| rows.partition_point(|row| row.line.hunk < rows[ix].line.hunk);
         let target = match self.selection {
             None => self.in_view(down, layout, viewport).map(|row| row.line),
             Some(selected) => {
                 let (top, bottom, _) = Self::selected_rows(&selected, layout);
-                // The first row of each hunk, down from the selection, or up from its top.
-                let firsts: Vec<&ChangedRow> = rows
-                    .iter()
-                    .enumerate()
-                    .filter(|(ix, row)| *ix == 0 || rows[ix - 1].line.hunk != row.line.hunk)
-                    .map(|(_, row)| row)
-                    .collect();
+                // The first row of a hunk, down from the selection, or up from its top.
                 if down {
-                    firsts
-                        .iter()
-                        .find(|row| row.row > bottom)
-                        .map(|row| row.line)
+                    let below = rows.partition_point(|row| row.row <= bottom);
+                    match rows.get(below) {
+                        Some(row) if hunk_start(below) == below => Some(row.line),
+                        Some(row) => {
+                            let next = rows.partition_point(|next| next.line.hunk <= row.line.hunk);
+                            rows.get(next).map(|row| row.line)
+                        }
+                        None => None,
+                    }
                 } else {
-                    firsts
-                        .iter()
-                        .rev()
-                        .find(|row| row.row < top)
-                        .map(|row| row.line)
+                    rows.partition_point(|row| row.row < top)
+                        .checked_sub(1)
+                        .map(|above| rows[hunk_start(above)].line)
                 }
             }
         }?;
-        let hunk = self.select_hunk(&target, layout);
-        Some((hunk.first()?.line, hunk.last()?.line))
+        self.select_hunk(&target, layout)
     }
 
     /// Handles `key`, if lines can be picked from the patch on show (`pickable`, `live`).
@@ -410,19 +380,13 @@ impl LinePicker {
     }
 }
 
-/// The row a line is on in `layout`.
-fn row_of(layout: &Layout) -> impl Fn(usize, Side) -> Option<usize> + '_ {
-    move |number, side| layout.row_of(number, side)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::super::diff_metadata::parse_patch_files;
-    use super::super::line_staging::hunk_buttons;
-    use super::super::patch_files::Expanded;
-    use super::super::viewer_rows::{LayoutOptions, Separators, layout};
     use super::*;
-    use crate::state::diff_style::DiffStyle;
+    use gitto_ui::diff::diff_metadata::{FileDiff, parse_patch_files};
+    use gitto_ui::diff::line_staging::hunk_buttons;
+    use gitto_ui::diff::patch_files::Expanded;
+    use gitto_ui::diff::viewer_rows::{LayoutOptions, Separators, layout};
 
     fn diff() -> FileDiff {
         parse_patch_files(
@@ -437,7 +401,7 @@ mod tests {
         layout(
             diff,
             LayoutOptions {
-                style: DiffStyle::Unified,
+                split: false,
                 expanded: &Expanded::new(),
                 separators: Separators::LineInfo,
                 can_load_files: false,
@@ -461,7 +425,7 @@ mod tests {
         let diff = diff();
         let layout = laid_out(&diff);
         let mut picker = LinePicker::default();
-        picker.shown(&diff, false, true, &layout);
+        picker.shown(false, true, &layout);
 
         picker.key(PickerKey::Down { extend: false }, true, true, &layout, VIEW);
         assert_eq!(selected(&picker), [(Side::Deletions, 3)]);
@@ -481,7 +445,7 @@ mod tests {
         let diff = diff();
         let layout = laid_out(&diff);
         let mut picker = LinePicker::default();
-        picker.shown(&diff, false, true, &layout);
+        picker.shown(false, true, &layout);
 
         picker.key(PickerKey::NextHunk, true, true, &layout, VIEW);
         assert_eq!(
@@ -503,7 +467,7 @@ mod tests {
         let diff = diff();
         let layout = laid_out(&diff);
         let mut picker = LinePicker::default();
-        picker.shown(&diff, false, true, &layout);
+        picker.shown(false, true, &layout);
         assert_eq!(
             picker.key(PickerKey::Space, true, true, &layout, VIEW),
             KeyOutcome::Ignored
@@ -537,7 +501,7 @@ mod tests {
         let diff = diff();
         let layout = laid_out(&diff);
         let mut picker = LinePicker::default();
-        picker.shown(&diff, false, true, &layout);
+        picker.shown(false, true, &layout);
         picker.key(PickerKey::Down { extend: false }, true, true, &layout, VIEW);
         let request = picker
             .stage_request(picker.picked().to_vec(), true, StageAction::Stage)
@@ -558,7 +522,7 @@ mod tests {
         )
         .remove(0);
         let layout = laid_out(&left);
-        let reveal = picker.shown(&left, true, true, &layout);
+        let reveal = picker.shown(true, true, &layout);
         assert_eq!(reveal.map(|line| line.line_number), Some(3));
         assert_eq!(selected(&picker), [(Side::Additions, 3)]);
     }
