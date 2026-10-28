@@ -69,7 +69,7 @@ impl GitApi {
     }
 
     /// Has `report` told of each error that's a bug ([`ApiError::is_bug`]), with the procedure it
-    /// failed, e.g. to send it to a crash reporter (TS's `reportError`).
+    /// failed, e.g. to send it to a crash reporter (TS's `reportError`). It's logged already.
     pub fn on_bug(mut self, report: impl Fn(&ApiError, &str) + Send + Sync + 'static) -> Self {
         self.report_bug = Some(Arc::new(report));
         self
@@ -129,15 +129,18 @@ impl GitApi {
         }
     }
 
-    /// `error` as the UI shows it, having failed `procedure`: logged, and reported if it's a bug
-    /// (`onError` in `server.ts`). For an error that didn't come through [`call`](Self::call).
+    /// `error` as the UI shows it, having failed `procedure`: logged (with `log`, as an error if
+    /// it's a bug and a warning otherwise), and reported if it's a bug (`onError` in `server.ts`).
+    /// For an error that didn't come through [`call`](Self::call).
     pub fn fail(&self, procedure: &str, error: Error) -> ApiError {
         let error = ApiError::new(error);
-        eprintln!("{}", log_line(procedure, &error));
-        if error.is_bug()
-            && let Some(report) = &self.report_bug
-        {
-            report(&error, procedure);
+        if error.is_bug() {
+            log::error!("{}", log_line(procedure, &error));
+            if let Some(report) = &self.report_bug {
+                report(&error, procedure);
+            }
+        } else {
+            log::warn!("{}", log_line(procedure, &error));
         }
         error
     }
