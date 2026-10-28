@@ -127,28 +127,51 @@ async fn switch_taking_changes(
     };
 
     let stash = stash_to_switch(run, name, refused).await?;
-    let from = head_position(run).await?;
+    // From here until they're popped, the changes are in the stash, which every failure says.
+    let from = head_position(run).await.map_err(in_the_stash)?;
     let mut failed = None;
     if let Err(error) = run.run_with(&args, switching).await {
         // Back as they were, on the branch they were made on, when it didn't switch.
-        if head_position(run).await? == from {
-            pop_newest(run).await?;
+        if head_position(run).await.map_err(in_the_stash)? == from {
+            pop_newest(run).await.map_err(in_the_stash)?;
             return Err(error);
         }
         // It switched, but failed after, at a post-checkout hook, say: returned once they're back.
         failed = Some(error);
     }
-    if !pops_cleanly(run, root, &stash).await? {
-        let branch = current_branch(run).await?;
-        return Err(Error::ChangesStashed(format!(
+    if !pops_cleanly(run, root, &stash)
+        .await
+        .map_err(in_the_stash)?
+    {
+        let branch = current_branch(run).await.ok().flatten();
+        let mut message = format!(
             "Switched to {}, but your uncommitted changes conflict with it, so they're kept in the stash.",
             branch.as_deref().unwrap_or("the branch")
-        )));
+        );
+        if let Some(failed) = failed {
+            message.push_str(&format!(
+                " Git also failed after switching:\n{}",
+                failed.without_hints()
+            ));
+        }
+        return Err(Error::ChangesStashed(message));
     }
-    pop_newest(run).await?;
+    pop_newest(run).await.map_err(in_the_stash)?;
     match failed {
         Some(error) => Err(error),
         None => Ok(()),
+    }
+}
+
+/// `error`, which came up while the uncommitted changes were in the stash, saying they're kept
+/// there: as an `Error::ChangesStashed`, unless popping them conflicted, which says so itself.
+fn in_the_stash(error: Error) -> Error {
+    match error {
+        Error::ChangesStashed(_) | Error::StashConflict(_) => error,
+        error => Error::ChangesStashed(format!(
+            "{}\nYour uncommitted changes are kept in the stash.",
+            error.without_hints()
+        )),
     }
 }
 
@@ -738,6 +761,51 @@ mod tests {
         assert_eq!(git(&path, ["symbolic-ref", "--short", "HEAD"]), "other");
         assert_eq!(read(&path, "a.txt"), "other\na\nmine\n");
         assert_eq!(git(&path, ["stash", "list"]), "");
+    }
+
+    #[test]
+    fn says_a_hook_failed_after_it_switched_when_the_changes_are_kept_in_the_stash() {
+        let fx = Fixture::new();
+        let path = create_branched_repo(&fx, "switch-hook-conflict");
+        write_script(
+            &path.join(".git").join("hooks").join("post-checkout"),
+            "#!/bin/sh\necho hook failed >&2\nexit 1\n",
+        );
+        fs::write(path.join("a.txt"), "mine\n").unwrap();
+
+        smol::block_on(async {
+            let repo = fx.repos.open("switch-hook-conflict").await.unwrap();
+            let error = switch_branch(&repo, "refs/heads/other").await.unwrap_err();
+            assert!(matches!(error, Error::ChangesStashed(_)), "{error:?}");
+            let message = error.to_string();
+            assert!(
+                message.starts_with(
+                    "Switched to other, but your uncommitted changes conflict with it, so they're kept in the stash. Git also failed after switching:\n"
+                ),
+                "{message}"
+            );
+            assert!(message.ends_with("\nhook failed"), "{message}");
+        });
+        assert_eq!(git(&path, ["symbolic-ref", "--short", "HEAD"]), "other");
+        assert!(
+            git(&path, ["stash", "list"]).contains("Uncommitted changes when switching to other")
+        );
+    }
+
+    #[test]
+    fn says_the_changes_are_in_the_stash_when_it_fails_once_theyre_stashed() {
+        let error = in_the_stash(Error::Bug("Git failed.".to_owned()));
+        assert!(matches!(error, Error::ChangesStashed(_)), "{error:?}");
+        assert_eq!(
+            error.to_string(),
+            "Git failed.\nYour uncommitted changes are kept in the stash."
+        );
+        // Popping them, which says so itself.
+        let conflict = Error::StashConflict("Popping the stash caused conflicts.".to_owned());
+        assert_eq!(
+            in_the_stash(conflict).to_string(),
+            "Popping the stash caused conflicts."
+        );
     }
 
     #[test]
