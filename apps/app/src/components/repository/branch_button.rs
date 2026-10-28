@@ -63,24 +63,6 @@ impl BranchButton {
         &self.repository_id
     }
 
-    /// Shows another repository's: the popover names a branch for the repository it was opened
-    /// in.
-    pub fn set_repository(
-        &mut self,
-        repository_id: RepositoryId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.repository_id != repository_id {
-            self.status = status_query(&repository_id, cx);
-            self.repository_id = repository_id;
-            self.open = false;
-            self.name
-                .update(cx, |name, cx| name.set_value("", window, cx));
-            cx.notify();
-        }
-    }
-
     pub fn is_open(&self) -> bool {
         self.open
     }
@@ -91,7 +73,7 @@ impl BranchButton {
         let source = status
             .as_ref()
             .map_or("HEAD", |status| branch_source(&status.head));
-        let changes = if has_uncommitted_changes(status.as_ref()) {
+        let changes = if status.as_ref().is_some_and(has_uncommitted_changes) {
             ", with your uncommitted changes."
         } else {
             "."
@@ -169,7 +151,7 @@ impl Render for BranchButton {
         }
         let disabled = button.is_disabled() || button.is_busy();
         let this = cx.entity().downgrade();
-        let form = cx.entity();
+        let form = cx.entity().downgrade();
         Popover::new("branch-popover")
             .anchor(Anchor::TopLeft)
             .open(self.open && !disabled)
@@ -181,17 +163,18 @@ impl Render for BranchButton {
             .trigger(button)
             .content(move |_, _, cx| {
                 let form = form.clone();
-                let (summary, name) = {
-                    let button = form.read(cx);
-                    (button.summary(), button.name.clone())
-                };
+                let shown = form
+                    .read_with(cx, |button, _| (button.summary(), button.name.clone()))
+                    .ok();
                 div()
                     .w(rems(18.67))
-                    .child(
-                        BranchForm::new(summary, &name).on_submit(move |_, window, cx| {
-                            form.update(cx, |this, cx| this.submit(window, cx));
-                        }),
-                    )
+                    .when_some(shown, |this, (summary, name)| {
+                        this.child(
+                            BranchForm::new(summary, &name).on_submit(move |window, cx| {
+                                let _ = form.update(cx, |this, cx| this.submit(window, cx));
+                            }),
+                        )
+                    })
             })
             .into_any_element()
     }
@@ -301,7 +284,7 @@ mod tests {
         assert!(shown.is_busy());
 
         let mut moved = changed(status(), 2);
-        moved.head = Head::Branch {
+        moved.summary.head = Head::Branch {
             name: "feature/new".into(),
             sha: "abc".into(),
         };
@@ -369,25 +352,17 @@ mod tests {
 
         // Another repository's button can be used meanwhile, and opening it changes nothing in
         // "a".
-        cx.update_window(window, |_, window, cx| {
-            button.update(cx, |button, cx| {
-                button.set_repository(b.clone(), window, cx)
-            })
-        })
-        .unwrap();
-        let shown = button.read_with(cx, |button, cx| button.button(cx));
+        let (other_window, other) = render(cx, &b, &creates);
+        let shown = other.read_with(cx, |button, cx| button.button(cx));
         assert!(!shown.is_busy());
         assert!(!shown.is_disabled());
-        click(window, "branch", cx);
-        assert!(button.read_with(cx, |button, _| button.is_open()));
-        press(window, "escape", cx);
+        click(other_window, "branch", cx);
+        assert!(other.read_with(cx, |button, _| button.is_open()));
+        press(other_window, "escape", cx);
 
-        cx.update_window(window, |_, window, cx| {
-            button.update(cx, |button, cx| {
-                button.set_repository(a.clone(), window, cx)
-            })
-        })
-        .unwrap();
+        // "a"'s, made again, is still creating it, and says why that failed.
+        drop(button);
+        let (_, button) = render(cx, &a, &creates);
         assert!(button.read_with(cx, |button, cx| button.button(cx).is_busy()));
         let settle = creates.settle.borrow_mut().remove(0);
         settle

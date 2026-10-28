@@ -15,7 +15,9 @@ use gitto_git::features::operation::schema::Operation;
 use gitto_git::features::refs::schema::Ref;
 use gitto_git::features::remote::schema::PushTarget;
 use gitto_git::features::stash::schema::Stash;
-use gitto_git::features::status::schema::{Head, StatusCounts, Uncommitted, WorkingTreeFiles};
+use gitto_git::features::status::schema::{
+    Head, StatusCounts, StatusSummary, Uncommitted, WorkingTreeFiles,
+};
 use gitto_git::features::worktree::schema::Worktree;
 use gitto_git::input::RepositoryId;
 use gitto_repository::Repository;
@@ -46,11 +48,11 @@ impl RepositorySource for Repositories {
         async { Err(QueryError::msg("Not in this test.")) }.boxed()
     }
 
-    fn remove(&self, _: String) -> BoxFuture<'static, Result<(), QueryError>> {
+    fn remove(&self, _: RepositoryId) -> BoxFuture<'static, Result<(), QueryError>> {
         async { Err(QueryError::msg("Not in this test.")) }.boxed()
     }
 
-    fn reorder(&self, _: Vec<String>) -> BoxFuture<'static, Result<(), QueryError>> {
+    fn reorder(&self, _: Vec<RepositoryId>) -> BoxFuture<'static, Result<(), QueryError>> {
         async { Err(QueryError::msg("Not in this test.")) }.boxed()
     }
 }
@@ -74,15 +76,17 @@ pub fn repository_id() -> RepositoryId {
 /// The uncommitted changes with HEAD at `head`: none, nor an upstream.
 pub fn uncommitted(head: Head) -> Uncommitted {
     Uncommitted {
-        head,
-        upstream: None,
-        ahead: 0,
-        behind: 0,
-        counts: StatusCounts {
-            files: 0,
-            staged: 0,
-            unstaged: 0,
-            conflicted: 0,
+        summary: StatusSummary {
+            head,
+            upstream: None,
+            ahead: 0,
+            behind: 0,
+            counts: StatusCounts {
+                files: 0,
+                staged: 0,
+                unstaged: 0,
+                conflicted: 0,
+            },
         },
         changes: WorkingTreeFiles {
             staged: vec![],
@@ -96,19 +100,18 @@ pub fn uncommitted(head: Head) -> Uncommitted {
 
 /// On main, tracking origin/main, two commits behind it, without changes.
 pub fn status() -> Uncommitted {
-    Uncommitted {
-        upstream: Some("origin/main".into()),
-        behind: 2,
-        ..uncommitted(Head::Branch {
-            name: "main".into(),
-            sha: "abc".into(),
-        })
-    }
+    let mut status = uncommitted(Head::Branch {
+        name: "main".into(),
+        sha: "abc".into(),
+    });
+    status.summary.upstream = Some("origin/main".into());
+    status.summary.behind = 2;
+    status
 }
 
 /// `status`, with `files` changed: one staged, the rest unstaged.
 pub fn changed(mut status: Uncommitted, files: u64) -> Uncommitted {
-    status.counts = StatusCounts {
+    status.summary.counts = StatusCounts {
         files,
         staged: files.min(1),
         unstaged: files.saturating_sub(1),
@@ -136,7 +139,7 @@ pub fn with_conflicts(
     marker_free: &[&str],
 ) -> Uncommitted {
     let count = paths.len() as u64;
-    status.counts = StatusCounts {
+    status.summary.counts = StatusCounts {
         files: count,
         staged: 0,
         unstaged: 0,
@@ -144,7 +147,7 @@ pub fn with_conflicts(
     };
     status.changes.unstaged = paths.iter().map(|path| conflicted(path)).collect();
     status.changes.marker_free = marker_free.iter().map(|path| (*path).to_owned()).collect();
-    status.version = uuid::Uuid::now_v7().to_string();
+    status.version = uuid::Uuid::now_v7().to_string().into();
     status
 }
 
@@ -183,7 +186,7 @@ pub fn set_remotes(id: &RepositoryId, remotes: &[&str], cx: &mut TestAppContext)
 /// The repository `id` at `path`, named after its folder.
 pub fn repository(id: &RepositoryId, path: &str) -> Repository {
     Repository {
-        id: id.to_string(),
+        id: id.clone(),
         name: path.rsplit('/').next().unwrap_or(path).to_owned(),
         path: path.to_owned(),
     }

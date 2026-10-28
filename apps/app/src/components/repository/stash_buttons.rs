@@ -52,16 +52,6 @@ impl StashButtons {
         &self.repository_id
     }
 
-    /// Shows another repository's.
-    pub fn set_repository(&mut self, repository_id: RepositoryId, cx: &mut Context<Self>) {
-        if self.repository_id != repository_id {
-            self.status = status_query(&repository_id, cx);
-            self.stashes = stashes_query(&repository_id, cx);
-            self.repository_id = repository_id;
-            cx.notify();
-        }
-    }
-
     /// Stash, as it is now. Until the status has loaded, it's disabled.
     pub fn stash_button(&self, cx: &App) -> ToolbarButton {
         let id = self.repository_id.clone();
@@ -103,9 +93,10 @@ impl StashButtons {
             (_, None, Some(error)) => format!("Couldn't load the stashes: {}", error.message()),
             _ => "Pop".to_owned(),
         };
-        let poppable = can_pop(
-            status.as_ref().map(|status| &status.counts),
-            stashes.as_deref(),
+        // Not until both have loaded.
+        let poppable = matches!(
+            (&status, &stashes),
+            (Some(status), Some(stashes)) if can_pop(&status.counts, stashes)
         );
         let newest = stashes
             .as_ref()
@@ -165,7 +156,7 @@ mod tests {
     }
 
     fn actions(calls: &Rc<Calls>) -> StashActions {
-        let busy = |id: &str, cx: &App| StashActions::is_pending(id, cx);
+        let busy = |id: &RepositoryId, cx: &App| StashActions::is_pending(id, cx);
         let unused = RepositoryOperation::new("unused", |_, _: String, cx: &mut App| {
             cx.background_spawn(async { Ok(()) })
         });

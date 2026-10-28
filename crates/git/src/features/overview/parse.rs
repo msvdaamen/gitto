@@ -6,7 +6,8 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use super::schema::{Activity, ActivityKind, HostedRemote};
-use crate::features::history::parse::millis;
+use crate::core::errors::Result;
+use crate::features::history::parse::{millis, warn_of_fields_left};
 
 /// With -z, entries are NUL-separated as well, so the output is a flat list of fields where every
 /// three make up one entry: the reflog selector (with `--date=unix`, `HEAD@{<seconds>}`), git's
@@ -41,14 +42,14 @@ fn capture(pattern: &Regex, text: &str) -> Option<String> {
         .map(|captures| captures[1].to_owned())
 }
 
-/// HEAD's reflog, as `log -g -z --date=unix` prints it with [`REFLOG_FORMAT`], as activity.
-pub fn parse_reflog(output: &str) -> Vec<Activity> {
+/// HEAD's reflog, as `log -g -z --date=unix` prints it with [`REFLOG_FORMAT`], as activity;
+/// `Error::Bug` for a time git wouldn't print.
+pub fn parse_reflog(output: &str) -> Result<Vec<Activity>> {
     let fields: Vec<&str> = output.split('\0').collect();
+    let (entries, rest) = fields.as_chunks::<3>();
+    warn_of_fields_left("reflog", rest);
     let mut activity = Vec::new();
-    for entry in fields.chunks_exact(3) {
-        let [selector, message, subject] = entry else {
-            unreachable!("chunks of 3")
-        };
+    for [selector, message, subject] in entries {
         let Some(seconds) = capture(&SELECTOR, selector.trim()) else {
             continue;
         };
@@ -57,7 +58,7 @@ pub fn parse_reflog(output: &str) -> Vec<Activity> {
         }
         if let Some((kind, target)) = to_activity(message) {
             activity.push(Activity {
-                at: millis(&seconds),
+                at: millis(&seconds)?,
                 kind,
                 target,
                 subject: (*subject).to_owned(),
@@ -65,7 +66,7 @@ pub fn parse_reflog(output: &str) -> Vec<Activity> {
             });
         }
     }
-    activity
+    Ok(activity)
 }
 
 /// What a reflog message (e.g. `checkout: moving from main to feature`) says was done, and with
@@ -186,6 +187,7 @@ mod tests {
 
     fn kinds(output: &str) -> Vec<String> {
         parse_reflog(output)
+            .unwrap()
             .into_iter()
             .map(|Activity { kind, target, .. }| match target {
                 Some(target) => format!("{} {target}", kind.as_str()),
@@ -204,7 +206,7 @@ mod tests {
     #[test]
     fn reads_when_what_and_gits_message() {
         assert_eq!(
-            parse_reflog(&reflog(&["commit: Fix it"])),
+            parse_reflog(&reflog(&["commit: Fix it"])).unwrap(),
             [Activity {
                 at: 1_700_000_000_000,
                 kind: ActivityKind::Commit,
@@ -276,7 +278,7 @@ mod tests {
 
     #[test]
     fn reads_nothing_from_no_output() {
-        assert_eq!(parse_reflog(""), []);
+        assert_eq!(parse_reflog("").unwrap(), []);
     }
 
     #[test]

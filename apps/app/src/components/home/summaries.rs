@@ -4,7 +4,6 @@ use std::rc::Rc;
 
 use gitto_git::features::overview::schema::Overview;
 use gitto_git::features::status::schema::{StatusSummary, Uncommitted};
-use gitto_git::input::RepositoryId;
 use gitto_repository::Repository;
 use gpui_kit::Context;
 
@@ -60,13 +59,10 @@ impl RepositorySummaries {
                 self.entries.push(entry);
                 continue;
             }
-            let Ok(id) = RepositoryId::parse(repository.id.clone()) else {
-                continue;
-            };
             self.entries.push(Entry {
                 repository: repository.clone(),
-                status: unwatched_status_query(&id, cx),
-                overview: overview_query(&id, cx),
+                status: unwatched_status_query(&repository.id, cx),
+                overview: overview_query(&repository.id, cx),
             });
         }
     }

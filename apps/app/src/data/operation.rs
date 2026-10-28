@@ -35,7 +35,7 @@ impl OperationState {
 /// Every repository's operations, by name and repository (see the module's doc).
 #[derive(Default)]
 pub struct Operations {
-    states: HashMap<(SharedString, String), OperationState>,
+    states: HashMap<(SharedString, RepositoryId), OperationState>,
 }
 
 impl Global for Operations {}
@@ -43,20 +43,20 @@ impl Global for Operations {}
 impl Operations {
     /// The operation `name`'s state on the repository `id`: idle, without an error, if it's not
     /// been run, or went through (`useRepositoryOperationState`).
-    pub fn state(name: &str, id: &str, cx: &App) -> OperationState {
+    pub fn state(name: &str, id: &RepositoryId, cx: &App) -> OperationState {
         cx.try_global::<Operations>()
             .and_then(|operations| {
                 operations
                     .states
-                    .get(&(SharedString::new(name), id.to_owned()))
+                    .get(&(SharedString::new(name), id.clone()))
             })
             .cloned()
             .unwrap_or_default()
     }
 
     /// Forgets why the operation `name` last failed on the repository `id`, unless it's running.
-    pub fn dismiss(name: &str, id: &str, cx: &mut App) {
-        let key = (SharedString::new(name), id.to_owned());
+    pub fn dismiss(name: &str, id: &RepositoryId, cx: &mut App) {
+        let key = (SharedString::new(name), id.clone());
         if Operations::state(name, id, cx).running {
             return;
         }
@@ -67,8 +67,8 @@ impl Operations {
         }
     }
 
-    fn set(name: &SharedString, id: &str, state: Option<OperationState>, cx: &mut App) {
-        let key = (name.clone(), id.to_owned());
+    fn set(name: &SharedString, id: &RepositoryId, state: Option<OperationState>, cx: &mut App) {
+        let key = (name.clone(), id.clone());
         cx.update_global::<Operations, _>(|operations, _| match state {
             Some(state) => {
                 operations.states.insert(key, state);
@@ -120,12 +120,12 @@ impl<T: 'static, R: 'static> RepositoryOperation<T, R> {
     }
 
     /// Its state on the repository `id`.
-    pub fn state(&self, id: &str, cx: &App) -> OperationState {
+    pub fn state(&self, id: &RepositoryId, cx: &App) -> OperationState {
         Operations::state(&self.name, id, cx)
     }
 
     /// Forgets why it last failed on the repository `id`.
-    pub fn dismiss(&self, id: &str, cx: &mut App) {
+    pub fn dismiss(&self, id: &RepositoryId, cx: &mut App) {
         Operations::dismiss(&self.name, id, cx)
     }
 
@@ -142,7 +142,7 @@ impl<T: 'static, R: 'static> RepositoryOperation<T, R> {
             return None;
         }
         let name = self.name.clone();
-        let repository = id.to_string();
+        let repository = id.clone();
         Operations::set(
             &name,
             &repository,
@@ -174,7 +174,10 @@ impl<T: 'static, R: 'static> RepositoryOperation<T, R> {
     /// This operation, which doesn't run while `busy` says one of its group is: for operations
     /// that are shown together, like the stashes', so what's on show is never from before
     /// another (`oneAtATime`).
-    pub fn one_at_a_time(self, busy: impl Fn(&str, &App) -> bool + 'static) -> OneAtATime<T, R> {
+    pub fn one_at_a_time(
+        self,
+        busy: impl Fn(&RepositoryId, &App) -> bool + 'static,
+    ) -> OneAtATime<T, R> {
         OneAtATime {
             operation: self,
             busy: Rc::new(busy),
@@ -183,7 +186,7 @@ impl<T: 'static, R: 'static> RepositoryOperation<T, R> {
 }
 
 /// Whether one of an operation's group is running on a repository, by its id.
-pub type Busy = Rc<dyn Fn(&str, &App) -> bool>;
+pub type Busy = Rc<dyn Fn(&RepositoryId, &App) -> bool>;
 
 /// An operation that waits for its group (see [`RepositoryOperation::one_at_a_time`]).
 pub struct OneAtATime<T, R = ()> {
@@ -205,11 +208,11 @@ impl<T: 'static, R: 'static> OneAtATime<T, R> {
         &self.operation
     }
 
-    pub fn state(&self, id: &str, cx: &App) -> OperationState {
+    pub fn state(&self, id: &RepositoryId, cx: &App) -> OperationState {
         self.operation.state(id, cx)
     }
 
-    pub fn dismiss(&self, id: &str, cx: &mut App) {
+    pub fn dismiss(&self, id: &RepositoryId, cx: &mut App) {
         self.operation.dismiss(id, cx)
     }
 
@@ -231,7 +234,7 @@ impl<T: 'static, R: 'static> OneAtATime<T, R> {
 /// repository, also after a failure: the action may have changed it partway, e.g. a pop that
 /// conflicts. Resolves once what's shown of it has loaded again.
 pub async fn reloading<R, E>(
-    id: &str,
+    id: &RepositoryId,
     action: impl Future<Output = Result<R, E>> + Send + 'static,
     cx: &mut AsyncApp,
 ) -> Result<R, QueryError>

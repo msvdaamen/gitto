@@ -23,6 +23,13 @@ const SHORTCUT: &str = if cfg!(target_os = "macos") {
     "Ctrl ↵"
 };
 
+/// HEAD's commit, told apart from the same commit in another repository, e.g. another worktree.
+#[derive(Debug, Clone, PartialEq)]
+struct Head {
+    repository: RepositoryId,
+    sha: String,
+}
+
 /// Commits what's staged in the repository, or amends the last commit with it. The new commit's
 /// message and the amended one are kept apart, so switching between them loses neither. Its owner
 /// tells it how many files are staged and which commit HEAD is ([`set_head`](Self::set_head)).
@@ -36,11 +43,11 @@ pub struct CommitForm {
     /// The commit being amended (as [`head`](Self::head)). Amending stops once HEAD moves to
     /// another commit: after the amend, or when one is made or checked out elsewhere, so a stale
     /// message is never amended onto it.
-    amending: Option<String>,
+    amending: Option<Head>,
     draft: CommitMessage,
     /// Edits to the amended message, kept for the commit they were made to while amending is
     /// toggled.
-    edits: Option<(String, CommitMessage)>,
+    edits: Option<(Head, CommitMessage)>,
     /// The last commit's message and where it was pushed, loaded while amending it.
     last_message: Query<String>,
     pushed_to: Query<Option<String>>,
@@ -70,6 +77,11 @@ impl CommitForm {
         });
         let subscriptions = vec![
             cx.observe(&commit, |_, _, cx| cx.notify()),
+            // Whatever changes the message on show notifies it: amending turned on or off, the
+            // last commit's message loaded, a commit made, HEAD moved.
+            cx.observe_in(&cx.entity(), window, |this, _, window, cx| {
+                this.sync_fields(window, cx)
+            }),
             cx.subscribe(&summary, |this, input, event, cx| match event {
                 InputEvent::Change => {
                     let summary = input.read(cx).value().to_string();
@@ -144,17 +156,24 @@ impl CommitForm {
         cx.notify();
     }
 
-    /// HEAD, told apart from the same commit in another repository, e.g. another worktree.
-    fn head(&self) -> Option<String> {
-        self.last_commit
-            .as_ref()
-            .map(|sha| format!("{} {sha}", self.repository_id))
+    fn head(&self) -> Option<Head> {
+        Some(Head {
+            repository: self.repository_id.clone(),
+            sha: self.last_commit.clone()?,
+        })
+    }
+
+    /// Whether `head` is HEAD.
+    fn is_head(&self, head: &Head) -> bool {
+        head.repository == self.repository_id && self.last_commit.as_ref() == Some(&head.sha)
     }
 
     /// Whether it's amending HEAD: checked against HEAD too, as amending is only reset once HEAD
     /// is seen to move.
     pub fn is_amending(&self) -> bool {
-        self.amending.is_some() && self.amending == self.head()
+        self.amending
+            .as_ref()
+            .is_some_and(|head| self.is_head(head))
     }
 
     /// The last commit's message, split, once loaded.
@@ -174,10 +193,9 @@ impl CommitForm {
     }
 
     fn amend_edits(&self) -> Option<CommitMessage> {
-        let head = self.head()?;
         self.edits
             .as_ref()
-            .filter(|(edited, _)| *edited == head)
+            .filter(|(edited, _)| self.is_head(edited))
             .map(|(_, message)| message.clone())
     }
 
@@ -334,8 +352,8 @@ impl CommitForm {
 
     /// Puts the message on show in the fields once it changed other than by typing (amending
     /// turned on, the last message loaded, a commit made): only then, as what's typed reaches the
-    /// message after the field has it, through its events, and a render can come in between. And
-    /// the summary's placeholder, which says when the last commit's message is loading.
+    /// message after the field has it, through its events, and it can be notified in between.
+    /// And the summary's placeholder, which says when the last commit's message is loading.
     fn sync_fields(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let message = self.message();
         let changed = message != self.synced;
@@ -365,8 +383,7 @@ impl CommitForm {
 }
 
 impl Render for CommitForm {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.sync_fields(window, cx);
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = *cx.palette();
         let amend = self.is_amending();
         let locked = self.is_locked(cx);
@@ -613,6 +630,41 @@ mod tests {
         form.click("commit", cx);
         assert_eq!(form.committed(), [amended("Reworded\n\nIts body\n", "a1")]);
         assert!(!form.is_amend_checked(cx));
+    }
+
+    /// Holds the form without rendering it.
+    struct Unrendered {
+        form: Entity<CommitForm>,
+    }
+
+    impl Render for Unrendered {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    #[gpui_kit::test]
+    fn puts_the_last_commits_message_in_the_fields_without_being_rendered(cx: &mut TestAppContext) {
+        let fakes = Fakes::new();
+        let data = fakes.data();
+        let _dir = crate::test_support::init(cx, |services| services);
+        let (_, host) = crate::test_support::open(cx, move |window, cx| Unrendered {
+            form: cx.new(|cx| {
+                let mut form = CommitForm::new(repository_id(), data, window, cx);
+                form.set_head(repository_id(), 0, Some("a1".to_owned()), cx);
+                form
+            }),
+        });
+        let form = host.read_with(cx, |host, _| host.form.clone());
+        form.update(cx, |form, cx| form.toggle_amend(true, cx));
+        cx.run_until_parked();
+        assert_eq!(
+            form.read_with(cx, |form, cx| (
+                form.summary.read(cx).value().to_string(),
+                form.description.read(cx).value().to_string(),
+            )),
+            ("Commit a1".to_owned(), "Its body".to_owned())
+        );
     }
 
     #[gpui_kit::test]

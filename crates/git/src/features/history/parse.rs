@@ -1,6 +1,8 @@
 //! Reading the log. Ported from `history/parse.ts`.
 
 use super::schema::{Commit, CommitRef, CommitRefKind};
+use crate::core::errors::{Error, Result};
+use crate::core::trace::TARGET;
 use crate::features::refs::parse::parse_ref_name;
 
 /// What the log prints of each commit: SHA, parents, author name, author email, author date,
@@ -11,22 +13,34 @@ const FIELDS: usize = 9;
 /// [`FIELDS`] entries make up one commit. None of the fields can contain NUL.
 pub const LOG_FORMAT: &str = "--format=%H%x00%P%x00%an%x00%ae%x00%at%x00%ct%x00%D%x00%s%x00%b";
 
-/// Seconds since the epoch, as the log prints them, in milliseconds; 0 for none (JS's `Number("")`).
-pub(crate) fn millis(seconds: &str) -> i64 {
-    seconds
+/// Seconds since the epoch, as git prints them, in milliseconds; `Error::Bug` for anything else,
+/// which git doesn't print.
+pub(crate) fn millis(seconds: &str) -> Result<i64> {
+    let parsed: i64 = seconds
         .trim()
-        .parse::<i64>()
-        .unwrap_or(0)
-        .saturating_mul(1000)
+        .parse()
+        .map_err(|_| Error::Bug(format!("Not a time from git: {seconds:?}")))?;
+    Ok(parsed.saturating_mul(1000))
 }
 
-/// The commits in the output of `log -z` with [`LOG_FORMAT`].
-pub fn parse_log(output: &str) -> Vec<Commit> {
+/// Warns of `rest`, the fields at the end of `what` git printed (e.g. `log`) that make up no entry
+/// of it: git ends the last entry with a NUL, so there's only ever the empty one after it.
+pub(crate) fn warn_of_fields_left(what: &str, rest: &[&str]) {
+    if !matches!(rest, [] | [""]) {
+        log::warn!(target: TARGET, "{what} ended in fields that make up no entry of it: {rest:?}");
+    }
+}
+
+/// The commits in the output of `log -z` with [`LOG_FORMAT`]; `Error::Bug` for a date git wouldn't
+/// print.
+pub fn parse_log(output: &str) -> Result<Vec<Commit>> {
     let fields: Vec<&str> = output.split('\0').collect();
-    fields
-        .chunks_exact(FIELDS)
-        .map(|commit| {
-            let [
+    let (commits, rest) = fields.as_chunks::<FIELDS>();
+    warn_of_fields_left("log", rest);
+    commits
+        .iter()
+        .map(
+            |[
                 sha,
                 parents,
                 author_name,
@@ -36,26 +50,24 @@ pub fn parse_log(output: &str) -> Vec<Commit> {
                 refs,
                 subject,
                 body,
-            ] = commit
-            else {
-                unreachable!("chunks of {FIELDS}")
-            };
-            Commit {
-                sha: sha.trim().to_owned(),
-                parents: if parents.is_empty() {
-                    Vec::new()
-                } else {
-                    parents.split(' ').map(str::to_owned).collect()
-                },
-                author_name: (*author_name).to_owned(),
-                author_email: (*author_email).to_owned(),
-                authored_at: millis(authored_at),
-                committed_at: millis(committed_at),
-                refs: parse_decorations(refs),
-                subject: (*subject).to_owned(),
-                body: body.trim().to_owned(),
-            }
-        })
+            ]| {
+                Ok(Commit {
+                    sha: sha.trim().to_owned(),
+                    parents: if parents.is_empty() {
+                        Vec::new()
+                    } else {
+                        parents.split(' ').map(str::to_owned).collect()
+                    },
+                    author_name: (*author_name).to_owned(),
+                    author_email: (*author_email).to_owned(),
+                    authored_at: millis(authored_at)?,
+                    committed_at: millis(committed_at)?,
+                    refs: parse_decorations(refs),
+                    subject: (*subject).to_owned(),
+                    body: body.trim().to_owned(),
+                })
+            },
+        )
         .collect()
 }
 
@@ -75,7 +87,7 @@ fn parse_decorations(decorations: &str) -> Vec<CommitRef> {
                     kind: CommitRefKind::Head,
                     name: "HEAD".to_owned(),
                     full_name: "HEAD".to_owned(),
-                    current: None,
+                    current: false,
                 });
             }
             let checked_out = decoration.strip_prefix("HEAD -> ");
@@ -87,7 +99,7 @@ fn parse_decorations(decorations: &str) -> Vec<CommitRef> {
                 kind: parsed.kind.into(),
                 name: parsed.name,
                 full_name: full_name.to_owned(),
-                current: checked_out.map(|_| true),
+                current: checked_out.is_some(),
             })
         })
         .collect()
@@ -102,7 +114,7 @@ mod tests {
             kind,
             name: name.to_owned(),
             full_name: full_name.to_owned(),
-            current: current.then_some(true),
+            current,
         }
     }
 
@@ -146,7 +158,7 @@ mod tests {
         let output = commits.concat().join("\0");
 
         assert_eq!(
-            parse_log(&output),
+            parse_log(&output).unwrap(),
             [
                 Commit {
                     sha: "bbb".into(),
@@ -205,7 +217,7 @@ mod tests {
         ];
 
         assert_eq!(
-            parse_log(&output.join("\0"))[0].refs,
+            parse_log(&output.join("\0")).unwrap()[0].refs,
             [
                 commit_ref(CommitRefKind::Head, "HEAD", "HEAD", false),
                 commit_ref(CommitRefKind::Local, "main", "refs/heads/main", false),
@@ -215,7 +227,36 @@ mod tests {
 
     #[test]
     fn returns_nothing_for_an_empty_log() {
-        assert_eq!(parse_log(""), []);
+        assert_eq!(parse_log("").unwrap(), []);
+    }
+
+    #[test]
+    fn warns_of_fields_that_make_up_no_commit() {
+        let logged = crate::test_support::logged_warnings();
+        // Other tests' warnings are logged too.
+        let cut_off = || {
+            logged()
+                .into_iter()
+                .filter(|warning| warning.contains("cut off"))
+                .collect::<Vec<_>>()
+        };
+        let commit = ["aaa", "", "Ada", "ada@example.com", "1", "1", "", "S", ""];
+        let mut output = commit.join("\0") + "\0";
+        assert_eq!(parse_log(&output).unwrap().len(), 1);
+        output += "bbb\0cut off";
+        assert_eq!(parse_log(&output).unwrap().len(), 1);
+        assert_eq!(
+            cut_off(),
+            [r#"log ended in fields that make up no entry of it: ["bbb", "cut off"]"#]
+        );
+    }
+
+    #[test]
+    fn says_a_date_git_wouldnt_print_is_a_bug() {
+        let output = ["aaa", "", "Ada", "ada@example.com", "", "1", "", "S", ""];
+        let error = parse_log(&output.join("\0")).unwrap_err();
+        assert!(matches!(error, Error::Bug(_)), "{error:?}");
+        assert_eq!(millis(" 12\n").unwrap(), 12_000);
     }
 
     #[test]
@@ -228,6 +269,11 @@ mod tests {
                 { "kind": "local", "name": "main", "fullName": "refs/heads/main", "current": true },
                 { "kind": "local", "name": "side", "fullName": "refs/heads/side" },
             ])
+        );
+        // And read back as it was.
+        assert_eq!(
+            serde_json::from_value::<Vec<CommitRef>>(json).unwrap(),
+            refs
         );
     }
 }

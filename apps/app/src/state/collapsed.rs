@@ -64,8 +64,7 @@ impl Collapsed {
         let collapsed = !self.is_collapsed(id);
         self.state.insert(id.to_owned(), collapsed);
         if let Ok(saved) = serde_json::to_string(&self.state) {
-            let _ = self
-                .storage
+            self.storage
                 .set_item(&storage_key(&self.repository_id), saved);
         }
     }
@@ -111,9 +110,7 @@ mod tests {
     #[test]
     fn ignores_unreadable_saved_state() {
         let storage = Rc::new(LocalStorage::in_memory());
-        storage
-            .set_item("gitto-sidebar-collapsed:repo", "not json")
-            .unwrap();
+        storage.set_item("gitto-sidebar-collapsed:repo", "not json");
         assert!(!Collapsed::new("repo", [], storage).is_collapsed("remotes"));
     }
 }

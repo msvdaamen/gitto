@@ -7,13 +7,12 @@ use gitto_git::api::pull;
 use gitto_git::features::remote::commands::{fetch_all, list_remotes};
 use gitto_git::features::remote::push::{get_push_target, push};
 use gitto_git::features::remote::schema::PushTarget;
-use gitto_git::input::{NonEmpty, RepositoryId};
-use gpui_kit::{App, AppContext as _, Context, Entity};
+use gitto_git::input::{BranchShortName, RepositoryId};
+use gpui_kit::{App, AppContext as _, Context};
 
 use super::call::{call, loads, parse};
 use super::client::{QueryClient, QueryError, QueryOptions, StaleTime};
 use super::keys;
-use super::mutation::Mutation;
 use super::operation::{OperationState, Operations, RepositoryOperation, reloading};
 use super::query::Query;
 
@@ -32,26 +31,24 @@ pub fn remotes_query<V: 'static>(id: &RepositoryId, cx: &mut Context<V>) -> Quer
     Query::new(remotes_options(id, cx), cx)
 }
 
-/// Fetches every remote of the repository whose id it's given (`useFetch`). The id is the
-/// mutation's input (`Mutation::input`), so a fetch still running after switching repositories
-/// reloads the one it fetched, and its state can be told apart from the current repository's.
-pub fn fetch_mutation(cx: &mut App) -> Entity<Mutation<RepositoryId>> {
-    Mutation::new(
-        |id: RepositoryId, cx: &mut App| {
-            let fetching = call(cx, "remote.fetch", &id, |repo| async move {
-                fetch_all(&repo).await
-            });
-            cx.spawn(async move |cx| {
-                cx.background_spawn(fetching).await?;
-                // The watcher would catch the new remote refs too, but reloading right away feels
-                // snappier.
-                cx.update(|cx| QueryClient::invalidate(&keys::repository(&id), cx))
-                    .await;
-                Ok(())
-            })
-        },
-        cx,
-    )
+const FETCH: &str = "fetch";
+
+/// Fetches every remote of a repository, then reloads it (`useFetch`); whether that's running,
+/// and why it last failed, are the repository's, whichever is on show.
+pub fn fetch_operation() -> RepositoryOperation<()> {
+    RepositoryOperation::new(FETCH, |id, (), cx: &mut App| {
+        let fetching = call(cx, "remote.fetch", &id, |repo| async move {
+            fetch_all(&repo).await
+        });
+        cx.spawn(async move |cx| {
+            cx.background_spawn(fetching).await?;
+            // The watcher would catch the new remote refs too, but reloading right away feels
+            // snappier.
+            cx.update(|cx| QueryClient::invalidate(&keys::repository(&id), cx))
+                .await;
+            Ok(())
+        })
+    })
 }
 
 /// Pulls the current branch's upstream; whether a pull is running, and why the last one failed
@@ -77,11 +74,11 @@ impl PullOperation {
         self.operation.run(id, (), cx)
     }
 
-    pub fn state(&self, id: &str, cx: &App) -> OperationState {
+    pub fn state(&self, id: &RepositoryId, cx: &App) -> OperationState {
         self.operation.state(id, cx)
     }
 
-    pub fn dismiss(&self, id: &str, cx: &mut App) {
+    pub fn dismiss(&self, id: &RepositoryId, cx: &mut App) {
         self.operation.dismiss(id, cx)
     }
 }
@@ -116,7 +113,7 @@ pub(crate) const PULL_BRANCH: &str = "pull-branch";
 pub fn pull_branch_operation() -> RepositoryOperation<String> {
     RepositoryOperation::new(PULL_BRANCH, |id, branch: String, cx: &mut App| {
         let pulling = call(cx, "remote.pull", &id, move |repo| async move {
-            pull(&repo, Some(&parse::<NonEmpty>(branch)?)).await
+            pull(&repo, Some(&parse::<BranchShortName>(branch)?)).await
         });
         cx.spawn(async move |cx| reloading(&id, pulling, cx).await)
     })
@@ -124,7 +121,7 @@ pub fn pull_branch_operation() -> RepositoryOperation<String> {
 
 /// Whether a branch that isn't checked out is being pulled (see [`pull_branch_operation`]), and
 /// why that last failed (`usePullBranchState`).
-pub fn pull_branch_state(id: &str, cx: &App) -> OperationState {
+pub fn pull_branch_state(id: &RepositoryId, cx: &App) -> OperationState {
     Operations::state(PULL_BRANCH, id, cx)
 }
 
@@ -161,11 +158,11 @@ impl PushOperation {
         self.operation.run(id, true, cx)
     }
 
-    pub fn state(&self, id: &str, cx: &App) -> OperationState {
+    pub fn state(&self, id: &RepositoryId, cx: &App) -> OperationState {
         self.operation.state(id, cx)
     }
 
-    pub fn dismiss(&self, id: &str, cx: &mut App) {
+    pub fn dismiss(&self, id: &RepositoryId, cx: &mut App) {
         self.operation.dismiss(id, cx)
     }
 }
@@ -234,15 +231,17 @@ pub fn push_target_query<V: 'static>(id: &RepositoryId, cx: &mut Context<V>) -> 
 
 #[cfg(test)]
 mod tests {
+    use gitto_git::ApiError;
+
     use super::*;
 
     #[test]
     fn tells_why_a_push_was_turned_down() {
         let rejected = |forcible: bool| {
-            QueryError::from(gitto_git::Error::PushRejected {
+            QueryError::from(ApiError::unreported(gitto_git::Error::PushRejected {
                 message: "Rejected.".to_owned(),
                 forcible,
-            })
+            }))
         };
         assert_eq!(
             push_rejection(Some(&rejected(true))),

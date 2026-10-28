@@ -19,7 +19,7 @@ use crate::components::ui::{IconName, context_menu_item};
 use crate::data::worktree::{WorktreeActions, worktree_actions};
 
 /// Forgets why an action last failed on a repository, by its id.
-type Dismiss = Rc<dyn Fn(&str, &mut App)>;
+type Dismiss = Rc<dyn Fn(&RepositoryId, &mut App)>;
 
 /// The menu of what can be done with a worktree. Opening it adds it to Gitto's repositories, as a
 /// repository of its own, and shows it; not for the one on show, a bare one, which has no files,
@@ -45,7 +45,7 @@ impl WorktreeMenu {
     }
 
     /// Whether a worktree is being added, opened or removed on the repository `id`.
-    pub fn is_busy(&self, id: &str, cx: &App) -> bool {
+    pub fn is_busy(&self, id: &RepositoryId, cx: &App) -> bool {
         WorktreeActions::is_pending(id, cx)
     }
 

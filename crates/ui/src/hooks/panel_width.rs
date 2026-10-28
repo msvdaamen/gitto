@@ -20,15 +20,9 @@ pub fn clamp(width: f64, bounds: PanelBounds) -> f64 {
     width.clamp(bounds.min, bounds.max).round()
 }
 
-/// The width saved as `saved` (as `localStorage` had it), within `bounds`; the initial one if
-/// it's unreadable.
+/// The width saved as `saved`, a number, within `bounds`; the initial one if it's unreadable.
 pub fn parse_width(saved: Option<&str>, bounds: PanelBounds) -> f64 {
-    // As `Number()` reads it: blank is 0.
-    let value = saved.and_then(|saved| match saved.trim() {
-        "" => Some(0.0),
-        number => number.parse::<f64>().ok(),
-    });
-    match value {
+    match saved.and_then(|saved| saved.trim().parse::<f64>().ok()) {
         Some(value) if value.is_finite() => clamp(value, bounds),
         _ => bounds.initial,
     }
@@ -148,6 +142,9 @@ mod tests {
             let panel = mount(&storage);
 
             assert_eq!(panel.width(), 220.0);
+            assert_eq!(parse_width(Some(" "), BOUNDS), 220.0);
+            assert_eq!(parse_width(Some("NaN"), BOUNDS), 220.0);
+            assert_eq!(parse_width(Some("inf"), BOUNDS), 220.0);
         }
     }
 

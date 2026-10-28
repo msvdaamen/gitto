@@ -17,12 +17,15 @@ use gpui_kit::{App, PathPromptOptions};
 use serde::{Deserialize, Serialize};
 
 /// The running Gitto's version: what the release build is given in `GITTO_VERSION`, as the
-/// Electron app's comes from its package.json. `0.0.0` for a build of one's own, which, like the
-/// Electron app's, has no changelog and doesn't remember what's been seen.
+/// Electron app's comes from its package.json. [`OWN_BUILD`] for a build of one's own.
 pub const APP_VERSION: &str = match option_env!("GITTO_VERSION") {
     Some(version) => version,
-    None => "0.0.0",
+    None => OWN_BUILD,
 };
+
+/// The version of a build of one's own, which, like the Electron app's, has no changelog and
+/// doesn't remember what's been seen.
+pub const OWN_BUILD: &str = "0.0.0";
 
 /// Where a build gets its updates from: a nightly only from the next nightly, a release only from
 /// the next release.
@@ -160,9 +163,11 @@ impl SystemContext {
             changelog: Arc::new(Changes::new(APP_VERSION, Vec::new(), last_seen_file)),
             telemetry: Arc::new(TelemetrySetting::new(
                 settings_file.clone(),
-                false,
-                read_telemetry_setting(&settings_file),
-                false,
+                TelemetryState {
+                    available: false,
+                    enabled: read_telemetry_setting(&settings_file),
+                    sending: false,
+                },
             )),
         }
     }
@@ -212,38 +217,26 @@ pub fn read_telemetry_setting(file: &Path) -> bool {
 /// off stops sending at once; turning it on only starts when Gitto restarts.
 pub struct TelemetrySetting {
     file: PathBuf,
-    available: bool,
-    /// Whether it's enabled, and sending.
-    state: Arc<Mutex<(bool, bool)>>,
+    state: Arc<Mutex<TelemetryState>>,
 }
 
 impl TelemetrySetting {
-    pub fn new(file: PathBuf, available: bool, enabled: bool, sending: bool) -> Self {
+    /// The setting kept in `file`, starting from `state`.
+    pub fn new(file: PathBuf, state: TelemetryState) -> Self {
         TelemetrySetting {
             file,
-            available,
-            state: Arc::new(Mutex::new((enabled, sending))),
-        }
-    }
-
-    fn snapshot(&self) -> TelemetryState {
-        let (enabled, sending) = *self.state.lock().unwrap_or_else(|e| e.into_inner());
-        TelemetryState {
-            available: self.available,
-            enabled,
-            sending,
+            state: Arc::new(Mutex::new(state)),
         }
     }
 }
 
 impl Telemetry for TelemetrySetting {
     fn state(&self) -> TelemetryState {
-        self.snapshot()
+        *self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     fn set_enabled(&self, enabled: bool) -> BoxFuture<'static, io::Result<TelemetryState>> {
         let file = self.file.clone();
-        let available = self.available;
         let state = Arc::clone(&self.state);
         let text = format!(
             "{}\n",
@@ -257,16 +250,12 @@ impl Telemetry for TelemetrySetting {
             // Saved first: the setting only changes once it's written.
             async_fs::write(&file, text).await?;
             let mut current = state.lock().unwrap_or_else(|e| e.into_inner());
-            current.0 = enabled;
+            current.enabled = enabled;
             if !enabled {
                 // Nothing to stop: nothing is ever sent (see the type's doc).
-                current.1 = false;
+                current.sending = false;
             }
-            Ok(TelemetryState {
-                available,
-                enabled: current.0,
-                sending: current.1,
-            })
+            Ok(*current)
         })
     }
 }
@@ -321,7 +310,7 @@ impl Changes {
 
     /// A build of one's own is neither in a changelog nor worth remembering.
     fn is_own_build(&self) -> bool {
-        self.version == "0.0.0"
+        self.version == OWN_BUILD
     }
 }
 
@@ -401,7 +390,14 @@ mod tests {
     fn stops_sending_at_once_when_its_turned_off_and_is_remembered() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("settings.json");
-        let setting = TelemetrySetting::new(file.clone(), true, true, true);
+        let setting = TelemetrySetting::new(
+            file.clone(),
+            TelemetryState {
+                available: true,
+                enabled: true,
+                sending: true,
+            },
+        );
 
         let state = smol::block_on(setting.set_enabled(false)).unwrap();
         assert_eq!(
@@ -423,7 +419,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("settings.json");
         std::fs::write(&file, r#"{"telemetry":false}"#).unwrap();
-        let setting = TelemetrySetting::new(file.clone(), true, false, false);
+        let setting = TelemetrySetting::new(
+            file.clone(),
+            TelemetryState {
+                available: true,
+                enabled: false,
+                sending: false,
+            },
+        );
 
         let state = smol::block_on(setting.set_enabled(true)).unwrap();
         assert_eq!(
@@ -493,7 +496,7 @@ mod tests {
     fn is_nothing_for_a_build_of_ones_own_which_isnt_remembered() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("last-seen-version");
-        let changes = Changes::new("0.0.0", vec![version("1.2.4-nightly3")], file.clone());
+        let changes = Changes::new(OWN_BUILD, vec![version("1.2.4-nightly3")], file.clone());
 
         assert_eq!(smol::block_on(changes.unseen()).unwrap(), []);
         smol::block_on(changes.seen()).unwrap();
