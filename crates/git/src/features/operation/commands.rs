@@ -13,24 +13,12 @@ use crate::core::repo::{GitCommand, Repo, current_branch, has_conflicts, resolve
 use crate::core::runner::RunOptions;
 use crate::features::remote::progress::rebase_state;
 
-/// Whether `c` is whitespace as JavaScript's `\s` and `trim` have it: Unicode's, and the BOM.
-fn is_js_space(c: char) -> bool {
-    c.is_whitespace() || c == '\u{feff}'
-}
-
-/// The contents of `file`, trimmed; `None` if it isn't there.
+/// The contents of `file`, trimmed; `None` if it isn't there, or has nothing in it.
 async fn read_state(file: PathBuf) -> Option<String> {
     let bytes = async_fs::read(file).await.ok()?;
-    Some(
-        String::from_utf8_lossy(&bytes)
-            .trim_matches(is_js_space)
-            .to_owned(),
-    )
-}
-
-/// Whether a file `read_state` read is there with something in it (TS's truthy string).
-fn has_text(state: &Option<String>) -> bool {
-    state.as_deref().is_some_and(|text| !text.is_empty())
+    let text = String::from_utf8_lossy(&bytes);
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_owned())
 }
 
 /// What `operation_state` reads: the operation under way, and the files it's told by.
@@ -60,16 +48,16 @@ async fn operation_state(git_dir: &Path) -> OperationState {
     );
     let todo = todo_lines(todo.as_deref());
     // The todo list's commands say which a series is: `pick` or `revert`.
-    let command = todo.first().and_then(|line| line.split(is_js_space).next());
+    let command = todo.first().and_then(|line| line.split_whitespace().next());
     let kind = if state.applying {
         Some(OperationKind::Am)
     } else if state.rebasing {
         Some(OperationKind::Rebase)
-    } else if has_text(&merge) {
+    } else if merge.is_some() {
         Some(OperationKind::Merge)
-    } else if has_text(&cherry_pick) || matches!(command, Some("pick" | "p")) {
+    } else if cherry_pick.is_some() || matches!(command, Some("pick" | "p")) {
         Some(OperationKind::CherryPick)
-    } else if has_text(&revert) || command == Some("revert") {
+    } else if revert.is_some() || command == Some("revert") {
         Some(OperationKind::Revert)
     } else {
         None
@@ -90,7 +78,7 @@ fn todo_lines(todo: Option<&str>) -> Vec<String> {
         .filter(|line| {
             line.chars()
                 .next()
-                .is_some_and(|first| first != '#' && !is_js_space(first))
+                .is_some_and(|first| first != '#' && !first.is_whitespace())
         })
         .map(str::to_owned)
         .collect()
@@ -121,7 +109,9 @@ pub async fn get_operation(repo: &Repo) -> Result<Option<Operation>> {
         }
         OperationKind::Rebase => {
             // `rebase-merge` for the merge backend, git's default; `rebase-apply` for the apply one.
-            let merging = has_text(&read_state(git_dir.join("rebase-merge").join("onto")).await);
+            let merging = read_state(git_dir.join("rebase-merge").join("onto"))
+                .await
+                .is_some();
             let dir = if merging {
                 "rebase-merge"
             } else {
@@ -150,8 +140,8 @@ pub async fn get_operation(repo: &Repo) -> Result<Option<Operation>> {
             // None between the commits of a series, once the one it stopped at was committed by
             // hand.
             let commit = match head {
-                Some(head) if !head.is_empty() => Some(commit_name(&run, &head).await),
-                _ => None,
+                Some(head) => Some(commit_name(&run, &head).await),
+                None => None,
             };
             // A line for the one it stopped at and each one after it.
             let remaining = operation.todo.len().saturating_sub(1) as u64;
@@ -206,7 +196,7 @@ async fn ref_name(run: &GitCommand, sha: &str) -> String {
     run.run(["rev-parse", "--short", sha])
         .await
         .unwrap_or_else(|_| sha.to_owned())
-        .trim_matches(is_js_space)
+        .trim()
         .to_owned()
 }
 
@@ -216,7 +206,7 @@ async fn commit_name(run: &GitCommand, sha: &str) -> CommitName {
         .run(["log", "-1", "--format=%h%x00%s", sha, "--"])
         .await
         .unwrap_or_default();
-    let mut parts = output.trim_matches(is_js_space).split('\0');
+    let mut parts = output.trim().split('\0');
     let short = parts
         .next()
         .map_or_else(|| sha.chars().take(7).collect(), str::to_owned);
@@ -892,6 +882,25 @@ mod tests {
         assert_eq!(steps(None, Some("2")), None);
         assert_eq!(steps(Some(""), Some("2")), None);
         assert_eq!(steps(Some("1"), None), None);
+    }
+
+    #[test]
+    fn read_state_trims_a_file_and_has_none_with_nothing_in_it() {
+        let fx = Fixture::new();
+        let file = |name: &str, contents: &str| {
+            let file = fx.root().join(name);
+            fs::write(&file, contents).unwrap();
+            file
+        };
+        smol::block_on(async {
+            assert_eq!(
+                read_state(file("head", " abc\n")).await.as_deref(),
+                Some("abc")
+            );
+            assert_eq!(read_state(file("empty", "")).await, None);
+            assert_eq!(read_state(file("blank", " \n\t")).await, None);
+            assert_eq!(read_state(fx.root().join("missing")).await, None);
+        });
     }
 
     #[test]
