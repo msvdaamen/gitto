@@ -2,9 +2,6 @@
 //! `packages/git/src/features/operation/commands.ts`.
 
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
-
-use regex::Regex;
 
 use super::schema::{CommitName, Operation, OperationKind, Steps};
 use crate::core::errors::{Error, Result};
@@ -346,7 +343,7 @@ async fn rewords_or_squashes(git_dir: &Path) -> bool {
     let done_lines = todo_lines(done.as_deref());
     // The one it stopped at, and the squashes and fixups that run up to it, if it's one of them.
     let mut from = done_lines.len().saturating_sub(1);
-    while from > 0 && SQUASHING.is_match(&done_lines[from]) {
+    while from > 0 && squashing(&done_lines[from]) {
         from -= 1;
     }
     done_lines[from..]
@@ -355,23 +352,31 @@ async fn rewords_or_squashes(git_dir: &Path) -> bool {
         .any(|line| asks_for_message(line))
 }
 
-/// A squash, or a fixup, which a squash before it in a row of them is asked for with.
-static SQUASHING: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(s|squash|f|fixup)\s").unwrap());
+/// A line of a rebase's todo list: its command, and the word after it (a commit, or a flag).
+fn todo_command(line: &str) -> (Option<&str>, Option<&str>) {
+    let mut words = line.split_whitespace();
+    (words.next(), words.next())
+}
 
-static REWORD_OR_SQUASH: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(r|reword|s|squash)\s").unwrap());
-static FIXUP_EDITING: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(f|fixup)\s+-c\s").unwrap());
-static MERGE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(m|merge)\s").unwrap());
-static MERGE_KEEPING: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(m|merge)\s+-C\s").unwrap());
+/// Whether a line of a rebase's todo list is a squash, or a fixup, which a squash before it in a
+/// row of them is asked for with.
+fn squashing(line: &str) -> bool {
+    matches!(
+        todo_command(line),
+        (Some("s" | "squash" | "f" | "fixup"), Some(_))
+    )
+}
 
 /// Whether git asks for the message of the commit a line of a rebase's todo list makes, in an
 /// editor: a reword, a squash, `fixup -c` (not `-C`, which takes the fixup's message as it is), and
 /// a merge but with `-C`, which takes the merge's message as it is.
 fn asks_for_message(line: &str) -> bool {
-    if REWORD_OR_SQUASH.is_match(line) || FIXUP_EDITING.is_match(line) {
-        return true;
+    match todo_command(line) {
+        (Some("r" | "reword" | "s" | "squash"), Some(_)) => true,
+        (Some("f" | "fixup"), Some(flag)) => flag == "-c",
+        (Some("m" | "merge"), Some(flag)) => flag != "-C",
+        _ => false,
     }
-    MERGE.is_match(line) && !MERGE_KEEPING.is_match(line)
 }
 
 /// Aborts the operation `kind`, putting the repository back as it was before it started: the
@@ -561,7 +566,7 @@ mod tests {
                     steps: Some(Steps { step: 1, total: 2 }),
                 })
             );
-            let theirs = Regex::new(r"(?m)^>>>>>>> [0-9a-f]+ \(theirs\)$").unwrap();
+            let theirs = regex::Regex::new(r"(?m)^>>>>>>> [0-9a-f]+ \(theirs\)$").unwrap();
             let text = conflict_text(&path);
             assert!(theirs.is_match(&text), "{text}");
 
@@ -930,8 +935,30 @@ mod tests {
             "fixup -C abc subject",
             "merge -C abc side",
             "exec make",
+            "squashed abc subject",
+            "reword",
         ] {
             assert!(!asks_for_message(line), "{line}");
+        }
+    }
+
+    #[test]
+    fn squashing_is_a_squash_or_a_fixup() {
+        for line in [
+            "s abc subject",
+            "squash abc subject",
+            "f abc subject",
+            "fixup -C abc",
+        ] {
+            assert!(squashing(line), "{line}");
+        }
+        for line in [
+            "pick abc subject",
+            "reword abc subject",
+            "fixups abc",
+            "squash",
+        ] {
+            assert!(!squashing(line), "{line}");
         }
     }
 
