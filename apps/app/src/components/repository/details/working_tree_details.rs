@@ -495,7 +495,7 @@ impl WorkingTreeDetails {
         if side == Side::Unstaged
             && let Some(lists) = lists.as_ref()
         {
-            list = list.marker_free(Opaque::new(lists.marker_free().clone()));
+            list = list.marker_free(lists.marker_free().clone());
         }
 
         let header =

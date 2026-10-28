@@ -187,7 +187,7 @@ impl WorkingTreeLists {
     }
 
     /// The conflicted files with no conflict markers left, ready to be marked resolved.
-    pub fn marker_free(&self) -> &HashSet<String> {
+    pub fn marker_free(&self) -> &Opaque<HashSet<String>> {
         &self.marker_free
     }
 
