@@ -532,36 +532,51 @@ impl ConflictViewer {
 
     /// Resolves the conflict asked for, if the text it was asked of is still the one on show:
     /// writes the text that leaves to disk, and shows it once it's written and highlighted, in the
-    /// last one's place.
+    /// last one's place. The text is rewritten, and measured, off the main thread, as
+    /// [`show_text`](Self::show_text) reads it.
     fn resolve_conflict(
         &mut self,
         request: Request,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<()> {
-        let Some(from) = &self.shown else {
-            return Task::ready(());
-        };
-        let (Some(state), Some(from_version)) = (&from.state, from.version.clone()) else {
-            return Task::ready(());
-        };
-        if !Arc::ptr_eq(state, &request.state) {
+        if !self.is_shown(&request.state) {
             return Task::ready(());
         }
-        let Some(resolved) = resolve(state, request.index, request.resolution).map(Arc::new) else {
-            return Task::ready(());
-        };
-        let from_state = Arc::clone(state);
-        self.saving = true;
-        self.report(cx);
-        let saving = (self.save)(resolved.contents().to_owned(), from_version.clone(), cx);
-        let highlighting = self
-            .highlights
-            .highlight(&resolved.diff, HIGHLIGHT_WAIT, cx);
-        let index = request.index;
+        let Request {
+            state: from_state,
+            index,
+            resolution,
+        } = request;
         cx.spawn_in(window, async move |this, cx| {
+            let state = Arc::clone(&from_state);
+            let resolved = cx
+                .background_spawn(async move {
+                    let resolved = Arc::new(resolve(&state, index, resolution)?);
+                    let widest = widest(&resolved);
+                    Some((resolved, widest))
+                })
+                .await;
+            let Some((resolved, widest)) = resolved else {
+                return;
+            };
+            let Ok(Some((from_version, saving, highlighting))) = this.update(cx, |this, cx| {
+                // Shown otherwise meanwhile: what was asked isn't of the text on show.
+                if !this.is_shown(&from_state) {
+                    return None;
+                }
+                let from_version = this.shown.as_ref()?.version.clone()?;
+                this.saving = true;
+                this.report(cx);
+                let saving = (this.save)(resolved.contents().to_owned(), from_version.clone(), cx);
+                let highlighting = this
+                    .highlights
+                    .highlight(&resolved.diff, HIGHLIGHT_WAIT, cx);
+                Some((from_version, saving, highlighting))
+            }) else {
+                return;
+            };
             let (saved, ()) = futures::join!(saving, highlighting);
-            let widest = widest(&resolved);
             let _ = this.update(cx, |this, cx| {
                 match saved {
                     Ok(version) => {
@@ -594,6 +609,18 @@ impl ConflictViewer {
                 this.saving = false;
                 this.report(cx);
             });
+        })
+    }
+
+    /// Whether `state` is the text on show, with its version on disk known, so a conflict of it
+    /// can be resolved over that version.
+    fn is_shown(&self, state: &Arc<ConflictState>) -> bool {
+        self.shown.as_ref().is_some_and(|shown| {
+            shown.version.is_some()
+                && shown
+                    .state
+                    .as_ref()
+                    .is_some_and(|shown| Arc::ptr_eq(shown, state))
         })
     }
 
@@ -1334,6 +1361,27 @@ mod tests {
         set_conflict("a.txt", text_conflict(&written, "v3"), cx);
         cx.run_until_parked();
         assert_eq!(shown(&opened, cx), (Some(written), Some("v3".into())));
+    }
+
+    #[gpui_kit::test]
+    fn resolves_the_current_conflict_and_writes_what_that_leaves(cx: &mut TestAppContext) {
+        let _dir = init(cx);
+        let opened = open_conflict(&two_conflicts(), cx);
+        let viewer = viewer(&opened, cx);
+        cx.update_window(opened.window, |_, window, cx| {
+            viewer.update(cx, |viewer, cx| {
+                viewer.resolve(Resolution::Theirs, window, cx)
+            })
+        })
+        .unwrap();
+        // Nothing's written, nor said to be, before the text's rewritten (in the background).
+        assert_eq!(opened.tree.saves(), []);
+        assert!(!cx.update(|cx| viewer.read(cx).saving));
+
+        cx.run_until_parked();
+        let written = format!("one\ntheirs\ntwo\n{MARKERS}");
+        assert_eq!(opened.tree.saves(), [save("a.txt", &written, "v1", false)]);
+        assert_eq!(shown(&opened, cx), (Some(written), Some("v2".into())));
     }
 
     #[gpui_kit::test]
