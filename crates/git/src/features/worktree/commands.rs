@@ -1,6 +1,5 @@
 //! Listing, adding and removing worktrees. Ported from `commands.ts`.
 
-use std::cmp::Ordering;
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 
@@ -156,7 +155,7 @@ async fn listed(root: &Path, run: &GitCommand) -> Result<(Vec<Worktree>, Vec<Pat
         return Ok((Vec::new(), Vec::new()));
     }
     // Git lists the linked ones as it finds their folders, in no set order.
-    worktrees[1..].sort_by(|a, b| locale_compare(&a.path, &b.path));
+    worktrees[1..].sort_by_cached_key(|worktree| locale_key(&worktree.path));
     let (here, paths) = futures::join!(
         real_path_or_itself(root),
         futures::future::join_all(
@@ -171,26 +170,21 @@ async fn listed(root: &Path, run: &GitCommand) -> Result<(Vec<Worktree>, Vec<Pat
     Ok((worktrees, paths))
 }
 
-/// Orders `a` and `b` roughly as JavaScript's `localeCompare` does: by their letters regardless of
+/// What orders paths roughly as JavaScript's `localeCompare` does: by their letters regardless of
 /// case first, then lowercase before uppercase. Punctuation is ordered by code point, where ICU has
 /// an order of its own (`a-b`, `a.b`, `a_b` here; `a_b`, `a-b`, `a.b` in TS), which only moves a
 /// worktree about in the list.
-fn locale_compare(a: &str, b: &str) -> Ordering {
+fn locale_key(path: &str) -> (String, String) {
     // Lowercase first, as ICU's tertiary strength has it.
-    let swap_case = |text: &str| -> String {
-        text.chars()
-            .flat_map(|c| {
-                if c.is_uppercase() {
-                    c.to_lowercase().collect::<Vec<_>>()
-                } else {
-                    c.to_uppercase().collect::<Vec<_>>()
-                }
-            })
-            .collect()
-    };
-    a.to_lowercase()
-        .cmp(&b.to_lowercase())
-        .then_with(|| swap_case(a).cmp(&swap_case(b)))
+    let mut swapped_case = String::with_capacity(path.len());
+    for c in path.chars() {
+        if c.is_uppercase() {
+            swapped_case.extend(c.to_lowercase());
+        } else {
+            swapped_case.extend(c.to_uppercase());
+        }
+    }
+    (path.to_lowercase(), swapped_case)
 }
 
 /// Where `path` really is, symlinks resolved; `path` itself if it's gone.
@@ -613,7 +607,7 @@ mod tests {
     #[test]
     fn orders_paths_regardless_of_case_then_lowercase_first() {
         let mut paths = ["/r/b", "/r/A", "/r/a", "/r/B", "/r/ab"];
-        paths.sort_by(|a, b| locale_compare(a, b));
+        paths.sort_by_cached_key(|path| locale_key(path));
         assert_eq!(paths, ["/r/a", "/r/A", "/r/ab", "/r/b", "/r/B"]);
     }
 
