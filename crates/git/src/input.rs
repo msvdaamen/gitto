@@ -160,16 +160,18 @@ impl fmt::Display for RepositoryId {
 }
 
 checked_string!(
-    /// A local or remote branch, by its full ref name (`refs/heads/…` or `refs/remotes/…`).
+    /// A local or remote branch, by its full ref name (`refs/heads/…` or `refs/remotes/…`). Not
+    /// a remote's `refs/remotes/<remote>/HEAD`, a link to its default branch rather than a branch.
     BranchRef,
     |value| {
-        ["refs/heads/", "refs/remotes/"].iter().any(|prefix| {
+        let named = ["refs/heads/", "refs/remotes/"].iter().any(|prefix| {
             value
                 .strip_prefix(prefix)
                 .and_then(|name| name.chars().next())
                 // zod's `/^refs\/(heads|remotes)\/./`: `.` is anything but a line terminator.
                 .is_some_and(|first| !matches!(first, '\n' | '\r' | '\u{2028}' | '\u{2029}'))
-        })
+        });
+        named && !(value.starts_with("refs/remotes/") && value.ends_with("/HEAD"))
     },
     |value| format!("Not a branch. ({value:?})")
 );
@@ -335,6 +337,15 @@ mod tests {
     fn branch_refs_are_local_or_remote_branches() {
         assert!(BranchRef::parse("refs/heads/main").is_ok());
         assert!(BranchRef::parse("refs/remotes/origin/main").is_ok());
+        assert!(BranchRef::parse("refs/remotes/up/stream/main").is_ok());
+        // A remote's link to its default branch, whatever the remote's name.
+        assert_eq!(
+            invalid(BranchRef::parse("refs/remotes/origin/HEAD").unwrap_err()),
+            "Not a branch. (\"refs/remotes/origin/HEAD\")"
+        );
+        assert!(BranchRef::parse("refs/remotes/up/stream/HEAD").is_err());
+        // A local branch can't be named `HEAD`, but one under a folder of that name is one.
+        assert!(BranchRef::parse("refs/heads/feature/HEAD").is_ok());
         assert!(BranchRef::parse("refs/heads/").is_err());
         assert!(BranchRef::parse("refs/heads/\nmain").is_err());
         assert!(BranchRef::parse("main").is_err());

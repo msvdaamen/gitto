@@ -237,8 +237,7 @@ fn merges_a_branch_saying_what_it_did_or_why_it_didnt() {
         assert_eq!(code, "BAD_REQUEST");
         let (code, _) = api_error(merge("refs/heads/side", "").await.unwrap_err());
         assert_eq!(code, "BAD_REQUEST");
-        // Past the input's check, but not a branch: a link to the remote's default one. Refused
-        // as input too, which the UI shouldn't have sent.
+        // A link to the remote's default branch isn't a branch either.
         assert_eq!(
             api_error(merge("refs/remotes/origin/HEAD", "main").await.unwrap_err()),
             ("BAD_REQUEST", "Input validation failed".to_owned())
