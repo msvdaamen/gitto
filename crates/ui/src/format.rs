@@ -14,13 +14,12 @@ pub fn initials(name: &str) -> String {
     letters.to_uppercase()
 }
 
-const AVATAR_COLORS: [&str; 6] = [
-    "#7c5ce7", "#38bda9", "#a978dd", "#e2a646", "#5b9be6", "#e0707a",
-];
+/// The avatar colours, as `0xRRGGBB`.
+pub const AVATAR_COLORS: [u32; 6] = [0x7c5ce7, 0x38bda9, 0xa978dd, 0xe2a646, 0x5b9be6, 0xe0707a];
 
-/// An avatar colour picked by `key` (e.g. an email address), whatever its case, the same one
-/// every time: by the 32-bit FNV-1a hash of its lowercase UTF-8.
-pub fn avatar_color(key: &str) -> &'static str {
+/// An avatar colour, as `0xRRGGBB`, picked by `key` (e.g. an email address), whatever its case,
+/// the same one every time: by the 32-bit FNV-1a hash of its lowercase UTF-8.
+pub fn avatar_color(key: &str) -> u32 {
     let mut hash: u32 = 0x811c_9dc5;
     let mut utf8 = [0; 4];
     for c in key.chars().flat_map(char::to_lowercase) {

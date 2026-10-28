@@ -121,7 +121,8 @@ pub struct CommitRow {
     pub description: Option<String>,
     pub author: String,
     pub initials: String,
-    pub avatar_color: &'static str,
+    /// As `0xRRGGBB` (see [`avatar_color`]).
+    pub avatar_color: u32,
     /// The commit date, which the history is sorted by, in milliseconds since the epoch.
     pub committed_at: i64,
     /// The branches and tags pointing at it (see [`to_ref_labels`]).

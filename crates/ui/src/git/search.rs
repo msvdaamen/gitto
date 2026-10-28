@@ -47,7 +47,7 @@ mod tests {
             description: None,
             author: "Ada Lovelace".into(),
             initials: "AL".into(),
-            avatar_color: "#000",
+            avatar_color: 0x000000,
             committed_at: 0,
             labels: vec![RefLabel::Branch(BranchLabel {
                 name: "main".into(),
