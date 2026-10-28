@@ -11,10 +11,11 @@ use gitto_git::features::diff::working_tree::WorkingTreeFile;
 use gitto_git::input::RepositoryId;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::EditorState;
 use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, App, Context, Entity, KeyDownEvent, Task, Window, div};
+use gpui_kit::{AnyElement, App, Context, Entity, Task, Window, div};
 
-use super::autosave::{AUTOSAVE_DELAY, Autosave, SaveFile, SaveState};
+use super::autosave::{AUTOSAVE_DELAY, Autosave, ReadEdits, SaveEdits, SaveState};
 use super::file_diff_view::FileDiffView;
 use super::unsaved_changes_dialog::{UnsavedChoice, open_unsaved_changes_dialog};
 use crate::components::ui::{IconButton, IconName, Notice};
@@ -22,22 +23,76 @@ use crate::data::file_diff::{fetch_working_tree_file, save_working_tree_file};
 use crate::data::{QueryClient, QueryError, QueryKey, keys};
 use crate::theme::PaletteExt as _;
 
+/// A version of a file in the working tree, as git's API names one (see
+/// `read_working_tree_file`): a write over the file is checked against the version it's of, so it
+/// doesn't go over changes made since.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FileVersion(String);
+
+impl FileVersion {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl From<String> for FileVersion {
+    fn from(version: String) -> Self {
+        FileVersion(version)
+    }
+}
+
+impl From<&str> for FileVersion {
+    fn from(version: &str) -> Self {
+        FileVersion(version.to_owned())
+    }
+}
+
+impl std::ops::Deref for FileVersion {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Whether a save goes over the file whatever it is now, or only as it was at the version
+/// expected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Overwrite {
+    IfUnchanged,
+    Always,
+}
+
+/// A file's text to save over it in the working tree: over the version `expected`, unless it's to
+/// [`Overwrite::Always`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SaveRequest {
+    pub contents: String,
+    pub expected: FileVersion,
+    pub overwrite: Overwrite,
+}
+
 /// Editing the file on show: the version of it on disk the edits are of (see
-/// `read_working_tree_file`).
+/// `read_working_tree_file`), and the editor they're made in, which they're read from as they're
+/// saved.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditSession {
-    pub version: String,
+    pub version: FileVersion,
+    pub editor: Entity<EditorState>,
 }
 
 /// Reads a file in the working tree, with its version.
 pub type ReadWorkingTreeFile =
     Rc<dyn Fn(&RepositoryId, &str, &mut App) -> Task<Result<WorkingTreeFile, QueryError>>>;
 
-/// Saves a file's text over it in the working tree, if it's still at `version` or to `overwrite`
-/// it; resolves to its new version.
-pub type SaveWorkingTreeFile = Rc<
-    dyn Fn(&RepositoryId, &str, String, String, bool, &mut App) -> Task<Result<String, QueryError>>,
->;
+/// Saves a file's text over it in the working tree, as the request says; resolves to its new
+/// version.
+pub type SaveWorkingTreeFile =
+    Rc<dyn Fn(&RepositoryId, &str, SaveRequest, &mut App) -> Task<Result<FileVersion, QueryError>>>;
 
 /// Loads again what's under a key, as what it's of changed: the file's changes once its edits
 /// are saved, say.
@@ -56,8 +111,16 @@ impl FileIo {
     pub fn git() -> Self {
         FileIo {
             read: Rc::new(fetch_working_tree_file),
-            save: Rc::new(|id, path, contents, version, overwrite, cx| {
-                save_working_tree_file(id, path, contents, version, overwrite, cx)
+            save: Rc::new(|id, path, request, cx| {
+                let saving = save_working_tree_file(
+                    id,
+                    path,
+                    request.contents,
+                    request.expected.into_string(),
+                    request.overwrite == Overwrite::Always,
+                    cx,
+                );
+                cx.spawn(async move |_| saving.await.map(FileVersion::from))
             }),
             reload: Rc::new(|key, cx| drop(QueryClient::invalidate(&key, cx))),
         }
@@ -94,14 +157,14 @@ impl FileEditing {
     pub fn new(cx: &mut Context<FileDiffView>) -> Self {
         let io = Rc::new(RefCell::new(FileIo::git()));
         let target: Rc<RefCell<Option<(RepositoryId, String)>>> = Rc::default();
-        let save: SaveFile = {
+        let save: SaveEdits = {
             let (io, target) = (Rc::clone(&io), Rc::clone(&target));
-            Rc::new(move |text, version, overwrite, cx| {
+            Rc::new(move |request, cx| {
                 let Some((id, path)) = target.borrow().clone() else {
                     return Task::ready(Err(QueryError::msg("Nothing is being edited.")));
                 };
                 let save = Rc::clone(&io.borrow().save);
-                save(&id, &path, text, version, overwrite, cx)
+                save(&id, &path, request, cx)
             })
         };
         let autosave = cx.new(|_| Autosave::new(save, AUTOSAVE_DELAY));
@@ -154,6 +217,12 @@ impl FileEditing {
         self.io.borrow().clone()
     }
 
+    /// What the view reads and writes the working tree with, shared with what else does (see
+    /// `ConflictResolutionView`): changed with [`FileDiffView::set_io`] for all of them.
+    pub fn shared_io(&self) -> Rc<RefCell<FileIo>> {
+        Rc::clone(&self.io)
+    }
+
     pub fn autosave(&self) -> &Entity<Autosave> {
         &self.autosave
     }
@@ -179,10 +248,10 @@ impl FileDiffView {
 
     /// Stops editing, dropping the edits that aren't saved.
     pub(super) fn discard_edits(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(conflict) = self.resolution.viewer() {
+        if let Some(conflict) = self.resolution.read(cx).viewer().cloned() {
             conflict.update(cx, |conflict, cx| conflict.discard(window, cx));
         }
-        self.patch_editor = None;
+        self.close_patch_editor();
         self.editing
             .autosave
             .update(cx, |autosave, cx| autosave.stop(cx));
@@ -270,21 +339,11 @@ impl FileDiffView {
         receive
     }
 
-    /// Escape leaves edit mode, before the editor takes it: only when there's a selection to
-    /// collapse is it left to the editor.
-    pub(super) fn capture_escape(
-        &mut self,
-        event: &KeyDownEvent,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let keystroke = &event.keystroke;
-        if keystroke.key != "escape"
-            || !self.editing.editing
-            || self.editing.asking.is_some()
-            || keystroke.modifiers.modified()
-        {
-            return;
+    /// Escape (`CloseFileDiff`) leaves edit mode, rather than the file: only when there's a
+    /// selection to collapse is it left to the editor. Whether it was for edit mode.
+    pub(super) fn escape_editing(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.editing.editing || self.editing.asking.is_some() {
+            return false;
         }
         let selection = self
             .patch_editor
@@ -292,13 +351,15 @@ impl FileDiffView {
             .is_some_and(|editor| editor.read(cx).has_selection(cx))
             || self
                 .resolution
+                .read(cx)
                 .viewer()
                 .is_some_and(|viewer| viewer.read(cx).has_selection(cx));
         if selection {
-            return;
+            cx.propagate();
+        } else {
+            drop(self.leave(cx));
         }
-        cx.stop_propagation();
-        drop(self.leave(cx));
+        true
     }
 
     /// Editing started (with the version of the file the edits are of), or stopped.
@@ -307,9 +368,11 @@ impl FileDiffView {
         match &session {
             Some(session) => {
                 let version = session.version.clone();
+                let editor = session.editor.clone();
+                let edits: ReadEdits = Rc::new(move |cx| editor.read(cx).value().to_string());
                 self.editing
                     .autosave
-                    .update(cx, |autosave, cx| autosave.start(version, cx));
+                    .update(cx, |autosave, cx| autosave.start(version, edits, cx));
             }
             None if self.editing.editing => {
                 // Ended without being asked to (the viewer went): what's left is saved all the
@@ -332,17 +395,17 @@ impl FileDiffView {
         cx.notify();
     }
 
-    /// The file was edited to `text`.
-    pub(super) fn on_edit(&mut self, text: String, cx: &mut Context<Self>) {
+    /// The file was edited.
+    pub(super) fn on_edit(&mut self, cx: &mut Context<Self>) {
         self.editing.edited = true;
         self.editing
             .autosave
-            .update(cx, |autosave, cx| autosave.change(text, cx));
+            .update(cx, |autosave, cx| autosave.change(cx));
     }
 
     /// Editing couldn't start, for `message`.
     pub(super) fn on_edit_failed(&mut self, message: String, cx: &mut Context<Self>) {
-        self.patch_editor = None;
+        self.close_patch_editor();
         self.stop_edit_mode(cx);
         self.editing.start_error = Some(message);
     }
@@ -738,7 +801,9 @@ mod tests {
         // Discard, the first of the dialog's answers after Cancel.
         opened.click(("action", 0usize), cx);
         assert_eq!(*leaving.borrow(), Some(true));
-        assert!(opened.read(cx, |view, _| view.patch_editor.is_none()));
+        // The editor's gone, and what it told the view with it.
+        assert!(opened.read(cx, |view, _| view.patch_editor.is_none()
+            && view.patch_editor_events.is_none()));
         // Typed in meanwhile: the file's changes are read again.
         assert_eq!(opened.tree.reloads(), [keys::uncommitted(&id())]);
         assert!(!is_editing(&opened, cx));

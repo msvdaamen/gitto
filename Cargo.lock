@@ -204,7 +204,6 @@ dependencies = [
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
- "regex",
  "serde",
  "serde_json",
  "similar",
@@ -2183,7 +2182,10 @@ dependencies = [
  "gitto-git",
  "indexmap",
  "memchr",
+ "regex",
  "serde_json",
+ "similar",
+ "thiserror 2.0.21",
  "url",
 ]
 

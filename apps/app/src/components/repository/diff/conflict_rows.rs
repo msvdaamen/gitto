@@ -4,10 +4,11 @@
 //! the file's diff (`UnresolvedFile`), with the same rules as the diff's (see `viewer_rows`): three
 //! lines of context, gaps of a line shown rather than hidden, and the same buttons to show more.
 
+use gitto_ui::diff::diff_metadata::Side;
+use gitto_ui::diff::patch_files::Expanded;
+use gitto_ui::diff::viewer_rows::{EXPANSION_LINES, SeparatorButtons};
+
 use super::conflict_diff::{CONTEXT_LINES, ConflictState, MarkerKind, Segment};
-use super::diff_metadata::Side;
-use super::patch_files::Expanded;
-use super::viewer_rows::{EXPANSION_LINES, SeparatorButtons};
 
 /// Hidden gaps of up to this many lines are shown instead (`collapsedContextThreshold`).
 const COLLAPSED_CONTEXT_THRESHOLD: usize = 1;
@@ -209,8 +210,9 @@ pub fn actions_row(rows: &[ConflictRow], index: usize) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    use gitto_ui::diff::viewer_rows::{ExpandDirection, expand};
+
     use super::super::conflict_diff::{Resolution, parse_conflicts, resolve};
-    use super::super::viewer_rows::{ExpandDirection, expand};
     use super::*;
 
     fn numbered(lines: usize, conflicts: &[usize]) -> String {

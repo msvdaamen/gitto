@@ -6,6 +6,9 @@
 //!   tags ([`git::ref_labels`]), its search ([`git::search`]), the sidebar's tree of refs
 //!   ([`git::ref_tree`]), commit messages ([`git::message`]), patches ([`git::patch`]), conflicts
 //!   ([`git::conflicts`]), and what to call things.
+//! - [`diff`]: `components/repository/diff/*.ts`'s model of a file's changes: a patch parsed
+//!   ([`diff::diff_metadata`]), the viewer's rows ([`diff::viewer_rows`]), the lines picked to stage
+//!   ([`diff::line_staging`]) and whole files fitted to a patch ([`diff::patch_files`]).
 //! - [`format`]: `lib/format.ts`: initials, avatar colours, relative times and counts.
 //! - [`hooks`]: what of `hooks/*.ts` isn't Solid's signals: the clock relative times are told by,
 //!   which sidebar folders are collapsed, and panels' widths, saved in a [`hooks::Storage`] as the
@@ -13,6 +16,7 @@
 //!
 //! Where the TS used `@gitto/git/types`, this uses gitto-git's types.
 
+pub mod diff;
 pub mod format;
 pub mod git;
 pub mod hooks;

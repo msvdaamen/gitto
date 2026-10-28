@@ -10,15 +10,17 @@ use std::sync::Arc;
 
 use futures::FutureExt as _;
 use futures::future::Shared;
+use gitto_ui::diff::diff_metadata::Side;
+use gitto_ui::diff::patch_files::Expanded;
+use gitto_ui::diff::viewer_rows::{ExpandDirection, SeparatorButtons, expand};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, HighlightStyle, Hsla,
-    KeyDownEvent, ListHorizontalSizingBehavior, MouseButton, Pixels, ScrollStrategy, SharedString,
-    StyledText, Task, UniformListScrollHandle, WeakEntity, Window, div, point, px, rems,
-    uniform_list,
+    ListHorizontalSizingBehavior, MouseButton, Pixels, ScrollStrategy, SharedString, StyledText,
+    Task, UniformListScrollHandle, WeakEntity, Window, div, px, rems, uniform_list,
 };
 
 pub use super::conflict_diff::Resolution;
@@ -28,14 +30,16 @@ use super::conflict_diff::{
 };
 use super::conflict_rows::{ConflictRow, LineRole, actions_row, conflict_rows};
 use super::conflict_whole_file::WholeFile;
-use super::diff_metadata::Side;
-use super::file_editing::EditSession;
+use super::file_editing::{EditSession, FileVersion};
 use super::highlight::DiffHighlights;
-use super::patch_files::Expanded;
 use super::patch_viewer::{
-    DrawnLine, FONT_REMS, ROW_REMS, code_char_width, scroll_list_by, widest_line,
+    DrawnLine, FONT_REMS, ROW_REMS, Scroll, code_char_width, scroll_list, scroll_list_to,
+    widest_line,
 };
-use super::viewer_rows::{ExpandDirection, SeparatorButtons, expand};
+use super::viewer_actions::{
+    CONFLICT_VIEWER, ScrollDown, ScrollLeft, ScrollPageDown, ScrollPageUp, ScrollRight,
+    ScrollToBottom, ScrollToTop, ScrollUp,
+};
 use super::viewer_runtime::{HIGHLIGHT_WAIT, SharedHighlights, ViewHighlights, ViewerRuntime};
 use crate::components::ui::{Icon, IconName};
 use crate::data::QueryError;
@@ -53,28 +57,30 @@ pub struct ConflictProgress {
     /// Whether a conflict is being resolved: written to disk, and shown once it is.
     pub saving: bool,
     /// The version of the file on show on disk; `None` until it's known, e.g. after editing.
-    pub version: Option<String>,
+    pub version: Option<FileVersion>,
     /// Why the file's conflicts aren't shown one by one, as its whole text is instead.
     pub problem: Option<String>,
 }
 
-/// The file on disk, as last read.
+/// The file on disk, as last read: its text shared, so it's given and compared without copying.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiskFile {
-    pub contents: String,
-    pub version: String,
+    pub version: FileVersion,
+    pub contents: Arc<str>,
 }
 
-/// Writes `contents` over the file at `version`; resolves to its new version.
-pub type SaveFile = Rc<dyn Fn(String, String, &mut App) -> Task<Result<String, QueryError>>>;
+/// Writes a resolved conflict's text, `contents`, over the file at the version expected; resolves
+/// to its new version.
+pub type SaveResolved =
+    Rc<dyn Fn(String, FileVersion, &mut App) -> Task<Result<FileVersion, QueryError>>>;
 
 /// What the conflict viewer tells the file's view.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConflictViewerEvent {
     /// Editing the whole file started, or stopped (`onEditing`).
     Editing(Option<EditSession>),
-    /// The whole file's text, as it's edited.
-    Edit(String),
+    /// The whole file was edited: its text is read from its editor as it's saved.
+    Edit,
     /// Why editing couldn't start.
     EditFailed(String),
     Progress(ConflictProgress),
@@ -89,11 +95,22 @@ struct Shown {
     file_key: String,
     contents: Arc<str>,
     /// Its version on disk; `None` while that isn't known.
-    version: Option<String>,
+    version: Option<FileVersion>,
     /// Its conflicts, if they're shown one by one.
     state: Option<Arc<ConflictState>>,
     problem: Option<String>,
     /// The widest line, in characters as drawn.
+    widest: usize,
+}
+
+/// A file's text as `show_text` read it, to put on show: its conflicts, or why they can't be read.
+struct ReadResult {
+    file_key: String,
+    contents: Arc<str>,
+    /// Its version on disk; `None` while that isn't known.
+    version: Option<FileVersion>,
+    read: ReadConflicts,
+    /// The widest line of its conflicts' sides, in characters as drawn.
     widest: usize,
 }
 
@@ -119,13 +136,13 @@ struct Request {
 pub struct ConflictViewer {
     focus: FocusHandle,
     scroll: UniformListScrollHandle,
-    save: SaveFile,
+    save: SaveResolved,
     path: SharedString,
     /// What the file's view last gave: the file, and the file as it was read from disk.
-    given: Option<(String, Option<DiskFile>)>,
+    pub(super) given: Option<(String, Option<DiskFile>)>,
     shown: Option<Shown>,
     /// Versions of the file that were written over here: read from disk before that, and stale.
-    superseded: HashSet<String>,
+    superseded: HashSet<FileVersion>,
     /// The conflict the header's buttons and keys are of, by its index.
     current: Option<usize>,
     saving: bool,
@@ -160,7 +177,7 @@ impl Focusable for ConflictViewer {
 }
 
 impl ConflictViewer {
-    pub fn new(save: SaveFile, cx: &mut Context<Self>) -> Self {
+    pub fn new(save: SaveResolved, cx: &mut Context<Self>) -> Self {
         cx.on_release(|this: &mut Self, cx| this.highlights.drop_long(cx))
             .detach();
         ConflictViewer {
@@ -335,26 +352,14 @@ impl ConflictViewer {
         cx: &mut Context<Self>,
     ) -> Task<()> {
         let Some(shown) = &mut self.shown else {
-            return self.show_text(
-                file_key,
-                disk.contents.into(),
-                Some(disk.version),
-                window,
-                cx,
-            );
+            return self.show_text(file_key, disk.contents, Some(disk.version), window, cx);
         };
         if shown.file_key != file_key {
             self.superseded.clear();
             self.requests.clear();
-            return self.show_text(
-                file_key,
-                disk.contents.into(),
-                Some(disk.version),
-                window,
-                cx,
-            );
+            return self.show_text(file_key, disk.contents, Some(disk.version), window, cx);
         }
-        if *shown.contents == *disk.contents {
+        if shown.contents == disk.contents {
             // Written here, or the same again: only its version is news.
             let known = shown.version.is_some();
             shown.version = Some(disk.version);
@@ -369,13 +374,7 @@ impl ConflictViewer {
         }
         // Changed elsewhere: what was asked of the last text isn't of this one.
         self.requests.clear();
-        self.show_text(
-            file_key,
-            disk.contents.into(),
-            Some(disk.version),
-            window,
-            cx,
-        )
+        self.show_text(file_key, disk.contents, Some(disk.version), window, cx)
     }
 
     /// Shows `contents`: its conflicts, highlighted, or the whole of it. Another file starts at
@@ -384,7 +383,7 @@ impl ConflictViewer {
         &mut self,
         file_key: String,
         contents: Arc<str>,
-        version: Option<String>,
+        version: Option<FileVersion>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<()> {
@@ -409,23 +408,26 @@ impl ConflictViewer {
                 };
                 waiting.await;
             }
-            let _ = this.update_in(cx, |this, window, cx| {
-                this.put_on_show(file_key, contents, version, read, widest, window, cx)
-            });
+            let result = ReadResult {
+                file_key,
+                contents,
+                version,
+                read,
+                widest,
+            };
+            let _ = this.update_in(cx, |this, window, cx| this.put_on_show(result, window, cx));
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn put_on_show(
-        &mut self,
-        file_key: String,
-        contents: Arc<str>,
-        version: Option<String>,
-        read: ReadConflicts,
-        widest: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    /// Puts the text `show_text` read on show.
+    fn put_on_show(&mut self, result: ReadResult, window: &mut Window, cx: &mut Context<Self>) {
+        let ReadResult {
+            file_key,
+            contents,
+            version,
+            read,
+            widest,
+        } = result;
         let other = self
             .shown
             .as_ref()
@@ -444,11 +446,7 @@ impl ConflictViewer {
                     window.focus(&self.focus, cx);
                 }
                 if other {
-                    self.scroll
-                        .0
-                        .borrow()
-                        .base_handle
-                        .set_offset(point(px(0.), px(0.)));
+                    scroll_list_to(&self.scroll, px(0.), px(0.));
                 }
                 // The lines shown around the conflicts are another file's.
                 if other {
@@ -530,36 +528,51 @@ impl ConflictViewer {
 
     /// Resolves the conflict asked for, if the text it was asked of is still the one on show:
     /// writes the text that leaves to disk, and shows it once it's written and highlighted, in the
-    /// last one's place.
+    /// last one's place. The text is rewritten, and measured, off the main thread, as
+    /// [`show_text`](Self::show_text) reads it.
     fn resolve_conflict(
         &mut self,
         request: Request,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<()> {
-        let Some(from) = &self.shown else {
-            return Task::ready(());
-        };
-        let (Some(state), Some(from_version)) = (&from.state, from.version.clone()) else {
-            return Task::ready(());
-        };
-        if !Arc::ptr_eq(state, &request.state) {
+        if !self.is_shown(&request.state) {
             return Task::ready(());
         }
-        let Some(resolved) = resolve(state, request.index, request.resolution).map(Arc::new) else {
-            return Task::ready(());
-        };
-        let from_state = Arc::clone(state);
-        self.saving = true;
-        self.report(cx);
-        let saving = (self.save)(resolved.contents().to_owned(), from_version.clone(), cx);
-        let highlighting = self
-            .highlights
-            .highlight(&resolved.diff, HIGHLIGHT_WAIT, cx);
-        let index = request.index;
+        let Request {
+            state: from_state,
+            index,
+            resolution,
+        } = request;
         cx.spawn_in(window, async move |this, cx| {
+            let state = Arc::clone(&from_state);
+            let resolved = cx
+                .background_spawn(async move {
+                    let resolved = Arc::new(resolve(&state, index, resolution)?);
+                    let widest = widest(&resolved);
+                    Some((resolved, widest))
+                })
+                .await;
+            let Some((resolved, widest)) = resolved else {
+                return;
+            };
+            let Ok(Some((from_version, saving, highlighting))) = this.update(cx, |this, cx| {
+                // Shown otherwise meanwhile: what was asked isn't of the text on show.
+                if !this.is_shown(&from_state) {
+                    return None;
+                }
+                let from_version = this.shown.as_ref()?.version.clone()?;
+                this.saving = true;
+                this.report(cx);
+                let saving = (this.save)(resolved.contents().to_owned(), from_version.clone(), cx);
+                let highlighting = this
+                    .highlights
+                    .highlight(&resolved.diff, HIGHLIGHT_WAIT, cx);
+                Some((from_version, saving, highlighting))
+            }) else {
+                return;
+            };
             let (saved, ()) = futures::join!(saving, highlighting);
-            let widest = widest(&resolved);
             let _ = this.update(cx, |this, cx| {
                 match saved {
                     Ok(version) => {
@@ -592,6 +605,18 @@ impl ConflictViewer {
                 this.saving = false;
                 this.report(cx);
             });
+        })
+    }
+
+    /// Whether `state` is the text on show, with its version on disk known, so a conflict of it
+    /// can be resolved over that version.
+    fn is_shown(&self, state: &Arc<ConflictState>) -> bool {
+        self.shown.as_ref().is_some_and(|shown| {
+            shown.version.is_some()
+                && shown
+                    .state
+                    .as_ref()
+                    .is_some_and(|shown| Arc::ptr_eq(shown, state))
         })
     }
 
@@ -671,7 +696,17 @@ impl ConflictViewer {
                     .map(|region| region.start_line);
                 let path = this.path.to_string();
                 this.whole.edit(&path, &contents, line, window, cx);
-                cx.emit(ConflictViewerEvent::Editing(Some(EditSession { version })));
+                let Some(editor) = this.whole.editor().cloned() else {
+                    this.editing = false;
+                    cx.emit(ConflictViewerEvent::EditFailed(
+                        "This file can't be edited.".to_owned(),
+                    ));
+                    return;
+                };
+                cx.emit(ConflictViewerEvent::Editing(Some(EditSession {
+                    version,
+                    editor,
+                })));
                 cx.notify();
             });
         })
@@ -723,38 +758,11 @@ impl ConflictViewer {
         cx.notify();
     }
 
-    /// Scrolls with the keyboard, as a browser's scroll container does.
-    fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let keystroke = &event.keystroke;
-        let modifiers = &keystroke.modifiers;
-        if self.whole.is_shown() || modifiers.alt || modifiers.control || modifiers.platform {
-            return;
-        }
+    /// Scrolls with the keyboard, as a browser's scroll container does (see `viewer_actions`).
+    fn scroll(&mut self, how: Scroll, window: &mut Window, cx: &mut Context<Self>) {
         let row_height = rems(ROW_REMS).to_pixels(window.rem_size());
-        let height = self
-            .scroll
-            .0
-            .borrow()
-            .last_item_size
-            .map_or(px(0.), |size| size.item.height);
-        let page = (height * 0.9).max(row_height);
-        let line = row_height * 2.;
-        let column = self.char_width.map_or(px(8.), |(_, width)| width) * 6.;
-        let (down, right) = match keystroke.key.as_str() {
-            "down" => (line, px(0.)),
-            "up" => (-line, px(0.)),
-            "right" => (px(0.), column),
-            "left" => (px(0.), -column),
-            "pagedown" => (page, px(0.)),
-            "pageup" => (-page, px(0.)),
-            "space" if modifiers.shift => (-page, px(0.)),
-            "space" => (page, px(0.)),
-            "home" => (px(-1e9), px(0.)),
-            "end" => (px(1e9), px(0.)),
-            _ => return,
-        };
-        scroll_list_by(&self.scroll, self.rows.len(), down, right, row_height);
-        cx.stop_propagation();
+        let char_width = self.char_width.map(|(_, width)| width);
+        scroll_list(&self.scroll, self.rows.len(), how, row_height, char_width);
         cx.notify();
     }
 
@@ -886,14 +894,46 @@ impl Render for ConflictViewer {
         };
         div()
             .id("conflicts")
-            .key_context("ConflictViewer")
+            // The whole file's editor has the keys while it's shown.
+            .when(!self.whole.is_shown(), |this| {
+                this.key_context(CONFLICT_VIEWER)
+            })
             .track_focus(&self.focus)
             .relative()
             .size_full()
             .min_h_0()
             .bg(palette.bg)
             .text_color(palette.text)
-            .on_key_down(cx.listener(Self::on_key_down))
+            .on_action(cx.listener(|this, _: &ScrollDown, window, cx| {
+                this.scroll(Scroll::LineDown, window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &ScrollUp, window, cx| {
+                    this.scroll(Scroll::LineUp, window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &ScrollLeft, window, cx| {
+                    this.scroll(Scroll::Left, window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &ScrollRight, window, cx| {
+                this.scroll(Scroll::Right, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ScrollPageDown, window, cx| {
+                this.scroll(Scroll::PageDown, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ScrollPageUp, window, cx| {
+                this.scroll(Scroll::PageUp, window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &ScrollToTop, window, cx| {
+                    this.scroll(Scroll::Top, window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &ScrollToBottom, window, cx| {
+                this.scroll(Scroll::Bottom, window, cx)
+            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
@@ -1279,8 +1319,9 @@ mod tests {
     }
 
     fn viewer(opened: &Opened, cx: &mut TestAppContext) -> gpui_kit::Entity<ConflictViewer> {
-        opened.read(cx, |view, _| {
+        opened.read(cx, |view, cx| {
             view.resolution
+                .read(cx)
                 .viewer()
                 .cloned()
                 .expect("the conflicts' viewer")
@@ -1293,9 +1334,47 @@ mod tests {
             let viewer = viewer.read(cx);
             (
                 viewer.shown_text().map(str::to_owned),
-                viewer.reported.as_ref().and_then(|p| p.version.clone()),
+                viewer
+                    .reported
+                    .as_ref()
+                    .and_then(|p| p.version.as_deref().map(str::to_owned)),
             )
         })
+    }
+
+    #[gpui_kit::test]
+    fn scrolls_with_the_keys_the_patchs_viewer_scrolls_with(cx: &mut TestAppContext) {
+        let _dir = init(cx);
+        let conflicts: String = (1..=100)
+            .map(|line| format!("line {line}\n{MARKERS}"))
+            .collect();
+        let opened = open_conflict(&conflicts, cx);
+        let viewer = viewer(&opened, cx);
+        cx.update_window(opened.window, |_, window, cx| {
+            window.focus(&viewer.read(cx).focus_handle(cx), cx)
+        })
+        .unwrap();
+        // How far down it's scrolled, once it's drawn: some scrolls are only done as it is.
+        let top = |cx: &mut TestAppContext| {
+            opened.has("conflicts", cx);
+            cx.update(|cx| -viewer.read(cx).scroll.0.borrow().base_handle.offset().y)
+        };
+        assert_eq!(top(cx), px(0.));
+
+        opened.press("end", cx);
+        let bottom = top(cx);
+        assert!(bottom > px(0.));
+        opened.press("up", cx);
+        assert!(top(cx) < bottom);
+        opened.press("home", cx);
+        assert_eq!(top(cx), px(0.));
+        opened.press("space", cx);
+        let page = top(cx);
+        assert!(page > px(0.));
+        opened.press("shift-space", cx);
+        assert_eq!(top(cx), px(0.));
+        opened.press("down", cx);
+        assert!(top(cx) > px(0.) && top(cx) < page);
     }
 
     #[gpui_kit::test]
@@ -1328,6 +1407,27 @@ mod tests {
         set_conflict("a.txt", text_conflict(&written, "v3"), cx);
         cx.run_until_parked();
         assert_eq!(shown(&opened, cx), (Some(written), Some("v3".into())));
+    }
+
+    #[gpui_kit::test]
+    fn resolves_the_current_conflict_and_writes_what_that_leaves(cx: &mut TestAppContext) {
+        let _dir = init(cx);
+        let opened = open_conflict(&two_conflicts(), cx);
+        let viewer = viewer(&opened, cx);
+        cx.update_window(opened.window, |_, window, cx| {
+            viewer.update(cx, |viewer, cx| {
+                viewer.resolve(Resolution::Theirs, window, cx)
+            })
+        })
+        .unwrap();
+        // Nothing's written, nor said to be, before the text's rewritten (in the background).
+        assert_eq!(opened.tree.saves(), []);
+        assert!(!cx.update(|cx| viewer.read(cx).saving));
+
+        cx.run_until_parked();
+        let written = format!("one\ntheirs\ntwo\n{MARKERS}");
+        assert_eq!(opened.tree.saves(), [save("a.txt", &written, "v1", false)]);
+        assert_eq!(shown(&opened, cx), (Some(written), Some("v2".into())));
     }
 
     #[gpui_kit::test]
