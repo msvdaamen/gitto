@@ -214,7 +214,7 @@ impl LogQuery {
         if self.has_more() && !self.query.is_fetching() && !self.more.read(cx).is_pending() {
             let id = self.id.clone();
             self.more.update(cx, |more, cx| {
-                drop(more.mutate(id, cx));
+                more.run(id, cx);
             });
         }
     }
