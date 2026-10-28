@@ -14,8 +14,8 @@ use gpui_kit::component::{Disableable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     Animation, AnimationExt as _, AnyElement, AnyWindowHandle, App, Context, ElementId, Entity,
-    EventEmitter, FocusHandle, Focusable, FontWeight, KeyDownEvent, SharedString, Subscription,
-    Task, Transformation, Window, div, percentage, px, rems,
+    EventEmitter, FocusHandle, Focusable, FontWeight, SharedString, Subscription, Task,
+    Transformation, Window, div, percentage, px, rems,
 };
 
 use super::conflict_viewer::{ConflictViewer, SaveFile};
@@ -465,21 +465,6 @@ impl FileDiffView {
         self.conflict = Some(cx.new(|cx| ConflictViewer::new(key, path, save, window, cx)));
     }
 
-    fn on_key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
-        let keystroke = &event.keystroke;
-        let modifiers = &keystroke.modifiers;
-        if keystroke.key != "escape"
-            || modifiers.alt
-            || modifiers.control
-            || modifiers.platform
-            || modifiers.shift
-        {
-            return;
-        }
-        cx.stop_propagation();
-        cx.emit(FileDiffEvent::Close);
-    }
-
     fn open(&mut self, source: DiffSource, file: ChangedFile, cx: &mut Context<Self>) {
         cx.emit(FileDiffEvent::Open { source, file });
     }
@@ -493,13 +478,13 @@ impl Render for FileDiffView {
         let files_error = self.view.files_error().map(SharedString::from);
         v_flex()
             .id("file-diff-view")
-            .key_context("FileDiffView")
+            .key_context(FILE_DIFF_VIEW)
             .track_focus(&self.focus)
             .size_full()
             .min_h_0()
             .min_w_0()
             .bg(palette.bg)
-            .on_key_down(cx.listener(Self::on_key_down))
+            .on_action(cx.listener(|_, _: &CloseFileDiff, _, cx| cx.emit(FileDiffEvent::Close)))
             .child(self.render_header(window, cx))
             .when_some(staging_error, |this, message| {
                 this.child(Notice::new(message).alert().icon(IconName::TriangleAlert))
@@ -1628,6 +1613,42 @@ mod tests {
         assert_eq!(calls[0].action, StageAction::Stage);
         assert_eq!(calls[0].version, patch_version(&from));
         assert_eq!(calls[0].lines, lines());
+        assert_eq!(opened.shown(cx), Some(changed_line("a.txt", "left")));
+    }
+
+    #[gpui_kit::test]
+    fn stages_the_lines_the_viewer_picks_with_the_keyboard(cx: &mut TestAppContext) {
+        let _dir = init(cx);
+        set_changes(vec![], vec![counted("a.txt")], false, cx);
+        patches(&DiffSource::Unstaged, &[counted("a.txt")], "new", cx);
+        let opened = open(DiffSource::Unstaged, counted("a.txt"), cx);
+        opened.lines.respond(leaves(
+            DiffSource::Unstaged,
+            counted("a.txt"),
+            changed_line("a.txt", "left"),
+        ));
+
+        let viewer = cx.update(|cx| opened.view.read(cx).viewer().cloned().unwrap());
+        cx.update_window(opened.window, |_, window, cx| {
+            window.focus(&viewer.focus_handle(cx), cx)
+        })
+        .unwrap();
+        // The first changed line, the removed one, staged.
+        opened.press("down", cx);
+        opened.press("space", cx);
+        let calls = opened.lines.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].version,
+            patch_version(&changed_line("a.txt", "new a.txt"))
+        );
+        assert_eq!(
+            calls[0].lines,
+            LineSelection {
+                deletions: vec![LineRange::new(1, 1).unwrap()],
+                additions: vec![],
+            }
+        );
         assert_eq!(opened.shown(cx), Some(changed_line("a.txt", "left")));
     }
 

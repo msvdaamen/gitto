@@ -22,9 +22,10 @@ use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_fl
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, HighlightStyle, Hsla,
-    KeyDownEvent, ListHorizontalSizingBehavior, MouseButton, MouseDownEvent, MouseMoveEvent,
-    Pixels, SharedString, StyledText, Subscription, Task, TextRun, UniformListScrollHandle,
-    WeakEntity, Window, combine_highlights, div, font, point, px, rems, uniform_list,
+    ListHorizontalSizingBehavior, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels,
+    ScrollStrategy, SharedString, Size, StyledText, Subscription, Task, TextRun,
+    UniformListScrollHandle, WeakEntity, Window, combine_highlights, div, font, point, px, rems,
+    uniform_list,
 };
 
 use super::highlight::{DiffHighlights, highlight_name};
@@ -697,67 +698,82 @@ impl PatchViewer {
     /// now; whether it did.
     fn pick(&mut self, key: PickerKey, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let row_height = rems(ROW_REMS).to_pixels(window.rem_size());
-        let picker_key = match keystroke.key.as_str() {
-            "down" => Some(PickerKey::Down {
-                extend: modifiers.shift,
-            }),
-            "up" => Some(PickerKey::Up {
-                extend: modifiers.shift,
-            }),
-            "]" => Some(PickerKey::NextHunk),
-            "[" => Some(PickerKey::PreviousHunk),
-            "space" if !modifiers.shift => Some(PickerKey::Space),
-            "escape" => Some(PickerKey::Escape),
-            _ => None,
-        };
-        if let Some(key) = picker_key {
-            let viewport = self.viewport(row_height);
-            let (pickable, live) = (self.is_pickable(), self.is_live());
-            let layout = Rc::clone(&self.layout);
-            match self.picker.key(key, pickable, live, &layout, viewport) {
-                KeyOutcome::Ignored => {}
-                KeyOutcome::Handled { reveal } => {
-                    if let Some(line) = reveal {
-                        self.reveal(&line);
-                    }
-                    cx.stop_propagation();
-                    cx.notify();
-                    return;
-                }
-                KeyOutcome::RevealHunk { first, last } => {
-                    self.reveal(&last);
-                    self.reveal(&first);
-                    cx.stop_propagation();
-                    cx.notify();
-                    return;
-                }
-                KeyOutcome::Stage => {
-                    let picked = self.picker.picked().to_vec();
-                    self.stage(picked, true, cx);
-                    cx.stop_propagation();
-                    return;
+        let viewport = self.viewport(row_height);
+        let (pickable, live) = (self.is_pickable(), self.is_live());
+        let layout = Rc::clone(&self.layout);
+        match self.picker.key(key, pickable, live, &layout, viewport) {
+            KeyOutcome::Ignored => return false,
+            KeyOutcome::Handled { reveal } => {
+                if let Some(line) = reveal {
+                    self.reveal(&line);
                 }
             }
+            KeyOutcome::RevealHunk { first, last } => {
+                self.reveal(&last);
+                self.reveal(&first);
+            }
+            KeyOutcome::Stage => {
+                let picked = self.picker.picked().to_vec();
+                self.stage(picked, true, cx);
+                return true;
+            }
         }
-        // Scrolling, as a browser's scroll container does.
+        cx.notify();
+        true
+    }
+
+    /// Picks lines with `key`; scrolls as `otherwise` says if they can't be picked.
+    fn pick_or_scroll(
+        &mut self,
+        key: PickerKey,
+        otherwise: Scroll,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.pick(key, window, cx) {
+            self.scroll(otherwise, window, cx);
+        }
+    }
+
+    /// Picks lines with `key`; leaves the key to the view around otherwise, e.g. Esc to close the
+    /// changes.
+    fn pick_or_propagate(&mut self, key: PickerKey, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.pick(key, window, cx) {
+            cx.propagate();
+        }
+    }
+
+    /// Scrolls, as a browser's scroll container does with the keyboard.
+    fn scroll(&mut self, scroll: Scroll, window: &mut Window, cx: &mut Context<Self>) {
+        let row_height = rems(ROW_REMS).to_pixels(window.rem_size());
         let page = self.viewport(row_height).rows.max(1.) * 0.9 * row_height;
         let line = row_height * 2.;
         let column = self.char_width.map_or(px(8.), |(_, width)| width) * 6.;
-        let (down, right) = match keystroke.key.as_str() {
-            "down" => (line, px(0.)),
-            "up" => (-line, px(0.)),
-            "right" => (px(0.), column),
-            "left" => (px(0.), -column),
-            "pagedown" => (page, px(0.)),
-            "pageup" => (-page, px(0.)),
-            "space" if modifiers.shift => (-page, px(0.)),
-            "space" => (page, px(0.)),
-            "home" => (px(-1e9), px(0.)),
-            "end" => (px(1e9), px(0.)),
-            _ => return,
+        let (down, right) = match scroll {
+            Scroll::LineDown => (line, px(0.)),
+            Scroll::LineUp => (-line, px(0.)),
+            Scroll::Right => (px(0.), column),
+            Scroll::Left => (px(0.), -column),
+            Scroll::PageDown => (page, px(0.)),
+            Scroll::PageUp => (-page, px(0.)),
+            Scroll::Top => {
+                self.scroll.scroll_to_item(0, ScrollStrategy::Top);
+                cx.notify();
+                return;
+            }
+            Scroll::Bottom => {
+                self.scroll.scroll_to_bottom();
+                cx.notify();
+                return;
+            }
         };
-        self.scroll_by(down, right, row_height);
-        cx.stop_propagation();
+        scroll_list_by(
+            &self.scroll,
+            self.layout.rows.len(),
+            down,
+            right,
+            row_height,
+        );
         cx.notify();
     }
 
@@ -990,7 +1006,7 @@ impl Render for PatchViewer {
         let busy = self.staging.as_ref().is_some_and(|staging| staging.busy);
         div()
             .id("patch-viewer")
-            .key_context("PatchViewer")
+            .key_context(PATCH_VIEWER)
             .track_focus(&self.focus)
             .relative()
             .size_full()
@@ -998,7 +1014,62 @@ impl Render for PatchViewer {
             .bg(palette.bg)
             .text_color(palette.text)
             .when(busy, |this| this.cursor_default())
-            .on_key_down(cx.listener(Self::on_key_down))
+            .on_action(cx.listener(|this, _: &SelectDown, window, cx| {
+                this.pick_or_scroll(
+                    PickerKey::Down { extend: false },
+                    Scroll::LineDown,
+                    window,
+                    cx,
+                )
+            }))
+            .on_action(cx.listener(|this, _: &SelectUp, window, cx| {
+                this.pick_or_scroll(PickerKey::Up { extend: false }, Scroll::LineUp, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ExtendSelectionDown, window, cx| {
+                this.pick_or_scroll(
+                    PickerKey::Down { extend: true },
+                    Scroll::LineDown,
+                    window,
+                    cx,
+                )
+            }))
+            .on_action(cx.listener(|this, _: &ExtendSelectionUp, window, cx| {
+                this.pick_or_scroll(PickerKey::Up { extend: true }, Scroll::LineUp, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SelectNextHunk, window, cx| {
+                this.pick_or_propagate(PickerKey::NextHunk, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SelectPreviousHunk, window, cx| {
+                this.pick_or_propagate(PickerKey::PreviousHunk, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &StageSelection, window, cx| {
+                this.pick_or_scroll(PickerKey::Space, Scroll::PageDown, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ClearSelection, window, cx| {
+                this.pick_or_propagate(PickerKey::Escape, window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &ScrollLeft, window, cx| {
+                    this.scroll(Scroll::Left, window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &ScrollRight, window, cx| {
+                this.scroll(Scroll::Right, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ScrollPageDown, window, cx| {
+                this.scroll(Scroll::PageDown, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ScrollPageUp, window, cx| {
+                this.scroll(Scroll::PageUp, window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &ScrollToTop, window, cx| {
+                    this.scroll(Scroll::Top, window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &ScrollToBottom, window, cx| {
+                this.scroll(Scroll::Bottom, window, cx)
+            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseDownEvent, window, cx| {

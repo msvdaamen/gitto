@@ -13,5 +13,5 @@ pub mod highlight;
 pub mod line_picker;
 pub mod patch_viewer;
 pub mod shown_file;
-pub mod viewer_rows;
+pub mod viewer_actions;
 pub mod viewer_runtime;
