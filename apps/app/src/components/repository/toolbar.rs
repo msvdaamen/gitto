@@ -16,7 +16,7 @@ use super::branch_button::BranchButton;
 use super::pull_button::PullButton;
 use super::push_button::PushButton;
 use super::stash_buttons::StashButtons;
-use super::toolbar_button::{HideBelow, SMALL, ToolbarButton};
+use super::toolbar_button::{HideBelow, ToolbarButton};
 use crate::components::ui::{Divider, FailurePopover, Icon, IconButton, IconName, TextInput};
 use crate::data::branch::{
     self, delete_branch_state, merge_branch_state, rebase_branch_state, switch_branch_state,
@@ -26,7 +26,7 @@ use crate::data::repositories::{find, repositories_query};
 use crate::data::status::status_query;
 use crate::data::{Mutation, Opaque, OperationState, Operations, Query, QueryError};
 use crate::theme::PaletteExt as _;
-use crate::views::repository::MEDIUM;
+use crate::theme::breakpoints::{MEDIUM, SMALL};
 
 /// The toolbar's height (TS's grid row, 49px).
 pub const TOOLBAR_HEIGHT: f32 = 3.25;
