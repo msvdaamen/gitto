@@ -11,7 +11,7 @@ use crate::core::repo::{GitCommand, Repo, current_branch, has_conflicts, resolve
 use crate::core::runner::RunOptions;
 use crate::features::operation::commands::operation_under_way;
 use crate::features::remote::progress::rebase_state;
-use crate::input::{BranchRef, NonEmpty};
+use crate::input::{BranchRef, BranchShortName};
 
 /// Rebases the checked-out branch, `branch`, the one the user saw, onto the branch `ref` (a full
 /// ref name, local or remote): replays the commits only it has on top of `ref`'s, one by one.
@@ -41,7 +41,7 @@ use crate::input::{BranchRef, NonEmpty};
 pub async fn rebase_branch(
     repo: &Repo,
     reference: &BranchRef,
-    branch: &NonEmpty,
+    branch: &BranchShortName,
 ) -> Result<RebaseOutcome> {
     let (reference, branch) = (reference.as_str(), branch.as_str());
     let Some(target) = branch_name(reference) else {

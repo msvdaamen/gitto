@@ -1,6 +1,7 @@
 //! Ported from `git/conflicts.ts`: what a conflicted file is, and what's under way in the
 //! repository, in the user's words.
 
+use gitto_git::Version;
 use gitto_git::features::conflicts::schema::{Conflict, ConflictSide, ConflictSides, Side};
 use gitto_git::features::operation::schema::{CommitName, Operation};
 
@@ -27,7 +28,7 @@ pub fn side_kind(side: &ConflictSide) -> SideKind {
 /// or not at all, once it isn't conflicted any more.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConflictKind {
-    Text { contents: String, version: String },
+    Text { contents: String, version: Version },
     Sides,
     Resolved,
 }

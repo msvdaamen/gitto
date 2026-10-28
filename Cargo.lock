@@ -2005,6 +2005,7 @@ dependencies = [
  "futures",
  "futures-lite",
  "libc",
+ "log",
  "memchr",
  "notify",
  "regex",
@@ -2025,11 +2026,9 @@ dependencies = [
  "futures",
  "gitto-db",
  "gitto-git",
- "serde",
- "serde_json",
  "smol",
  "tempfile",
- "uuid",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

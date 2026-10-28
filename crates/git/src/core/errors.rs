@@ -10,6 +10,8 @@ use std::fmt;
 use std::io;
 use std::sync::Arc;
 
+use crate::input::RepositoryId;
+
 /// What the git crate's functions return.
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -363,7 +365,7 @@ pub enum Error {
 
     /// No repository with that id has been added to Gitto.
     #[error("Repository not found.")]
-    RepositoryNotFound { repository_id: String },
+    RepositoryNotFound { repository_id: RepositoryId },
 
     /// Gitto's list of repositories couldn't be read, to find one by its id: a bug, said with why.
     #[error("{0}")]
@@ -512,9 +514,15 @@ impl RepositoryListError {
         while let Some(source) = inner.source() {
             inner = source;
         }
+        RepositoryListError::with_reason(action, &inner.to_string())
+    }
+
+    /// The list couldn't be `action`ed, for `reason`: said trimmed, with a full stop if it has
+    /// none.
+    pub fn with_reason(action: ListAction, reason: &str) -> Self {
         RepositoryListError {
             action,
-            reason: sentence(&inner.to_string()),
+            reason: sentence(reason),
         }
     }
 }
@@ -728,6 +736,10 @@ mod tests {
         assert_eq!(
             RepositoryListError::new(ListAction::Update, &full).to_string(),
             "Gitto couldn't update its list of repositories: disk is full!"
+        );
+        assert_eq!(
+            RepositoryListError::with_reason(ListAction::Read, " no such table \n").reason,
+            "no such table."
         );
     }
 

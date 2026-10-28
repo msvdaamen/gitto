@@ -4,8 +4,9 @@
 use std::path::{Component, Path, PathBuf};
 
 use gitto_db::rusqlite;
+use gitto_git::input::RepositoryId;
 
-use crate::errors::{Error, ListAction, Result};
+use crate::errors::{Error, ListAction, ListError, Result};
 use crate::store::RepositoryStore;
 use crate::types::Repository;
 
@@ -28,17 +29,29 @@ impl RepositoryService {
     }
 
     /// The repository with `id`; `None` if there's none.
-    pub async fn get_repository(&self, id: &str) -> Result<Option<Repository>> {
-        listed(ListAction::Read, self.store.get_by_id(id).await)
+    pub async fn get_repository(&self, id: &RepositoryId) -> Result<Option<Repository>> {
+        Ok(self.find(id).await?)
+    }
+
+    /// The repository with `id`, as `get_repository` has it, failing only as the list can.
+    pub(crate) async fn find(&self, id: &RepositoryId) -> Result<Option<Repository>, ListError> {
+        self.store
+            .get_by_id(id)
+            .await
+            .map_err(|cause| ListError::new(ListAction::Read, cause))
     }
 
     /// Adds the git repository at `path` after the others; returns the existing entry if it was
     /// already added. `path` is made absolute as Node's `path.resolve` does (see [`resolve`]), and
-    /// is refused with [`Error::NotAGitRepository`] if it has no `.git`.
+    /// is refused with [`Error::NotAGitRepository`] if it has no `.git`, and with
+    /// [`Error::PathNotUtf8`] if it isn't UTF-8, as the list keeps paths as text.
     pub async fn add_repository(&self, path: impl AsRef<Path>) -> Result<Repository> {
-        // A string, as in TS: Node had the path as one, lossily if it wasn't UTF-8 (in which case
-        // the folder isn't found, and it's not a git repository).
-        let repo_path = resolve(path.as_ref()).to_string_lossy().into_owned();
+        let resolved = resolve(path.as_ref());
+        let Some(repo_path) = resolved.to_str().map(str::to_owned) else {
+            return Err(Error::PathNotUtf8 {
+                path: resolved.to_string_lossy().into_owned(),
+            });
+        };
 
         let existing = listed(ListAction::Read, self.store.get_by_path(&repo_path).await)?;
         if let Some(existing) = existing {
@@ -54,21 +67,21 @@ impl RepositoryService {
         }
 
         let repository = Repository {
-            id: uuid::Uuid::now_v7().to_string(),
+            id: RepositoryId::generate(),
             name: basename(&repo_path),
             path: repo_path,
         };
-        listed(ListAction::Update, self.store.create(&repository).await)?;
-        Ok(repository)
+        // The one listed at its path: this one, unless it was added meanwhile.
+        listed(ListAction::Update, self.store.create(&repository).await)
     }
 
     /// Removes the repository from Gitto; the folder on disk is left untouched.
-    pub async fn remove_repository(&self, id: &str) -> Result<()> {
+    pub async fn remove_repository(&self, id: &RepositoryId) -> Result<()> {
         listed(ListAction::Update, self.store.delete(id).await)
     }
 
     /// Puts the tabs in the order of `ids`; repositories missing from it keep their place after.
-    pub async fn reorder_repositories(&self, ids: &[String]) -> Result<()> {
+    pub async fn reorder_repositories(&self, ids: &[RepositoryId]) -> Result<()> {
         listed(ListAction::Update, self.store.reorder(ids).await)
     }
 }
@@ -184,9 +197,6 @@ mod tests {
 
         assert_eq!(repository.name, "gitto");
         assert_eq!(repository.path, text(&path));
-        let id = uuid::Uuid::parse_str(&repository.id).unwrap();
-        assert_eq!(id.get_version_num(), 7);
-        assert_eq!(repository.id, id.hyphenated().to_string());
         assert_eq!(
             smol::block_on(f.service.get_repositories()).unwrap(),
             std::slice::from_ref(&repository)
@@ -228,6 +238,28 @@ mod tests {
         assert!(f.names().is_empty());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn refuses_a_folder_whose_path_isnt_utf8() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let f = fixture();
+        let path = f.dir.path().join(OsStr::from_bytes(b"caf\xe9"));
+
+        let error = f.add(&path).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "Gitto can't add {}, as its path isn't UTF-8.",
+                resolve(&path).to_string_lossy()
+            )
+        );
+        assert!(!error.is_bug());
+        assert!(f.names().is_empty());
+    }
+
     #[test]
     fn refuses_a_folder_that_does_not_exist() {
         let f = fixture();
@@ -251,6 +283,20 @@ mod tests {
         let again = f.add(path.join("../gitto/.")).unwrap();
 
         assert_eq!(again, first);
+        assert_eq!(f.names(), ["gitto"]);
+    }
+
+    #[test]
+    fn adds_a_repository_added_twice_at_once_once() {
+        let f = fixture();
+        let path = f.folder("gitto", true);
+
+        let (first, second) = smol::block_on(futures::future::join(
+            f.service.add_repository(&path),
+            f.service.add_repository(&path),
+        ));
+
+        assert_eq!(first.unwrap(), second.unwrap());
         assert_eq!(f.names(), ["gitto"]);
     }
 
@@ -327,7 +373,7 @@ mod tests {
         );
         // Removing it again, or an id that was never there, is no error.
         smol::block_on(f.service.remove_repository(&one.id)).unwrap();
-        smol::block_on(f.service.remove_repository("missing")).unwrap();
+        smol::block_on(f.service.remove_repository(&RepositoryId::generate())).unwrap();
         assert_eq!(
             smol::block_on(f.service.get_repository(&two.id)).unwrap(),
             Some(two)
@@ -337,7 +383,7 @@ mod tests {
     #[test]
     fn reorders_the_repositories() {
         let f = fixture();
-        let ids: Vec<String> = ["one", "two", "three"]
+        let ids: Vec<RepositoryId> = ["one", "two", "three"]
             .into_iter()
             .map(|name| f.add(f.folder(name, true)).unwrap().id)
             .collect();
@@ -363,7 +409,8 @@ mod tests {
             "Gitto couldn't read its list of repositories: no such table: repositories."
         );
         assert!(error.is_bug());
-        let error = smol::block_on(f.service.get_repository("id")).unwrap_err();
+        let error =
+            smol::block_on(f.service.get_repository(&RepositoryId::generate())).unwrap_err();
         assert_eq!(
             error.to_string(),
             "Gitto couldn't read its list of repositories: no such table: repositories."
@@ -417,11 +464,11 @@ mod tests {
             error.to_string(),
             "Gitto couldn't update its list of repositories: database or disk is full."
         );
-        let Error::List { action, cause } = &error else {
+        let Error::List(list) = &error else {
             panic!("not a list error: {error:?}");
         };
-        assert_eq!(*action, ListAction::Update);
-        assert_eq!(cause.to_string(), "database or disk is full");
+        assert_eq!(list.action(), ListAction::Update);
+        assert_eq!(list.cause().to_string(), "database or disk is full");
     }
 
     #[test]

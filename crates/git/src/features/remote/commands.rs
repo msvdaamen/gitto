@@ -16,7 +16,7 @@ use crate::core::git_dirs::{GitDirs, git_dirs};
 use crate::core::repo::{GitCommand, Repo, current_branch, ref_exists, resolve_ref, succeeds};
 use crate::core::runner::{RunOptions, spawn_detached};
 use crate::features::branch::in_use::branches_in_use;
-use crate::input::NonEmpty;
+use crate::input::BranchShortName;
 
 /// The remotes, by name, as `run` lists them.
 pub async fn list_remotes(run: &GitCommand) -> Result<Vec<String>> {
@@ -113,7 +113,7 @@ pub async fn pull(repo: &Repo) -> Result<()> {
 /// changing nothing, if it has commits its upstream doesn't, which only merging or rebasing it,
 /// checked out, brings together, or if it's checked out in another worktree, or being rebased or
 /// bisected in one (`Error::PullBlocked`). Every remote is fetched too, as `pull` does.
-pub async fn pull_branch(repo: &Repo, branch: &NonEmpty) -> Result<()> {
+pub async fn pull_branch(repo: &Repo, branch: &BranchShortName) -> Result<()> {
     let branch = branch.as_str();
     let run = repo.git();
     let (current, config) = futures::try_join!(current_branch(&run), read_config(&run))?;
@@ -1674,8 +1674,8 @@ mod tests {
 
     #[test]
     fn pull_branch_needs_a_branchs_name() {
-        // Refused as the input's parsed: `pull_branch` takes a `NonEmpty`.
-        let error = NonEmpty::parse("").unwrap_err();
+        // Refused as the input's parsed: `pull_branch` takes a `BranchShortName`.
+        let error = BranchShortName::parse("").unwrap_err();
         assert!(matches!(error, Error::InvalidInput(_)), "{error:?}");
     }
 }

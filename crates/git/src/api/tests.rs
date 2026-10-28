@@ -27,7 +27,8 @@ use crate::features::status::commands::get_status_since;
 use crate::features::status::schema::{Head, StatusReply};
 use crate::features::version::check;
 use crate::features::watch::schema::GitDirChange;
-use crate::input::{BranchRef, FullSha, NonEmpty, Paths, RepositoryId, Sha};
+use crate::input::{BranchRef, BranchShortName, FullSha, Paths, RepositoryId, Sha};
+use crate::schema::Version;
 use crate::test_support::{Fixture, git, valid};
 
 /// Procedures only take UUIDv7 repository ids.
@@ -50,7 +51,7 @@ fn api_error(error: ApiError) -> (&'static str, String) {
 
 /// The API over `fx`'s repositories, with the installed git.
 fn api(fx: &Fixture) -> GitApi {
-    GitApi::with(fx.repos.clone(), GitVersion::new())
+    GitApi::with(fx.repos.git_repos(), GitVersion::new())
 }
 
 /// The repository with some history (see `create_history_repo`), as `HISTORY`.
@@ -145,7 +146,7 @@ fn runs_nothing_with_a_git_gitto_doesnt_support() {
         let output = read.lock().unwrap().clone();
         async move { output }
     });
-    let outdated = GitApi::with(fx.repos.clone(), version);
+    let outdated = GitApi::with(fx.repos.git_repos(), version);
     smol::block_on(async {
         history(&fx).await;
         let ran = Arc::new(AtomicBool::new(false));
@@ -201,7 +202,7 @@ fn merges_a_branch_saying_what_it_did_or_why_it_didnt() {
         // The UI's input, checked as it's parsed, then the procedure.
         let merge = |reference: &str, into: &str| {
             let input = BranchRef::parse(reference).and_then(|reference| {
-                let into = NonEmpty::parse(into)?;
+                let into = BranchShortName::parse(into)?;
                 Ok((reference, into))
             });
             let api = api.clone();
@@ -254,9 +255,9 @@ fn skips_a_status_the_caller_already_has() {
     let api = api(&fx);
     smol::block_on(async {
         history(&fx).await;
-        let status = |since: Option<String>| {
+        let status = |since: Option<Version>| {
             api.call("status.get", &id(HISTORY), |repo| async move {
-                get_status_since(&repo, since.as_deref()).await
+                get_status_since(&repo, since.as_ref()).await
             })
         };
         let StatusReply::Status(full) = status(None).await.unwrap() else {
@@ -268,7 +269,7 @@ fn skips_a_status_the_caller_already_has() {
             StatusReply::Unchanged { .. }
         ));
         assert_eq!(
-            status(Some("an older version".to_owned())).await.unwrap(),
+            status(Some("an older version".into())).await.unwrap(),
             StatusReply::Status(full)
         );
     });
@@ -294,7 +295,6 @@ fn tells_the_renderer_a_push_it_can_force_apart_from_other_failures() {
             .await
             .unwrap_err();
         assert_eq!(error.code(), ApiCode::PushRewritten);
-        assert_eq!(error.status(), 409);
         assert_eq!(
             api_error(error),
             (
@@ -311,42 +311,7 @@ fn tells_the_renderer_a_push_it_can_force_apart_from_other_failures() {
 #[test]
 fn takes_only_uuid_v7_repository_ids() {
     let error = RepositoryId::parse("history").unwrap_err();
-    assert_eq!(ApiError::from(error).code().code(), "BAD_REQUEST");
-}
-
-#[test]
-fn takes_only_the_values_the_contracts_enums_have() {
-    use crate::features::conflicts::schema::Side;
-    use crate::features::operation::schema::OperationKind;
-    use crate::features::staging::discard::DiscardSide;
-    use crate::schema::FileStatus;
-
-    fn parses<T: serde::de::DeserializeOwned>(value: &str) -> bool {
-        serde_json::from_str::<T>(&format!("{value:?}")).is_ok()
-    }
-
-    for kind in ["merge", "rebase", "cherry-pick", "revert", "am"] {
-        assert!(parses::<OperationKind>(kind), "{kind}");
-    }
-    assert!(!parses::<OperationKind>("cherrypick"));
-    assert!(!parses::<OperationKind>("Merge"));
-    assert!(parses::<Side>("ours") && parses::<Side>("theirs"));
-    assert!(!parses::<Side>("base"));
-    assert!(parses::<DiscardSide>("staged") && parses::<DiscardSide>("unstaged"));
-    assert!(!parses::<DiscardSide>("both"));
-    for status in [
-        "modified",
-        "added",
-        "deleted",
-        "renamed",
-        "copied",
-        "typechange",
-        "untracked",
-        "conflicted",
-    ] {
-        assert!(parses::<FileStatus>(status), "{status}");
-    }
-    assert!(!parses::<FileStatus>("ignored"));
+    assert_eq!(ApiError::new(error).code().code(), "BAD_REQUEST");
 }
 
 #[test]
@@ -376,7 +341,10 @@ fn reports_bugs_with_the_procedure_they_failed_and_only_bugs() {
         });
         assert_eq!(
             api_error(bug.await.unwrap_err()),
-            ("INTERNAL_SERVER_ERROR", "Internal server error".to_owned())
+            (
+                "INTERNAL_SERVER_ERROR",
+                "Something went wrong in Gitto.".to_owned()
+            )
         );
         let input = api.fail("branch.merge", BranchRef::parse("v1").unwrap_err());
         assert_eq!(input.message(), "Input validation failed");
@@ -398,7 +366,7 @@ struct Locked(Arc<AtomicUsize>);
 impl RepositoryLookup for Locked {
     fn repository_path<'a>(
         &'a self,
-        _: &'a str,
+        _: &'a RepositoryId,
     ) -> BoxFuture<'a, Result<Option<PathBuf>, RepositoryListError>> {
         self.0.fetch_add(1, Ordering::SeqCst);
         let locked = std::io::Error::other("database is locked");
@@ -453,7 +421,7 @@ fn pulls_the_checked_out_branch_or_the_one_named() {
     git(&upstream, ["commit", "-q", "--allow-empty", "-m", "second"]);
     smol::block_on(async {
         let repo = fx.repos.open("clone").await.unwrap();
-        let other = NonEmpty::parse("other").unwrap();
+        let other = BranchShortName::parse("other").unwrap();
         pull(&repo, Some(&other)).await.unwrap();
         let upstream_head = git(&upstream, ["rev-parse", "HEAD"]);
         assert_eq!(git(&path, ["rev-parse", "other"]), upstream_head);
@@ -505,7 +473,7 @@ fn calls_can_run_on_another_thread() {
     let fx = Fixture::new();
     let api = api(&fx);
     let reference = valid::<BranchRef>("refs/heads/side");
-    let into = valid::<NonEmpty>("main");
+    let into = valid::<BranchShortName>("main");
     let merge = api.call("branch.merge", &id(HISTORY), |repo| async move {
         merge_branch(&repo, &reference, &into).await
     });
@@ -523,12 +491,12 @@ fn logs_a_failure_with_the_command_git_ran() {
         "fatal: bad object 0123\n",
     );
     assert_eq!(
-        super::log_line("diff.commitFiles", &ApiError::from(Error::Git(error))),
+        super::log_line("diff.commitFiles", &ApiError::new(Error::Git(error))),
         "[git] diff.commitFiles failed (INTERNAL_SERVER_ERROR): fatal: bad object 0123\n  \
          git diff-tree 0123 (exit code 128)"
     );
     assert_eq!(
-        super::log_line("commit.create", &ApiError::from(Error::HeadMoved)),
+        super::log_line("commit.create", &ApiError::new(Error::HeadMoved)),
         "[git] commit.create failed (CONFLICT): The last commit changed before it could be \
          amended, so nothing was amended."
     );

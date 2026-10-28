@@ -138,7 +138,7 @@ pub async fn resolve_text(repo: &Repo, contents: &str) {
         version: text.version,
         overwrite: false,
     };
-    let version = save_working_tree_file(repo, "f.txt", contents, &expected)
+    let version = save_working_tree_file(repo, &valid("f.txt"), contents, &expected)
         .await
         .unwrap();
     mark_resolved(repo, &valid("f.txt"), Some(&version), false)

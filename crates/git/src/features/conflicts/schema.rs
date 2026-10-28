@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::schema::Version;
+
 /// One side of a conflicted file, as the index has it while it's unmerged: its mode (`100644`, say,
 /// or `120000` for a symbolic link and `160000` for a submodule) and its object.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,7 +29,7 @@ pub struct ConflictSides {
 #[serde(rename_all = "camelCase")]
 pub struct ConflictText {
     pub contents: String,
-    pub version: String,
+    pub version: Version,
 }
 
 /// A conflicted file: its sides, and what's in the working tree at its path.
@@ -43,7 +45,7 @@ pub struct Conflict {
     /// The version of the file in the working tree, text or not, which resolving it whole checks
     /// it still has; `None` if there's no file there, or it's a symbolic link, or leads out of the
     /// repository, none of which can be read.
-    pub version: Option<String>,
+    pub version: Option<Version>,
     /// Whether the file in the working tree is binary, which git leaves as ours without markers.
     pub binary: bool,
     /// Why the file in the working tree isn't `text`, e.g. it's too large; `None` if it is.

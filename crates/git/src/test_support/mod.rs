@@ -20,16 +20,47 @@ use crate::core::errors::Error;
 use crate::core::git_dirs::real_path;
 use crate::core::repo::{GitRepos, Repo};
 use crate::core::runner::lock;
+use crate::input::RepositoryId;
 
 /// Repositories for one test, in a temp directory of its own.
 pub struct Fixture {
     /// Removed when the fixture is dropped.
     _dir: tempfile::TempDir,
     root: PathBuf,
-    /// Repository paths by name, for `repos`.
-    paths: Arc<Mutex<HashMap<String, PathBuf>>>,
+    /// Repository paths by id, for `repos`.
+    paths: Arc<Mutex<HashMap<RepositoryId, PathBuf>>>,
     /// Opens the repositories `create_repo` made (and `add_path` added), by their name.
-    pub repos: GitRepos,
+    pub repos: NamedRepos,
+}
+
+/// `GitRepos` that opens repositories by a name, as tests call them: each name has an id of its
+/// own, which is the name itself if it's a repository id.
+#[derive(Clone)]
+pub struct NamedRepos {
+    repos: GitRepos,
+    ids: Arc<Mutex<HashMap<String, RepositoryId>>>,
+}
+
+impl NamedRepos {
+    /// The repository `name` is (see `GitRepos::open`).
+    pub async fn open(&self, name: &str) -> Result<Repo, Error> {
+        self.repos.open(&self.id(name)).await
+    }
+
+    /// The id of the repository `name` is.
+    pub fn id(&self, name: &str) -> RepositoryId {
+        lock(&self.ids)
+            .entry(name.to_owned())
+            .or_insert_with(|| {
+                RepositoryId::parse(name).unwrap_or_else(|_| RepositoryId::generate())
+            })
+            .clone()
+    }
+
+    /// The `GitRepos` these are, which opens them by their ids.
+    pub fn git_repos(&self) -> GitRepos {
+        self.repos.clone()
+    }
 }
 
 impl Default for Fixture {
@@ -48,9 +79,12 @@ impl Fixture {
         // Where it really is: git lists worktrees by their real paths, and macOS puts the temp
         // folder under a symlink.
         let root = smol::block_on(real_path(dir.path())).expect("the temp directory's real path");
-        let paths = Arc::new(Mutex::new(HashMap::<String, PathBuf>::new()));
+        let paths = Arc::new(Mutex::new(HashMap::<RepositoryId, PathBuf>::new()));
         let lookup = Arc::clone(&paths);
-        let repos = GitRepos::new(move |id: &str| lock(&lookup).get(id).cloned());
+        let repos = NamedRepos {
+            repos: GitRepos::new(move |id: &RepositoryId| lock(&lookup).get(id).cloned()),
+            ids: Arc::default(),
+        };
         Fixture {
             _dir: dir,
             root,
@@ -66,7 +100,7 @@ impl Fixture {
 
     /// Has `repos` open the repository at `path` as `name`, e.g. a linked worktree.
     pub fn add_path(&self, name: &str, path: impl Into<PathBuf>) {
-        lock(&self.paths).insert(name.to_owned(), path.into());
+        lock(&self.paths).insert(self.repos.id(name), path.into());
     }
 
     /// Creates an empty repository on `main`, which `repos` opens as `name`, and returns its path.
