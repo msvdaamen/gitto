@@ -43,13 +43,56 @@ use crate::state::collapsed::Collapsed;
 use crate::theme::base_px;
 use crate::views::repository::MEDIUM;
 
-/// The sections, by the id their collapsed state is saved under.
-const LOCAL: &str = "local";
-const REMOTES: &str = "remotes";
-const TAGS: &str = "tags";
-const STASHES: &str = "stashes";
-const WORKTREES: &str = "worktrees";
-const SECTIONS: [&str; 5] = [LOCAL, REMOTES, TAGS, STASHES, WORKTREES];
+/// The sidebar's sections, in the order they're shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Section {
+    Local,
+    Remotes,
+    Tags,
+    Stashes,
+    Worktrees,
+}
+
+impl Section {
+    pub const ALL: [Section; 5] = [
+        Section::Local,
+        Section::Remotes,
+        Section::Tags,
+        Section::Stashes,
+        Section::Worktrees,
+    ];
+
+    /// The id its collapsed state is saved under, which its parts' ids are made of too.
+    pub fn key(self) -> &'static str {
+        match self {
+            Section::Local => "local",
+            Section::Remotes => "remotes",
+            Section::Tags => "tags",
+            Section::Stashes => "stashes",
+            Section::Worktrees => "worktrees",
+        }
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Section::Local => "Local branches",
+            Section::Remotes => "Remotes",
+            Section::Tags => "Tags",
+            Section::Stashes => "Stashes",
+            Section::Worktrees => "Worktrees",
+        }
+    }
+
+    fn icon(self) -> IconName {
+        match self {
+            Section::Local => IconName::GitBranch,
+            Section::Remotes => IconName::Cloud,
+            Section::Tags => IconName::Tag,
+            Section::Stashes => IconName::Inbox,
+            Section::Worktrees => IconName::FolderGit2,
+        }
+    }
+}
 
 /// What the list runs: the data layer's operations, or a test's.
 #[derive(Clone)]
@@ -258,7 +301,11 @@ impl RefList {
 
     fn collapsed_of(id: &RepositoryId, cx: &App) -> Collapsed {
         let storage = Rc::clone(Services::global(cx).storage());
-        Collapsed::new(id.to_string(), [(TAGS, true), (STASHES, true)], storage)
+        Collapsed::new(
+            id.to_string(),
+            [(Section::Tags.key(), true), (Section::Stashes.key(), true)],
+            storage,
+        )
     }
 
     pub fn repository_id(&self) -> &RepositoryId {
@@ -295,25 +342,39 @@ impl RefList {
         cx.notify();
     }
 
-    /// Whether the section or folder `id` is collapsed.
-    pub fn is_collapsed(&self, id: &str) -> bool {
-        self.collapsed.is_collapsed(id)
+    pub fn is_section_collapsed(&self, section: Section) -> bool {
+        self.collapsed.is_collapsed(section.key())
     }
 
-    /// Collapses the section or folder `id`, or expands it.
-    pub fn toggle(&mut self, id: &str, cx: &mut Context<Self>) {
+    /// Whether the ref folder at `path` (e.g. `refs/remotes/origin`) is collapsed.
+    pub fn is_folder_collapsed(&self, path: &str) -> bool {
+        self.collapsed.is_collapsed(path)
+    }
+
+    /// Collapses `section`, or expands it.
+    pub fn toggle_section(&mut self, section: Section, cx: &mut Context<Self>) {
+        self.toggle(section.key(), cx);
+    }
+
+    /// Collapses the ref folder at `path`, or expands it.
+    pub fn toggle_folder(&mut self, path: &str, cx: &mut Context<Self>) {
+        self.toggle(path, cx);
+    }
+
+    /// Collapses the section or folder saved as `id`, or expands it.
+    fn toggle(&mut self, id: &str, cx: &mut Context<Self>) {
         self.collapsed.toggle(id);
         self.collapsed_revision += 1;
         cx.notify();
     }
 
-    /// Whether the section `id` shows something running on its items: popping or deleting a
-    /// stash, or adding, opening or removing a worktree.
-    pub fn is_section_busy(&self, id: &str, cx: &App) -> bool {
-        match id {
-            STASHES => self.actions.stash.is_busy(&self.repository_id, cx),
-            WORKTREES => self.actions.worktree.is_busy(&self.repository_id, cx),
-            _ => false,
+    /// Whether `section` shows something running on its items: popping or deleting a stash, or
+    /// adding, opening or removing a worktree.
+    pub fn is_section_busy(&self, section: Section, cx: &App) -> bool {
+        match section {
+            Section::Stashes => self.actions.stash.is_busy(&self.repository_id, cx),
+            Section::Worktrees => self.actions.worktree.is_busy(&self.repository_id, cx),
+            Section::Local | Section::Remotes | Section::Tags => false,
         }
     }
 
@@ -558,35 +619,30 @@ impl RefList {
         })
     }
 
-    /// The section `id` of the list, collapsible under that id, counting `count` items in
-    /// `items` rows.
+    /// `section` of the list, counting `count` items in `items` rows.
     fn section(
         &self,
-        id: &'static str,
+        section: Section,
         count: usize,
         items: usize,
         render_rows: RenderRows,
         cx: &mut Context<Self>,
     ) -> SidebarSection {
-        let (title, icon) = match id {
-            LOCAL => ("Local branches", IconName::GitBranch),
-            REMOTES => ("Remotes", IconName::Cloud),
-            TAGS => ("Tags", IconName::Tag),
-            STASHES => ("Stashes", IconName::Inbox),
-            _ => ("Worktrees", IconName::FolderGit2),
-        };
         let list = cx.entity().downgrade();
-        let scroll = SECTIONS
-            .iter()
-            .position(|section| *section == id)
-            .map(|ix| &self.scrolls[ix]);
-        SidebarSection::new(id, title, icon, count, items, render_rows)
-            .collapsed(self.collapsed.is_collapsed(id))
-            .busy(self.is_section_busy(id, cx))
-            .when_some(scroll, |section, scroll| section.track_scroll(scroll))
-            .on_toggle(move |_, cx| {
-                let _ = list.update(cx, |list, cx| list.toggle(id, cx));
-            })
+        SidebarSection::new(
+            section.key(),
+            section.title(),
+            section.icon(),
+            count,
+            items,
+            render_rows,
+        )
+        .collapsed(self.is_section_collapsed(section))
+        .busy(self.is_section_busy(section, cx))
+        .track_scroll(&self.scrolls[section as usize])
+        .on_toggle(move |_, cx| {
+            let _ = list.update(cx, |list, cx| list.toggle_section(section, cx));
+        })
     }
 }
 
@@ -625,7 +681,7 @@ fn tree_row(line: &TreeLine, rows: &RowContext) -> AnyElement {
             )
             .on_toggle(move |_, cx| {
                 let path = path.clone();
-                let _ = list.update(cx, |list, cx| list.toggle(&path, cx));
+                let _ = list.update(cx, |list, cx| list.toggle_folder(&path, cx));
             })
             .into_any_element()
         }
@@ -703,7 +759,7 @@ impl Render for RefList {
 
         let local = self
             .section(
-                LOCAL,
+                Section::Local,
                 self.trees.local_count,
                 self.trees.local.len(),
                 tree_rows(Rc::clone(&self.trees.local), Rc::clone(&rows)),
@@ -712,7 +768,7 @@ impl Render for RefList {
             .rail(rail);
         let remotes = self
             .section(
-                REMOTES,
+                Section::Remotes,
                 self.trees.remote_count,
                 self.trees.remote.len(),
                 tree_rows(Rc::clone(&self.trees.remote), Rc::clone(&rows)),
@@ -722,7 +778,7 @@ impl Render for RefList {
         let tags = Rc::clone(&self.trees.tags);
         let tags = self
             .section(
-                TAGS,
+                Section::Tags,
                 tags.len(),
                 tags.len(),
                 Rc::new(move |range: Range<usize>, _, _| {
@@ -754,7 +810,13 @@ impl Render for RefList {
             })
         };
         let stashes = self
-            .section(STASHES, stashes.len(), stashes.len(), stash_rows, cx)
+            .section(
+                Section::Stashes,
+                stashes.len(),
+                stashes.len(),
+                stash_rows,
+                cx,
+            )
             .rail(rail)
             .failure(self.actions.stash.failure(&id, cx));
 
@@ -771,7 +833,7 @@ impl Render for RefList {
         };
         let worktrees = self
             .section(
-                WORKTREES,
+                Section::Worktrees,
                 worktrees.len(),
                 worktrees.len(),
                 worktree_rows,
@@ -1289,7 +1351,7 @@ mod tests {
             })
         }
 
-        fn is_section_busy(&self, section: &str, cx: &mut TestAppContext) -> bool {
+        fn is_section_busy(&self, section: Section, cx: &mut TestAppContext) -> bool {
             let list = self.list(cx);
             list.read_with(cx, |list, cx| list.is_section_busy(section, cx))
         }
@@ -1297,14 +1359,15 @@ mod tests {
         /// The failure shown beside the section, by its title and message.
         fn section_failure(
             &self,
-            section: &str,
+            section: Section,
             cx: &mut TestAppContext,
         ) -> Option<(String, String)> {
             let list = self.list(cx);
             list.read_with(cx, |list, cx| {
                 let failure = match section {
-                    STASHES => list.actions.stash.failure(&list.repository_id, cx),
-                    _ => list.actions.worktree.failure(&list.repository_id, cx),
+                    Section::Stashes => list.actions.stash.failure(&list.repository_id, cx),
+                    Section::Worktrees => list.actions.worktree.failure(&list.repository_id, cx),
+                    _ => unreachable!("{section:?} has no actions on its items"),
                 };
                 failure
                     .error
@@ -1329,11 +1392,11 @@ mod tests {
             });
         }
 
-        /// Expands the section `id` if it's collapsed (tags and stashes are, at first).
-        fn expand(&self, section: &'static str, cx: &mut TestAppContext) {
+        /// Expands `section` if it's collapsed (tags and stashes are, at first).
+        fn expand(&self, section: Section, cx: &mut TestAppContext) {
             let list = self.list(cx);
-            if list.read_with(cx, |list, _| list.is_collapsed(section)) {
-                self.click(&format!("section-{section}"), cx);
+            if list.read_with(cx, |list, _| list.is_section_collapsed(section)) {
+                self.click(&format!("section-{}", section.key()), cx);
             }
         }
 
@@ -1463,7 +1526,7 @@ mod tests {
             .collect();
         let f = render_with(cx, |id, cx| set_refs(id, many.clone(), cx));
         let list = f.list(cx);
-        let scroll = list.read_with(cx, |list, _| list.scrolls[0].clone());
+        let scroll = list.read_with(cx, |list, _| list.scrolls[Section::Local as usize].clone());
         scroll.scroll_to_item_strict(40, ScrollStrategy::Top);
         f.in_window(cx, |window, cx| window.render_frame(cx));
         assert!(f.has_row("branch-refs/heads/b45", cx));
@@ -1485,7 +1548,7 @@ mod tests {
         let f = render_with(cx, |id, cx| set_refs(id, many.clone(), cx));
         set_refs(&f.other, many, cx);
         let list = f.list(cx);
-        let scroll = list.read_with(cx, |list, _| list.scrolls[0].clone());
+        let scroll = list.read_with(cx, |list, _| list.scrolls[Section::Local as usize].clone());
         scroll.scroll_to_item_strict(40, ScrollStrategy::Top);
         f.in_window(cx, |window, cx| window.render_frame(cx));
         assert!(!f.has_row("branch-refs/heads/b00", cx));
@@ -1499,9 +1562,9 @@ mod tests {
         let f = render(cx);
         assert!(f.has_row(MAIN, cx));
         let list = f.list(cx);
-        assert!(list.read_with(cx, |list, _| list.is_collapsed(TAGS)));
-        assert!(list.read_with(cx, |list, _| list.is_collapsed(STASHES)));
-        assert!(!list.read_with(cx, |list, _| list.is_collapsed(LOCAL)));
+        assert!(list.read_with(cx, |list, _| list.is_section_collapsed(Section::Tags)));
+        assert!(list.read_with(cx, |list, _| list.is_section_collapsed(Section::Stashes)));
+        assert!(!list.read_with(cx, |list, _| list.is_section_collapsed(Section::Local)));
         assert!(f.in_window(cx, |window, _| {
             window.find("section-tags").expanded() == Some(false)
                 && window.find("section-local").expanded() == Some(true)
@@ -1543,7 +1606,7 @@ mod tests {
             set_refs(id, vec![local("main", true), tag("v0.1.0")], cx)
         });
         assert!(!f.has_row("tag-refs/tags/v0.1.0", cx));
-        f.expand(TAGS, cx);
+        f.expand(Section::Tags, cx);
         assert!(f.has_row("tag-refs/tags/v0.1.0", cx));
         assert!(f.open_menu("tag-refs/tags/v0.1.0", cx).is_empty());
     }
@@ -2000,7 +2063,7 @@ mod tests {
     ) {
         let f = render_with(cx, with_stashes);
         f.fakes.pop.hold.set(true);
-        f.expand(STASHES, cx);
+        f.expand(Section::Stashes, cx);
 
         assert_eq!(
             f.open_menu(&stash_row(&older()), cx),
@@ -2008,7 +2071,7 @@ mod tests {
         );
         f.choose("Pop stash", cx);
         assert_eq!(f.fakes.pop.calls(), [older().sha]);
-        assert!(f.is_section_busy(STASHES, cx));
+        assert!(f.is_section_busy(Section::Stashes, cx));
         // The toolbar's Pop isn't the one running, but waits for it.
         let id = f.id.clone();
         assert!(cx.read(|cx| !Operations::state("pop", &id, cx).running));
@@ -2024,7 +2087,7 @@ mod tests {
 
         f.fakes.pop.finish(());
         cx.run_until_parked();
-        assert!(!f.is_section_busy(STASHES, cx));
+        assert!(!f.is_section_busy(Section::Stashes, cx));
     }
 
     #[gpui_kit::test]
@@ -2032,12 +2095,12 @@ mod tests {
         let f = render_with(cx, with_stashes);
         let message = "Popping the stash caused conflicts.";
         f.fakes.pop.fail_with(message);
-        f.expand(STASHES, cx);
+        f.expand(Section::Stashes, cx);
 
         f.open_menu(&stash_row(&older()), cx);
         f.choose("Pop stash", cx);
         assert_eq!(
-            f.section_failure(STASHES, cx),
+            f.section_failure(Section::Stashes, cx),
             Some(("Pop stash".to_owned(), message.to_owned()))
         );
         // Only there, not under the toolbar's Pop as well.
@@ -2045,14 +2108,14 @@ mod tests {
         assert!(cx.read(|cx| Operations::state("pop", &id, cx).error.is_none()));
 
         f.choose("Dismiss", cx);
-        assert_eq!(f.section_failure(STASHES, cx), None);
+        assert_eq!(f.section_failure(Section::Stashes, cx), None);
     }
 
     #[gpui_kit::test]
     fn doesnt_delete_one_while_another_stash_action_runs(cx: &mut TestAppContext) {
         let f = render_with(cx, with_stashes);
         f.fakes.pop.hold.set(true);
-        f.expand(STASHES, cx);
+        f.expand(Section::Stashes, cx);
 
         // The dialog was open before the pop began.
         f.open_menu(&stash_row(&older()), cx);
@@ -2080,7 +2143,7 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let f = render_with(cx, with_stashes);
-        f.expand(STASHES, cx);
+        f.expand(Section::Stashes, cx);
         f.open_menu(&stash_row(&older()), cx);
         f.choose("Delete stash…", cx);
         assert!(f.has_dialog(cx));
@@ -2098,7 +2161,7 @@ mod tests {
             conflicted.counts.conflicted = 1;
             set_status(id, conflicted, cx);
         });
-        f.expand(STASHES, cx);
+        f.expand(Section::Stashes, cx);
         f.open_menu(&stash_row(&newer()), cx);
         f.choose("Pop stash", cx);
         assert!(f.fakes.pop.calls().is_empty());
@@ -2107,7 +2170,7 @@ mod tests {
     #[gpui_kit::test]
     fn deletes_the_stash_right_clicked_once_thats_confirmed(cx: &mut TestAppContext) {
         let f = render_with(cx, with_stashes);
-        f.expand(STASHES, cx);
+        f.expand(Section::Stashes, cx);
 
         f.open_menu(&stash_row(&older()), cx);
         f.choose("Delete stash…", cx);
@@ -2128,13 +2191,13 @@ mod tests {
         let f = render_with(cx, with_stashes);
         let message = "The stash is gone: the stashes changed before it could be deleted.";
         f.fakes.drop.fail_with(message);
-        f.expand(STASHES, cx);
+        f.expand(Section::Stashes, cx);
 
         f.open_menu(&stash_row(&newer()), cx);
         f.choose("Delete stash…", cx);
         f.choose("Delete", cx);
         assert_eq!(
-            f.section_failure(STASHES, cx),
+            f.section_failure(Section::Stashes, cx),
             Some(("Delete stash".to_owned(), message.to_owned()))
         );
     }
@@ -2142,7 +2205,7 @@ mod tests {
     #[gpui_kit::test]
     fn opens_no_branch_menu_for_a_stash(cx: &mut TestAppContext) {
         let f = render_with(cx, with_stashes);
-        f.expand(STASHES, cx);
+        f.expand(Section::Stashes, cx);
         let offered = f.open_menu(&stash_row(&newer()), cx);
         assert!(offered.contains(&"Pop stash".to_owned()));
         assert!(!offered.contains(&"Create branch…".to_owned()));
@@ -2207,11 +2270,11 @@ mod tests {
 
         f.double_click(&worktree_row("/w/repo-feature"), cx);
         assert_eq!(f.fakes.open.calls(), ["/w/repo-feature"]);
-        assert!(f.is_section_busy(WORKTREES, cx));
+        assert!(f.is_section_busy(Section::Worktrees, cx));
 
         f.fakes.open.finish(());
         cx.run_until_parked();
-        assert!(!f.is_section_busy(WORKTREES, cx));
+        assert!(!f.is_section_busy(Section::Worktrees, cx));
     }
 
     #[gpui_kit::test]
@@ -2241,7 +2304,7 @@ mod tests {
         f.choose("Open worktree", cx);
         assert_eq!(f.fakes.open.calls(), ["/w/repo-check"]);
         assert_eq!(
-            f.section_failure(WORKTREES, cx),
+            f.section_failure(Section::Worktrees, cx),
             Some(("Open worktree".to_owned(), message.to_owned()))
         );
     }
@@ -2259,7 +2322,7 @@ mod tests {
         assert!(f.fakes.remove.calls().is_empty());
         f.choose("Remove", cx);
         assert_eq!(f.fakes.remove.calls(), ["/w/repo-feature"]);
-        assert!(f.is_section_busy(WORKTREES, cx));
+        assert!(f.is_section_busy(Section::Worktrees, cx));
 
         // Nor another one meanwhile.
         f.open_menu(&worktree_row("/w/repo-check"), cx);
@@ -2268,7 +2331,7 @@ mod tests {
 
         f.fakes.remove.finish(());
         cx.run_until_parked();
-        assert!(!f.is_section_busy(WORKTREES, cx));
+        assert!(!f.is_section_busy(Section::Worktrees, cx));
     }
 
     #[gpui_kit::test]
@@ -2299,12 +2362,12 @@ mod tests {
         f.choose("Remove worktree…", cx);
         f.choose("Remove", cx);
         assert_eq!(
-            f.section_failure(WORKTREES, cx),
+            f.section_failure(Section::Worktrees, cx),
             Some(("Remove worktree".to_owned(), message.to_owned()))
         );
 
         f.choose("Dismiss", cx);
-        assert_eq!(f.section_failure(WORKTREES, cx), None);
+        assert_eq!(f.section_failure(Section::Worktrees, cx), None);
     }
 
     #[gpui_kit::test]
@@ -2341,7 +2404,7 @@ mod tests {
         f.double_click(FEATURE, cx);
         assert!(f.fakes.switch.calls().is_empty());
         assert_eq!(f.fakes.open.calls(), ["/w/repo-feature"]);
-        assert!(f.is_section_busy(WORKTREES, cx));
+        assert!(f.is_section_busy(Section::Worktrees, cx));
         f.fakes.open.finish(());
     }
 
@@ -2355,7 +2418,7 @@ mod tests {
         f.open_menu(FEATURE, cx);
         f.choose("Open worktree repo-feature", cx);
         assert_eq!(
-            f.section_failure(WORKTREES, cx),
+            f.section_failure(Section::Worktrees, cx),
             Some(("Open worktree".to_owned(), message.to_owned()))
         );
     }
@@ -2381,11 +2444,11 @@ mod tests {
         );
         // The dialog closes, and the section shows it running.
         assert!(!f.has_dialog(cx));
-        assert!(f.is_section_busy(WORKTREES, cx));
+        assert!(f.is_section_busy(Section::Worktrees, cx));
 
         f.fakes.add.finish(());
         cx.run_until_parked();
-        assert!(!f.is_section_busy(WORKTREES, cx));
+        assert!(!f.is_section_busy(Section::Worktrees, cx));
     }
 
     #[gpui_kit::test]
@@ -2400,7 +2463,7 @@ mod tests {
         f.choose("Add worktree…", cx);
         f.choose("Add worktree", cx);
         assert_eq!(
-            f.section_failure(WORKTREES, cx),
+            f.section_failure(Section::Worktrees, cx),
             Some(("Add worktree".to_owned(), message.to_owned()))
         );
 
@@ -2414,7 +2477,7 @@ mod tests {
             "/w/repo-origin-feature"
         );
         // Out of the way of the folder.
-        assert_eq!(f.section_failure(WORKTREES, cx), None);
+        assert_eq!(f.section_failure(Section::Worktrees, cx), None);
     }
 
     // ref-list.test.tsx: deleting from the branch menu.
@@ -2484,14 +2547,14 @@ mod tests {
         f.open_menu(FEATURE, cx);
         f.choose("Add worktree…", cx);
         f.choose("Add worktree", cx);
-        assert!(f.is_section_busy(WORKTREES, cx));
+        assert!(f.is_section_busy(Section::Worktrees, cx));
         f.open_menu(ORIGIN_FEATURE, cx);
         f.choose("Delete origin/feature…", cx);
         assert!(!f.has_dialog(cx));
 
         f.fakes.add.finish(());
         cx.run_until_parked();
-        assert!(!f.is_section_busy(WORKTREES, cx));
+        assert!(!f.is_section_busy(Section::Worktrees, cx));
         f.open_menu(ORIGIN_FEATURE, cx);
         f.choose("Delete origin/feature…", cx);
         f.choose("Delete", cx);
