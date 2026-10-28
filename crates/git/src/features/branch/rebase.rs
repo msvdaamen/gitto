@@ -880,7 +880,7 @@ mod tests {
             assert!(matches!(error, Error::RebaseUndone { .. }), "{error:?}");
             assert!(
                 regex::Regex::new(
-                    r"(?s)^Rebasing side onto main stopped partway, and was undone:\n.*failed to write commit object\nFix that, then rebase again\.$"
+                    r"(?s)^Rebasing side onto main stopped partway, and was undone:\n.*failed to write commit object\n(?:Could not apply [^\n]*\n)?Fix that, then rebase again\.$"
                 )
                 .unwrap()
                 .is_match(&error.to_string()),
@@ -926,7 +926,7 @@ mod tests {
             assert!(matches!(error, Error::RebaseStopped { .. }), "{error:?}");
             assert!(
                 regex::Regex::new(
-                    r"(?s)^Rebasing side onto main stopped partway:\n.*failed to write commit object\nIt couldn't be undone either:\n.+\nFinish the rebase in a terminal, or abort it\.$"
+                    r"(?s)^Rebasing side onto main stopped partway:\n.*failed to write commit object\n(?:Could not apply [^\n]*\n)?It couldn't be undone either:\n.+\nFinish the rebase in a terminal, or abort it\.$"
                 )
                 .unwrap()
                 .is_match(&error.to_string()),
