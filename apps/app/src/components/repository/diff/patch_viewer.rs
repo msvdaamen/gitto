@@ -66,6 +66,13 @@ pub enum PatchViewerEvent {
     FilesError(Option<String>),
     /// Why the last patch given can't be shown: it couldn't be parsed.
     Failed { file_key: String, message: String },
+    /// Stages (or unstages, as `LineStaging::action` says) `lines` of `patch`, the patch on show
+    /// they were picked from. The owner says if they couldn't be
+    /// ([`stage_failed`](PatchViewer::stage_failed)).
+    StageLines {
+        patch: Arc<str>,
+        lines: LineSelection,
+    },
 }
 
 /// What the viewer shows, from its owner.
@@ -142,6 +149,8 @@ pub struct PatchViewer {
     /// Why the whole file couldn't be loaded, by the diff it's of: it's no use trying again.
     failures: Vec<(Arc<FileDiff>, String)>,
     picker: LinePicker,
+    /// Where the keyboard staged the lines asked for last, if it did, until they're staged.
+    staging_at: Option<StagedAt>,
     /// A line-number drag is selecting lines, from the selection's start.
     dragging: bool,
     /// The diffs this view had highlighted, to drop the long ones once it closes.
@@ -182,6 +191,7 @@ impl PatchViewer {
             loads: Vec::new(),
             failures: Vec::new(),
             picker: LinePicker::default(),
+            staging_at: None,
             dragging: false,
             highlights: ViewHighlights::default(),
             reported: (false, None),
@@ -543,7 +553,7 @@ impl PatchViewer {
 
     /// Stages `changed`, of the patch on show, if lines can be staged now.
     fn stage(&mut self, changed: Vec<ChangedLine>, by_keyboard: bool, cx: &mut Context<Self>) {
-        let Some(staging) = self.staging.clone() else {
+        let Some(staging) = self.staging else {
             return;
         };
         if staging.busy || !self.is_live() {
@@ -552,7 +562,7 @@ impl PatchViewer {
         let Some(patch) = self
             .shown
             .as_ref()
-            .map(|shown| shown.patch.patch.to_string())
+            .map(|shown| Arc::clone(&shown.patch.patch))
         else {
             return;
         };
@@ -562,19 +572,18 @@ impl PatchViewer {
         else {
             return;
         };
-        let selection: LineSelection = to_selection(&request.lines);
-        let at = request.at;
-        // Not from inside this view's update: staging updates its owner, which updates this.
-        cx.spawn(async move |this, cx| {
-            let staged = cx.update(|cx| (staging.stage)(patch, selection, cx)).await;
-            if staged.is_err() {
-                let _ = this.update(cx, |this, _| {
-                    let awaiting = this.is_awaiting_patch();
-                    this.picker.stage_failed(at, awaiting);
-                });
-            }
-        })
-        .detach();
+        self.staging_at = request.at;
+        cx.emit(PatchViewerEvent::StageLines {
+            patch,
+            lines: to_selection(&request.lines),
+        });
+    }
+
+    /// The lines asked for last ([`PatchViewerEvent::StageLines`]) couldn't be staged: the
+    /// keyboard picks the same ones again, in the patch reloaded.
+    pub fn stage_failed(&mut self) {
+        let awaiting = self.is_awaiting_patch();
+        self.picker.stage_failed(self.staging_at.take(), awaiting);
     }
 
     /// The rows in view.
@@ -1488,7 +1497,6 @@ mod tests {
         let staging = LineStaging {
             action: StageAction::Stage,
             busy: false,
-            stage: Rc::new(|_, _, _| Task::ready(Ok(()))),
         };
         assert!(stage_button_on_hover(Some(staging), cx));
     }

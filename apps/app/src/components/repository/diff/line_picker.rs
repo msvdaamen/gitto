@@ -8,36 +8,15 @@ use gitto_ui::diff::diff_metadata::Side;
 use gitto_ui::diff::line_staging::{ChangedLine, ChangedRow, SelectedRange, range_of};
 use gitto_ui::diff::viewer_rows::Layout;
 
-use gitto_git::features::staging::schema::LineSelection;
-use gpui_kit::{App, Task};
-
-use super::diff_metadata::{FileDiff, Side};
-use super::line_staging::{
-    ChangedLine, ChangedRow, SelectedRange, changed_lines, changed_rows, range_of, selected_lines,
-};
-use super::viewer_rows::Layout;
-use crate::data::QueryError;
 use crate::data::staging::StageAction;
 
-/// Stages `lines` of `patch`, the patch on show they were picked from; resolves once they're
-/// staged, and fails if they couldn't be.
-pub type StageLines = Rc<dyn Fn(String, LineSelection, &mut App) -> Task<Result<(), QueryError>>>;
-
-/// Staging or unstaging lines of the patch on show, which can then be picked (`LineStaging`).
-#[derive(Clone)]
+/// Staging or unstaging lines of the patch on show, which can then be picked (`LineStaging`):
+/// the viewer asks its owner to stage those picked (see `PatchViewerEvent::StageLines`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LineStaging {
     pub action: StageAction,
     /// Lines are being staged: no others are until the patch that leaves is on show.
     pub busy: bool,
-    pub stage: StageLines,
-}
-
-impl PartialEq for LineStaging {
-    fn eq(&self, other: &Self) -> bool {
-        self.action == other.action
-            && self.busy == other.busy
-            && Rc::ptr_eq(&self.stage, &other.stage)
-    }
 }
 
 /// Where the keyboard staged lines from, by the line numbers of the side the patch leaves as it

@@ -1,6 +1,7 @@
 //! A file's changes, in place of the history. Ported from `file-diff-view.tsx`.
 
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use gitto_git::FileStatus;
@@ -427,6 +428,19 @@ impl FileDiffView {
             PatchViewerEvent::FilesError(error) => self.view.set_files_error(error.clone()),
             PatchViewerEvent::Failed { file_key, message } => {
                 self.viewer_error = Some((file_key.clone(), message.clone()));
+            }
+            PatchViewerEvent::StageLines { patch, lines } => {
+                let staging = self.stage_lines(Arc::clone(patch), lines.clone(), cx);
+                cx.spawn(async move |this, cx| {
+                    if staging.await.is_err() {
+                        let _ = this.update(cx, |this, cx| {
+                            if let Some(viewer) = &this.viewer {
+                                viewer.update(cx, |viewer, _| viewer.stage_failed());
+                            }
+                        });
+                    }
+                })
+                .detach();
             }
         }
         cx.notify();
@@ -1103,12 +1117,14 @@ mod tests {
             lines: LineSelection,
             cx: &mut TestAppContext,
         ) -> Rc<RefCell<Option<Result<(), QueryError>>>> {
-            let staging = self.staging(cx).expect("lines can be staged");
+            assert!(self.staging(cx).is_some(), "lines can be staged");
             let result = Rc::new(RefCell::new(None));
             let done = Rc::clone(&result);
-            let patch = patch.to_owned();
+            let patch: Arc<str> = patch.into();
             cx.update(|cx| {
-                let staged = (staging.stage)(patch, lines, cx);
+                let staged = self
+                    .view
+                    .update(cx, |view, cx| view.stage_lines(patch, lines, cx));
                 cx.spawn(async move |_| *done.borrow_mut() = Some(staged.await))
                     .detach();
             });
