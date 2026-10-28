@@ -21,6 +21,10 @@ use crate::input::FileInput;
 
 /// Paths go to git's stdin, NUL-separated, rather than on the command line, which holds only so
 /// many (32k characters on Windows).
+///
+/// They're UTF-8, as the status lists them: a file whose name isn't is listed with U+FFFD in its
+/// name (see `parse_status`), which no file has, so it can only be staged, unstaged or discarded
+/// with everything else (`stage_all`, `unstage_all`, `discard_all`), which go by git's own paths.
 pub const PATHS_FROM_STDIN: [&str; 2] = ["--pathspec-from-file=-", "--pathspec-file-nul"];
 
 /// Refuses no paths, or an empty one, as the contract's `z.array(z.string().min(1)).min(1)` did.
