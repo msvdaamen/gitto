@@ -87,7 +87,7 @@ fn is_not_found(error: &io::Error) -> bool {
 /// as file systems on macOS and Windows don't tell `.GIT` from it.
 fn is_plain(path: &str) -> bool {
     path.split(['\\', '/'])
-        .all(|part| part != ".." && part.to_lowercase() != ".git")
+        .all(|part| part != ".." && !part.eq_ignore_ascii_case(".git"))
 }
 
 /// A file in the working tree as it was read, and `version`, which names its bytes.
@@ -284,9 +284,12 @@ pub fn version_of(bytes: &[u8]) -> String {
     sha1_smol::Sha1::from(bytes).hexdigest()
 }
 
-/// Saves to the same file, one after the other: a later one checks the file an earlier one wrote.
+/// Saves to the repository's files, one after the other: a later one checks the file an earlier
+/// one wrote. One line for all of them, rather than one per file: a file has more than one path
+/// (`a.txt`, `./a.txt`, or through a linked folder), and which file a path leads to is only known
+/// once it's been looked up on disk, which a later save could do sooner than an earlier one.
 #[derive(Default)]
-struct Saves(WriteQueue<String>);
+struct Saves(WriteQueue<()>);
 
 /// The version a file was at when Gitto last saved over it, and the one it saved.
 #[derive(Debug, Clone)]
@@ -345,8 +348,8 @@ pub struct SaveExpectation {
 /// it, then put in its place, so it's never found half written. A link isn't saved through, nor is
 /// a file that isn't UTF-8. Resolves to the saved file's version.
 ///
-/// Its place in line, after the saves to the same path before it, is taken when it's first polled
-/// (see `WriteQueue`).
+/// Its place in line, after the saves to the repository's files before it, is taken when it's
+/// first polled (see `Saves`).
 pub fn save_working_tree_file(
     repo: &Repo,
     path: &str,
@@ -359,8 +362,8 @@ pub fn save_working_tree_file(
     let path = path.to_owned();
     let contents = contents.to_owned();
     let expected = expected.clone();
-    // In the order they're asked for, by the path they're asked for.
-    saves.0.run(path.clone(), async move {
+    // One after the other, in the order they're first polled (see `Saves`).
+    saves.0.run((), async move {
         // Not following a link at its end, which is refused below.
         let target = confine(&repo, &path, false).await?;
         let before = read_existing(target.clone(), &path).await?;

@@ -956,6 +956,33 @@ mod tests {
     }
 
     #[test]
+    fn saves_to_a_file_one_after_the_other_whatever_path_names_it() {
+        let fx = Fixture::new();
+        smol::block_on(async {
+            let repo = fx.create_history_repo("save-paths").await;
+            let version = read_working_tree_file(&repo, "a file.txt")
+                .await
+                .unwrap()
+                .version;
+            let names = ["a file.txt", "./a file.txt", "a file.txt", "./a file.txt"];
+            let saves = names.iter().enumerate().map(|(index, name)| {
+                let contents = format!("{index}\n");
+                let expected = expected(&version, false);
+                let repo = &repo;
+                async move { save_working_tree_file(repo, name, &contents, &expected).await }
+            });
+            for saved in futures::future::join_all(saves).await {
+                saved.unwrap();
+            }
+            // Each read the file the one before it wrote, the last one last.
+            assert_eq!(
+                fs::read_to_string(repo.path().join("a file.txt")).unwrap(),
+                "3\n"
+            );
+        });
+    }
+
+    #[test]
     fn makes_a_file_that_was_deleted_again_when_overwriting_and_only_then() {
         let fx = Fixture::new();
         smol::block_on(async {
