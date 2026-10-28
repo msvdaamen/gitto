@@ -9,7 +9,7 @@ use futures::future::BoxFuture;
 use super::limits::{MAX_BLOB_BYTES, MAX_PATCH_BYTES};
 use super::parse::parse_diff;
 use super::schema::ChangedFile;
-use super::working_tree::check_working_tree_path;
+use super::working_tree::{check_working_tree_path, decode_utf8};
 use crate::core::errors::{Error, Result};
 use crate::core::repo::{GitCommand, Repo};
 use crate::core::runner::RunOptions;
@@ -244,7 +244,8 @@ pub const PORCELAIN_DIFF: [&str; 4] = [
 ];
 
 /// The contents of a file, by its object name; fails with `Error::FileTooLarge` above
-/// `MAX_BLOB_BYTES`.
+/// `MAX_BLOB_BYTES`, and with `Error::NotUtf8` for one that isn't UTF-8, as
+/// `read_working_tree_file` does for the other side of a diff.
 pub async fn get_blob(repo: &Repo, oid: &FullSha) -> Result<String> {
     let size = repo
         .read(["cat-file", "-s", "--end-of-options", oid.as_str()])
@@ -256,8 +257,17 @@ pub async fn get_blob(repo: &Repo, oid: &FullSha) -> Result<String> {
     if bytes > MAX_BLOB_BYTES {
         return Err(Error::FileTooLarge { bytes });
     }
-    repo.read(["cat-file", "blob", "--end-of-options", oid.as_str()])
-        .await
+    // Capped too, in case another object took its name since (`git replace`).
+    let options =
+        RunOptions::default().max_output(MAX_BLOB_BYTES as usize, Error::FileTooLarge { bytes });
+    let blob = repo
+        .git()
+        .run_bytes_with(
+            ["cat-file", "blob", "--end-of-options", oid.as_str()],
+            options,
+        )
+        .await?;
+    decode_utf8(&blob)
 }
 
 #[cfg(test)]
@@ -460,29 +470,42 @@ mod tests {
         });
     }
 
+    /// Writes `bytes` to the repository at `path` as a blob, and names it.
+    fn write_blob(path: &Path, bytes: &[u8]) -> FullSha {
+        let mut child = Command::new("git")
+            .args(["hash-object", "-w", "--stdin"])
+            .current_dir(path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(bytes).unwrap();
+        let output = child.wait_with_output().unwrap();
+        valid(String::from_utf8(output.stdout).unwrap().trim())
+    }
+
     #[test]
     fn wont_read_a_file_too_large_to_send_whole() {
         let fx = Fixture::new();
         smol::block_on(async {
             let repo = fx.create_history_repo("large-blob").await;
-            let mut child = Command::new("git")
-                .args(["hash-object", "-w", "--stdin"])
-                .current_dir(repo.path())
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .spawn()
-                .unwrap();
             let input = "x".repeat(MAX_BLOB_BYTES as usize + 1);
-            child
-                .stdin
-                .take()
-                .unwrap()
-                .write_all(input.as_bytes())
-                .unwrap();
-            let output = child.wait_with_output().unwrap();
-            let oid = String::from_utf8(output.stdout).unwrap().trim().to_owned();
-            let error = get_blob(&repo, &valid(&oid)).await.unwrap_err();
+            let oid = write_blob(repo.path(), input.as_bytes());
+            let error = get_blob(&repo, &oid).await.unwrap_err();
             assert!(matches!(error, Error::FileTooLarge { .. }), "{error:?}");
+        });
+    }
+
+    #[test]
+    fn wont_read_a_file_that_isnt_utf_8_as_text() {
+        let fx = Fixture::new();
+        smol::block_on(async {
+            let repo = fx.create_history_repo("latin-1-blob").await;
+            let oid = write_blob(repo.path(), b"caf\xe9\n");
+            let error = get_blob(&repo, &oid).await.unwrap_err();
+            assert!(matches!(error, Error::NotUtf8), "{error:?}");
+            let oid = write_blob(repo.path(), "café\n".as_bytes());
+            assert_eq!(get_blob(&repo, &oid).await.unwrap(), "café\n");
         });
     }
 
