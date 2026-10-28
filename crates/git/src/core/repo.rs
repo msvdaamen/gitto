@@ -314,12 +314,14 @@ impl Repo {
     }
 
     /// Whether the log has to be sorted by git: an earlier read, left unsorted, had a commit below
-    /// one of its parents (see `getLog`). Remembered while the app runs, with `sort_log`.
+    /// one of its parents (see `getLog`). Remembered while the app runs, once
+    /// `mark_log_needs_sorting` is called.
     pub fn sorts_log(&self) -> bool {
         self.inner.state.sorts_log.load(Ordering::Relaxed)
     }
 
-    pub fn sort_log(&self) {
+    /// Has git sort the log from now on (see `sorts_log`).
+    pub fn mark_log_needs_sorting(&self) {
         self.inner.state.sorts_log.store(true, Ordering::Relaxed);
     }
 
@@ -882,7 +884,7 @@ mod tests {
                 .await
                 .unwrap();
             observed.status_took(Duration::from_millis(20));
-            observed.sort_log();
+            observed.mark_log_needs_sorting();
             let ran = |how, args: &[&str]| Observed::Ran {
                 how,
                 args: args.iter().map(|arg| arg.to_string()).collect(),
