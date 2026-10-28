@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use super::blockers::{Action, detached_head};
-use crate::core::errors::{Error, GitError, Result};
+use crate::core::errors::{Error, GitError, Integration, Result};
 use crate::core::repo::{GitCommand, has_conflicts, ref_exists, succeeds};
 
 /// What a merge, rebase or `git am` left unfinished in a repository.
@@ -17,9 +17,11 @@ pub struct Progress {
     pub applying: bool,
 }
 
-/// Whether `state` has anything unfinished, which git won't merge or rebase over.
-pub fn in_progress(state: &Progress) -> bool {
-    state.conflicts || state.merging || state.rebasing || state.applying
+impl Progress {
+    /// Whether anything is unfinished, which git won't merge or rebase over.
+    pub fn in_progress(self) -> bool {
+        self.conflicts || self.merging || self.rebasing || self.applying
+    }
 }
 
 /// Whether `file` is there; a folder counts.
@@ -75,23 +77,24 @@ async fn is_ancestor(run: &GitCommand, ancestor: &str, rev: &str) -> Result<bool
     succeeds(run, ["merge-base", "--is-ancestor", ancestor, rev]).await
 }
 
-/// Why the merge or rebase `args`, which `failure` is of if it failed, left the pull for the user
-/// to finish, now that it's done, as an `Error::PullInterrupted`; `None` if it didn't. Even one
-/// that went through can have: putting back local changes it stashed can conflict, and
+/// Why the pull's merge or rebase (`integration`) of `merged` (what a merge was given to merge, a
+/// commit or a ref), which `failure` is of if it failed, left the pull for the user to finish,
+/// now that it's done, as an `Error::PullInterrupted`; `None` if it didn't. Even one that went
+/// through can have: putting back local changes it stashed can conflict, and
 /// `branch.<name>.mergeOptions` can stop a merge before committing, or squash it, so what was
 /// merged isn't in HEAD.
-pub async fn interruption<S: AsRef<str>>(
+pub async fn interruption(
     run: &GitCommand,
     git_dir: &Path,
-    args: &[S],
+    integration: Integration,
+    merged: &str,
     upstream: &str,
     failure: Option<&GitError>,
 ) -> Result<Option<Error>> {
     let after = progress(run, git_dir).await?;
     // A merge that went through, or stopped at conflicts, without a merge to commit: squashed, if
     // what it merged isn't in HEAD.
-    let merged = args.last().map_or("", AsRef::as_ref);
-    let squashing = args.first().is_some_and(|arg| arg.as_ref() == "merge")
+    let squashing = integration == Integration::Merge
         && !after.merging
         && (failure.is_none() || after.conflicts)
         && !is_ancestor(run, merged, "HEAD").await?;
@@ -212,11 +215,12 @@ mod tests {
             let repo = fx.repos.open("interrupted").await.unwrap();
             let run = repo.git();
             let state = progress(&run, &path.join(".git")).await.unwrap();
-            assert!(state.conflicts && state.merging && in_progress(&state));
+            assert!(state.conflicts && state.merging && state.in_progress());
             let error = interruption(
                 &run,
                 &path.join(".git"),
-                &["merge", "side"],
+                Integration::Merge,
+                "side",
                 "refs/heads/side",
                 None,
             )
@@ -230,7 +234,7 @@ mod tests {
 
             git(&path, ["merge", "--abort"]);
             let state = progress(&run, &path.join(".git")).await.unwrap();
-            assert!(!in_progress(&state));
+            assert!(!state.in_progress());
         });
     }
 }

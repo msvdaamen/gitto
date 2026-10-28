@@ -1,67 +1,11 @@
-//! Committing, amending and rewording. Ported from `commit/commands.ts`, with the input check of
-//! `commit/contract.ts` ([`Message`]).
-
-use std::fmt;
-use std::future::Future;
-use std::ops::Deref;
-
-use serde::{Deserialize, Serialize};
+//! Committing, amending and rewording. Ported from `commit/commands.ts`; the input check of
+//! `commit/contract.ts` is [`Message`], in `crate::input`.
 
 use crate::core::errors::{Error, Result};
 use crate::core::repo::{GitCommand, Repo, current_branch, resolve_ref};
 use crate::core::runner::RunOptions;
-use crate::input::FullSha;
-
-/// A commit's message: anything but only whitespace. Not trimmed: an amend, or a reword, commits it
-/// exactly as it's sent, ending in a newline or not.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(try_from = "String", into = "String")]
-pub struct Message(String);
-
-impl Message {
-    /// `value`, if it has something but whitespace; `Error::InvalidInput` otherwise.
-    pub fn parse(value: impl Into<String>) -> Result<Message> {
-        let value = value.into();
-        // JS's `\S`: `\s` also has the byte order mark, which Unicode's whitespace doesn't.
-        if value.chars().any(|c| !c.is_whitespace() && c != '\u{feff}') {
-            Ok(Message(value))
-        } else {
-            Err(Error::InvalidInput("The message is empty.".to_owned()))
-        }
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl TryFrom<String> for Message {
-    type Error = Error;
-
-    fn try_from(value: String) -> Result<Message> {
-        Message::parse(value)
-    }
-}
-
-impl From<Message> for String {
-    fn from(message: Message) -> String {
-        message.0
-    }
-}
-
-impl Deref for Message {
-    type Target = str;
-
-    fn deref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for Message {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
+pub use crate::input::Message;
+use crate::input::{FullSha, Sha};
 
 /// Commits what's staged, with `message` as it's written. With `amend`, HEAD's SHA, replaces that
 /// commit with it instead, with what's staged added to it, as long as HEAD is still that commit:
@@ -69,12 +13,8 @@ impl fmt::Display for Message {
 /// mistake. Nothing needs to be staged to only reword it: an amend may leave the commit empty, so
 /// an empty one can be reworded.
 ///
-/// Its place in the repository's writes is taken when it's called, not when it's first polled.
-pub fn create_commit(
-    repo: &Repo,
-    message: &Message,
-    amend: Option<&FullSha>,
-) -> impl Future<Output = Result<()>> + Send + 'static + use<> {
+/// Its place in the repository's writes is taken when it's first polled (see `Repo::exclusive`).
+pub async fn create_commit(repo: &Repo, message: &Message, amend: Option<&FullSha>) -> Result<()> {
     let message = message.as_str().to_owned();
     let amend = amend.map(|sha| sha.as_str().to_owned());
     repo.exclusive(move |run| async move {
@@ -90,6 +30,7 @@ pub fn create_commit(
         .await?;
         Ok(())
     })
+    .await
 }
 
 /// Rewrites the message of HEAD's commit, `sha`, to `message` as it's written, as long as HEAD is
@@ -98,12 +39,8 @@ pub fn create_commit(
 /// git rewords a commit in a rebase.
 ///
 /// Its own function, rather than an option of `create_commit`, for that SHA, which committing
-/// doesn't look up. Its place in the repository's writes is taken when it's called.
-pub fn reword_commit(
-    repo: &Repo,
-    sha: &FullSha,
-    message: &Message,
-) -> impl Future<Output = Result<String>> + Send + 'static + use<> {
+/// doesn't look up. Its place in the repository's writes is taken when it's first polled.
+pub async fn reword_commit(repo: &Repo, sha: &FullSha, message: &Message) -> Result<String> {
     let sha = sha.as_str().to_owned();
     let message = message.as_str().to_owned();
     // One write, so no other commit of Gitto's can land before the rewritten one's SHA is read.
@@ -115,6 +52,7 @@ pub fn reword_commit(
             .await?
             .ok_or_else(|| Error::Bug("HEAD has no commit after a commit.".to_owned()))
     })
+    .await
 }
 
 /// Replaces HEAD's commit, `sha`, with one of `message`, and what's staged unless `args` say
@@ -135,10 +73,17 @@ async fn amend_head(run: &GitCommand, sha: &str, message: &str, args: &[&str]) -
 }
 
 /// A commit's message exactly as it was written, e.g. the last one's to amend it; the log's
-/// subject joins its first lines. `sha` is a commit, e.g. a [`crate::input::Sha`].
-pub async fn get_commit_message(repo: &Repo, sha: &str) -> Result<String> {
+/// subject joins its first lines.
+pub async fn get_commit_message(repo: &Repo, sha: &Sha) -> Result<String> {
     let mut output = repo
-        .read(["log", "--max-count=1", "--format=%B", sha, "--"])
+        .read([
+            "log",
+            "--max-count=1",
+            "--format=%B",
+            "--end-of-options",
+            sha.as_str(),
+            "--",
+        ])
         .await?;
     // The log ends each entry with a newline of its own.
     if output.ends_with('\n') {
@@ -151,7 +96,7 @@ pub async fn get_commit_message(repo: &Repo, sha: &str) -> Result<String> {
 /// `origin/feature`; `None` if amending it needs no force-push. Not a branch the checked-out one
 /// was only created from, e.g. `origin/main`, which amending doesn't rewrite; and none with HEAD
 /// detached, as amending then rewrites no branch.
-pub async fn get_pushed_to(repo: &Repo, sha: &str) -> Result<Option<String>> {
+pub async fn get_pushed_to(repo: &Repo, sha: &Sha) -> Result<Option<String>> {
     let run = repo.git();
     // Where the repository's config pushes the branch. It fails when the config can't say, as
     // `git push` would; a broken repository fails the lookups around it too.
@@ -182,8 +127,7 @@ pub async fn get_pushed_to(repo: &Repo, sha: &str) -> Result<Option<String>> {
         .read([
             "for-each-ref",
             "--count=1",
-            "--contains",
-            sha,
+            &format!("--contains={sha}"),
             "--format=%(refname:lstrip=2)",
             &pattern,
         ])
@@ -209,6 +153,11 @@ mod tests {
 
     fn head(path: &Path) -> FullSha {
         FullSha::parse(git(path, ["rev-parse", "HEAD"])).unwrap()
+    }
+
+    /// The commit `repo`'s HEAD is at, as the UI would name it.
+    fn at_head(repo: &Repo) -> Sha {
+        Sha::parse(git(repo.path(), ["rev-parse", "HEAD"])).unwrap()
     }
 
     /// The repository the TS tests share, as their first one leaves it: "Initial commit", which
@@ -247,7 +196,7 @@ mod tests {
                     kind: CommitRefKind::Local,
                     name: "main".into(),
                     full_name: "refs/heads/main".into(),
-                    current: Some(true),
+                    current: true,
                 }]
             );
         });
@@ -315,7 +264,8 @@ mod tests {
         let path = committed(&fx);
         smol::block_on(async {
             let repo = fx.repos.open("empty").await.unwrap();
-            let amending = create_commit(&repo, &message("Amended first"), Some(&head(&path)));
+            let (amended_message, amended) = (message("Amended first"), head(&path));
+            let amending = create_commit(&repo, &amended_message, Some(&amended));
             let other = repo.write(["commit", "-q", "--allow-empty", "-m", "Queued after"]);
             let (amended, committed) = futures::join!(amending, other);
             amended.unwrap();
@@ -338,7 +288,10 @@ mod tests {
             create_commit(&repo, &message(text), Some(&head(&path)))
                 .await
                 .unwrap();
-            assert_eq!(get_commit_message(&repo, "HEAD").await.unwrap(), text);
+            assert_eq!(
+                get_commit_message(&repo, &at_head(&repo)).await.unwrap(),
+                text
+            );
         });
     }
 
@@ -352,7 +305,10 @@ mod tests {
             create_commit(&repo, &message("Café\n"), Some(&head(&path)))
                 .await
                 .unwrap();
-            assert_eq!(get_commit_message(&repo, "HEAD").await.unwrap(), "Café\n");
+            assert_eq!(
+                get_commit_message(&repo, &at_head(&repo)).await.unwrap(),
+                "Café\n"
+            );
         });
     }
 
@@ -367,12 +323,15 @@ mod tests {
             create_commit(&repo, &message("  New  \n"), None)
                 .await
                 .unwrap();
-            assert_eq!(get_commit_message(&repo, "HEAD").await.unwrap(), "New\n");
+            assert_eq!(
+                get_commit_message(&repo, &at_head(&repo)).await.unwrap(),
+                "New\n"
+            );
             create_commit(&repo, &message("No newline"), Some(&head(&path)))
                 .await
                 .unwrap();
             assert_eq!(
-                get_commit_message(&repo, "HEAD").await.unwrap(),
+                get_commit_message(&repo, &at_head(&repo)).await.unwrap(),
                 "No newline"
             );
         });
@@ -462,7 +421,7 @@ mod tests {
                 .unwrap();
             assert_eq!(reworded, git(&path, ["rev-parse", "HEAD"]));
             assert_eq!(
-                get_commit_message(&repo, "HEAD").await.unwrap(),
+                get_commit_message(&repo, &at_head(&repo)).await.unwrap(),
                 "Reworded\n"
             );
             assert_eq!(
@@ -493,7 +452,7 @@ mod tests {
                 .unwrap_err();
             assert!(matches!(error, Error::HeadMoved), "{error:?}");
             assert_eq!(
-                get_commit_message(&repo, "HEAD").await.unwrap(),
+                get_commit_message(&repo, &at_head(&repo)).await.unwrap(),
                 "Made in a terminal\n"
             );
         });
@@ -509,7 +468,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("message").await.unwrap();
             assert_eq!(
-                get_commit_message(&repo, "HEAD").await.unwrap(),
+                get_commit_message(&repo, &at_head(&repo)).await.unwrap(),
                 format!("{text}\n")
             );
         });
@@ -523,7 +482,10 @@ mod tests {
         let path = fx.clone_repo("clone", &remote);
         smol::block_on(async {
             let repo = fx.repos.open("clone").await.unwrap();
-            let pushed_to = || get_pushed_to(&repo, "HEAD");
+            let pushed_to = || async {
+                let head = at_head(&repo);
+                get_pushed_to(&repo, &head).await
+            };
             assert_eq!(pushed_to().await.unwrap().as_deref(), Some("origin/main"));
 
             // Only created from origin/main, which tracks it: amending rewrites `feature` alone.
@@ -573,6 +535,10 @@ mod tests {
             "The message is empty."
         );
         assert_eq!(Message::parse(" a\n").unwrap().as_str(), " a\n");
+        // JS's `\s` has the byte order mark too.
+        assert!(Message::parse("\u{feff} ").is_err());
         assert!(serde_json::from_str::<Message>("\"\"").is_err());
+        // Made as the other checked strings are.
+        assert_eq!(Message::try_from("Fix").unwrap().as_ref() as &str, "Fix");
     }
 }

@@ -1981,6 +1981,7 @@ dependencies = [
  "futures",
  "futures-lite",
  "libc",
+ "log",
  "memchr",
  "notify",
  "regex",

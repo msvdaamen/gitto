@@ -9,14 +9,14 @@ use futures::future::BoxFuture;
 use super::limits::{MAX_BLOB_BYTES, MAX_PATCH_BYTES};
 use super::parse::parse_diff;
 use super::schema::ChangedFile;
-use super::working_tree::check_working_tree_path;
+use super::working_tree::{check_working_tree_path, decode_utf8};
 use crate::core::errors::{Error, Result};
 use crate::core::repo::{GitCommand, Repo};
 use crate::core::runner::RunOptions;
-use crate::input::FileInput;
+use crate::input::{FileInput, FullSha, Sha};
 
 /// The files the commit `sha` changed compared to its first parent, with their line counts.
-pub async fn get_commit_files(repo: &Repo, sha: &str) -> Result<Vec<ChangedFile>> {
+pub async fn get_commit_files(repo: &Repo, sha: &Sha) -> Result<Vec<ChangedFile>> {
     let output = repo
         .read([
             "diff-tree",
@@ -28,7 +28,8 @@ pub async fn get_commit_files(repo: &Repo, sha: &str) -> Result<Vec<ChangedFile>
             "-z",
             "--no-commit-id",
             "--diff-merges=first-parent",
-            sha,
+            "--end-of-options",
+            sha.as_str(),
         ])
         .await?;
     Ok(parse_diff(&output))
@@ -37,11 +38,7 @@ pub async fn get_commit_files(repo: &Repo, sha: &str) -> Result<Vec<ChangedFile>
 /// The patch of one file a commit changed, compared to its first parent like `get_commit_files`,
 /// so its lines are the ones counted there. A renamed file needs its old path too, to be found as
 /// one. With full object names on its `index` line, which `get_blob` reads the whole file by.
-pub fn get_commit_file_patch(
-    repo: &Repo,
-    sha: &str,
-    file: &FileInput,
-) -> BoxFuture<'static, Result<String>> {
+pub async fn get_commit_file_patch(repo: &Repo, sha: &Sha, file: &FileInput) -> Result<String> {
     let mut args = vec![
         "diff-tree",
         "-p",
@@ -51,11 +48,12 @@ pub fn get_commit_file_patch(
         "--full-index",
         "--no-commit-id",
         "--diff-merges=first-parent",
-        sha,
+        "--end-of-options",
+        sha.as_str(),
         "--",
     ];
     args.extend(file_paths(file));
-    read_patch(&repo.git(), args)
+    read_patch(&repo.git(), args).await
 }
 
 /// The patch of one file's unstaged changes: the working tree compared to the index, as in the
@@ -242,15 +240,30 @@ pub const PORCELAIN_DIFF: [&str; 4] = [
 ];
 
 /// The contents of a file, by its object name; fails with `Error::FileTooLarge` above
-/// `MAX_BLOB_BYTES`.
-pub async fn get_blob(repo: &Repo, oid: &str) -> Result<String> {
-    let size = repo.read(["cat-file", "-s", oid]).await?;
-    // A size that isn't a number (it always is) is no reason not to read it, as in TS (`NaN`).
-    let bytes = size.trim().parse::<u64>().unwrap_or(0);
+/// `MAX_BLOB_BYTES`, and with `Error::NotUtf8` for one that isn't UTF-8, as
+/// `read_working_tree_file` does for the other side of a diff.
+pub async fn get_blob(repo: &Repo, oid: &FullSha) -> Result<String> {
+    let size = repo
+        .read(["cat-file", "-s", "--end-of-options", oid.as_str()])
+        .await?;
+    let bytes: u64 = size
+        .trim()
+        .parse()
+        .map_err(|_| Error::Bug(format!("Not a size from git: {size:?}")))?;
     if bytes > MAX_BLOB_BYTES {
         return Err(Error::FileTooLarge { bytes });
     }
-    repo.read(["cat-file", "blob", oid]).await
+    // Capped too, in case another object took its name since (`git replace`).
+    let options =
+        RunOptions::default().max_output(MAX_BLOB_BYTES as usize, Error::FileTooLarge { bytes });
+    let blob = repo
+        .git()
+        .run_bytes_with(
+            ["cat-file", "blob", "--end-of-options", oid.as_str()],
+            options,
+        )
+        .await?;
+    decode_utf8(&blob)
 }
 
 #[cfg(test)]
@@ -268,7 +281,7 @@ mod tests {
         SaveExpectation, read_working_tree_file, save_working_tree_file,
     };
     use crate::schema::FileStatus;
-    use crate::test_support::{Fixture, git};
+    use crate::test_support::{Fixture, git, valid};
 
     fn file(path: &str, orig_path: Option<&str>) -> FileInput {
         FileInput {
@@ -346,7 +359,7 @@ mod tests {
             let merge = sha_of(repo.path(), "Merge side");
             let first = sha_of(repo.path(), "first");
             assert_eq!(
-                get_commit_files(&repo, &merge).await.unwrap(),
+                get_commit_files(&repo, &valid(&merge)).await.unwrap(),
                 vec![
                     changed(
                         "c.txt",
@@ -359,7 +372,7 @@ mod tests {
                 ]
             );
             assert_eq!(
-                get_commit_files(&repo, &first).await.unwrap(),
+                get_commit_files(&repo, &valid(&first)).await.unwrap(),
                 vec![
                     changed("a file.txt", FileStatus::Added, None, Some(1), Some(0)),
                     changed("b.txt", FileStatus::Added, None, Some(1), Some(0)),
@@ -374,7 +387,7 @@ mod tests {
         let fx = Fixture::new();
         smol::block_on(async {
             let repo = fx.create_history_repo("history").await;
-            let error = get_commit_files(&repo, "0123456789abcdef0123456789abcdef01234567")
+            let error = get_commit_files(&repo, &valid("0123456789abcdef0123456789abcdef01234567"))
                 .await
                 .unwrap_err();
             assert!(is_git_error(&error), "{error:?}");
@@ -390,7 +403,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.create_history_repo("patches").await;
             let sha = sha_of(repo.path(), "main commit");
-            let patch = get_commit_file_patch(&repo, &sha, &file("a file.txt", None))
+            let patch = get_commit_file_patch(&repo, &valid(&sha), &file("a file.txt", None))
                 .await
                 .unwrap();
             let header = Regex::new(
@@ -408,7 +421,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.create_history_repo("patches").await;
             let sha = sha_of(repo.path(), "Merge side");
-            let patch = get_commit_file_patch(&repo, &sha, &file("c.txt", Some("b.txt")))
+            let patch = get_commit_file_patch(&repo, &valid(&sha), &file("c.txt", Some("b.txt")))
                 .await
                 .unwrap();
             assert!(
@@ -424,7 +437,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.create_history_repo("patches").await;
             let sha = sha_of(repo.path(), "first");
-            let patch = get_commit_file_patch(&repo, &sha, &file("b.txt", None))
+            let patch = get_commit_file_patch(&repo, &valid(&sha), &file("b.txt", None))
                 .await
                 .unwrap();
             assert!(patch.contains("new file mode 100644\n"), "{patch}");
@@ -440,14 +453,31 @@ mod tests {
         smol::block_on(async {
             let repo = fx.create_history_repo("blobs").await;
             let sha = sha_of(repo.path(), "main commit");
-            let patch = get_commit_file_patch(&repo, &sha, &file("a file.txt", None))
+            let patch = get_commit_file_patch(&repo, &valid(&sha), &file("a file.txt", None))
                 .await
                 .unwrap();
             let index = Regex::new(r"(?m)^index ([0-9a-f]+)\.\.([0-9a-f]+)").unwrap();
             let captures = index.captures(&patch).unwrap();
-            assert_eq!(get_blob(&repo, &captures[1]).await.unwrap(), "a\n");
-            assert_eq!(get_blob(&repo, &captures[2]).await.unwrap(), "a\nmore\n");
+            assert_eq!(get_blob(&repo, &valid(&captures[1])).await.unwrap(), "a\n");
+            assert_eq!(
+                get_blob(&repo, &valid(&captures[2])).await.unwrap(),
+                "a\nmore\n"
+            );
         });
+    }
+
+    /// Writes `bytes` to the repository at `path` as a blob, and names it.
+    fn write_blob(path: &Path, bytes: &[u8]) -> FullSha {
+        let mut child = Command::new("git")
+            .args(["hash-object", "-w", "--stdin"])
+            .current_dir(path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(bytes).unwrap();
+        let output = child.wait_with_output().unwrap();
+        valid(String::from_utf8(output.stdout).unwrap().trim())
     }
 
     #[test]
@@ -455,24 +485,23 @@ mod tests {
         let fx = Fixture::new();
         smol::block_on(async {
             let repo = fx.create_history_repo("large-blob").await;
-            let mut child = Command::new("git")
-                .args(["hash-object", "-w", "--stdin"])
-                .current_dir(repo.path())
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .spawn()
-                .unwrap();
             let input = "x".repeat(MAX_BLOB_BYTES as usize + 1);
-            child
-                .stdin
-                .take()
-                .unwrap()
-                .write_all(input.as_bytes())
-                .unwrap();
-            let output = child.wait_with_output().unwrap();
-            let oid = String::from_utf8(output.stdout).unwrap().trim().to_owned();
+            let oid = write_blob(repo.path(), input.as_bytes());
             let error = get_blob(&repo, &oid).await.unwrap_err();
             assert!(matches!(error, Error::FileTooLarge { .. }), "{error:?}");
+        });
+    }
+
+    #[test]
+    fn wont_read_a_file_that_isnt_utf_8_as_text() {
+        let fx = Fixture::new();
+        smol::block_on(async {
+            let repo = fx.create_history_repo("latin-1-blob").await;
+            let oid = write_blob(repo.path(), b"caf\xe9\n");
+            let error = get_blob(&repo, &oid).await.unwrap_err();
+            assert!(matches!(error, Error::NotUtf8), "{error:?}");
+            let oid = write_blob(repo.path(), "café\n".as_bytes());
+            assert_eq!(get_blob(&repo, &oid).await.unwrap(), "café\n");
         });
     }
 
@@ -878,7 +907,8 @@ mod tests {
             let path = repo.path();
             symlink(path.join("c.txt"), path.join("link"));
             fs::write(path.join("latin1.txt"), [0x63, 0x61, 0x66, 0xe9]).unwrap();
-            let save = |name: &str| save_working_tree_file(&repo, name, "x\n", &expected("", true));
+            let overwrite = expected("", true);
+            let save = |name: &'static str| save_working_tree_file(&repo, name, "x\n", &overwrite);
 
             assert!(is_outside(&save("link").await.unwrap_err()));
             assert!(is_outside(&save("../outside.txt").await.unwrap_err()));
@@ -902,9 +932,10 @@ mod tests {
                 .unwrap()
                 .version;
             // Both sent before either's done, as the last edits are when the window closes.
+            let unchanged = expected(&version, false);
             let (first, second) = futures::join!(
-                save_working_tree_file(&repo, "a file.txt", "first\n", &expected(&version, false)),
-                save_working_tree_file(&repo, "a file.txt", "second\n", &expected(&version, false)),
+                save_working_tree_file(&repo, "a file.txt", "first\n", &unchanged),
+                save_working_tree_file(&repo, "a file.txt", "second\n", &unchanged),
             );
             first.unwrap();
             second.unwrap();
@@ -919,6 +950,33 @@ mod tests {
                     .await
                     .unwrap_err();
             assert!(is_changed_on_disk(&error), "{error:?}");
+        });
+    }
+
+    #[test]
+    fn saves_to_a_file_one_after_the_other_whatever_path_names_it() {
+        let fx = Fixture::new();
+        smol::block_on(async {
+            let repo = fx.create_history_repo("save-paths").await;
+            let version = read_working_tree_file(&repo, "a file.txt")
+                .await
+                .unwrap()
+                .version;
+            let names = ["a file.txt", "./a file.txt", "a file.txt", "./a file.txt"];
+            let saves = names.iter().enumerate().map(|(index, name)| {
+                let contents = format!("{index}\n");
+                let expected = expected(&version, false);
+                let repo = &repo;
+                async move { save_working_tree_file(repo, name, &contents, &expected).await }
+            });
+            for saved in futures::future::join_all(saves).await {
+                saved.unwrap();
+            }
+            // Each read the file the one before it wrote, the last one last.
+            assert_eq!(
+                fs::read_to_string(repo.path().join("a file.txt")).unwrap(),
+                "3\n"
+            );
         });
     }
 
