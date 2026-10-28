@@ -2,8 +2,8 @@
 //!
 //! TS took `Pick`s of the `StatusSummary`; these take those of its fields.
 
-use gitto_git::features::remote::blockers::pull_blocker;
 use gitto_git::features::status::schema::{Head, StatusSummary};
+use gitto_git::{PullBlocker, pull_blocker};
 
 /// What to call HEAD: the branch name, or "detached HEAD".
 pub fn head_label(head: &Head) -> &str {
@@ -39,8 +39,9 @@ pub fn is_checked_out(head: &Head, r#ref: &str) -> bool {
     head_branch(head).is_some_and(|name| r#ref.strip_prefix("refs/heads/") == Some(name))
 }
 
-pub fn has_uncommitted_changes(status: Option<&StatusSummary>) -> bool {
-    status.is_some_and(|status| status.counts.files > 0)
+/// Whether anything is uncommitted: a file changed, staged or not.
+pub fn has_uncommitted_changes(status: &StatusSummary) -> bool {
+    status.counts.files > 0
 }
 
 /// How HEAD compares to its upstream: "synced", or how many commits ahead and behind, e.g. "↑2 ↓1".
@@ -58,14 +59,14 @@ pub fn sync_label(ahead: u64, behind: u64) -> String {
 }
 
 /// Why HEAD can't be pulled into, if it can't: it isn't on a branch, or the branch has no upstream.
-pub fn head_pull_blocker(head: &Head, upstream: Option<&str>) -> Option<String> {
+pub fn head_pull_blocker(head: &Head, upstream: Option<&str>) -> Option<PullBlocker> {
     pull_blocker(head_branch(head), upstream)
 }
 
 /// What pulling would do, e.g. "Pull 2 commits from origin/main", or why it can't.
 pub fn pull_title(head: &Head, upstream: Option<&str>, behind: u64) -> String {
     if let Some(blocker) = head_pull_blocker(head, upstream) {
-        return blocker;
+        return blocker.to_string();
     }
     let upstream = upstream.unwrap_or_default();
     // `behind` is as of the last fetch; the pull fetches first, so there may be more.
@@ -84,6 +85,7 @@ pub fn branch_source(head: &Head) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gitto_git::features::status::schema::StatusCounts;
 
     fn main() -> Head {
         Head::Branch {
@@ -132,6 +134,24 @@ mod tests {
                 "Not on a branch: HEAD is detached, or a rebase is under way."
             );
         }
+    }
+
+    #[test]
+    fn has_uncommitted_changes_when_a_file_changed() {
+        let status = |files| StatusSummary {
+            head: main(),
+            upstream: None,
+            ahead: 0,
+            behind: 0,
+            counts: StatusCounts {
+                files,
+                staged: 0,
+                unstaged: files,
+                conflicted: 0,
+            },
+        };
+        assert!(has_uncommitted_changes(&status(1)));
+        assert!(!has_uncommitted_changes(&status(0)));
     }
 
     #[test]

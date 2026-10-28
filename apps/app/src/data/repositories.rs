@@ -45,7 +45,6 @@ impl RepositorySource for RepositoryService {
 
     fn reorder(&self, ids: Vec<RepositoryId>) -> BoxFuture<'static, Result<(), QueryError>> {
         let service = self.clone();
-        let ids: Vec<String> = ids.into_iter().map(String::from).collect();
         async move { Ok(service.reorder_repositories(&ids).await?) }.boxed()
     }
 }
@@ -64,9 +63,7 @@ pub fn repositories_query<V: 'static>(cx: &mut Context<V>) -> Query<Vec<Reposito
 
 /// The repository with `id` among `repositories` (`useRepository`).
 pub fn find<'a>(repositories: &'a [Repository], id: &RepositoryId) -> Option<&'a Repository> {
-    repositories
-        .iter()
-        .find(|repository| repository.id == id.as_str())
+    repositories.iter().find(|repository| repository.id == *id)
 }
 
 /// Asks for a folder and adds the repository in it; resolves to the repository, or `None` when the
@@ -153,9 +150,7 @@ impl OpenRepository {
                 match result {
                     Ok(Some(repository)) => {
                         this.error = None;
-                        if let Ok(id) = RepositoryId::parse(repository.id) {
-                            Router::navigate(Route::Repository(id), cx);
-                        }
+                        Router::navigate(Route::Repository(repository.id), cx);
                     }
                     Ok(None) => this.error = None,
                     Err(error) => this.error = Some(error),

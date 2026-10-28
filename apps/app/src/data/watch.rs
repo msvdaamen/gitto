@@ -337,7 +337,7 @@ mod tests {
         /// Ends the open stream with an error, like the watcher running out of file watches.
         fn fail(&self, message: &str) {
             if let Some(sender) = self.sender.borrow_mut().take() {
-                let error = ApiError::from(gitto_git::Error::Bug(message.to_owned()));
+                let error = ApiError::unreported(gitto_git::Error::Bug(message.to_owned()));
                 let _ = sender.unbounded_send(Err(error));
             }
         }
@@ -431,14 +431,10 @@ mod tests {
         Watched { initial, ..watched }
     }
 
-    fn id() -> String {
-        repository_id().to_string()
-    }
-
     #[gpui_kit::test]
     fn refetches_what_was_loaded_before_it_was_watched(cx: &mut TestAppContext) {
         let mut watched = watch(true, cx);
-        assert_eq!(watched.initial, [keys::repository(&id())]);
+        assert_eq!(watched.initial, [keys::repository(&repository_id())]);
         watched.cleanup(cx);
     }
 
@@ -446,12 +442,12 @@ mod tests {
     fn doesnt_refetch_what_was_loaded_while_switching_to_the_repository(cx: &mut TestAppContext) {
         cx.update(QueryClient::init);
         // Loaded when the repository was last on show.
-        cx.update(|cx| QueryClient::set_data(&keys::refs(&id()), 1, cx));
+        cx.update(|cx| QueryClient::set_data(&keys::refs(&repository_id()), 1, cx));
         cx.executor().advance_clock(Duration::from_secs(1));
         let shown_at = cx.update(|cx| QueryClient::now(cx));
         cx.executor().advance_clock(Duration::from_millis(100));
         // Loaded since it came on show, before the watcher started.
-        cx.update(|cx| QueryClient::set_data(&keys::log(&id()), 2, cx));
+        cx.update(|cx| QueryClient::set_data(&keys::log(&repository_id()), 2, cx));
 
         let streams: Rc<dyn WatchStreams> = Rc::new(Streams {
             git_dir: Procedure::new(),
@@ -469,8 +465,8 @@ mod tests {
                     .is_invalidated()
             })
         };
-        assert!(invalidated(keys::refs(&id()), cx));
-        assert!(!invalidated(keys::log(&id()), cx));
+        assert!(invalidated(keys::refs(&repository_id()), cx));
+        assert!(!invalidated(keys::log(&repository_id()), cx));
         drop(watcher);
     }
 
@@ -481,7 +477,10 @@ mod tests {
 
         watched.streams.git_dir.push(vec![GitDirChange::Index]);
         cx.run_until_parked();
-        assert_eq!(watched.invalidated(cx), [keys::uncommitted(&id())]);
+        assert_eq!(
+            watched.invalidated(cx),
+            [keys::uncommitted(&repository_id())]
+        );
 
         watched.clear(cx);
         watched
@@ -489,7 +488,10 @@ mod tests {
             .git_dir
             .push(vec![GitDirChange::Index, GitDirChange::Refs]);
         cx.run_until_parked();
-        assert_eq!(watched.invalidated(cx), [keys::repository(&id())]);
+        assert_eq!(
+            watched.invalidated(cx),
+            [keys::repository(&repository_id())]
+        );
 
         watched.cleanup(cx);
         assert_eq!(watched.streams.git_dir.open(), 0);
@@ -505,7 +507,10 @@ mod tests {
 
         watched.streams.working_tree.push(());
         cx.run_until_parked();
-        assert_eq!(watched.invalidated(cx), [keys::uncommitted(&id())]);
+        assert_eq!(
+            watched.invalidated(cx),
+            [keys::uncommitted(&repository_id())]
+        );
 
         watched.cleanup(cx);
         assert_eq!(watched.streams.working_tree.open(), 0);
@@ -534,7 +539,10 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(watched.invalidated(cx), []);
         watched.set_focused(true, cx);
-        assert_eq!(watched.invalidated(cx), [keys::uncommitted(&id())]);
+        assert_eq!(
+            watched.invalidated(cx),
+            [keys::uncommitted(&repository_id())]
+        );
 
         watched.clear(cx);
         watched.set_focused(false, cx);
@@ -558,7 +566,10 @@ mod tests {
         assert_eq!(watched.streams.git_dir.open(), 1);
 
         watched.set_focused(true, cx);
-        assert_eq!(watched.invalidated(cx), [keys::uncommitted(&id())]);
+        assert_eq!(
+            watched.invalidated(cx),
+            [keys::uncommitted(&repository_id())]
+        );
         assert_eq!(watched.streams.working_tree.open(), 1);
 
         watched.cleanup(cx);
@@ -572,7 +583,10 @@ mod tests {
 
         watched.set_focused(true, cx);
         assert_eq!(watched.streams.working_tree.open(), 1);
-        assert_eq!(watched.invalidated(cx), [keys::uncommitted(&id())]);
+        assert_eq!(
+            watched.invalidated(cx),
+            [keys::uncommitted(&repository_id())]
+        );
 
         watched.cleanup(cx);
     }
@@ -588,7 +602,10 @@ mod tests {
 
         watched.set_focused(false, cx);
         watched.set_focused(true, cx);
-        assert_eq!(watched.invalidated(cx), [keys::uncommitted(&id())]);
+        assert_eq!(
+            watched.invalidated(cx),
+            [keys::uncommitted(&repository_id())]
+        );
         assert_eq!(watched.streams.working_tree.open(), 1);
 
         watched.cleanup(cx);
@@ -605,7 +622,10 @@ mod tests {
         cx.run_until_parked();
         watched.set_focused(false, cx);
         watched.set_focused(true, cx);
-        assert_eq!(watched.invalidated(cx), [keys::uncommitted(&id())]);
+        assert_eq!(
+            watched.invalidated(cx),
+            [keys::uncommitted(&repository_id())]
+        );
         assert_eq!(watched.streams.working_tree.open(), 1);
 
         watched.cleanup(cx);
@@ -624,7 +644,10 @@ mod tests {
 
         watched.set_focused(false, cx);
         watched.set_focused(true, cx);
-        assert_eq!(watched.invalidated(cx), [keys::repository(&id())]);
+        assert_eq!(
+            watched.invalidated(cx),
+            [keys::repository(&repository_id())]
+        );
         assert_eq!(watched.streams.git_dir.open(), 1);
 
         watched.cleanup(cx);
