@@ -14,7 +14,7 @@ use super::details_data::DetailsData;
 use crate::components::ui::{FormField, Icon, IconName};
 use crate::data::commit::NewCommit;
 use crate::data::{Mutation, Query, QueryError};
-use crate::theme::PaletteExt as _;
+use crate::theme::{PaletteExt as _, base_px};
 
 /// The shortcut that commits, as the button shows it.
 const SHORTCUT: &str = if cfg!(target_os = "macos") {
@@ -379,7 +379,7 @@ impl Render for CommitForm {
         v_flex()
             .id("commit-form")
             .flex_none()
-            .p(rems(0.933))
+            .p(base_px(14.))
             .capture_action(cx.listener(|this, action: &Enter, _, cx| {
                 // Cmd or Ctrl+Enter commits from either field; else Enter in the description
                 // would add a line too.

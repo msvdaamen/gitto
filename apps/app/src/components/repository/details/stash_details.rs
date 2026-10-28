@@ -20,7 +20,7 @@ use crate::data::{Opaque, Query};
 use crate::git::changes::LineCounts;
 use crate::git::diff_source::DiffSource;
 use crate::state::clock::{Clock, relative_time};
-use crate::theme::PaletteExt as _;
+use crate::theme::{PaletteExt as _, base_px};
 
 /// A stash selected in the history: what git named it, when it was made, and the files it
 /// changed, scrolled with the summary.
@@ -204,9 +204,9 @@ impl RenderOnce for StashSummary {
             .child(
                 div()
                     .mt_3()
-                    .px(rems(0.467))
+                    .px(base_px(7.))
                     .py_1()
-                    .rounded(rems(0.333))
+                    .rounded(base_px(5.))
                     .border_1()
                     .border_color(palette.border_soft)
                     .bg(palette.bg)
