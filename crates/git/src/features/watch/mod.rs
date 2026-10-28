@@ -7,5 +7,4 @@ pub mod commands;
 mod generator;
 pub mod git_dirs;
 pub mod schema;
-mod turns;
 mod watcher;

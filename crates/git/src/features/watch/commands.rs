@@ -4,9 +4,8 @@
 //! them: what they watch is then unwatched in the background.
 
 use std::collections::HashSet;
-use std::future::Future;
 use std::path::PathBuf;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 use std::time::Instant;
 
 use futures::Stream;
@@ -16,7 +15,6 @@ use super::batches::Batches;
 use super::generator::{Yielder, generate};
 use super::git_dirs::{classify, inside};
 use super::schema::GitDirChange;
-use super::turns::{Turn, Turns};
 use super::watcher::{self, OnEvents, Subscribe, Subscription};
 use crate::core::errors::Result;
 use crate::core::git_dirs::{GitDirs, git_dirs, real_path};
@@ -28,34 +26,6 @@ use crate::features::status::commands::status_snapshot;
 /// Folders in the git directory that are big or churn a lot, but never change what the UI shows.
 /// `info` (with the exclude rules) is `watch_working_tree`'s; the two never watch the same folder.
 const GIT_DIR_IGNORED: &[&str] = &["objects", "logs", "hooks", "lfs", "modules", "info"];
-
-static TURNS: LazyLock<Turns> = LazyLock::new(Turns::default);
-
-/// `subscribe`, never while an unsubscribe runs, nor the other way around. The watcher shares what
-/// watches (on Linux, one inotify instance) between its subscriptions, and shuts it down with the
-/// last unsubscribe. A subscribe that started while that was still removing its watches ends up on
-/// the one being shut down, and never hears of a change: after switching from a big repository to
-/// another, the new one's git directory wasn't watched, and a commit made in a terminal didn't
-/// show.
-///
-/// That was `@parcel/watcher`'s; `notify` gives each subscription a watcher of its own, but
-/// subscribing and unsubscribing still take turns, so a repository that's switched to doesn't
-/// wait on one that's left. Its turn is taken now.
-fn watch(
-    subscribe: &Subscribe,
-    dir: PathBuf,
-    ignore: Vec<PathBuf>,
-    on_events: OnEvents,
-) -> impl Future<Output = Result<Subscription>> + Send + 'static + use<> {
-    let subscribe = Arc::clone(subscribe);
-    let subscribing = TURNS.take(Turn::Subscribe, move || subscribe(dir, ignore, on_events));
-    async move {
-        let subscription = subscribing.await?;
-        Ok(Subscription::new(move || {
-            Box::pin(TURNS.take(Turn::Unsubscribe, move || subscription.unsubscribe()))
-        }))
-    }
-}
 
 /// Yields what changed in the repository's git directory (debounced), until it's dropped.
 pub fn watch_git_dir(
@@ -110,7 +80,7 @@ async fn git_dir_changes(
                     .collect(),
             ),
         });
-        watch(subscribe, root, ignore, on_events)
+        subscribe(root, ignore, on_events)
     }))
     .await;
     // All the subscriptions that worked are kept (and so unsubscribed), even if one failed.
@@ -247,7 +217,7 @@ impl WorkingTree {
                     changes.add(TreeChange::Excludes);
                 }
             });
-            self.excludes = watch(&self.subscribe, info.to_owned(), Vec::new(), on_events)
+            self.excludes = (self.subscribe)(info.to_owned(), Vec::new(), on_events)
                 .await
                 .ok();
         }
@@ -346,7 +316,7 @@ impl WorkingTree {
                     .collect(),
             ),
         });
-        let next = watch(&self.subscribe, self.root.clone(), ignore, on_events).await?;
+        let next = (self.subscribe)(self.root.clone(), ignore, on_events).await?;
         trace(format_args!(
             "watching {} ({} ignored paths, set up in {:.0}ms)",
             self.root.display(),
@@ -467,17 +437,14 @@ mod tests {
     use std::ffi::OsStr;
     use std::fs;
     use std::path::Path;
-    use std::sync::Mutex;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, SystemTime};
 
     use async_io::Timer;
     use futures::StreamExt;
 
     use super::*;
-    use crate::core::runner::lock;
     use crate::features::status::commands::get_status;
-    use crate::test_support::{Fixture, git, wait_for};
+    use crate::test_support::{Fixture, git};
 
     use GitDirChange::{Index, Refs};
 
@@ -893,70 +860,6 @@ mod tests {
             // Branches are shared.
             git(&main, ["branch", "shared"]);
             assert!(changed(changes.next().await).contains(&Refs));
-        });
-    }
-
-    /// A watcher whose unsubscribes take a while, like removing a big repository's watches does
-    /// (TS's mock of `@parcel/watcher`).
-    #[derive(Default)]
-    struct SlowWatcher {
-        subscribed: Mutex<Vec<PathBuf>>,
-        unsubscribing: AtomicUsize,
-        /// The folders subscribed to while an unsubscribe was still running.
-        overlapped: Mutex<Vec<PathBuf>>,
-    }
-
-    impl SlowWatcher {
-        fn subscribe(self: &Arc<Self>) -> Subscribe {
-            let watcher = Arc::clone(self);
-            Arc::new(move |dir: PathBuf, _ignore, _on_events| {
-                let watcher = Arc::clone(&watcher);
-                Box::pin(async move {
-                    if watcher.unsubscribing.load(Ordering::SeqCst) > 0 {
-                        lock(&watcher.overlapped).push(dir.clone());
-                    }
-                    lock(&watcher.subscribed).push(dir);
-                    Ok(Subscription::new(move || {
-                        Box::pin(async move {
-                            watcher.unsubscribing.fetch_add(1, Ordering::SeqCst);
-                            Timer::after(Duration::from_millis(100)).await;
-                            watcher.unsubscribing.fetch_sub(1, Ordering::SeqCst);
-                        })
-                    }))
-                })
-            })
-        }
-    }
-
-    #[test]
-    fn the_watchers_subscriptions_dont_start_while_another_is_being_removed() {
-        let fx = Fixture::new();
-        fx.create_repo("turn-left");
-        fx.create_repo("turn-shown");
-        let watcher = Arc::new(SlowWatcher::default());
-        smol::block_on(async {
-            let (left, shown) =
-                futures::try_join!(fx.repos.open("turn-left"), fx.repos.open("turn-shown"))
-                    .unwrap();
-
-            let leaving = watching(watch_git_dir_with(left, watcher.subscribe()));
-            wait_for(Duration::from_secs(5), || {
-                lock(&watcher.subscribed).len() == 1
-            })
-            .await;
-
-            // As when switching repositories: the old one's watch stops as the new one's starts.
-            // A subscribe during an unsubscribe can be left without events for good (see
-            // `watch`).
-            assert!(leaving.abort().await);
-            let started = watching(watch_git_dir_with(shown, watcher.subscribe()));
-            wait_for(Duration::from_secs(5), || {
-                lock(&watcher.subscribed).len() == 2
-            })
-            .await;
-            assert!(lock(&watcher.overlapped).is_empty());
-
-            assert!(started.abort().await);
         });
     }
 }
