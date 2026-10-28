@@ -1069,25 +1069,6 @@ impl Repository {
         .detach();
         Some(result)
     }
-
-    /// Runs `action`, git's part of a change, on the background executor, then reloads what's
-    /// shown of the repository, also after a failure: the action may have changed it partway, e.g.
-    /// a pop that conflicts. Resolves once that's reloaded.
-    pub fn reloading<R: Send + 'static>(
-        &mut self,
-        action: GitTask<R>,
-        cx: &mut Context<Self>,
-    ) -> Task<Result<R, DataError>> {
-        let action = cx.background_spawn(action);
-        cx.spawn(async move |this, cx| {
-            let result = action.await;
-            let reloading = this.update(cx, |repo, cx| repo.reload_all(cx));
-            if let Ok(reloading) = reloading {
-                reloading.await;
-            }
-            result
-        })
-    }
 }
 
 /// Renders the view `cx` is of again when what `select` picks of `repository` changes, as it
@@ -1310,6 +1291,7 @@ mod tests {
     use gpui_kit::TestAppContext;
 
     use super::*;
+    use crate::data::changes::{Scope, Then};
 
     fn repository_id() -> RepositoryId {
         RepositoryId::parse("01890a5d-ac96-774b-bcce-b302099a8057").unwrap()
@@ -1739,7 +1721,13 @@ mod tests {
             .update(cx, |repository, cx| {
                 repository.run(
                     Change::Push,
-                    |repository, cx| repository.reloading(async { Ok(7) }.boxed(), cx),
+                    |repository, cx| {
+                        repository.after(
+                            async { Ok(7) }.boxed(),
+                            |_| Then::AwaitReload(Scope::All),
+                            cx,
+                        )
+                    },
                     cx,
                 )
             })

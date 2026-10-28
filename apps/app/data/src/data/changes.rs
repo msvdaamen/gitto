@@ -118,6 +118,28 @@ impl Change {
     }
 }
 
+/// What a change reloads once git's part of it is done (see [`Repository::after`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Then {
+    /// Nothing: it changed nothing.
+    Settle,
+    /// What's shown of `Scope`, settling at once: the change is done, and its error shown,
+    /// before that's reloaded.
+    Reload(Scope),
+    /// What's shown of `Scope`, settling once that's reloaded, so what's shown is what the change
+    /// left before it can be run again.
+    AwaitReload(Scope),
+}
+
+/// What of a repository a change reloads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Scope {
+    /// What's shown of all of it (see [`Repository::reload_all`]).
+    All,
+    /// What's shown of the uncommitted changes (see [`Repository::reload_uncommitted`]).
+    Uncommitted,
+}
+
 impl Repository {
     /// `input`, checked as the UI hands it over (see `RepositoryGit::invalid`), as git's part of a
     /// change.
@@ -135,18 +157,30 @@ impl Repository {
         }
     }
 
-    /// Runs `action`, git's part of a change, then reloads what's shown of the repository without
-    /// waiting for it (also after a failure): the change is done, and its error shown, before the
-    /// history has reloaded.
-    fn then_reload<R: Send + 'static>(
+    /// Runs `action`, git's part of a change, on the background executor, then reloads what
+    /// `then` says for its outcome (see [`Then`]); resolves to the outcome, once that's reloaded
+    /// if `then` says to wait.
+    pub(crate) fn after<R: Send + 'static>(
         &mut self,
         action: GitTask<R>,
+        then: impl FnOnce(&Result<R, DataError>) -> Then + 'static,
         cx: &mut Context<Self>,
     ) -> Task<Result<R, DataError>> {
         let action = cx.background_spawn(action);
         cx.spawn(async move |this, cx| {
             let result = action.await;
-            let _ = this.update(cx, |repository, cx| drop(repository.reload_all(cx)));
+            let (scope, wait) = match then(&result) {
+                Then::Settle => return result,
+                Then::Reload(scope) => (scope, false),
+                Then::AwaitReload(scope) => (scope, true),
+            };
+            let reloading = this.update(cx, |repository, cx| match scope {
+                Scope::All => repository.reload_all(cx),
+                Scope::Uncommitted => repository.reload_uncommitted(cx),
+            });
+            if wait && let Ok(reloading) = reloading {
+                reloading.await;
+            }
             result
         })
     }
@@ -159,7 +193,10 @@ impl Repository {
     pub fn pull(&mut self, cx: &mut Context<Self>) -> Done {
         self.run(
             Change::Pull,
-            |repository, cx| repository.then_reload(repository.git().pull(None), cx),
+            |repository, cx| {
+                let pull = repository.git().pull(None);
+                repository.after(pull, |_| Then::Reload(Scope::All), cx)
+            },
             cx,
         )
     }
@@ -174,7 +211,7 @@ impl Repository {
                 let git = repository.git().clone();
                 let action =
                     repository.checked(NonEmpty::parse(branch), |branch| git.pull(Some(branch)));
-                repository.reloading(action, cx)
+                repository.after(action, |_| Then::AwaitReload(Scope::All), cx)
             },
             cx,
         )
@@ -187,7 +224,10 @@ impl Repository {
     pub fn push(&mut self, force: bool, cx: &mut Context<Self>) -> Done {
         self.run(
             Change::Push,
-            |repository, cx| repository.then_reload(repository.git().push(force), cx),
+            |repository, cx| {
+                let push = repository.git().push(force);
+                repository.after(push, |_| Then::Reload(Scope::All), cx)
+            },
             cx,
         )
     }
@@ -200,7 +240,7 @@ impl Repository {
             Change::Fetch,
             |repository, cx| {
                 let fetch = repository.git().fetch();
-                repository.reloading(fetch, cx)
+                repository.after(fetch, |_| Then::AwaitReload(Scope::All), cx)
             },
             cx,
         )
@@ -241,7 +281,7 @@ impl Repository {
                 let action = repository.checked(BranchName::parse(name), |name| {
                     git.create_branch(name, None)
                 });
-                repository.reloading(action, cx)
+                repository.after(action, |_| Then::AwaitReload(Scope::All), cx)
             },
             cx,
         )
@@ -267,7 +307,7 @@ impl Repository {
                 let action = repository.checked(BranchRef::parse(reference), |reference| {
                     git.switch_branch(reference)
                 });
-                repository.reloading(action, cx)
+                repository.after(action, |_| Then::AwaitReload(Scope::All), cx)
             },
             cx,
         )
@@ -286,7 +326,7 @@ impl Repository {
                     .and_then(|name| Ok((name, BranchRef::parse(input.from)?)));
                 let action =
                     repository.checked(parsed, |(name, from)| git.create_branch(name, Some(from)));
-                repository.reloading(action, cx)
+                repository.after(action, |_| Then::AwaitReload(Scope::All), cx)
             },
             cx,
         )
@@ -301,7 +341,7 @@ impl Repository {
                 let action = repository.checked(BranchRef::parse(reference), |reference| {
                     git.delete_branch(reference)
                 });
-                repository.reloading(action, cx)
+                repository.after(action, |_| Then::AwaitReload(Scope::All), cx)
             },
             cx,
         )
@@ -366,22 +406,27 @@ impl Repository {
     pub(crate) fn integrating<T: Send + 'static>(
         &mut self,
         action: GitTask<T>,
-        is_up_to_date: impl FnOnce(&T) -> bool + 'static,
+        is_up_to_date: impl FnOnce(&T) -> bool + Send + 'static,
         up_to_date: String,
         cx: &mut Context<Self>,
     ) -> Task<Result<T, DataError>> {
-        let action = cx.background_spawn(action);
-        cx.spawn(async move |this, cx| {
-            let outcome = action.await;
-            if let Ok(outcome) = &outcome
-                && is_up_to_date(outcome)
-            {
-                return Err(DataError::msg(up_to_date));
-            }
-            if let Ok(reloading) = this.update(cx, |repository, cx| repository.reload_all(cx)) {
-                reloading.await;
-            }
-            outcome
+        let action = async move {
+            let outcome = action.await?;
+            let changed_nothing = is_up_to_date(&outcome);
+            Ok((outcome, changed_nothing))
+        }
+        .boxed();
+        let integrating = self.after(
+            action,
+            |result| match result {
+                Ok((_, true)) => Then::Settle,
+                _ => Then::AwaitReload(Scope::All),
+            },
+            cx,
+        );
+        cx.spawn(async move |_, _| match integrating.await? {
+            (_, true) => Err(DataError::msg(up_to_date)),
+            (outcome, false) => Ok(outcome),
         })
     }
 
@@ -408,7 +453,7 @@ impl Repository {
             change,
             |repository, cx| {
                 let action = action(repository);
-                repository.reloading(action, cx)
+                repository.after(action, |_| Then::AwaitReload(Scope::All), cx)
             },
             cx,
         )
@@ -478,7 +523,7 @@ impl Repository {
                 let action = repository.checked(parsed, |(folder, branch, new_branch)| {
                     git.add_worktree(folder, branch, new_branch)
                 });
-                repository.reloading(action, cx)
+                repository.after(action, |_| Then::AwaitReload(Scope::All), cx)
             },
             cx,
         )
@@ -574,7 +619,7 @@ impl Repository {
             Change::Continue,
             |repository, cx| {
                 let action = repository.git().continue_operation(kind);
-                repository.reloading(action, cx)
+                repository.after(action, |_| Then::AwaitReload(Scope::All), cx)
             },
             cx,
         )
@@ -586,7 +631,7 @@ impl Repository {
             Change::Abort,
             |repository, cx| {
                 let action = repository.git().abort_operation(kind);
-                repository.reloading(action, cx)
+                repository.after(action, |_| Then::AwaitReload(Scope::All), cx)
             },
             cx,
         )
@@ -604,7 +649,7 @@ impl Repository {
         let parsed = Message::parse(commit.message)
             .and_then(|message| Ok((message, commit.amend.map(FullSha::parse).transpose()?)));
         let action = self.checked(parsed, |(message, amend)| git.create_commit(message, amend));
-        self.refresh_after_commit(action, cx)
+        self.after(action, after_commit, cx)
     }
 
     /// Rewrites the message of HEAD's commit, leaving what's staged out of it; resolves to the
@@ -618,73 +663,11 @@ impl Repository {
         let parsed =
             FullSha::parse(reword.sha).and_then(|sha| Ok((sha, Message::parse(reword.message)?)));
         let action = self.checked(parsed, |(sha, message)| git.reword_commit(sha, message));
-        self.refresh_after_commit(action, cx)
+        self.after(action, after_commit, cx)
     }
 
-    /// Runs a commit's `action`, then reloads what it changed: the whole repository once it's
-    /// done, waited for; after a failure, the uncommitted changes only (`refreshAfterCommit`).
-    fn refresh_after_commit<R: Send + 'static>(
-        &mut self,
-        action: GitTask<R>,
-        cx: &mut Context<Self>,
-    ) -> Task<Result<R, DataError>> {
-        let action = cx.background_spawn(action);
-        cx.spawn(async move |this, cx| {
-            let result = action.await;
-            match &result {
-                Ok(_) => {
-                    if let Ok(reloading) =
-                        this.update(cx, |repository, cx| repository.reload_all(cx))
-                    {
-                        reloading.await;
-                    }
-                }
-                // A failure saying HEAD has moved means the status is behind; reloaded without
-                // waiting for it, so the error shows right away.
-                Err(_) => {
-                    let _ =
-                        this.update(cx, |repository, cx| drop(repository.reload_uncommitted(cx)));
-                }
-            }
-            result
-        })
-    }
-
-    // Staging: a view's own changes. Each reloads the uncommitted changes after, without waiting:
-    // the watcher would catch it too, but reloading right away feels snappier.
-
-    /// Runs `action`, a change to the uncommitted changes, then reloads them; settles once they
-    /// have (`useStagingMutation`), so what's shown is what it left before it can be run again.
-    fn then_reloaded_uncommitted(
-        &mut self,
-        action: GitTask<()>,
-        cx: &mut Context<Self>,
-    ) -> Task<Result<(), DataError>> {
-        let action = cx.background_spawn(action);
-        cx.spawn(async move |this, cx| {
-            action.await?;
-            if let Ok(reloading) =
-                this.update(cx, |repository, cx| repository.reload_uncommitted(cx))
-            {
-                reloading.await;
-            }
-            Ok(())
-        })
-    }
-
-    /// Runs `action`, a change to the uncommitted changes, then reloads them without waiting.
-    fn then_reload_uncommitted(
-        &mut self,
-        action: GitTask<()>,
-        cx: &mut Context<Self>,
-    ) -> Task<Result<(), DataError>> {
-        let action = cx.background_spawn(action);
-        cx.spawn(async move |this, cx| {
-            let result = action.await;
-            let _ = this.update(cx, |repository, cx| drop(repository.reload_uncommitted(cx)));
-            result
-        })
-    }
+    // Staging: a view's own changes. Each reloads the uncommitted changes after: the watcher
+    // would catch it too, but reloading right away feels snappier.
 
     /// Stages files, or all of them (`useStage`).
     pub fn stage(
@@ -699,7 +682,7 @@ impl Repository {
                 self.checked(Paths::parse(paths), |paths| git.stage(paths))
             }
         };
-        self.then_reloaded_uncommitted(action, cx)
+        self.after(action, after_staging, cx)
     }
 
     /// Unstages files, or all of them (`useUnstage`).
@@ -715,7 +698,7 @@ impl Repository {
                 self.checked(Paths::parse(paths), |paths| git.unstage(paths))
             }
         };
-        self.then_reloaded_uncommitted(action, cx)
+        self.after(action, after_staging, cx)
     }
 
     /// Discards changes, which are lost: a file's unstaged ones, or staged ones and all, by both
@@ -735,7 +718,7 @@ impl Repository {
                 side,
             }),
         };
-        self.then_reloaded_uncommitted(action, cx)
+        self.after(action, after_staging, cx)
     }
 
     /// Stages or unstages a whole file at `paths` (a renamed one by both).
@@ -750,7 +733,7 @@ impl Repository {
             StageAction::Stage => git.stage(paths),
             StageAction::Unstage => git.unstage(paths),
         });
-        self.then_reload_uncommitted(action, cx)
+        self.after(action, |_| Then::Reload(Scope::Uncommitted), cx)
     }
 
     /// Stages or unstages lines of `file`'s changes, picked from its patch named by `version`;
@@ -841,7 +824,27 @@ impl Repository {
                 with_markers,
             } => git.mark_resolved(path, version, with_markers),
         });
-        self.then_reload_uncommitted(action, cx)
+        self.after(action, |_| Then::Reload(Scope::Uncommitted), cx)
+    }
+}
+
+/// What a commit reloads: the whole repository once it's done, waited for; after a failure, the
+/// uncommitted changes only (`refreshAfterCommit`). A failure saying HEAD has moved means the
+/// status is behind; it's reloaded without waiting for it, so the error shows right away.
+fn after_commit<R>(result: &Result<R, DataError>) -> Then {
+    match result {
+        Ok(_) => Then::AwaitReload(Scope::All),
+        Err(_) => Then::Reload(Scope::Uncommitted),
+    }
+}
+
+/// What a change to the uncommitted changes reloads: them, settling once they have
+/// (`useStagingMutation`), so what's shown is what it left before it can be run again; nothing
+/// after a failure.
+fn after_staging(result: &Result<(), DataError>) -> Then {
+    match result {
+        Ok(()) => Then::AwaitReload(Scope::Uncommitted),
+        Err(_) => Then::Settle,
     }
 }
 
