@@ -486,6 +486,15 @@ impl PatchViewer {
         let loading = load_files(Arc::clone(&diff), &self.load_file, cx);
         cx.spawn(async move |this, cx| {
             let loaded = loading.await;
+            // The whole file can have lines wider than the patch's, or more of them: measured off
+            // the main thread, as it's read whole.
+            let measured = match &loaded {
+                Ok(loaded) => {
+                    let hydrated = Arc::clone(&loaded.hydrated);
+                    Some(cx.background_spawn(async move { measure(&hydrated) }).await)
+                }
+                Err(_) => None,
+            };
             let _ = this.update(cx, |this, cx| {
                 if let Some(ix) = this.loads.iter().position(|load| Arc::ptr_eq(load, &diff)) {
                     this.loads.remove(ix);
@@ -499,11 +508,13 @@ impl PatchViewer {
                         if on_show {
                             this.highlights.remember(&loaded.hydrated);
                             let highlights = ViewerRuntime::highlight(&loaded.hydrated, cx);
-                            let highest = measure(&loaded.hydrated).1;
                             if let Some(shown) = &mut this.shown {
                                 shown.diff = Arc::clone(&loaded.hydrated);
                                 shown.highlights = highlights;
-                                shown.highest = highest;
+                                if let Some((widest, highest)) = measured {
+                                    shown.widest = widest;
+                                    shown.highest = highest;
+                                }
                             }
                             let range = gap_size(&loaded.hydrated, index);
                             expand(&mut this.expanded, index, direction, range);
@@ -1408,6 +1419,7 @@ fn line_text(
 mod tests {
     use gpui_kit::{AppContext as _, TestAppContext};
 
+    use super::super::viewer_runtime::LoadedFile;
     use super::*;
     use crate::data::QueryError;
 
@@ -1478,5 +1490,56 @@ mod tests {
     fn keeps_the_line_numbers_of_a_patch_whose_lines_cant_be_staged(cx: &mut TestAppContext) {
         // A commit's, say: the button would take the number's place, with nothing in it.
         assert!(!stage_button_on_hover(None, cx));
+    }
+
+    #[gpui_kit::test]
+    fn widens_the_rows_for_a_line_wider_than_the_patchs_once_its_shown_around_it(
+        cx: &mut TestAppContext,
+    ) {
+        let _dir = crate::test_support::init(cx, |services| services);
+        // The first line, hidden above the hunk, is far wider than the patch's lines.
+        let wide = "w".repeat(500);
+        let old = format!("{wide}\ntwo\nthree\nfour\nfive\nsix\n");
+        let new = format!("{wide}\ntwo\nthree\nfour\nfive\nSIX\n");
+        let load_file: LoadFile = Rc::new(move |side, _, _| {
+            let contents = match side {
+                Side::Deletions => old.clone(),
+                Side::Additions => new.clone(),
+            };
+            Task::ready(Ok(LoadedFile::Blob(contents)))
+        });
+        let (window, viewer) =
+            crate::test_support::open(cx, |_, cx| PatchViewer::new(load_file, cx));
+        cx.update(|cx| {
+            viewer.update(cx, |viewer, cx| {
+                viewer.set_props(
+                    PatchProps {
+                        patch: "diff --git a/f.txt b/f.txt\nindex 1111111..2222222 100644\n--- a/f.txt\n+++ b/f.txt\n@@ -5,2 +5,2 @@\n five\n-six\n+SIX\n".into(),
+                        file_key: "f.txt".into(),
+                        cache_key: "test:wide".into(),
+                        style: DiffStyle::Unified,
+                        staging: None,
+                    },
+                    cx,
+                )
+            })
+        });
+        cx.run_until_parked();
+        let row_width = |cx: &mut TestAppContext| {
+            cx.update_window(window, |_, window, cx| {
+                viewer.update(cx, |viewer, cx| {
+                    viewer.frame(window, cx).expect("a patch on show").row_width
+                })
+            })
+            .unwrap()
+        };
+        let before = row_width(cx);
+        viewer.update(cx, |viewer, cx| {
+            viewer.expand_gap(0, ExpandDirection::All, cx)
+        });
+        cx.run_until_parked();
+        assert!(viewer.read_with(cx, |viewer, _| !viewer.shown_diff().unwrap().is_partial));
+        let after = row_width(cx);
+        assert!(after > before * 2., "{before:?} to {after:?}");
     }
 }
