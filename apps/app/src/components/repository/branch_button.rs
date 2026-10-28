@@ -169,7 +169,7 @@ impl Render for BranchButton {
         }
         let disabled = button.is_disabled() || button.is_busy();
         let this = cx.entity().downgrade();
-        let form = cx.entity();
+        let form = cx.entity().downgrade();
         Popover::new("branch-popover")
             .anchor(Anchor::TopLeft)
             .open(self.open && !disabled)
@@ -181,17 +181,18 @@ impl Render for BranchButton {
             .trigger(button)
             .content(move |_, _, cx| {
                 let form = form.clone();
-                let (summary, name) = {
-                    let button = form.read(cx);
-                    (button.summary(), button.name.clone())
-                };
+                let shown = form
+                    .read_with(cx, |button, _| (button.summary(), button.name.clone()))
+                    .ok();
                 div()
                     .w(rems(18.67))
-                    .child(
-                        BranchForm::new(summary, &name).on_submit(move |_, window, cx| {
-                            form.update(cx, |this, cx| this.submit(window, cx));
-                        }),
-                    )
+                    .when_some(shown, |this, (summary, name)| {
+                        this.child(BranchForm::new(summary, &name).on_submit(
+                            move |_, window, cx| {
+                                let _ = form.update(cx, |this, cx| this.submit(window, cx));
+                            },
+                        ))
+                    })
             })
             .into_any_element()
     }

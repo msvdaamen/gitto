@@ -102,11 +102,14 @@ impl CreateBranchDialog {
             return;
         }
         self.open = true;
-        let this = cx.entity();
+        let this = cx.entity().downgrade();
         let focus = self.name.focus_handle(cx);
         window.open_dialog(cx, move |dialog, window, cx| {
+            let Some(shown) = this.upgrade() else {
+                return dialog;
+            };
             let (summary, name, disabled) = {
-                let shown = this.read(cx);
+                let shown = shown.read(cx);
                 (
                     shown.summary(),
                     shown.name.clone(),
@@ -119,7 +122,7 @@ impl CreateBranchDialog {
                 .w(rems(WIDTH).to_pixels(window.rem_size()))
                 .close_button(false)
                 .on_cancel(move |_, _, cx| {
-                    cancel.update(cx, |this, cx| {
+                    let _ = cancel.update(cx, |this, cx| {
                         this.open = false;
                         cx.notify();
                     });
@@ -130,7 +133,7 @@ impl CreateBranchDialog {
                         // `run` does nothing while a switch or a merge is running.
                         .disabled(disabled)
                         .on_submit(move |_, window, cx| {
-                            submit.update(cx, |this, cx| this.submit(window, cx));
+                            let _ = submit.update(cx, |this, cx| this.submit(window, cx));
                         }),
                 )
         });

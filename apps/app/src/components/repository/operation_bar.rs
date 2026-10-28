@@ -228,7 +228,7 @@ impl OperationBar {
     fn confirm_abort(&mut self, operation: Operation, window: &mut Window, cx: &mut Context<Self>) {
         let name = operation_name(&operation);
         let kind = operation.kind();
-        let this = cx.entity();
+        let this = cx.entity().downgrade();
         let id = self.repository_id.clone();
         ConfirmDialog::new(
             IconName::TriangleAlert,
@@ -240,7 +240,7 @@ impl OperationBar {
                  you've resolved so far are lost."
         ))
         .action("Abort", ButtonVariant::Primary, move |_, cx| {
-            this.update(cx, |this, cx| {
+            let _ = this.update(cx, |this, cx| {
                 // Not once another repository is on show: the operation asked about is this one's.
                 if this.repository_id == id {
                     this.abort(kind, cx);

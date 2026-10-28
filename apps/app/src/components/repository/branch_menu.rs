@@ -496,11 +496,11 @@ impl BranchMenuProvider {
             "Create branch…",
             busy,
             {
-                let this = this.clone();
+                let this = this.downgrade();
                 let branch = branch.to_string();
                 move |_, window, cx| {
                     let branch = branch.clone();
-                    this.update(cx, |this, cx| this.create_from(branch, window, cx));
+                    let _ = this.update(cx, |this, cx| this.create_from(branch, window, cx));
                 }
             },
         ));
@@ -515,11 +515,11 @@ impl BranchMenuProvider {
                     format!("Merge {short} into {head}"),
                     !may_integrate,
                     {
-                        let this = this.clone();
+                        let this = this.downgrade();
                         let branch = branch.to_string();
                         move |_, _, cx| {
                             let branch = branch.clone();
-                            this.update(cx, |this, cx| this.merge(branch, cx));
+                            let _ = this.update(cx, |this, cx| this.merge(branch, cx));
                         }
                     },
                 ))
@@ -528,11 +528,11 @@ impl BranchMenuProvider {
                     format!("Rebase {head} onto {short}"),
                     !may_integrate,
                     {
-                        let this = this.clone();
+                        let this = this.downgrade();
                         let branch = branch.to_string();
                         move |_, _, cx| {
                             let branch = branch.clone();
-                            this.update(cx, |this, cx| this.rebase(branch, cx));
+                            let _ = this.update(cx, |this, cx| this.rebase(branch, cx));
                         }
                     },
                 ));
@@ -543,9 +543,11 @@ impl BranchMenuProvider {
                 format!("Pull {short}"),
                 provider.is_pulling(&branch, cx),
                 {
-                    let this = this.clone();
+                    let this = this.downgrade();
                     let branch = branch.clone();
-                    move |_, _, cx| this.update(cx, |this, cx| this.pull(&branch, cx))
+                    move |_, _, cx| {
+                        let _ = this.update(cx, |this, cx| this.pull(&branch, cx));
+                    }
                 },
             ));
         }
@@ -555,11 +557,11 @@ impl BranchMenuProvider {
                 format!("Open worktree {}", worktree.name),
                 provider.is_opening_worktree(cx),
                 {
-                    let this = this.clone();
+                    let this = this.downgrade();
                     let path = worktree.path.clone();
                     move |_, _, cx| {
                         let path = path.clone();
-                        this.update(cx, |this, cx| this.open_worktree(path, cx));
+                        let _ = this.update(cx, |this, cx| this.open_worktree(path, cx));
                     }
                 },
             )),
@@ -568,11 +570,12 @@ impl BranchMenuProvider {
                 "Add worktree…",
                 busy,
                 {
-                    let this = this.clone();
+                    let this = this.downgrade();
                     let branch = branch.to_string();
                     move |_, window, cx| {
                         let branch = branch.clone();
-                        this.update(cx, |this, cx| this.add_worktree_for(branch, window, cx));
+                        let _ =
+                            this.update(cx, |this, cx| this.add_worktree_for(branch, window, cx));
                     }
                 },
             )),
@@ -583,10 +586,11 @@ impl BranchMenuProvider {
             format!("Delete {short}…"),
             busy || deletion.is_none(),
             {
-                let this = this.clone();
+                let this = this.downgrade();
                 move |_, window, cx| {
                     if let Some(deletion) = deletion.clone() {
-                        this.update(cx, |this, cx| this.delete_branch(deletion, window, cx));
+                        let _ =
+                            this.update(cx, |this, cx| this.delete_branch(deletion, window, cx));
                     }
                 }
             },

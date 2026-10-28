@@ -225,21 +225,24 @@ impl AddWorktreeDialog {
             return;
         }
         self.open = true;
-        let this = cx.entity();
+        let this = cx.entity().downgrade();
         let focus = self.folder.focus_handle(cx);
         window.open_dialog(cx, move |dialog, window, cx| {
+            let Some(shown) = this.upgrade() else {
+                return dialog;
+            };
             let cancel = this.clone();
             dialog
                 .w(rems(WIDTH).to_pixels(window.rem_size()))
                 .close_button(false)
                 .on_cancel(move |_, _, cx| {
-                    cancel.update(cx, |this, cx| {
+                    let _ = cancel.update(cx, |this, cx| {
                         this.open = false;
                         cx.notify();
                     });
                     true
                 })
-                .child(Self::render_form(&this, window, cx))
+                .child(Self::render_form(&shown, window, cx))
         });
         focus.focus(window, cx);
         cx.notify();
@@ -273,8 +276,8 @@ impl AddWorktreeDialog {
             });
         }
         let naming = !Self::typed(&new_branch, cx).is_empty();
-        let browse = this.clone();
-        let submit = this.clone();
+        let browse = this.downgrade();
+        let submit = this.downgrade();
         v_flex()
             .child(
                 div()
@@ -307,7 +310,7 @@ impl AddWorktreeDialog {
                         Button::new("browse")
                             .label("Browse…")
                             .on_click(move |_, window, cx| {
-                                browse.update(cx, |this, cx| this.browse(window, cx));
+                                let _ = browse.update(cx, |this, cx| this.browse(window, cx));
                             }),
                     )
                     .child(
@@ -322,7 +325,7 @@ impl AddWorktreeDialog {
                             })
                             .disabled(!valid || blocked)
                             .on_click(move |_, window, cx| {
-                                submit.update(cx, |this, cx| this.submit(window, cx));
+                                let _ = submit.update(cx, |this, cx| this.submit(window, cx));
                             }),
                     ),
             )

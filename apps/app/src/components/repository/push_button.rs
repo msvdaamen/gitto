@@ -10,7 +10,7 @@ use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::prelude::*;
-use gpui_kit::{App, Context, Entity, SharedString, Subscription, Window, div};
+use gpui_kit::{App, Context, SharedString, Subscription, WeakEntity, Window, div};
 
 use super::toolbar_button::ToolbarButton;
 use crate::components::ui::dialog::CONFIRM_WIDTH;
@@ -116,6 +116,12 @@ impl PushButton {
                 this.sync_dialog(window, cx);
                 cx.notify();
             }),
+            // The dialog is the button's: it goes with it.
+            cx.on_release_in(window, |this, window, cx| {
+                if this.dialog_open {
+                    window.close_dialog(cx);
+                }
+            }),
         ];
         let mut button = PushButton {
             target: push_target_query(&repository_id, cx),
@@ -186,15 +192,21 @@ impl PushButton {
         self.shown.update(rejected);
         if wanted && !self.dialog_open {
             self.dialog_open = true;
-            let this = cx.entity();
+            let this = cx.entity().downgrade();
             window.open_dialog(cx, move |dialog, window, cx| {
-                let copy = this.read(cx).rejected_copy(cx);
+                // Gone with the button (it closes the dialog as it goes, see `new`).
+                let Some(copy) = this
+                    .upgrade()
+                    .map(|button| button.read(cx).rejected_copy(cx))
+                else {
+                    return dialog;
+                };
                 let cancel = this.clone();
                 dialog
                     .w(CONFIRM_WIDTH.to_pixels(window.rem_size()))
                     .close_button(false)
                     .on_cancel(move |_, _, cx| {
-                        cancel.update(cx, |this, cx| this.cancel_rejected(cx));
+                        let _ = cancel.update(cx, |this, cx| this.cancel_rejected(cx));
                         true
                     })
                     .child(
@@ -219,7 +231,7 @@ impl PushButton {
         RejectedCopy::of(&rejection, self.can_pull())
     }
 
-    fn rejected_footer(this: &Entity<Self>, copy: &RejectedCopy) -> DialogFooter {
+    fn rejected_footer(this: &WeakEntity<Self>, copy: &RejectedCopy) -> DialogFooter {
         let cancel = this.clone();
         let mut footer = DialogFooter::new().gap_2().child(
             Button::new("cancel")
@@ -227,7 +239,7 @@ impl PushButton {
                 .label(copy.cancel)
                 .on_click(move |_, window, cx| {
                     window.close_dialog(cx);
-                    cancel.update(cx, |this, cx| this.cancel_rejected(cx));
+                    let _ = cancel.update(cx, |this, cx| this.cancel_rejected(cx));
                 }),
         );
         if let Some(variant) = copy.pull {
@@ -238,7 +250,7 @@ impl PushButton {
                     .label("Pull")
                     .on_click(move |_, window, cx| {
                         window.close_dialog(cx);
-                        pull.update(cx, |this, cx| this.pull_instead(cx));
+                        let _ = pull.update(cx, |this, cx| this.pull_instead(cx));
                     }),
             );
         }
@@ -250,7 +262,7 @@ impl PushButton {
                     .label("Force push")
                     .on_click(move |_, window, cx| {
                         window.close_dialog(cx);
-                        force.update(cx, |this, cx| this.force_push(cx));
+                        let _ = force.update(cx, |this, cx| this.force_push(cx));
                     }),
             );
         }
@@ -326,7 +338,7 @@ mod tests {
 
     use gitto_git::features::remote::schema::PushTarget;
     use gpui_kit::test::TestWindowExt as _;
-    use gpui_kit::{AnyWindowHandle, AppContext as _, TestAppContext};
+    use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, IntoElement, Render, TestAppContext};
 
     use super::*;
     use crate::components::repository::test_support::{
@@ -396,16 +408,22 @@ mod tests {
         pull: PullOperation,
     ) -> (tempfile::TempDir, AnyWindowHandle, Entity<PushButton>) {
         let dir = setup(cx);
+        let id = seed(target, cx);
+        let (window, button) = crate::test_support::open(cx, move |window, cx| {
+            PushButton::with_operations(id, push, pull, window, cx)
+        });
+        (dir, window, button)
+    }
+
+    /// A repository two commits ahead of its upstream, and one behind, pushing to `target`.
+    fn seed(target: PushTarget, cx: &mut TestAppContext) -> RepositoryId {
         let id = repository_id();
         let mut summary = status();
         summary.ahead = 2;
         summary.behind = 1;
         set_status(&id, summary, cx);
         set_push_target(&id, target, cx);
-        let (window, button) = crate::test_support::open(cx, move |window, cx| {
-            PushButton::with_operations(id, push, pull, window, cx)
-        });
-        (dir, window, button)
+        id
     }
 
     fn click(window: AnyWindowHandle, id: &'static str, cx: &mut TestAppContext) {
@@ -499,6 +517,39 @@ mod tests {
         click(window, "cancel", cx);
         assert!(!has_dialog(window, cx));
         assert_eq!(*calls.pulls.borrow(), 0);
+    }
+
+    /// A page with a push button, until it drops it.
+    struct Page {
+        button: Option<Entity<PushButton>>,
+    }
+
+    impl Render for Page {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().children(self.button.clone())
+        }
+    }
+
+    #[gpui_kit::test]
+    fn closes_its_dialog_and_is_let_go_of_when_dropped(cx: &mut TestAppContext) {
+        let (_, push, pull) = operations(|_, _| Err(rejected(true)));
+        let _dir = setup(cx);
+        let id = seed(target(), cx);
+        let (window, page) = crate::test_support::open(cx, move |window, cx| Page {
+            button: Some(cx.new(|cx| PushButton::with_operations(id, push, pull, window, cx))),
+        });
+        click(window, "push", cx);
+        assert!(has_dialog(window, cx));
+
+        let button = page.read_with(cx, |page, _| page.button.as_ref().unwrap().downgrade());
+        page.update(cx, |page, cx| {
+            page.button = None;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        // The dialog held on to nothing: the button is gone, and its dialog with it.
+        assert!(button.upgrade().is_none());
+        assert!(!has_dialog(window, cx));
     }
 
     #[gpui_kit::test]
