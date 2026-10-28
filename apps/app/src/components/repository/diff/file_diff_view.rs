@@ -14,17 +14,21 @@ use gpui_kit::component::{Disableable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     Animation, AnimationExt as _, AnyElement, AnyWindowHandle, App, Context, ElementId, Entity,
-    EventEmitter, FocusHandle, Focusable, FontWeight, KeyDownEvent, SharedString, Subscription,
-    Task, Transformation, Window, div, percentage, px, rems,
+    EventEmitter, FocusHandle, Focusable, FontWeight, KeyContext, SharedString, Subscription, Task,
+    Transformation, Window, div, percentage, px, rems,
 };
 
+use super::conflict_diff::Resolution::{Both, Ours, Theirs};
 use super::conflict_resolution::{ConflictResolutionView, ResolutionFile};
 use super::conflict_viewer::prepare_conflicts;
 use super::file_editing::FileEditing;
 use super::file_staging::{FileStaging, StageFileMutation, StageLinesMutation};
 use super::patch_viewer::{PatchProps, PatchViewer, PatchViewerEvent};
 use super::shown_file::{PreparedPatch, ShownFile, patch_cache_key};
-use super::viewer_actions::{CloseFileDiff, FILE_DIFF_VIEW};
+use super::viewer_actions::{
+    CloseFileDiff, FILE_DIFF_VIEW, KeepBoth, KeepOurs, KeepTheirs, MarkResolved, NextConflict,
+    OpenNextConflicted, PreviousConflict, RESOLVING,
+};
 use super::viewer_editing::{PatchEditor, PatchEditorEvent};
 use super::viewer_runtime::{LoadFile, LoadedFile, prepare_patch};
 use crate::components::ui::{
@@ -544,11 +548,34 @@ impl FileDiffView {
         cx.notify();
     }
 
-    fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        // The conflicts' keys, wherever the focus is in the view but in the editor.
+    /// The view's key context: its conflicts' keys are bound only while they're its own (see
+    /// `ConflictResolutionView::takes_keys`), so they're typed in an editor otherwise.
+    fn key_context(&self, cx: &App) -> KeyContext {
+        let mut context = KeyContext::default();
+        context.add(FILE_DIFF_VIEW);
+        if self.resolution.read(cx).takes_keys() {
+            context.add(RESOLVING);
+        }
+        context
+    }
+
+    /// One of the conflicts' keys, `act` on the resolution: whether it took it. If it didn't, the
+    /// key goes on, to be typed, say.
+    fn on_conflict_key(
+        &mut self,
+        act: impl FnOnce(
+            &mut ConflictResolutionView,
+            &mut Window,
+            &mut Context<ConflictResolutionView>,
+        ) -> bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let resolution = self.resolution.clone();
-        if resolution.update(cx, |resolution, cx| resolution.on_key(event, window, cx)) {
-            cx.stop_propagation();
+        let taken = resolution.read(cx).takes_keys()
+            && resolution.update(cx, |resolution, cx| act(resolution, window, cx));
+        if !taken {
+            cx.propagate();
         }
     }
 
@@ -573,14 +600,46 @@ impl Render for FileDiffView {
         let files_error = self.view.files_error().map(SharedString::from);
         v_flex()
             .id("file-diff-view")
-            .key_context(FILE_DIFF_VIEW)
+            .key_context(self.key_context(cx))
             .track_focus(&self.focus)
             .size_full()
             .min_h_0()
             .min_w_0()
             .bg(palette.bg)
-            .on_key_down(cx.listener(Self::on_key_down))
             .on_action(cx.listener(|this, _: &CloseFileDiff, _, cx| this.close(cx)))
+            .on_action(cx.listener(|this, _: &KeepOurs, window, cx| {
+                this.on_conflict_key(
+                    |it, window, cx| it.keep_current(Ours, window, cx),
+                    window,
+                    cx,
+                )
+            }))
+            .on_action(cx.listener(|this, _: &KeepTheirs, window, cx| {
+                this.on_conflict_key(
+                    |it, window, cx| it.keep_current(Theirs, window, cx),
+                    window,
+                    cx,
+                )
+            }))
+            .on_action(cx.listener(|this, _: &KeepBoth, window, cx| {
+                this.on_conflict_key(
+                    |it, window, cx| it.keep_current(Both, window, cx),
+                    window,
+                    cx,
+                )
+            }))
+            .on_action(cx.listener(|this, _: &NextConflict, window, cx| {
+                this.on_conflict_key(|it, _, cx| it.step(true, cx), window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &PreviousConflict, window, cx| {
+                this.on_conflict_key(|it, _, cx| it.step(false, cx), window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &OpenNextConflicted, window, cx| {
+                this.on_conflict_key(|it, _, cx| it.open_next(cx), window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &MarkResolved, window, cx| {
+                this.on_conflict_key(|it, window, cx| it.mark_resolved(window, cx), window, cx)
+            }))
             .child(self.render_header(window, cx))
             .children(self.render_editing_banner(cx))
             .when_some(staging_error, |this, message| {

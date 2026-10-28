@@ -19,9 +19,8 @@ use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_fl
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, HighlightStyle, Hsla,
-    KeyDownEvent, ListHorizontalSizingBehavior, MouseButton, Pixels, ScrollStrategy, SharedString,
-    StyledText, Task, UniformListScrollHandle, WeakEntity, Window, div, point, px, rems,
-    uniform_list,
+    ListHorizontalSizingBehavior, MouseButton, Pixels, ScrollStrategy, SharedString, StyledText,
+    Task, UniformListScrollHandle, WeakEntity, Window, div, px, rems, uniform_list,
 };
 
 pub use super::conflict_diff::Resolution;
@@ -34,7 +33,12 @@ use super::conflict_whole_file::WholeFile;
 use super::file_editing::{EditSession, FileVersion};
 use super::highlight::DiffHighlights;
 use super::patch_viewer::{
-    DrawnLine, FONT_REMS, ROW_REMS, code_char_width, scroll_list_by, widest_line,
+    DrawnLine, FONT_REMS, ROW_REMS, Scroll, code_char_width, scroll_list, scroll_list_to,
+    widest_line,
+};
+use super::viewer_actions::{
+    CONFLICT_VIEWER, ScrollDown, ScrollLeft, ScrollPageDown, ScrollPageUp, ScrollRight,
+    ScrollToBottom, ScrollToTop, ScrollUp,
 };
 use super::viewer_runtime::{HIGHLIGHT_WAIT, SharedHighlights, ViewHighlights, ViewerRuntime};
 use crate::components::ui::{Icon, IconName};
@@ -442,11 +446,7 @@ impl ConflictViewer {
                     window.focus(&self.focus, cx);
                 }
                 if other {
-                    self.scroll
-                        .0
-                        .borrow()
-                        .base_handle
-                        .set_offset(point(px(0.), px(0.)));
+                    scroll_list_to(&self.scroll, px(0.), px(0.));
                 }
                 // The lines shown around the conflicts are another file's.
                 if other {
@@ -758,38 +758,11 @@ impl ConflictViewer {
         cx.notify();
     }
 
-    /// Scrolls with the keyboard, as a browser's scroll container does.
-    fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let keystroke = &event.keystroke;
-        let modifiers = &keystroke.modifiers;
-        if self.whole.is_shown() || modifiers.alt || modifiers.control || modifiers.platform {
-            return;
-        }
+    /// Scrolls with the keyboard, as a browser's scroll container does (see `viewer_actions`).
+    fn scroll(&mut self, how: Scroll, window: &mut Window, cx: &mut Context<Self>) {
         let row_height = rems(ROW_REMS).to_pixels(window.rem_size());
-        let height = self
-            .scroll
-            .0
-            .borrow()
-            .last_item_size
-            .map_or(px(0.), |size| size.item.height);
-        let page = (height * 0.9).max(row_height);
-        let line = row_height * 2.;
-        let column = self.char_width.map_or(px(8.), |(_, width)| width) * 6.;
-        let (down, right) = match keystroke.key.as_str() {
-            "down" => (line, px(0.)),
-            "up" => (-line, px(0.)),
-            "right" => (px(0.), column),
-            "left" => (px(0.), -column),
-            "pagedown" => (page, px(0.)),
-            "pageup" => (-page, px(0.)),
-            "space" if modifiers.shift => (-page, px(0.)),
-            "space" => (page, px(0.)),
-            "home" => (px(-1e9), px(0.)),
-            "end" => (px(1e9), px(0.)),
-            _ => return,
-        };
-        scroll_list_by(&self.scroll, self.rows.len(), down, right, row_height);
-        cx.stop_propagation();
+        let char_width = self.char_width.map(|(_, width)| width);
+        scroll_list(&self.scroll, self.rows.len(), how, row_height, char_width);
         cx.notify();
     }
 
@@ -912,14 +885,46 @@ impl Render for ConflictViewer {
         };
         div()
             .id("conflicts")
-            .key_context("ConflictViewer")
+            // The whole file's editor has the keys while it's shown.
+            .when(!self.whole.is_shown(), |this| {
+                this.key_context(CONFLICT_VIEWER)
+            })
             .track_focus(&self.focus)
             .relative()
             .size_full()
             .min_h_0()
             .bg(palette.bg)
             .text_color(palette.text)
-            .on_key_down(cx.listener(Self::on_key_down))
+            .on_action(cx.listener(|this, _: &ScrollDown, window, cx| {
+                this.scroll(Scroll::LineDown, window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &ScrollUp, window, cx| {
+                    this.scroll(Scroll::LineUp, window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &ScrollLeft, window, cx| {
+                    this.scroll(Scroll::Left, window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &ScrollRight, window, cx| {
+                this.scroll(Scroll::Right, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ScrollPageDown, window, cx| {
+                this.scroll(Scroll::PageDown, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ScrollPageUp, window, cx| {
+                this.scroll(Scroll::PageUp, window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &ScrollToTop, window, cx| {
+                    this.scroll(Scroll::Top, window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &ScrollToBottom, window, cx| {
+                this.scroll(Scroll::Bottom, window, cx)
+            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
@@ -1326,6 +1331,41 @@ mod tests {
                     .and_then(|p| p.version.as_deref().map(str::to_owned)),
             )
         })
+    }
+
+    #[gpui_kit::test]
+    fn scrolls_with_the_keys_the_patchs_viewer_scrolls_with(cx: &mut TestAppContext) {
+        let _dir = init(cx);
+        let conflicts: String = (1..=100)
+            .map(|line| format!("line {line}\n{MARKERS}"))
+            .collect();
+        let opened = open_conflict(&conflicts, cx);
+        let viewer = viewer(&opened, cx);
+        cx.update_window(opened.window, |_, window, cx| {
+            window.focus(&viewer.read(cx).focus_handle(cx), cx)
+        })
+        .unwrap();
+        // How far down it's scrolled, once it's drawn: some scrolls are only done as it is.
+        let top = |cx: &mut TestAppContext| {
+            opened.has("conflicts", cx);
+            cx.update(|cx| -viewer.read(cx).scroll.0.borrow().base_handle.offset().y)
+        };
+        assert_eq!(top(cx), px(0.));
+
+        opened.press("end", cx);
+        let bottom = top(cx);
+        assert!(bottom > px(0.));
+        opened.press("up", cx);
+        assert!(top(cx) < bottom);
+        opened.press("home", cx);
+        assert_eq!(top(cx), px(0.));
+        opened.press("space", cx);
+        let page = top(cx);
+        assert!(page > px(0.));
+        opened.press("shift-space", cx);
+        assert_eq!(top(cx), px(0.));
+        opened.press("down", cx);
+        assert!(top(cx) > px(0.) && top(cx) < page);
     }
 
     #[gpui_kit::test]

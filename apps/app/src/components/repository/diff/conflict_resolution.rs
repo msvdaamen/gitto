@@ -12,9 +12,7 @@ use gitto_ui::git::conflicts::{ConflictKind, conflict_kind, describe_conflict};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{Disableable as _, Sizable as _, v_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{
-    AnyElement, App, Context, Entity, EventEmitter, KeyDownEvent, Subscription, Task, Window, div,
-};
+use gpui_kit::{AnyElement, App, Context, Entity, EventEmitter, Subscription, Task, Window, div};
 
 use super::conflict_sides::ConflictSides;
 use super::conflict_viewer::{
@@ -393,9 +391,10 @@ impl ConflictResolutionView {
     }
 
     /// Marks the file resolved, once it's ready; asks first if it has conflict markers left.
-    pub fn mark_resolved(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Whether that was for this file's resolution: its key, say, even while it's busy.
+    pub fn mark_resolved(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if !self.is_text() || self.is_busy() {
-            return;
+            return true;
         }
         let version = self.version();
         if self.is_ready() {
@@ -406,7 +405,7 @@ impl ConflictResolutionView {
                 },
                 cx,
             );
-            return;
+            return true;
         }
         let left = self.shown_progress().map_or(0, |shown| shown.left);
         let resolution = cx.entity().downgrade();
@@ -428,6 +427,7 @@ impl ConflictResolutionView {
             window,
             cx,
         );
+        true
     }
 
     /// Keeps `side` of `conflict` whole.
@@ -470,8 +470,8 @@ impl ConflictResolutionView {
         })
     }
 
-    /// Opens the next conflicted file, if there's one.
-    fn open_next(&mut self, cx: &mut Context<Self>) -> bool {
+    /// Opens the next conflicted file, if there's one; whether there was.
+    pub fn open_next(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(target) = self.file.next.clone() else {
             return false;
         };
@@ -483,7 +483,7 @@ impl ConflictResolutionView {
     }
 
     /// Steps to the next conflict, or the one before.
-    fn step(&mut self, forward: bool, cx: &mut Context<Self>) {
+    pub fn step(&mut self, forward: bool, cx: &mut Context<Self>) -> bool {
         if let Some(viewer) = &self.viewer {
             viewer.update(cx, |viewer, cx| {
                 if forward {
@@ -493,51 +493,30 @@ impl ConflictResolutionView {
                 }
             });
         }
+        true
     }
 
-    /// The conflicts' keys: `[` and `]`, `O`, `T` and `B`, `N`, and ⌘↵ (or Ctrl+Enter). Not while
-    /// the file's edited. Whether it took the key.
-    pub fn on_key(
+    /// Whether the conflicts' keys are its own now (see `viewer_actions`): `[` and `]`, `O`, `T`
+    /// and `B`, `N`, and ⌘↵ (or Ctrl+Enter). While the file's resolved here, but not while it's
+    /// edited by hand, when they're the editor's.
+    pub fn takes_keys(&self) -> bool {
+        self.file.active && !self.file.editing
+    }
+
+    /// Keeps `resolution` of the current conflict, if it can be kept now; whether it could.
+    pub fn keep_current(
         &mut self,
-        event: &KeyDownEvent,
+        resolution: Resolution,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self.file.active || self.file.editing {
+        if self.is_busy() || !self.is_text() {
             return false;
         }
-        let keystroke = &event.keystroke;
-        let modifiers = &keystroke.modifiers;
-        let key = keystroke.key.as_str();
-        if key == "enter" && (modifiers.platform || modifiers.control) {
-            self.mark_resolved(window, cx);
-            return true;
+        if let Some(viewer) = &self.viewer {
+            viewer.update(cx, |viewer, cx| viewer.resolve(resolution, window, cx));
         }
-        if modifiers.platform || modifiers.control || modifiers.alt {
-            return false;
-        }
-        let resolution = match key {
-            "o" => Some(Resolution::Ours),
-            "t" => Some(Resolution::Theirs),
-            "b" => Some(Resolution::Both),
-            _ => None,
-        };
-        match key {
-            "n" => self.open_next(cx),
-            "]" | "[" => {
-                self.step(key == "]", cx);
-                true
-            }
-            _ => match resolution {
-                Some(resolution) if !self.is_busy() && self.is_text() => {
-                    if let Some(viewer) = &self.viewer {
-                        viewer.update(cx, |viewer, cx| viewer.resolve(resolution, window, cx));
-                    }
-                    true
-                }
-                _ => false,
-            },
-        }
+        true
     }
 
     /// Whether the file can be edited by hand: its text, once it's on show as it is on disk.
@@ -581,14 +560,18 @@ impl ConflictResolutionView {
                     "Previous conflict ([)",
                 )
                 .disabled(left == 0 || editing)
-                .on_click(move |_, _, cx| previous.update(cx, |this, cx| this.step(false, cx)))
+                .on_click(move |_, _, cx| {
+                    previous.update(cx, |this, cx| this.step(false, cx));
+                })
                 .into_any_element(),
             );
             let next = this.clone();
             controls.push(
                 IconButton::new("next-conflict", IconName::ChevronDown, "Next conflict (])")
                     .disabled(left == 0 || editing)
-                    .on_click(move |_, _, cx| next.update(cx, |this, cx| this.step(true, cx)))
+                    .on_click(move |_, _, cx| {
+                        next.update(cx, |this, cx| this.step(true, cx));
+                    })
                     .into_any_element(),
             );
         }
@@ -606,7 +589,7 @@ impl ConflictResolutionView {
                             .label("Mark resolved")
                             .disabled(self.is_busy())
                             .on_click(move |_, window, cx| {
-                                mark.update(cx, |this, cx| this.mark_resolved(window, cx))
+                                mark.update(cx, |this, cx| this.mark_resolved(window, cx));
                             }),
                     )
                     .into_any_element(),
@@ -1028,6 +1011,31 @@ mod tests {
         });
         assert!(!opened.is_enabled("mark-resolved", cx));
         assert_ne!(left(&opened, cx).as_deref(), Some("No conflicts left"));
+    }
+
+    #[gpui_kit::test]
+    fn leaves_its_keys_to_the_editor_while_its_edited_by_hand(cx: &mut TestAppContext) {
+        let _dir = init(cx);
+        let opened = open_conflict(&conflicts(2), cx);
+        opened.click("edit-file", cx);
+        let edited = |cx: &mut TestAppContext| {
+            opened.read(cx, |view, cx| {
+                let viewer = view.resolution.read(cx).viewer()?;
+                let editor = viewer.read(cx).whole_file()?;
+                Some(editor.read(cx).value().to_string())
+            })
+        };
+        assert_eq!(edited(cx), Some(conflicts(2)));
+
+        // Typed, rather than keeping ours or opening the next conflicted file.
+        opened.press("o", cx);
+        opened.press("n", cx);
+        assert!(
+            edited(cx)
+                .is_some_and(|text| text.contains("on") && text.len() == conflicts(2).len() + 2)
+        );
+        assert_eq!(opened.events(), []);
+        assert_eq!(opened.resolve.calls(), []);
     }
 
     #[gpui_kit::test]

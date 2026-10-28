@@ -153,9 +153,9 @@ pub(super) fn code_char_width(font_size: Pixels, window: &mut Window, cx: &App) 
 /// Rows kept in sight above and below a line the view scrolls to, as moving through a list does.
 const REVEAL_MARGIN_ROWS: f32 = 3.;
 
-/// Which way the keyboard scrolls the view.
+/// Which way the keyboard scrolls a viewer (see `viewer_actions`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Scroll {
+pub(super) enum Scroll {
     LineDown,
     LineUp,
     Left,
@@ -199,13 +199,39 @@ impl ListScroll {
 }
 
 /// Scrolls the list `scroll` tracks to `left` and `top`, as they are: within its contents.
-fn scroll_list_to(scroll: &UniformListScrollHandle, left: Pixels, top: Pixels) {
+pub(super) fn scroll_list_to(scroll: &UniformListScrollHandle, left: Pixels, top: Pixels) {
     scroll.0.borrow().base_handle.set_offset(point(-left, -top));
+}
+
+/// Scrolls the list `scroll` tracks, of `rows` rows `row_height` high, as a browser's scroll
+/// container does with the keyboard: a line is two rows, a page nine tenths of the view, and a
+/// column six characters `char_width` wide (a guess, before the font's measured).
+pub(super) fn scroll_list(
+    scroll: &UniformListScrollHandle,
+    rows: usize,
+    how: Scroll,
+    row_height: Pixels,
+    char_width: Option<Pixels>,
+) {
+    let page = (ListScroll::of(scroll).height() / row_height).max(1.) * 0.9 * row_height;
+    let line = row_height * 2.;
+    let column = char_width.unwrap_or(px(8.)) * 6.;
+    let (down, right) = match how {
+        Scroll::LineDown => (line, px(0.)),
+        Scroll::LineUp => (-line, px(0.)),
+        Scroll::Right => (px(0.), column),
+        Scroll::Left => (px(0.), -column),
+        Scroll::PageDown => (page, px(0.)),
+        Scroll::PageUp => (-page, px(0.)),
+        Scroll::Top => return scroll.scroll_to_item(0, ScrollStrategy::Top),
+        Scroll::Bottom => return scroll.scroll_to_bottom(),
+    };
+    scroll_list_by(scroll, rows, down, right, row_height);
 }
 
 /// Scrolls the list `scroll` tracks, of `rows` rows `row_height` high, by `down` pixels (up, if
 /// negative) and `across` right, within its contents.
-pub(super) fn scroll_list_by(
+fn scroll_list_by(
     scroll: &UniformListScrollHandle,
     rows: usize,
     down: Pixels,
@@ -839,35 +865,15 @@ impl PatchViewer {
     }
 
     /// Scrolls, as a browser's scroll container does with the keyboard.
-    fn scroll(&mut self, scroll: Scroll, window: &mut Window, cx: &mut Context<Self>) {
+    fn scroll(&mut self, how: Scroll, window: &mut Window, cx: &mut Context<Self>) {
         let row_height = rems(ROW_REMS).to_pixels(window.rem_size());
-        let page = self.viewport(row_height).rows.max(1.) * 0.9 * row_height;
-        let line = row_height * 2.;
-        let column = self.char_width.map_or(px(8.), |(_, width)| width) * 6.;
-        let (down, right) = match scroll {
-            Scroll::LineDown => (line, px(0.)),
-            Scroll::LineUp => (-line, px(0.)),
-            Scroll::Right => (px(0.), column),
-            Scroll::Left => (px(0.), -column),
-            Scroll::PageDown => (page, px(0.)),
-            Scroll::PageUp => (-page, px(0.)),
-            Scroll::Top => {
-                self.scroll.scroll_to_item(0, ScrollStrategy::Top);
-                cx.notify();
-                return;
-            }
-            Scroll::Bottom => {
-                self.scroll.scroll_to_bottom();
-                cx.notify();
-                return;
-            }
-        };
-        scroll_list_by(
+        let char_width = self.char_width.map(|(_, width)| width);
+        scroll_list(
             &self.scroll,
             self.layout.rows.len(),
-            down,
-            right,
+            how,
             row_height,
+            char_width,
         );
         cx.notify();
     }
