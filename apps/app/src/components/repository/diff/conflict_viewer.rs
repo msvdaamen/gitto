@@ -99,6 +99,17 @@ struct Shown {
     widest: usize,
 }
 
+/// A file's text as `show_text` read it, to put on show: its conflicts, or why they can't be read.
+struct ReadResult {
+    file_key: String,
+    contents: Arc<str>,
+    /// Its version on disk; `None` while that isn't known.
+    version: Option<FileVersion>,
+    read: ReadConflicts,
+    /// The widest line of its conflicts' sides, in characters as drawn.
+    widest: usize,
+}
+
 /// A conflict to resolve, by its index in the text that was on show when it was asked.
 struct Request {
     state: Arc<ConflictState>,
@@ -411,23 +422,26 @@ impl ConflictViewer {
                 };
                 waiting.await;
             }
-            let _ = this.update_in(cx, |this, window, cx| {
-                this.put_on_show(file_key, contents, version, read, widest, window, cx)
-            });
+            let result = ReadResult {
+                file_key,
+                contents,
+                version,
+                read,
+                widest,
+            };
+            let _ = this.update_in(cx, |this, window, cx| this.put_on_show(result, window, cx));
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn put_on_show(
-        &mut self,
-        file_key: String,
-        contents: Arc<str>,
-        version: Option<FileVersion>,
-        read: ReadConflicts,
-        widest: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    /// Puts the text `show_text` read on show.
+    fn put_on_show(&mut self, result: ReadResult, window: &mut Window, cx: &mut Context<Self>) {
+        let ReadResult {
+            file_key,
+            contents,
+            version,
+            read,
+            widest,
+        } = result;
         let other = self
             .shown
             .as_ref()
