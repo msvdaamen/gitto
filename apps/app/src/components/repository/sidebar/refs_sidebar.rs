@@ -8,6 +8,7 @@ use gpui_kit::{Context, Entity, SharedString, Window, div};
 
 use super::agent_placeholder::AgentPlaceholder;
 use super::ref_list::RefList;
+use crate::components::repository::branch_menu::BranchMenuProvider;
 use crate::components::ui::{Icon, IconName, SegmentedControl};
 use crate::theme::{PaletteExt as _, base_px};
 use crate::views::repository::MEDIUM;
@@ -54,9 +55,15 @@ pub struct RefsSidebar {
 }
 
 impl RefsSidebar {
-    pub fn new(repository_id: RepositoryId, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    /// The sidebar of the repository `repository_id`, whose branches' menus are `branch_menu`'s.
+    pub fn new(
+        repository_id: RepositoryId,
+        branch_menu: Entity<BranchMenuProvider>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         RefsSidebar {
-            list: cx.new(|cx| RefList::new(repository_id, window, cx)),
+            list: cx.new(|cx| RefList::new(repository_id, branch_menu, window, cx)),
             mode: SidebarMode::List,
             open: true,
         }
@@ -205,7 +212,8 @@ mod tests {
 
     use super::*;
     use crate::components::repository::test_support::{
-        repository_id, set_refs, set_stashes, set_status, set_worktrees, setup, status,
+        repository_id, set_operation, set_refs, set_remotes, set_stashes, set_status,
+        set_worktrees, setup, status,
     };
 
     fn local(name: &str, current: bool) -> Ref {
@@ -231,8 +239,10 @@ mod tests {
         set_refs(&id, vec![local("main", true), local("feature", false)], cx);
         set_stashes(&id, vec![], cx);
         set_worktrees(&id, vec![], cx);
-        let (window, sidebar) =
-            crate::test_support::open(cx, move |window, cx| RefsSidebar::new(id, window, cx));
+        let (window, sidebar) = crate::test_support::open(cx, move |window, cx| {
+            let branch_menu = cx.new(|cx| BranchMenuProvider::new(id.clone(), window, cx));
+            RefsSidebar::new(id, branch_menu, window, cx)
+        });
         (dir, window, sidebar)
     }
 
@@ -256,6 +266,9 @@ mod tests {
         assert!(has(window, "section-local", cx));
         assert!(has(window, "branch-refs/heads/feature", cx));
         assert!(!has(window, "rail-local", cx));
+        // What the branch menus show.
+        set_operation(&id, None, cx);
+        set_remotes(&id, &[], cx);
         cx.update_window(window, |_, window, _| {
             assert!(window.try_find_by_label("Configure sidebar").is_some());
         })

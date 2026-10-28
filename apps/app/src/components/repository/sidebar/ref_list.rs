@@ -18,8 +18,8 @@ use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::{WindowExt as _, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, Context, ScrollStrategy, SharedString, Subscription, UniformListScrollHandle,
-    WeakEntity, Window, div,
+    AnyElement, App, Context, Entity, ScrollStrategy, SharedString, Subscription,
+    UniformListScrollHandle, WeakEntity, Window, div,
 };
 
 use super::drop_stash_dialog::open_drop_stash_dialog;
@@ -28,7 +28,7 @@ use super::sidebar_row::{RowTag, SidebarFolder, SidebarRow};
 use super::sidebar_section::{RenderRows, SidebarSection};
 use super::stash_menu::StashMenu;
 use super::worktree_menu::WorktreeMenu;
-use crate::components::repository::branch_menu::{BranchMenuProvider, branch_menu};
+use crate::components::repository::branch_menu::BranchMenuProvider;
 use crate::components::repository::row_menu::RowMenu;
 use crate::components::ui::{EmptyState, IconName, LoadingState};
 use crate::data::branch::{BranchChange, switch_branch_operation};
@@ -225,6 +225,7 @@ struct OtherWorktrees {
 /// act on.
 struct RowContext {
     list: WeakEntity<RefList>,
+    branch_menu: Entity<BranchMenuProvider>,
     /// The worktrees other than the one on show, whose files are these.
     other_worktrees: Rc<[Worktree]>,
     branch_menu_for: Option<SharedString>,
@@ -236,10 +237,11 @@ struct RowContext {
 /// The sidebar's sections: local branches, remotes, tags, stashes, worktrees (see
 /// `SidebarSection`). Double-clicking a branch switches to it; for a remote one, to the local
 /// branch tracking it. Right-clicking one opens a menu of what can be done with it, like creating
-/// a branch from it (`branch_menu`); right-clicking a stash, one to pop or delete it. A branch
-/// checked out in another worktree says so, and double-clicking it opens that worktree instead, as
-/// git won't switch to it here. Double-clicking a worktree opens it, as a repository of its own;
-/// right-clicking one opens a menu to open or remove it.
+/// a branch from it (the `BranchMenuProvider` it's given, which the page shares with the
+/// history); right-clicking a stash, one to pop or delete it. A branch checked out in another
+/// worktree says so, and double-clicking it opens that worktree instead, as git won't switch to it
+/// here. Double-clicking a worktree opens it, as a repository of its own; right-clicking one opens
+/// a menu to open or remove it.
 ///
 /// An entity: it shows the refs, the stashes and the worktrees of the repository it's given
 /// ([`set_repository`](Self::set_repository)), keeping what's on show while they reload, so the
@@ -257,6 +259,7 @@ pub struct RefList {
     /// Counts the changes to `collapsed`, so the trees are made again.
     collapsed_revision: u64,
     actions: SidebarActions,
+    branch_menu: Entity<BranchMenuProvider>,
     /// The stash whose menu is open, by its SHA.
     stash_menu: RowMenu,
     /// The worktree whose menu is open, by its path.
@@ -269,26 +272,37 @@ pub struct RefList {
 }
 
 impl RefList {
-    pub fn new(repository_id: RepositoryId, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        RefList::with_actions(repository_id, SidebarActions::new(), window, cx)
+    /// The list of the repository `repository_id`, whose branches' menus are `branch_menu`'s.
+    pub fn new(
+        repository_id: RepositoryId,
+        branch_menu: Entity<BranchMenuProvider>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        RefList::with_actions(
+            repository_id,
+            branch_menu,
+            SidebarActions::new(),
+            window,
+            cx,
+        )
     }
 
     /// With `actions` doing the work: a test's.
     pub(crate) fn with_actions(
         repository_id: RepositoryId,
+        branch_menu: Entity<BranchMenuProvider>,
         actions: SidebarActions,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let clock = Clock::global(cx);
-        let mut subscriptions = vec![
+        let subscriptions = vec![
             cx.observe_global::<Operations>(|_, cx| cx.notify()),
             cx.observe(&clock, |_, _, cx| cx.notify()),
+            // Which branch's menu is open is the branch menus'.
+            cx.observe(&branch_menu, |_, _, cx| cx.notify()),
         ];
-        // Which branch's menu is open is the branch menus' (see `branch_menu`).
-        if let Some(provider) = BranchMenuProvider::current(cx) {
-            subscriptions.push(cx.observe(&provider, |_, _, cx| cx.notify()));
-        }
         RefList {
             refs: refs_query(&repository_id, cx),
             stashes: stashes_query(&repository_id, cx),
@@ -298,6 +312,7 @@ impl RefList {
             collapsed_revision: 0,
             repository_id,
             actions,
+            branch_menu,
             stash_menu: RowMenu::default(),
             worktree_menu: RowMenu::default(),
             asking: None,
@@ -430,16 +445,9 @@ impl RefList {
                     .run(&self.repository_id, reference.to_owned(), cx);
             }
             Some(worktree) if can_open_worktree(worktree) => {
-                match BranchMenuProvider::current(cx) {
-                    Some(provider) => {
-                        let path = worktree.path.clone();
-                        provider.update(cx, |provider, cx| provider.open_worktree(path, cx));
-                    }
-                    None => self
-                        .actions
-                        .worktree
-                        .open(&self.repository_id, worktree, cx),
-                }
+                let path = worktree.path.clone();
+                self.branch_menu
+                    .update(cx, |provider, cx| provider.open_worktree(path, cx));
             }
             Some(_) => {}
         }
@@ -631,8 +639,8 @@ impl RefList {
         Rc::new(RowContext {
             list: cx.entity().downgrade(),
             other_worktrees: self.other_worktrees(),
-            branch_menu_for: BranchMenuProvider::current(cx)
-                .and_then(|provider| provider.read(cx).open_for().cloned()),
+            branch_menu: self.branch_menu.clone(),
+            branch_menu_for: self.branch_menu.read(cx).open_for().cloned(),
             stash_menu_for: self.stash_menu.open_for().cloned(),
             worktree_menu_for: self.worktree_menu.open_for().cloned(),
             now: gitto_ui::hooks::relative_time::now_ms(),
@@ -713,8 +721,8 @@ fn tree_row(line: &TreeLine, rows: &RowContext) -> AnyElement {
     }
 }
 
-/// A local or remote branch's line in its tree, with its menu (see `branch_menu`). One checked
-/// out in another worktree has a folder after its name, and says which in its tooltip.
+/// A local or remote branch's line in its tree, with its menu (see `BranchMenuProvider`). One
+/// checked out in another worktree has a folder after its name, and says which in its tooltip.
 fn branch_row(branch: &Ref, label: &SharedString, depth: usize, rows: &RowContext) -> AnyElement {
     let full_name = SharedString::from(branch.full_name.clone());
     let worktree = worktree_on(Some(&rows.other_worktrees), &branch.full_name);
@@ -725,6 +733,7 @@ fn branch_row(branch: &Ref, label: &SharedString, depth: usize, rows: &RowContex
     let list = rows.list.clone();
     let activated = full_name.clone();
     let menu_of = full_name.clone();
+    let provider = rows.branch_menu.clone();
     SidebarRow::new(
         SharedString::from(format!("branch-{full_name}")),
         IconName::GitBranch,
@@ -739,7 +748,7 @@ fn branch_row(branch: &Ref, label: &SharedString, depth: usize, rows: &RowContex
     .on_double_click(move |_, cx| {
         let _ = list.update(cx, |list, cx| list.activate_branch(&activated, cx));
     })
-    .menu(move |menu, window, cx| branch_menu(menu, menu_of.clone(), window, cx))
+    .menu(move |menu, _, cx| BranchMenuProvider::build_menu(&provider, menu_of.clone(), menu, cx))
     .into_any_element()
 }
 
@@ -1263,8 +1272,15 @@ mod tests {
             let provider =
                 cx.new(|cx| BranchMenuProvider::with(shown.clone(), actions, create, add, cx));
             let toolbar = cx.new(|cx| RepositoryToolbar::new(shown.clone(), window, cx));
-            let list = cx
-                .new(|cx| RefList::with_actions(shown.clone(), made.sidebar_actions(), window, cx));
+            let list = cx.new(|cx| {
+                RefList::with_actions(
+                    shown.clone(),
+                    provider.clone(),
+                    made.sidebar_actions(),
+                    window,
+                    cx,
+                )
+            });
             Host {
                 toolbar,
                 provider,
@@ -1797,6 +1813,24 @@ mod tests {
         f.press("escape", cx);
         assert!(!f.is_menu_open(cx));
         assert!(f.open_menu("folder-refs/remotes/origin", cx).is_empty());
+    }
+
+    #[gpui_kit::test]
+    fn opens_the_menus_of_the_branch_menus_its_given_rather_than_the_last_made(
+        cx: &mut TestAppContext,
+    ) {
+        let f = render(cx);
+        // Another page's, made after this one's.
+        let other = f.other.clone();
+        let _later = f.in_window(cx, |window, cx| {
+            cx.new(|cx| BranchMenuProvider::new(other, window, cx))
+        });
+        assert!(f.open_menu(FEATURE, cx).contains(&"Create branch…".to_owned()));
+        let provider = f.provider(cx);
+        assert_eq!(
+            provider.read_with(cx, |provider, _| provider.open_for().cloned()),
+            Some(SharedString::from("refs/heads/feature"))
+        );
     }
 
     #[gpui_kit::test]
