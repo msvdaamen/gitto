@@ -5,13 +5,15 @@ use gitto_git::input::RepositoryId;
 use gitto_ui::git::message::{CommitMessage, edit_message, join_message, split_message};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
-use gpui_kit::component::input::{Enter, InputEvent, InputState, TextareaState};
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{Context, Entity, FontWeight, SharedString, Subscription, Window, div, rems};
 
 use super::details_data::DetailsData;
-use crate::components::ui::{FormField, Icon, IconName};
+use crate::components::repository::commit_message::{
+    CommitMessageEditor, CommitMessageEvent, push_warning,
+};
+use crate::components::ui::{Icon, IconName};
 use crate::data::commit::NewCommit;
 use crate::data::{Mutation, Query, QueryError};
 use crate::theme::{PaletteExt as _, base_px};
@@ -44,13 +46,10 @@ pub struct CommitForm {
     /// The last commit's message and where it was pushed, loaded while amending it.
     last_message: Query<String>,
     pushed_to: Query<Option<String>>,
-    summary: Entity<InputState>,
-    /// The summary's placeholder, as last set.
-    placeholder: &'static str,
-    /// The message the fields were last given, or typed in them (see `sync_fields`).
-    synced: CommitMessage,
-    description: Entity<TextareaState>,
+    editor: Entity<CommitMessageEditor>,
     _subscriptions: Vec<Subscription>,
+    /// Shows the last commit's message once it's loaded (see [`show`](Self::show)).
+    _loading: Subscription,
 }
 
 impl CommitForm {
@@ -61,35 +60,19 @@ impl CommitForm {
         cx: &mut Context<Self>,
     ) -> Self {
         let commit = data.create_commit(cx);
-        let summary =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Summary of your changes"));
-        let description = cx.new(|cx| {
-            TextareaState::new(window, cx)
-                .placeholder("Add more context…")
-                .rows(3)
-        });
+        let editor = cx.new(|cx| CommitMessageEditor::new(3, window, cx));
         let subscriptions = vec![
             cx.observe(&commit, |_, _, cx| cx.notify()),
-            cx.subscribe(&summary, |this, input, event, cx| match event {
-                InputEvent::Change => {
-                    let summary = input.read(cx).value().to_string();
-                    this.edit(Some(summary), None, cx);
-                }
-                // Enter in the summary commits, as a form's submit does.
-                InputEvent::PressEnter { .. } => this.submit(cx),
-                _ => {}
-            }),
-            cx.subscribe(&description, |this, input, event, cx| {
-                if let InputEvent::Change = event {
-                    let description = input.read(cx).value().to_string();
-                    this.edit(None, Some(description), cx);
-                }
+            cx.subscribe_in(&editor, window, |this, _, event, window, cx| match event {
+                CommitMessageEvent::Edited(message) => this.edit(message.clone(), cx),
+                CommitMessageEvent::Submit => this.submit(window, cx),
             }),
         ];
         let last_message = Query::new(
             data.commit_message(&repository_id, "", cx).enabled(false),
             cx,
         );
+        let loading = CommitForm::observe_loading(&last_message, window, cx);
         let pushed_to = Query::new(data.pushed_to(&repository_id, "", cx).enabled(false), cx);
         CommitForm {
             repository_id,
@@ -102,12 +85,22 @@ impl CommitForm {
             edits: None,
             last_message,
             pushed_to,
-            summary,
-            placeholder: "Summary of your changes",
-            synced: CommitMessage::default(),
-            description,
+            editor,
             _subscriptions: subscriptions,
+            _loading: loading,
         }
+    }
+
+    /// Shows `last_message` in the fields once it's loaded: after the query has seen it, as it
+    /// was observed first.
+    fn observe_loading(
+        last_message: &Query<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Subscription {
+        cx.observe_in(last_message.entry(), window, |this, _, window, cx| {
+            this.show(window, cx)
+        })
     }
 
     /// How many files are staged, and HEAD's commit (`None` before the first), in the repository
@@ -118,6 +111,7 @@ impl CommitForm {
         repository_id: RepositoryId,
         staged_count: usize,
         last_commit: Option<String>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let moved = self.repository_id != repository_id || self.last_commit != last_commit;
@@ -135,11 +129,13 @@ impl CommitForm {
                 .commit_message(&self.repository_id, &sha, cx)
                 .enabled(false);
             self.last_message.set_options(message, cx);
+            self._loading = CommitForm::observe_loading(&self.last_message, window, cx);
             let pushed_to = self
                 .data
                 .pushed_to(&self.repository_id, &sha, cx)
                 .enabled(false);
             self.pushed_to.set_options(pushed_to, cx);
+            self.show(window, cx);
         }
         cx.notify();
     }
@@ -192,21 +188,8 @@ impl CommitForm {
         }
     }
 
-    fn edit(
-        &mut self,
-        summary: Option<String>,
-        description: Option<String>,
-        cx: &mut Context<Self>,
-    ) {
-        let mut message = self.message();
-        if let Some(summary) = summary {
-            message.summary = summary;
-        }
-        if let Some(description) = description {
-            message.description = description;
-        }
-        // The fields have it already, as it was typed there.
-        self.synced = message.clone();
+    /// The message on show was typed as `message`.
+    fn edit(&mut self, message: CommitMessage, cx: &mut Context<Self>) {
         if message == self.message() {
             return;
         }
@@ -218,12 +201,13 @@ impl CommitForm {
     }
 
     /// Turns amending on or off; either way, the last commit's failure is forgotten.
-    pub fn toggle_amend(&mut self, checked: bool, cx: &mut Context<Self>) {
+    pub fn toggle_amend(&mut self, checked: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.amending = if checked { self.head() } else { None };
         let amend = self.is_amending();
         self.last_message.set_enabled(amend, cx);
         self.pushed_to.set_enabled(amend, cx);
         self.commit.update(cx, |commit, cx| commit.reset(cx));
+        self.show(window, cx);
         cx.notify();
     }
 
@@ -256,7 +240,7 @@ impl CommitForm {
     }
 
     /// Commits, or amends, if it can.
-    pub fn submit(&mut self, cx: &mut Context<Self>) {
+    pub fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.can_commit(cx) {
             return;
         }
@@ -275,15 +259,16 @@ impl CommitForm {
         let done = self
             .commit
             .update(cx, |commit, cx| commit.mutate(input, cx));
-        cx.spawn(async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
             if let Ok(Ok(())) = done.await {
-                let _ = this.update(cx, |this, cx| {
+                let _ = this.update_in(cx, |this, window, cx| {
                     if amended.is_none() {
                         this.draft = CommitMessage::default();
                     } else {
                         this.amending = None;
                         this.edits = None;
                     }
+                    this.show(window, cx);
                     cx.notify();
                 });
             }
@@ -319,54 +304,24 @@ impl CommitForm {
         if !self.is_amending() {
             return None;
         }
-        if self.pushed_to.is_error() {
-            return Some("Couldn't check whether the last commit has been pushed; if it has, amending it means force-pushing.".to_owned());
-        }
-        let branch = self
-            .pushed_to
-            .data()
-            .flatten()
-            .filter(|_| self.pushed_to.is_success())?;
-        Some(format!(
-            "The last commit is already on {branch}; amending it means force-pushing."
-        ))
+        push_warning(&self.pushed_to, "the last commit", "amending it")
     }
 
     /// Puts the message on show in the fields once it changed other than by typing (amending
-    /// turned on, the last message loaded, a commit made): only then, as what's typed reaches the
-    /// message after the field has it, through its events, and a render can come in between. And
-    /// the summary's placeholder, which says when the last commit's message is loading.
-    fn sync_fields(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// turned on or off, the last message loaded, a commit made, HEAD moved on), and says in the
+    /// summary's placeholder when the last commit's message is loading.
+    fn show(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let message = self.message();
-        let changed = message != self.synced;
-        self.synced = message.clone();
         let loading = self.is_amending() && self.last_message.is_pending();
-        let placeholder = if loading {
-            "Loading the last commit…"
-        } else {
-            "Summary of your changes"
-        };
-        let set_placeholder = self.placeholder != placeholder;
-        self.placeholder = placeholder;
-        self.summary.update(cx, |input, cx| {
-            if changed && input.value().as_ref() != message.summary {
-                input.set_value(message.summary.clone(), window, cx);
-            }
-            if set_placeholder {
-                input.set_placeholder(placeholder, window, cx);
-            }
-        });
-        self.description.update(cx, |input, cx| {
-            if changed && input.value().as_ref() != message.description {
-                input.set_value(message.description.clone(), window, cx);
-            }
+        self.editor.update(cx, |editor, cx| {
+            editor.set_message(&message, false, window, cx);
+            editor.set_loading(loading.then_some("Loading the last commit…"), window, cx);
         });
     }
 }
 
 impl Render for CommitForm {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.sync_fields(window, cx);
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = *cx.palette();
         let amend = self.is_amending();
         let locked = self.is_locked(cx);
@@ -380,28 +335,15 @@ impl Render for CommitForm {
             .id("commit-form")
             .flex_none()
             .p(base_px(14.))
-            .capture_action(cx.listener(|this, action: &Enter, _, cx| {
-                // Cmd or Ctrl+Enter commits from either field; else Enter in the description
-                // would add a line too.
-                if action.secondary {
-                    cx.stop_propagation();
-                    this.submit(cx);
-                }
-            }))
-            .child(FormField::input("Commit message", &self.summary).readonly(locked))
-            .child(
-                FormField::textarea("Description", &self.description)
-                    .hint("optional")
-                    .readonly(locked),
-            )
+            .child(CommitMessageEditor::fields(&self.editor, locked, cx))
             .child(
                 div().mb_2p5().child(
                     Checkbox::new("amend")
                         .label("Amend last commit")
                         .checked(amend)
                         .disabled(self.last_commit.is_none() || pending)
-                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                            this.toggle_amend(*checked, cx)
+                        .on_click(cx.listener(|this, checked: &bool, window, cx| {
+                            this.toggle_amend(*checked, window, cx)
                         })),
                 ),
             )
@@ -430,7 +372,7 @@ impl Render for CommitForm {
                     .accessibility_label(SharedString::from(format!("{label} {SHORTCUT}")))
                     .font_weight(FontWeight::BOLD)
                     .disabled(!can_commit)
-                    .on_click(cx.listener(|this, _, _, cx| this.submit(cx)))
+                    .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx)))
                     // The shortcut, quietly, in the button's text color (TS's borderless `Kbd`).
                     .child(
                         div()
@@ -481,7 +423,7 @@ mod tests {
         let last_commit = last_commit.map(str::to_owned);
         let (dir, window, form) = open(cx, move |window, cx| {
             let mut form = CommitForm::new(repository_id(), data, window, cx);
-            form.set_head(repository_id(), staged, last_commit, cx);
+            form.set_head(repository_id(), staged, last_commit, window, cx);
             form
         });
         Form {
@@ -501,7 +443,9 @@ mod tests {
 
         /// Types `text` in the summary, at its end; `replace` first selects what's there.
         fn type_summary(&self, text: &str, replace: bool, cx: &mut TestAppContext) {
-            let summary = self.form.read_with(cx, |form, _| form.summary.clone());
+            let summary = self
+                .form
+                .read_with(cx, |form, cx| form.editor.read(cx).summary().clone());
             cx.update_window(self.window, |_, window, cx| {
                 summary.update(cx, |input, cx| input.focus(window, cx));
                 window.render_frame(cx);
@@ -513,7 +457,9 @@ mod tests {
         }
 
         fn type_description(&self, text: &str, cx: &mut TestAppContext) {
-            let description = self.form.read_with(cx, |form, _| form.description.clone());
+            let description = self
+                .form
+                .read_with(cx, |form, cx| form.editor.read(cx).description().clone());
             cx.update_window(self.window, |_, window, cx| {
                 description.update(cx, |input, cx| input.focus(window, cx));
                 window.render_frame(cx);
@@ -532,8 +478,12 @@ mod tests {
             cx: &mut TestAppContext,
         ) {
             let sha = sha.map(str::to_owned);
-            self.form
-                .update(cx, |form, cx| form.set_head(repository_id, staged, sha, cx));
+            cx.update_window(self.window, |_, window, cx| {
+                self.form.update(cx, |form, cx| {
+                    form.set_head(repository_id, staged, sha, window, cx)
+                })
+            })
+            .unwrap();
             cx.run_until_parked();
         }
 
@@ -541,17 +491,19 @@ mod tests {
         fn fields(&self, cx: &mut TestAppContext) -> (String, String) {
             self.render(cx);
             self.form.read_with(cx, |form, cx| {
+                let editor = form.editor.read(cx);
                 (
-                    form.summary.read(cx).value().to_string(),
-                    form.description.read(cx).value().to_string(),
+                    editor.summary().read(cx).value().to_string(),
+                    editor.description().read(cx).value().to_string(),
                 )
             })
         }
 
         fn is_readonly(&self, cx: &mut TestAppContext) -> bool {
             self.render(cx);
-            self.form
-                .read_with(cx, |form, cx| !form.summary.read(cx).is_editable())
+            self.form.read_with(cx, |form, cx| {
+                !form.editor.read(cx).summary().read(cx).is_editable()
+            })
         }
 
         fn is_amend_checked(&self, cx: &mut TestAppContext) -> bool {
@@ -581,6 +533,11 @@ mod tests {
         fn render(&self, cx: &mut TestAppContext) {
             cx.update_window(self.window, |_, window, cx| window.render_frame(cx))
                 .unwrap();
+        }
+
+        fn placeholder(&self, cx: &mut TestAppContext) -> &'static str {
+            self.form
+                .read_with(cx, |form, cx| form.editor.read(cx).placeholder())
         }
 
         fn committed(&self) -> Vec<NewCommit> {
@@ -649,10 +606,7 @@ mod tests {
         let answer = form.fakes.messages.later();
         form.click("amend", cx);
         assert!(form.is_readonly(cx));
-        assert_eq!(
-            form.form.read_with(cx, |form, _| form.placeholder),
-            "Loading the last commit…"
-        );
+        assert_eq!(form.placeholder(cx), "Loading the last commit…");
 
         answer.send(Ok("Loaded".into())).unwrap();
         cx.run_until_parked();
@@ -760,10 +714,7 @@ mod tests {
         let error = form.form.read_with(cx, |form, cx| form.error(cx));
         assert_eq!(error.unwrap().message(), "log failed");
         assert!(form.is_readonly(cx));
-        assert_eq!(
-            form.form.read_with(cx, |form, _| form.placeholder),
-            "Summary of your changes"
-        );
+        assert_eq!(form.placeholder(cx), "Summary of your changes");
 
         form.click("amend", cx);
         assert!(!form.is_readonly(cx));

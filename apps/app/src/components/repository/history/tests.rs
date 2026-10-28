@@ -979,6 +979,25 @@ fn keeps_the_rewritten_commit_selected_rather_than_the_uncommitted_changes(
 }
 
 #[gpui_kit::test]
+fn saves_the_edited_message_with_the_shortcut(cx: &mut TestAppContext) {
+    let history = render(cx, two_commits(0));
+    set_message(&history, "e5", "Commit e5\n\nWhy it was made\n", None, cx);
+    *history.reword.borrow_mut() = Some(Ok(reworded_to_f6(0)));
+
+    history.edit_message_of("e5", cx);
+    history.type_text("!", cx);
+    history.press("secondary-enter", cx);
+    assert_eq!(
+        *history.calls.reworded.borrow(),
+        [Reword {
+            sha: "e5".into(),
+            message: "Commit e5!\n\nWhy it was made\n".into(),
+        }]
+    );
+    assert!(!history.has_dialog(cx));
+}
+
+#[gpui_kit::test]
 fn says_when_the_commit_is_pushed_already(cx: &mut TestAppContext) {
     let history = render(cx, two_commits(0));
     set_message(&history, "e5", "Commit e5\n", Some("origin/main"), cx);
