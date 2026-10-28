@@ -690,7 +690,7 @@ impl From<io::Error> for Error {
 }
 
 /// The most specific error for a command that exited with `exit_code`, going by what git printed.
-pub fn command_error(
+pub(crate) fn command_error(
     cwd: &str,
     args: &[String],
     exit_code: Option<i32>,
@@ -771,7 +771,7 @@ fn megabytes(bytes: u64) -> f64 {
 
 /// `value` with `digits` decimals, rounding halves up as JS's `toFixed` does (Rust's formatting
 /// rounds them to even).
-pub fn to_fixed(value: f64, digits: i32) -> String {
+pub(crate) fn to_fixed(value: f64, digits: i32) -> String {
     let scale = 10f64.powi(digits);
     let rounded = (value * scale).round() / scale;
     format!("{rounded:.prec$}", prec = digits.max(0) as usize)

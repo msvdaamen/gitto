@@ -102,7 +102,7 @@ impl RunOptions {
 }
 
 /// Settings that keep git's output stable and machine-readable, whatever the user's config says.
-pub const CONFIG: &[&str] = &[
+pub(crate) const CONFIG: &[&str] = &[
     "-c",
     "core.quotepath=false",
     "-c",
@@ -117,7 +117,7 @@ pub const CONFIG: &[&str] = &[
 ];
 
 /// The environment git runs with, over the process's own.
-pub const ENV: &[(&str, &str)] = &[
+pub(crate) const ENV: &[(&str, &str)] = &[
     // Parse-stable, English output.
     ("LC_ALL", "C"),
     // Never block on a tty prompt; there's no terminal to answer it.
@@ -154,7 +154,7 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// like refreshing the index: futures only run while polled, so one that's only started and
 /// dropped wouldn't run at all. On smol's global executor, so it doesn't matter which executor
 /// (GPUI's, say) the caller runs on.
-pub fn spawn_detached(future: impl Future<Output = ()> + Send + 'static) {
+pub(crate) fn spawn_detached(future: impl Future<Output = ()> + Send + 'static) {
     smol::spawn(future).detach();
 }
 
@@ -242,7 +242,7 @@ impl Drop for Group {
 /// Runs `git` in `cwd` and resolves to its stdout, decoded as UTF-8 (lossily); fails with a
 /// `GitError` (of the most specific kind, see `command_error`) on a non-zero exit. See
 /// [`run_git_bytes`].
-pub fn run_git<I, S>(
+pub(crate) fn run_git<I, S>(
     cwd: impl AsRef<Path>,
     args: I,
     options: RunOptions,
@@ -268,7 +268,7 @@ where
 /// terminal to keep away from.
 ///
 /// The arguments are taken when it's called, and git started when the future is first polled.
-pub fn run_git_bytes<I, S>(
+pub(crate) fn run_git_bytes<I, S>(
     cwd: impl AsRef<Path>,
     args: I,
     options: RunOptions,

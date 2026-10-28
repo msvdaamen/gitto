@@ -12,12 +12,12 @@ static TRACING: LazyLock<bool> =
     LazyLock::new(|| std::env::var_os("GITTO_TRACE").is_some_and(|value| !value.is_empty()));
 
 /// Whether tracing is on: work that's only done for a trace can be skipped otherwise.
-pub fn tracing() -> bool {
+pub(crate) fn tracing() -> bool {
     *TRACING
 }
 
 /// Logs `message` when tracing; pass `format_args!(..)` to format it only then.
-pub fn trace(message: impl Display) {
+pub(crate) fn trace(message: impl Display) {
     if tracing() {
         log::debug!(target: TARGET, "{message}");
     }
