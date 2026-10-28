@@ -2,34 +2,19 @@
 //! `packages/git/src/features/operation/commands.ts`.
 
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
 
-use regex::Regex;
-
-use super::schema::{CommitName, Operation, OperationKind, Steps};
+use super::schema::{CommitName, Operation, OperationAction, OperationKind, Steps};
 use crate::core::errors::{Error, Result};
 use crate::core::git_dirs::git_dirs;
 use crate::core::repo::{GitCommand, Repo, current_branch, has_conflicts, resolve_ref, succeeds};
 use crate::core::runner::RunOptions;
 
-/// Whether `c` is whitespace as JavaScript's `\s` and `trim` have it: Unicode's, and the BOM.
-fn is_js_space(c: char) -> bool {
-    c.is_whitespace() || c == '\u{feff}'
-}
-
-/// The contents of `file`, trimmed; `None` if it isn't there.
+/// The contents of `file`, trimmed; `None` if it isn't there, or has nothing in it.
 async fn read_state(file: PathBuf) -> Option<String> {
     let bytes = async_fs::read(file).await.ok()?;
-    Some(
-        String::from_utf8_lossy(&bytes)
-            .trim_matches(is_js_space)
-            .to_owned(),
-    )
-}
-
-/// Whether a file `read_state` read is there with something in it (TS's truthy string).
-fn has_text(state: &Option<String>) -> bool {
-    state.as_deref().is_some_and(|text| !text.is_empty())
+    let text = String::from_utf8_lossy(&bytes);
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_owned())
 }
 
 /// Whether `file` is there; a folder counts.
@@ -86,16 +71,16 @@ async fn operation_state(git_dir: &Path) -> OperationState {
     );
     let todo = todo_lines(todo.as_deref());
     // The todo list's commands say which a series is: `pick` or `revert`.
-    let command = todo.first().and_then(|line| line.split(is_js_space).next());
+    let command = todo.first().and_then(|line| line.split_whitespace().next());
     let kind = if state.applying {
         Some(OperationKind::Am)
     } else if state.rebasing {
         Some(OperationKind::Rebase)
-    } else if has_text(&merge) {
+    } else if merge.is_some() {
         Some(OperationKind::Merge)
-    } else if has_text(&cherry_pick) || matches!(command, Some("pick" | "p")) {
+    } else if cherry_pick.is_some() || matches!(command, Some("pick" | "p")) {
         Some(OperationKind::CherryPick)
-    } else if has_text(&revert) || command == Some("revert") {
+    } else if revert.is_some() || command == Some("revert") {
         Some(OperationKind::Revert)
     } else {
         None
@@ -116,7 +101,7 @@ fn todo_lines(todo: Option<&str>) -> Vec<String> {
         .filter(|line| {
             line.chars()
                 .next()
-                .is_some_and(|first| first != '#' && !is_js_space(first))
+                .is_some_and(|first| first != '#' && !first.is_whitespace())
         })
         .map(str::to_owned)
         .collect()
@@ -146,16 +131,26 @@ pub async fn get_operation(repo: &Repo) -> Result<Option<Operation>> {
             }
         }
         OperationKind::Rebase => {
-            // `rebase-merge` for the merge backend, git's default; `rebase-apply` for the apply one.
-            let merging = has_text(&read_state(git_dir.join("rebase-merge").join("onto")).await);
+            // `rebase-merge` for the merge backend, git's default, which has `onto` there;
+            // `rebase-apply` for the apply one.
+            let (merging, onto) = match state("rebase-merge/onto").await {
+                Some(onto) => (true, Some(onto)),
+                None => (false, state("rebase-apply/onto").await),
+            };
             let dir = if merging {
                 "rebase-merge"
             } else {
                 "rebase-apply"
             };
+            let onto_name = async {
+                match &onto {
+                    Some(onto) => Some(ref_name(&run, onto).await),
+                    None => None,
+                }
+            };
             let (head_name, onto, step, total) = futures::join!(
                 state(&format!("{dir}/head-name")),
-                state(&format!("{dir}/onto")),
+                onto_name,
                 state(&format!(
                     "{dir}/{}",
                     if merging { "msgnum" } else { "next" }
@@ -167,7 +162,7 @@ pub async fn get_operation(repo: &Repo) -> Result<Option<Operation>> {
                     .as_deref()
                     .and_then(|name| name.strip_prefix("refs/heads/"))
                     .map(str::to_owned),
-                onto: ref_name(&run, onto.as_deref().unwrap_or_default()).await,
+                onto,
                 steps: steps(step.as_deref(), total.as_deref()),
             }
         }
@@ -176,8 +171,8 @@ pub async fn get_operation(repo: &Repo) -> Result<Option<Operation>> {
             // None between the commits of a series, once the one it stopped at was committed by
             // hand.
             let commit = match head {
-                Some(head) if !head.is_empty() => Some(commit_name(&run, &head).await),
-                _ => None,
+                Some(head) => Some(commit_name(&run, &head).await),
+                None => None,
             };
             // A line for the one it stopped at and each one after it.
             let remaining = operation.todo.len().saturating_sub(1) as u64;
@@ -206,11 +201,9 @@ fn steps(step: Option<&str>, total: Option<&str>) -> Option<Steps> {
 }
 
 /// The shortest name of the commit `sha`, as the user knows it: a branch pointing at it, or else a
-/// remote-tracking branch or a tag, or else its abbreviated SHA.
+/// remote-tracking branch or a tag, or else its abbreviated SHA; or `sha` itself, if git can't
+/// say.
 async fn ref_name(run: &GitCommand, sha: &str) -> String {
-    if sha.is_empty() {
-        return String::new();
-    }
     let points_at = format!("--points-at={sha}");
     let refs = run
         .run([
@@ -232,7 +225,7 @@ async fn ref_name(run: &GitCommand, sha: &str) -> String {
     run.run(["rev-parse", "--short", sha])
         .await
         .unwrap_or_else(|_| sha.to_owned())
-        .trim_matches(is_js_space)
+        .trim()
         .to_owned()
 }
 
@@ -242,7 +235,7 @@ async fn commit_name(run: &GitCommand, sha: &str) -> CommitName {
         .run(["log", "-1", "--format=%h%x00%s", sha, "--"])
         .await
         .unwrap_or_default();
-    let mut parts = output.trim_matches(is_js_space).split('\0');
+    let mut parts = output.trim().split('\0');
     let short = parts
         .next()
         .map_or_else(|| sha.chars().take(7).collect(), str::to_owned);
@@ -255,8 +248,8 @@ async fn commit_name(run: &GitCommand, sha: &str) -> CommitName {
 
 /// The command that continues or aborts `kind`: `git merge --continue`, `git rebase --abort`, and
 /// so on.
-fn operation_args(kind: OperationKind, action: &str) -> [String; 2] {
-    [kind.as_str().to_owned(), format!("--{action}")]
+fn operation_args(kind: OperationKind, action: OperationAction) -> [&'static str; 2] {
+    [kind.as_str(), action.as_flag()]
 }
 
 /// The operation under way in the worktree whose git directory is `git_dir`, if any (see
@@ -272,14 +265,10 @@ async fn check_operation(git_dir: &Path, kind: OperationKind) -> Result<()> {
     if current == Some(kind) {
         return Ok(());
     }
-    Err(Error::NoOperation(match current {
-        Some(current) => format!(
-            "A {} is under way now, not a {}.",
-            current.name(),
-            kind.name()
-        ),
-        None => format!("The {} is no longer under way.", kind.name()),
-    }))
+    Err(Error::NoOperation {
+        expected: kind,
+        current,
+    })
 }
 
 /// Continues the operation `kind` once its conflicts are resolved: commits the merge, or the commit
@@ -300,17 +289,17 @@ pub async fn continue_operation(repo: &Repo, kind: OperationKind) -> Result<()> 
             check_operation(&git_dir, kind),
         )?;
         if kind == OperationKind::Rebase && rewords_or_squashes(&git_dir).await {
-            return Err(Error::EditorNeeded(
-                "The rest of this rebase rewords or squashes commits, whose messages need an editor Gitto can't open. Continue it in a terminal.".to_owned(),
-            ));
+            return Err(Error::EditorNeeded);
         }
         // With the message as git prepared it, as no editor can be opened: `:` takes it as it is,
         // and leaves out its comments, like the conflicts git lists in a merge's.
-        let options = RunOptions::default().env("GIT_EDITOR", ":").rewrites_files();
+        let options = RunOptions::default()
+            .env("GIT_EDITOR", ":")
+            .rewrites_files();
         let continued = go_on(
             &run,
             kind,
-            operation_args(kind, "continue"),
+            operation_args(kind, OperationAction::Continue),
             conflicted,
             &options,
         )
@@ -330,9 +319,15 @@ pub async fn continue_operation(repo: &Repo, kind: OperationKind) -> Result<()> 
         if !empty {
             return Err(error.without_hints());
         }
-        go_on(&run, kind, operation_args(kind, "skip"), false, &options)
-            .await
-            .map_err(Error::without_hints)
+        go_on(
+            &run,
+            kind,
+            operation_args(kind, OperationAction::Skip),
+            false,
+            &options,
+        )
+        .await
+        .map_err(Error::without_hints)
     })
     .await
 }
@@ -341,7 +336,7 @@ pub async fn continue_operation(repo: &Repo, kind: OperationKind) -> Result<()> 
 async fn go_on(
     run: &GitCommand,
     kind: OperationKind,
-    args: [String; 2],
+    args: [&'static str; 2],
     conflicted_before: bool,
     options: &RunOptions,
 ) -> Result<()> {
@@ -382,7 +377,7 @@ async fn rewords_or_squashes(git_dir: &Path) -> bool {
     let done_lines = todo_lines(done.as_deref());
     // The one it stopped at, and the squashes and fixups that run up to it, if it's one of them.
     let mut from = done_lines.len().saturating_sub(1);
-    while from > 0 && SQUASHING.is_match(&done_lines[from]) {
+    while from > 0 && squashing(&done_lines[from]) {
         from -= 1;
     }
     done_lines[from..]
@@ -391,23 +386,31 @@ async fn rewords_or_squashes(git_dir: &Path) -> bool {
         .any(|line| asks_for_message(line))
 }
 
-/// A squash, or a fixup, which a squash before it in a row of them is asked for with.
-static SQUASHING: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(s|squash|f|fixup)\s").unwrap());
+/// A line of a rebase's todo list: its command, and the word after it (a commit, or a flag).
+fn todo_command(line: &str) -> (Option<&str>, Option<&str>) {
+    let mut words = line.split_whitespace();
+    (words.next(), words.next())
+}
 
-static REWORD_OR_SQUASH: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(r|reword|s|squash)\s").unwrap());
-static FIXUP_EDITING: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(f|fixup)\s+-c\s").unwrap());
-static MERGE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(m|merge)\s").unwrap());
-static MERGE_KEEPING: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(m|merge)\s+-C\s").unwrap());
+/// Whether a line of a rebase's todo list is a squash, or a fixup, which a squash before it in a
+/// row of them is asked for with.
+fn squashing(line: &str) -> bool {
+    matches!(
+        todo_command(line),
+        (Some("s" | "squash" | "f" | "fixup"), Some(_))
+    )
+}
 
 /// Whether git asks for the message of the commit a line of a rebase's todo list makes, in an
 /// editor: a reword, a squash, `fixup -c` (not `-C`, which takes the fixup's message as it is), and
 /// a merge but with `-C`, which takes the merge's message as it is.
 fn asks_for_message(line: &str) -> bool {
-    if REWORD_OR_SQUASH.is_match(line) || FIXUP_EDITING.is_match(line) {
-        return true;
+    match todo_command(line) {
+        (Some("r" | "reword" | "s" | "squash"), Some(_)) => true,
+        (Some("f" | "fixup"), Some(flag)) => flag == "-c",
+        (Some("m" | "merge"), Some(flag)) => flag != "-C",
+        _ => false,
     }
-    MERGE.is_match(line) && !MERGE_KEEPING.is_match(line)
 }
 
 /// Aborts the operation `kind`, putting the repository back as it was before it started: the
@@ -416,7 +419,7 @@ pub async fn abort_operation(repo: &Repo, kind: OperationKind) -> Result<()> {
     repo.exclusive(|run| async move {
         check_operation(&git_dirs(repo).await?.git_dir, kind).await?;
         run.run_with(
-            operation_args(kind, "abort"),
+            operation_args(kind, OperationAction::Abort),
             RunOptions::default().rewrites_files(),
         )
         .await
@@ -579,17 +582,31 @@ mod tests {
                 .await
                 .unwrap_err();
             assert!(
-                matches!(&error, Error::NoOperation(message) if message == "A merge is under way now, not a rebase."),
+                matches!(
+                    error,
+                    Error::NoOperation {
+                        expected: OperationKind::Rebase,
+                        current: Some(OperationKind::Merge)
+                    }
+                ),
                 "{error:?}"
             );
+            assert_eq!(error.to_string(), "A merge is under way now, not a rebase.");
             abort_operation(&repo, OperationKind::Merge).await.unwrap();
             let error = continue_operation(&repo, OperationKind::Merge)
                 .await
                 .unwrap_err();
             assert!(
-                matches!(&error, Error::NoOperation(message) if message == "The merge is no longer under way."),
+                matches!(
+                    error,
+                    Error::NoOperation {
+                        expected: OperationKind::Merge,
+                        current: None
+                    }
+                ),
                 "{error:?}"
             );
+            assert_eq!(error.to_string(), "The merge is no longer under way.");
         });
     }
 
@@ -619,11 +636,11 @@ mod tests {
                 get_operation(&repo).await.unwrap(),
                 Some(Operation::Rebase {
                     branch: Some("side".into()),
-                    onto: "main".into(),
+                    onto: Some("main".into()),
                     steps: Some(Steps { step: 1, total: 2 }),
                 })
             );
-            let theirs = Regex::new(r"(?m)^>>>>>>> [0-9a-f]+ \(theirs\)$").unwrap();
+            let theirs = regex::Regex::new(r"(?m)^>>>>>>> [0-9a-f]+ \(theirs\)$").unwrap();
             let text = conflict_text(&path);
             assert!(theirs.is_match(&text), "{text}");
 
@@ -657,6 +674,22 @@ mod tests {
     }
 
     #[test]
+    fn a_rebase_says_it_doesnt_know_what_its_onto_when_gits_record_of_that_cant_be_read() {
+        let fx = Fixture::new();
+        let path = create_rebase(&fx, "op-rebase-onto");
+        fs::remove_file(path.join(".git").join("rebase-merge").join("onto")).unwrap();
+        fs::write(path.join(".git").join("rebase-merge").join("onto"), "\n").unwrap();
+        smol::block_on(async {
+            let repo = fx.repos.open("op-rebase-onto").await.unwrap();
+            let operation = get_operation(&repo).await.unwrap();
+            assert!(
+                matches!(operation, Some(Operation::Rebase { onto: None, .. })),
+                "{operation:?}"
+            );
+        });
+    }
+
+    #[test]
     fn a_rebase_isnt_continued_when_a_commit_ahead_is_to_be_reworded_which_needs_an_editor() {
         let fx = Fixture::new();
         let path = fx.create_diverged_repo("op-rebase-reword", &text_conflict(), None);
@@ -671,7 +704,7 @@ mod tests {
             let error = continue_operation(&repo, OperationKind::Rebase)
                 .await
                 .unwrap_err();
-            assert!(matches!(error, Error::EditorNeeded(_)), "{error:?}");
+            assert!(matches!(error, Error::EditorNeeded), "{error:?}");
             let operation = get_operation(&repo).await.unwrap();
             assert!(
                 matches!(
@@ -718,7 +751,7 @@ mod tests {
             let error = continue_operation(&repo, OperationKind::Rebase)
                 .await
                 .unwrap_err();
-            assert!(matches!(error, Error::EditorNeeded(_)), "{error:?}");
+            assert!(matches!(error, Error::EditorNeeded), "{error:?}");
         });
     }
 
@@ -947,6 +980,25 @@ mod tests {
     }
 
     #[test]
+    fn read_state_trims_a_file_and_has_none_with_nothing_in_it() {
+        let fx = Fixture::new();
+        let file = |name: &str, contents: &str| {
+            let file = fx.root().join(name);
+            fs::write(&file, contents).unwrap();
+            file
+        };
+        smol::block_on(async {
+            assert_eq!(
+                read_state(file("head", " abc\n")).await.as_deref(),
+                Some("abc")
+            );
+            assert_eq!(read_state(file("empty", "")).await, None);
+            assert_eq!(read_state(file("blank", " \n\t")).await, None);
+            assert_eq!(read_state(fx.root().join("missing")).await, None);
+        });
+    }
+
+    #[test]
     fn todo_lines_leave_out_comments_and_blanks() {
         assert_eq!(
             todo_lines(Some("pick a one\n# comment\n\n  indented\nrevert b two")),
@@ -973,8 +1025,30 @@ mod tests {
             "fixup -C abc subject",
             "merge -C abc side",
             "exec make",
+            "squashed abc subject",
+            "reword",
         ] {
             assert!(!asks_for_message(line), "{line}");
+        }
+    }
+
+    #[test]
+    fn squashing_is_a_squash_or_a_fixup() {
+        for line in [
+            "s abc subject",
+            "squash abc subject",
+            "f abc subject",
+            "fixup -C abc",
+        ] {
+            assert!(squashing(line), "{line}");
+        }
+        for line in [
+            "pick abc subject",
+            "reword abc subject",
+            "fixups abc",
+            "squash",
+        ] {
+            assert!(!squashing(line), "{line}");
         }
     }
 

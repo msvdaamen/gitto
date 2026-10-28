@@ -1,11 +1,11 @@
 //! Rebasing the checked-out branch onto another. Ported from `rebase.ts`.
 
-use super::preflight::{self, Checked, Verb, preflight};
+use super::preflight::{self, Checked, preflight};
 use super::refusal::{
     RefusalKind, Wording, list, nul_separated, parse_refusal, refusal_message, staged_files,
 };
 use super::schema::RebaseOutcome;
-use crate::core::errors::{Error, GitError, Result};
+use crate::core::errors::{Error, GitError, Integration, IntegrationBlocker, Result};
 use crate::core::git_dirs::git_dirs;
 use crate::core::repo::{GitCommand, Repo, has_conflicts, resolve_ref};
 use crate::core::runner::RunOptions;
@@ -43,13 +43,20 @@ pub async fn rebase_branch(repo: &Repo, reference: &str, branch: &str) -> Result
     let git_dir = git_dirs(repo).await?.git_dir;
     // One write, so nothing else changes the branch, or starts another operation, halfway.
     repo.exclusive(|run| async move {
-        let Checked { sha, head: before } =
-            preflight(&run, &git_dir, reference, &target, branch, Verb::Rebase).await?;
+        let Checked { sha, head: before } = preflight(
+            &run,
+            &git_dir,
+            reference,
+            &target,
+            branch,
+            Integration::Rebase,
+        )
+        .await?;
         if before.is_none() {
-            return Err(Error::RebaseBlocked(format!(
-                "{branch} has no commits yet, so there's nothing to rebase. Merge {} into it instead.",
-                target.name
-            )));
+            return Err(Error::RebaseBlocked(IntegrationBlocker::NoCommits {
+                branch: branch.to_owned(),
+                onto: target.name,
+            }));
         }
 
         let args = [
@@ -84,19 +91,28 @@ pub async fn rebase_branch(repo: &Repo, reference: &str, branch: &str) -> Result
             if state.rebasing {
                 let reason = failure.without_hints().message;
                 let undone = run
-                    .run_with(["rebase", "--abort"], RunOptions::default().rewrites_files())
+                    .run_with(
+                        ["rebase", "--abort"],
+                        RunOptions::default().rewrites_files(),
+                    )
                     .await;
+                let branch = branch.to_owned();
+                let onto = target.name;
                 if let Err(abort) = undone {
-                    return Err(Error::RebaseStopped(format!(
-                        "Rebasing {branch} onto {} stopped partway:\n{reason}\nIt couldn't be undone either:\n{}\nFinish the rebase in a terminal, or abort it.",
-                        target.name,
-                        abort.without_hints()
-                    )));
+                    return Err(Error::RebaseStopped {
+                        branch,
+                        onto,
+                        reason: format!(
+                            "{reason}\nIt couldn't be undone either:\n{}",
+                            abort.without_hints()
+                        ),
+                    });
                 }
-                return Err(Error::RebaseUndone(format!(
-                    "Rebasing {branch} onto {} stopped partway, and was undone:\n{reason}\nFix that, then rebase again.",
-                    target.name
-                )));
+                return Err(Error::RebaseUndone {
+                    branch,
+                    onto,
+                    reason,
+                });
             }
             if let Some(refused) = why_refused(&run, &failure, &target.name).await? {
                 return Err(Error::RebaseBlocked(refused));
@@ -119,7 +135,11 @@ pub async fn rebase_branch(repo: &Repo, reference: &str, branch: &str) -> Result
 /// What to tell the user about `failure`, if git refused to rebase onto `onto` with it, having
 /// done nothing: over uncommitted changes, which it won't rebase with at all, naming the files, or
 /// untracked files in the way of checking out `onto`; `None` if it failed otherwise.
-async fn why_refused(run: &GitCommand, failure: &GitError, onto: &str) -> Result<Option<String>> {
+async fn why_refused(
+    run: &GitCommand,
+    failure: &GitError,
+    onto: &str,
+) -> Result<Option<IntegrationBlocker>> {
     if let Some(changes) = parse_uncommitted(&failure.stderr) {
         // Git doesn't name them: it checks the working tree first, then the index.
         let (files, what, to) = match changes {
@@ -135,9 +155,9 @@ async fn why_refused(run: &GitCommand, failure: &GitError, onto: &str) -> Result
         } else {
             format!("{to} {}", list(&files))
         };
-        return Ok(Some(format!(
-            "Git won't rebase while {what}{named}. Commit or stash them, then rebase."
-        )));
+        let message =
+            format!("Git won't rebase while {what}{named}. Commit or stash them, then rebase.");
+        return Ok(Some(IntegrationBlocker::InTheWay { files, message }));
     }
     let Some(refused) = parse_refusal(&failure.stderr) else {
         return Ok(None);
@@ -147,7 +167,7 @@ async fn why_refused(run: &GitCommand, failure: &GitError, onto: &str) -> Result
         RefusalKind::Staged => staged_files(run).await?,
         _ => refused.files,
     };
-    Ok(Some(refusal_message(
+    let message = refusal_message(
         refused.kind,
         &files,
         &Wording {
@@ -155,7 +175,8 @@ async fn why_refused(run: &GitCommand, failure: &GitError, onto: &str) -> Result
             wont: "rebase",
             next: "rebase",
         },
-    )))
+    );
+    Ok(Some(IntegrationBlocker::InTheWay { files, message }))
 }
 
 /// Which uncommitted changes git refused to rebase over (see `parse_uncommitted`).
@@ -250,7 +271,7 @@ mod tests {
     fn rebasing_side_onto_main(step: u64, total: u64) -> Option<Operation> {
         Some(Operation::Rebase {
             branch: Some("side".to_owned()),
-            onto: "main".to_owned(),
+            onto: Some("main".to_owned()),
             steps: Some(Steps { step, total }),
         })
     }
@@ -577,10 +598,10 @@ mod tests {
             );
             let conflict = get_conflict(&repo, "f.txt").await.unwrap();
             // In a rebase, "ours" is the branch rebased onto, and "theirs" the commit replayed.
-            assert!(conflict.ours.is_some());
-            assert_eq!(conflict.theirs, None);
+            assert!(conflict.sides.ours.is_some());
+            assert_eq!(conflict.sides.theirs, None);
             let shown = ShownConflict {
-                sides: conflict.sides(),
+                sides: conflict.sides.clone(),
                 version: None,
             };
             keep_side(&repo, "f.txt", Side::Ours, &shown).await.unwrap();
@@ -857,7 +878,7 @@ mod tests {
             let error = rebase_branch(&repo, "refs/heads/main", "side")
                 .await
                 .unwrap_err();
-            assert!(matches!(error, Error::RebaseUndone(_)), "{error:?}");
+            assert!(matches!(error, Error::RebaseUndone { .. }), "{error:?}");
             assert!(
                 regex::Regex::new(
                     r"(?s)^Rebasing side onto main stopped partway, and was undone:\n.*failed to write commit object\nFix that, then rebase again\.$"
@@ -903,7 +924,7 @@ mod tests {
             let error = rebase_branch(&repo, "refs/heads/main", "side")
                 .await
                 .unwrap_err();
-            assert!(matches!(error, Error::RebaseStopped(_)), "{error:?}");
+            assert!(matches!(error, Error::RebaseStopped { .. }), "{error:?}");
             assert!(
                 regex::Regex::new(
                     r"(?s)^Rebasing side onto main stopped partway:\n.*failed to write commit object\nIt couldn't be undone either:\n.+\nFinish the rebase in a terminal, or abort it\.$"

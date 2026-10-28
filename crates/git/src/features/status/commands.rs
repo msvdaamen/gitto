@@ -8,7 +8,8 @@ use sha1_smol::Sha1;
 
 use super::parse::{STATUS_ARGS, parse_status};
 use super::schema::{
-    Status, StatusCounts, StatusFile, StatusReply, Unchanged, Uncommitted, WorkingTreeFiles,
+    Status, StatusCounts, StatusFile, StatusReply, StatusSummary, Unchanged, Uncommitted,
+    WorkingTreeFiles,
 };
 use crate::core::errors::Result;
 use crate::core::repo::Repo;
@@ -85,11 +86,13 @@ async fn read_status(repo: &Repo) -> Result<(Uncommitted, String)> {
         hash.update(b"\0");
     }
     let uncommitted = Uncommitted {
-        head,
-        upstream,
-        ahead,
-        behind,
-        counts: count_files(&files),
+        summary: StatusSummary {
+            head,
+            upstream,
+            ahead,
+            behind,
+            counts: count_files(&files),
+        },
         changes: WorkingTreeFiles {
             staged: changes.staged,
             unstaged: changes.unstaged,
@@ -136,9 +139,9 @@ async fn resolved_conflicts(repo: &Repo, files: &[StatusFile]) -> Vec<String> {
         .iter()
         .filter(|file| {
             file.conflict.as_ref().is_some_and(|conflict| {
-                (conflict.xy == "UU" || conflict.xy == "AA")
-                    && is_regular_file(&conflict.ours)
-                    && is_regular_file(&conflict.theirs)
+                conflict.kind.on_both_sides()
+                    && conflict.ours.is_file()
+                    && conflict.theirs.is_file()
             })
         })
         .map(|file| file.path.clone())
@@ -147,11 +150,6 @@ async fn resolved_conflicts(repo: &Repo, files: &[StatusFile]) -> Vec<String> {
         return Vec::new();
     }
     marker_free(repo, &text).await
-}
-
-/// Whether `mode` is a file's, executable or not, rather than a link's or a submodule's.
-fn is_regular_file(mode: &str) -> bool {
-    mode == "100644" || mode == "100755"
 }
 
 /// Past this many characters of paths, the unstaged diff isn't limited to the changed files: the
@@ -218,8 +216,13 @@ async fn get_working_tree_files(
         .iter()
         .map(|path| path.encode_utf16().count() + 3)
         .sum();
+    // A name that isn't UTF-8 comes out of git lossily, with U+FFFD in it: handed back to git, it
+    // would name no file, and the diff would leave it out.
+    let lossy = unstaged_paths
+        .iter()
+        .any(|path| path.contains(char::REPLACEMENT_CHARACTER));
     let mut unstaged_args = vec!["diff", "--raw", "--numstat", "-z"];
-    if length <= MAX_PATHSPEC_LENGTH {
+    if length <= MAX_PATHSPEC_LENGTH && !lossy {
         unstaged_args.push("--");
         unstaged_args.extend(&unstaged_paths);
     }
@@ -299,14 +302,14 @@ mod tests {
             let repo = fx.create_history_repo("history").await;
             let status = get_status(&repo).await.unwrap();
             assert!(
-                matches!(&status.head, Head::Branch { name, .. } if name == "main"),
+                matches!(&status.summary.head, Head::Branch { name, .. } if name == "main"),
                 "{:?}",
-                status.head
+                status.summary.head
             );
-            assert_eq!(status.upstream, None);
-            assert_eq!((status.ahead, status.behind), (0, 0));
+            assert_eq!(status.summary.upstream, None);
+            assert_eq!((status.summary.ahead, status.summary.behind), (0, 0));
             assert_eq!(
-                status.counts,
+                status.summary.counts,
                 StatusCounts {
                     files: 2,
                     staged: 0,
@@ -377,13 +380,13 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(
-                status.head,
+                status.summary.head,
                 Head::Unborn {
                     name: "main".into()
                 }
             );
             assert_eq!(
-                status.counts,
+                status.summary.counts,
                 StatusCounts {
                     files: 0,
                     staged: 0,
@@ -511,6 +514,72 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn the_changed_files_are_the_same_as_full_diffs_with_a_name_that_isnt_utf8() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        if !crate::test_support::non_utf8_names() {
+            return;
+        }
+        let fx = Fixture::new();
+        let path = fx.create_repo("not-utf8");
+        let name = OsStr::from_bytes(b"caf\xe9.txt");
+        fs::write(path.join(name), "one\n").unwrap();
+        fs::write(path.join("plain.txt"), "one\n").unwrap();
+        git(&path, ["add", "."]);
+        git(&path, ["commit", "-q", "-m", "first"]);
+        fs::write(path.join(name), "two\n").unwrap();
+        fs::write(path.join("plain.txt"), "two\n").unwrap();
+        smol::block_on(async {
+            let repo = fx.repos.open("not-utf8").await.unwrap();
+
+            let changes = get_status(&repo).await.unwrap().changes;
+            assert_eq!(changes, full_diffs(&repo).await);
+            assert_eq!(
+                changes.unstaged,
+                [
+                    changed("caf\u{fffd}.txt", FileStatus::Modified, Some(1), Some(1)),
+                    changed("plain.txt", FileStatus::Modified, Some(1), Some(1)),
+                ]
+            );
+        });
+    }
+
+    #[test]
+    fn the_changed_files_are_the_same_as_full_diffs_with_names_of_newlines_tabs_and_accents() {
+        let fx = Fixture::new();
+        let path = fx.create_repo("odd-names");
+        // Windows takes no newline or tab in a name.
+        let names: &[&str] = if cfg!(windows) {
+            &["café.txt", "a b.txt"]
+        } else {
+            &["café.txt", "a b.txt", "two\nlines.txt", "tab\there.txt"]
+        };
+        for name in names {
+            fs::write(path.join(name), "one\n").unwrap();
+        }
+        git(&path, ["add", "."]);
+        git(&path, ["commit", "-q", "-m", "first"]);
+        for name in names {
+            fs::write(path.join(name), "two\n").unwrap();
+            fs::write(path.join(format!("new {name}")), "new\n").unwrap();
+        }
+        smol::block_on(async {
+            let repo = fx.repos.open("odd-names").await.unwrap();
+
+            let changes = get_status(&repo).await.unwrap().changes;
+            assert_eq!(changes, full_diffs(&repo).await);
+            let unstaged = paths(&changes.unstaged);
+            for name in names {
+                assert!(unstaged.contains(name), "{name:?} in {unstaged:?}");
+                let new = format!("new {name}");
+                assert!(unstaged.contains(&new.as_str()), "{new:?} in {unstaged:?}");
+            }
+        });
+    }
+
     #[test]
     fn the_changed_files_are_the_same_as_full_diffs_with_a_merge_conflict() {
         let fx = Fixture::new();
@@ -529,7 +598,7 @@ mod tests {
             let repo = fx.repos.open("conflict").await.unwrap();
 
             let Uncommitted {
-                changes, counts, ..
+                changes, summary, ..
             } = get_status(&repo).await.unwrap();
             assert_eq!(changes, full_diffs(&repo).await);
             // Conflicted on both sides, as it is when there are too many files to diff.
@@ -541,7 +610,7 @@ mod tests {
             assert_eq!(changes.staged[0].path, "file.txt");
             assert_eq!(changes.staged[0].status, FileStatus::Conflicted);
             assert_eq!(
-                counts,
+                summary.counts,
                 StatusCounts {
                     files: 1,
                     staged: 0,

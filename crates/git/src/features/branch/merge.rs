@@ -1,9 +1,9 @@
 //! Merging a branch into the checked-out one. Ported from `merge.ts`.
 
-use super::preflight::{self, Checked, Verb, preflight};
+use super::preflight::{self, Checked, preflight};
 use super::refusal::{RefusalKind, Wording, parse_refusal, refusal_message, staged_files};
 use super::schema::MergeOutcome;
-use crate::core::errors::{Error, Result};
+use crate::core::errors::{Error, Integration, IntegrationBlocker, Result};
 use crate::core::git_dirs::git_dirs;
 use crate::core::repo::{GitCommand, Repo, has_conflicts, ref_exists, resolve_ref};
 use crate::core::runner::RunOptions;
@@ -33,7 +33,7 @@ pub async fn merge_branch(repo: &Repo, reference: &str, into: &str) -> Result<Me
     // One write, so nothing else changes the branch, or starts another operation, halfway.
     repo.exclusive(|run| async move {
         let Checked { sha, head: before } =
-            preflight(&run, &git_dir, reference, &target, into, Verb::Merge).await?;
+            preflight(&run, &git_dir, reference, &target, into, Integration::Merge).await?;
         // None for a branch without commits yet, which just moves to it: nor can git word one.
         let message = async {
             match before {
@@ -83,11 +83,10 @@ pub async fn merge_branch(repo: &Repo, reference: &str, into: &str) -> Result<Me
             }
             // Also when the merge commit couldn't be written, e.g. as signing it failed.
             if merging {
-                return Err(Error::MergeStopped(format!(
-                    "Merging {} stopped before committing:\n{}\nFix that, then commit the merge, or abort it.",
-                    target.name,
-                    failure.without_hints().message
-                )));
+                return Err(Error::MergeStopped {
+                    branch: target.name,
+                    reason: failure.without_hints().message,
+                });
             }
             let Some(refused) = parse_refusal(&failure.stderr) else {
                 return Err(Error::Git(failure.without_hints()));
@@ -98,7 +97,7 @@ pub async fn merge_branch(repo: &Repo, reference: &str, into: &str) -> Result<Me
                 RefusalKind::Staged => staged_files(&run).await?,
                 _ => refused.files,
             };
-            return Err(Error::MergeBlocked(refusal_message(
+            let message = refusal_message(
                 refused.kind,
                 &files,
                 &Wording {
@@ -106,7 +105,11 @@ pub async fn merge_branch(repo: &Repo, reference: &str, into: &str) -> Result<Me
                     wont: &format!("merge {}", target.name),
                     next: "merge",
                 },
-            )));
+            );
+            return Err(Error::MergeBlocked(IntegrationBlocker::InTheWay {
+                files,
+                message,
+            }));
         }
         let after = resolve_ref(&run, "HEAD").await?;
         if after == before {
@@ -140,7 +143,7 @@ mod tests {
 
     use super::*;
     use crate::features::conflicts::commands::{ShownConflict, get_conflict, keep_side};
-    use crate::features::conflicts::schema::Side;
+    use crate::features::conflicts::schema::{ConflictFile, Side};
     use crate::features::operation::commands::{
         abort_operation, continue_operation, get_operation,
     };
@@ -625,9 +628,9 @@ mod tests {
                 MergeOutcome::Conflicts
             );
             let conflict = get_conflict(&repo, "f.txt").await.unwrap();
-            assert_eq!(conflict.ours, None);
+            assert_eq!(conflict.sides.ours, None);
             let shown = ShownConflict {
-                sides: conflict.sides(),
+                sides: conflict.sides.clone(),
                 version: None,
             };
             keep_side(&repo, "f.txt", Side::Theirs, &shown)
@@ -663,9 +666,9 @@ mod tests {
                 MergeOutcome::Conflicts
             );
             let conflict = get_conflict(&repo, "b.dat").await.unwrap();
-            assert!(conflict.ours.is_some());
-            assert!(conflict.theirs.is_some());
-            assert_eq!(conflict.text, None);
+            assert!(conflict.sides.ours.is_some());
+            assert!(conflict.sides.theirs.is_some());
+            assert!(matches!(conflict.file, ConflictFile::Binary { .. }));
         });
     }
 
@@ -1087,7 +1090,7 @@ mod tests {
             let error = merge_branch(&repo, "refs/heads/side", "main")
                 .await
                 .unwrap_err();
-            assert!(matches!(error, Error::MergeStopped(_)), "{error:?}");
+            assert!(matches!(error, Error::MergeStopped { .. }), "{error:?}");
             assert!(
                 regex::Regex::new(
                     r"(?s)^Merging side stopped before committing:\n.*failed to write commit object\nFix that, then commit the merge, or abort it\.$"
@@ -1122,7 +1125,7 @@ mod tests {
             let error = merge_branch(&repo, "refs/heads/side", "main")
                 .await
                 .unwrap_err();
-            assert!(matches!(error, Error::MergeStopped(_)), "{error:?}");
+            assert!(matches!(error, Error::MergeStopped { .. }), "{error:?}");
             assert_eq!(
                 error.to_string(),
                 "Merging side stopped before committing:\nNot on Fridays.\nNot committing merge; use 'git commit' to complete the merge.\nFix that, then commit the merge, or abort it."

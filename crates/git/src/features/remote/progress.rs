@@ -3,8 +3,7 @@
 
 use std::path::Path;
 
-use super::blockers::{Action, detached_head};
-use crate::core::errors::{Error, GitError, Result};
+use crate::core::errors::{Error, GitError, Integration, Result};
 use crate::core::repo::{GitCommand, has_conflicts, ref_exists, succeeds};
 use crate::features::operation::commands::rebase_state;
 
@@ -18,15 +17,11 @@ pub struct Progress {
     pub applying: bool,
 }
 
-/// Whether `state` has anything unfinished, which git won't merge or rebase over.
-pub fn in_progress(state: &Progress) -> bool {
-    state.conflicts || state.merging || state.rebasing || state.applying
-}
-
-/// Why HEAD, detached in the worktree whose git directory is `git_dir`, can't be pulled into or
-/// pushed: a rebase may have stopped there.
-pub async fn why_detached(git_dir: &Path, action: Action) -> String {
-    detached_head(action, rebase_state(git_dir).await.rebasing)
+impl Progress {
+    /// Whether anything is unfinished, which git won't merge or rebase over.
+    pub fn in_progress(self) -> bool {
+        self.conflicts || self.merging || self.rebasing || self.applying
+    }
 }
 
 /// What's unfinished in the repository, read at once.
@@ -49,23 +44,24 @@ async fn is_ancestor(run: &GitCommand, ancestor: &str, rev: &str) -> Result<bool
     succeeds(run, ["merge-base", "--is-ancestor", ancestor, rev]).await
 }
 
-/// Why the merge or rebase `args`, which `failure` is of if it failed, left the pull for the user
-/// to finish, now that it's done, as an `Error::PullInterrupted`; `None` if it didn't. Even one
-/// that went through can have: putting back local changes it stashed can conflict, and
+/// Why the pull's merge or rebase (`integration`) of `merged` (what a merge was given to merge, a
+/// commit or a ref), which `failure` is of if it failed, left the pull for the user to finish,
+/// now that it's done, as an `Error::PullInterrupted`; `None` if it didn't. Even one that went
+/// through can have: putting back local changes it stashed can conflict, and
 /// `branch.<name>.mergeOptions` can stop a merge before committing, or squash it, so what was
 /// merged isn't in HEAD.
-pub async fn interruption<S: AsRef<str>>(
+pub async fn interruption(
     run: &GitCommand,
     git_dir: &Path,
-    args: &[S],
+    integration: Integration,
+    merged: &str,
     upstream: &str,
     failure: Option<&GitError>,
 ) -> Result<Option<Error>> {
     let after = progress(run, git_dir).await?;
     // A merge that went through, or stopped at conflicts, without a merge to commit: squashed, if
     // what it merged isn't in HEAD.
-    let merged = args.last().map_or("", AsRef::as_ref);
-    let squashing = args.first().is_some_and(|arg| arg.as_ref() == "merge")
+    let squashing = integration == Integration::Merge
         && !after.merging
         && (failure.is_none() || after.conflicts)
         && !is_ancestor(run, merged, "HEAD").await?;
@@ -142,26 +138,9 @@ fn capitalize(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use super::*;
     use crate::test_support::conflicts::text_conflict;
     use crate::test_support::{Fixture, git};
-
-    #[test]
-    fn says_why_head_is_detached_unless_git_am_detached_it() {
-        let fx = Fixture::new();
-        let path = fx.create_repo("why-detached");
-        let git_dir = path.join(".git");
-        fs::create_dir(git_dir.join("rebase-apply")).unwrap();
-        fs::write(git_dir.join("rebase-apply").join("applying"), "").unwrap();
-        smol::block_on(async {
-            assert_eq!(
-                why_detached(&git_dir, Action::Push).await,
-                "HEAD is detached: check out a branch to push it."
-            );
-        });
-    }
 
     #[test]
     fn a_merge_that_conflicted_interrupts_the_pull() {
@@ -171,11 +150,12 @@ mod tests {
             let repo = fx.repos.open("interrupted").await.unwrap();
             let run = repo.git();
             let state = progress(&run, &path.join(".git")).await.unwrap();
-            assert!(state.conflicts && state.merging && in_progress(&state));
+            assert!(state.conflicts && state.merging && state.in_progress());
             let error = interruption(
                 &run,
                 &path.join(".git"),
-                &["merge", "side"],
+                Integration::Merge,
+                "side",
                 "refs/heads/side",
                 None,
             )
@@ -189,7 +169,7 @@ mod tests {
 
             git(&path, ["merge", "--abort"]);
             let state = progress(&run, &path.join(".git")).await.unwrap();
-            assert!(!in_progress(&state));
+            assert!(!state.in_progress());
         });
     }
 }

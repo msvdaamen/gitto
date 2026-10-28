@@ -4,33 +4,17 @@
 use std::path::Path;
 
 use super::commands::{branch_target, ref_sha};
-use crate::core::errors::{Error, Result};
+use crate::core::errors::{Error, Integration, IntegrationBlocker, Result};
 use crate::core::repo::{GitCommand, current_branch, has_conflicts, resolve_ref};
 use crate::features::operation::commands::operation_under_way;
 use crate::features::refs::parse::RefName;
 
-/// Which of the two `preflight` checks for, which words what stops it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Verb {
-    Merge,
-    Rebase,
-}
-
-impl Verb {
-    /// "merge", as in "then merge."
-    fn word(self) -> &'static str {
-        match self {
-            Verb::Merge => "merge",
-            Verb::Rebase => "rebase",
-        }
-    }
-
-    /// The error for what stops it: `Error::MergeBlocked` or `Error::RebaseBlocked`.
-    fn blocked(self, message: String) -> Error {
-        match self {
-            Verb::Merge => Error::MergeBlocked(message),
-            Verb::Rebase => Error::RebaseBlocked(message),
-        }
+/// The error for `blocker`, which stops `integration`: `Error::MergeBlocked` or
+/// `Error::RebaseBlocked`.
+pub(super) fn blocked(integration: Integration, blocker: IntegrationBlocker) -> Error {
+    match integration {
+        Integration::Merge => Error::MergeBlocked(blocker),
+        Integration::Rebase => Error::RebaseBlocked(blocker),
     }
 }
 
@@ -56,7 +40,7 @@ pub(super) struct Checked {
 
 /// Checks, through `run` (a command of `repo.exclusive`, the worktree's git directory `git_dir`),
 /// that the branch `target`, named `ref` in full, can be merged into, or `branch` rebased onto it.
-/// Fails with `Error::MergeBlocked` or `Error::RebaseBlocked`, as `verb` says, while an operation
+/// Fails with `Error::MergeBlocked` or `Error::RebaseBlocked`, as `integration` says, while an operation
 /// (a merge, a rebase…) or conflicts are under way, HEAD is detached, `ref` is gone, or it's
 /// `branch` itself; with `Error::RepositoryChanged` if another branch than `branch` is checked out
 /// by now.
@@ -66,7 +50,7 @@ pub(super) async fn preflight(
     reference: &str,
     target: &RefName,
     branch: &str,
-    verb: Verb,
+    integration: Integration,
 ) -> Result<Checked> {
     let (operation, conflicted, current, sha, head) = futures::try_join!(
         async { Ok::<_, Error>(operation_under_way(git_dir).await) },
@@ -76,40 +60,33 @@ pub(super) async fn preflight(
         ref_sha(run, reference),
         resolve_ref(run, "HEAD"),
     )?;
-    let word = verb.word();
+    let blocked = |blocker| Err(blocked(integration, blocker));
     if let Some(operation) = operation {
-        return Err(verb.blocked(format!(
-            "A {} is under way. Finish or abort it, then {word}.",
-            operation.name()
-        )));
+        return blocked(IntegrationBlocker::OperationUnderWay {
+            operation: operation.name().to_owned(),
+        });
     }
     if conflicted {
-        return Err(verb.blocked(format!(
-            "Some files have conflicts. Resolve them, then {word}."
-        )));
+        return blocked(IntegrationBlocker::Conflicts);
     }
     let Some(current) = current else {
-        return Err(verb.blocked(format!(
-            "HEAD is detached: check out a branch to {}.",
-            match verb {
-                Verb::Merge => "merge into it",
-                Verb::Rebase => "rebase it",
-            }
-        )));
+        return blocked(IntegrationBlocker::Detached);
     };
     if current != branch {
         return Err(Error::RepositoryChanged(format!(
-            "Switched from {branch} to {current} meanwhile, so nothing was {word}d."
+            "Switched from {branch} to {current} meanwhile, so nothing was {}d.",
+            integration.as_str()
         )));
     }
     let Some(sha) = sha else {
-        return Err(verb.blocked(format!("{} no longer exists.", target.name)));
+        return blocked(IntegrationBlocker::Gone {
+            branch: target.name.clone(),
+        });
     };
     if reference == format!("refs/heads/{branch}") {
-        return Err(verb.blocked(match verb {
-            Verb::Merge => format!("Can't merge {branch} into itself."),
-            Verb::Rebase => format!("Can't rebase {branch} onto itself."),
-        }));
+        return blocked(IntegrationBlocker::Itself {
+            branch: branch.to_owned(),
+        });
     }
     Ok(Checked { sha, head })
 }

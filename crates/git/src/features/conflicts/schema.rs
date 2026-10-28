@@ -2,12 +2,14 @@
 
 use serde::{Deserialize, Serialize};
 
-/// One side of a conflicted file, as the index has it while it's unmerged: its mode (`100644`, say,
-/// or `120000` for a symbolic link and `160000` for a submodule) and its object.
+use crate::schema::FileMode;
+
+/// One side of a conflicted file, as the index has it while it's unmerged: its mode (a file's, a
+/// symbolic link's or a submodule's) and its object.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConflictSide {
-    pub mode: String,
+    pub mode: FileMode,
     pub oid: String,
 }
 
@@ -34,31 +36,67 @@ pub struct ConflictText {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Conflict {
-    pub base: Option<ConflictSide>,
-    pub ours: Option<ConflictSide>,
-    pub theirs: Option<ConflictSide>,
-    /// The file in the working tree as text, conflict markers and all, with its version (see
-    /// `read_working_tree_file`); `None` if it isn't text that can be shown (see `unreadable`).
-    pub text: Option<ConflictText>,
-    /// The version of the file in the working tree, text or not, which resolving it whole checks
-    /// it still has; `None` if there's no file there, or it's a symbolic link, or leads out of the
-    /// repository, none of which can be read.
-    pub version: Option<String>,
-    /// Whether the file in the working tree is binary, which git leaves as ours without markers.
-    pub binary: bool,
-    /// Why the file in the working tree isn't `text`, e.g. it's too large; `None` if it is.
-    pub unreadable: Option<String>,
+    #[serde(flatten)]
+    pub sides: ConflictSides,
+    pub file: ConflictFile,
 }
 
-impl Conflict {
-    /// Its sides alone.
-    pub fn sides(&self) -> ConflictSides {
-        ConflictSides {
-            base: self.base.clone(),
-            ours: self.ours.clone(),
-            theirs: self.theirs.clone(),
+/// What's in the working tree at a conflicted file's path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ConflictFile {
+    /// Text, conflict markers and all, to resolve its conflicts in.
+    Text(ConflictText),
+    /// A binary file, which git leaves as ours, without markers. `version` is of what's in it.
+    Binary { version: String },
+    /// A file too large to show (see `MAX_BLOB_BYTES`). `stamp` is when it last changed, which
+    /// keeping a side checks, rather than what's in it, which would be read again whenever the
+    /// working tree changes.
+    TooLarge { stamp: String },
+    /// A file that isn't UTF-8 text, which can't be shown or edited as text. `version` is of
+    /// what's in it.
+    NotUtf8 { version: String },
+    /// A path that leads out of the repository, e.g. in a folder that's a link out of it: not
+    /// read.
+    Outside,
+    /// Nothing, e.g. as it was deleted.
+    Missing,
+    /// A symbolic link, which isn't followed: it's no part of the conflict, and can lead anywhere.
+    /// Its conflict is resolved by keeping a side.
+    Link,
+}
+
+impl ConflictFile {
+    /// Its version, which resolving the conflict by keeping a side checks it still has; `None`
+    /// for what can't be read.
+    pub fn version(&self) -> Option<FileVersion> {
+        match self {
+            ConflictFile::Text(text) => Some(FileVersion::Content(text.version.clone())),
+            ConflictFile::Binary { version } | ConflictFile::NotUtf8 { version } => {
+                Some(FileVersion::Content(version.clone()))
+            }
+            ConflictFile::TooLarge { stamp } => Some(FileVersion::Stamp(stamp.clone())),
+            ConflictFile::Outside | ConflictFile::Missing | ConflictFile::Link => None,
         }
     }
+
+    /// The text, if it's text.
+    pub fn text(&self) -> Option<&ConflictText> {
+        match self {
+            ConflictFile::Text(text) => Some(text),
+            _ => None,
+        }
+    }
+}
+
+/// A version of a file in the working tree, to tell whether it changed since.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FileVersion {
+    /// Of what's in it (see `read_working_tree_file`).
+    Content(String),
+    /// Of when it last changed, going by what the file system says of it.
+    Stamp(String),
 }
 
 /// Which side of a conflict to keep whole (TS's `z.enum(["ours", "theirs"])`).

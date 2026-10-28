@@ -6,16 +6,9 @@ use std::path::{Path, PathBuf};
 
 use futures_lite::StreamExt;
 
+pub use crate::core::errors::InUse;
 use crate::core::errors::Result;
 use crate::core::repo::GitCommand;
-
-/// Why a branch is in use, and what to do about it (see `branches_in_use`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InUse {
-    /// Follows the branch's name, e.g. `is being rebased`.
-    pub state: String,
-    pub fix: String,
-}
 
 /// What the file at `path` says, trimmed; `""` if it isn't there.
 async fn read(path: PathBuf) -> String {
@@ -58,9 +51,8 @@ pub async fn branches_in_use(run: &GitCommand) -> Result<HashMap<String, InUse>>
         if !local.is_empty() && !worktree.is_empty() {
             in_use.insert(
                 local.to_owned(),
-                InUse {
-                    state: format!("is checked out in {worktree}"),
-                    fix: "Switch to another branch there first.".to_owned(),
+                InUse::CheckedOut {
+                    worktree: PathBuf::from(worktree),
                 },
             );
         }
@@ -80,20 +72,14 @@ pub async fn branches_in_use(run: &GitCommand) -> Result<HashMap<String, InUse>>
     for (rebase_merge, rebase_apply, bisect) in states {
         for rebased in [rebase_merge, rebase_apply] {
             if rebased.starts_with("refs/heads/") {
-                in_use.entry(rebased).or_insert_with(|| InUse {
-                    state: "is being rebased".to_owned(),
-                    fix: "Finish or abort the rebase first.".to_owned(),
-                });
+                in_use.entry(rebased).or_insert(InUse::Rebasing);
             }
         }
         // The branch's short name; a commit's SHA when bisecting started detached.
         if !bisect.is_empty() {
             in_use
                 .entry(format!("refs/heads/{bisect}"))
-                .or_insert_with(|| InUse {
-                    state: "is being bisected".to_owned(),
-                    fix: "Stop bisecting first.".to_owned(),
-                });
+                .or_insert(InUse::Bisecting);
         }
     }
     Ok(in_use)
@@ -140,15 +126,18 @@ mod tests {
             let repo = fx.repos.open("in-use").await.unwrap();
             let in_use = branches_in_use(&repo.git()).await.unwrap();
             assert_eq!(
-                in_use["refs/heads/main"].state,
-                format!("is checked out in {}", path.display())
+                in_use["refs/heads/main"],
+                InUse::CheckedOut {
+                    worktree: path.clone()
+                }
             );
             assert_eq!(
-                in_use["refs/heads/linked"].state,
+                in_use["refs/heads/linked"].state(),
                 format!("is checked out in {}", linked.display())
             );
-            assert_eq!(in_use["refs/heads/rebased"].state, "is being rebased");
-            assert_eq!(in_use["refs/heads/bisected"].state, "is being bisected");
+            assert_eq!(in_use["refs/heads/rebased"], InUse::Rebasing);
+            assert_eq!(in_use["refs/heads/bisected"].state(), "is being bisected");
+            assert_eq!(in_use["refs/heads/bisected"].fix(), "Stop bisecting first.");
             assert!(!in_use.contains_key("refs/heads/free"));
         });
     }
