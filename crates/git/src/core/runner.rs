@@ -766,7 +766,7 @@ async fn run(cwd: PathBuf, args: Vec<OsString>, options: RunOptions) -> Result<V
     }
     // What git said was cut off, so it can't be taken for all it said, nor why it failed.
     if let Some(error) = stdout_failed.or(stderr_failed) {
-        return Err(error.into());
+        return Err(Error::Git(unread_output(shown_args, code, &error)));
     }
     if code == Some(0) {
         return Ok(out);
@@ -778,6 +778,16 @@ async fn run(cwd: PathBuf, args: Vec<OsString>, options: RunOptions) -> Result<V
         &String::from_utf8_lossy(&out),
         &String::from_utf8_lossy(&err),
     )))
+}
+
+/// The failure of the command `args`, which exited with `code`, whose output couldn't be read to
+/// its end: a bug, naming the command, rather than a file Gitto couldn't read.
+fn unread_output(args: Vec<String>, code: Option<i32>, error: &std::io::Error) -> GitError {
+    let message = format!(
+        "Couldn't read the output of git {}: {error}",
+        args.join(" ")
+    );
+    GitError::new(message, args, code, "")
 }
 
 #[cfg(test)]
@@ -944,7 +954,19 @@ mod tests {
 
         let output = smol::block_on(read_output(&mut Failing(false), None, || true));
         assert_eq!(output.bytes, b"partial");
-        assert_eq!(output.failed.unwrap().to_string(), "read failed");
+        let failed = output.failed.unwrap();
+        assert_eq!(failed.to_string(), "read failed");
+        // A failure of the command it's of, rather than of a file.
+        let error = Error::Git(unread_output(
+            vec!["log".into(), "-1".into()],
+            Some(0),
+            &failed,
+        ));
+        assert_eq!(
+            error.to_string(),
+            "Couldn't read the output of git log -1: read failed"
+        );
+        assert!(error.api().is_bug());
 
         let mut stopped = 0;
         let output = smol::block_on(read_output(&mut Failing(false), Some(3), || {
