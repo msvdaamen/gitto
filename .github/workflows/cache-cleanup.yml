@@ -1,8 +1,8 @@
 name: Cache cleanup
 
-# A pull request's caches (see the Rust job in ci.yml) can only be restored by that pull request, so
-# once it's merged or closed they only take up the repository's cache space, where GitHub would
-# otherwise keep them for a week.
+# A pull request's caches (pnpm's, see .github/actions/setup; the Rust jobs in ci.yml only save
+# main's) can only be restored by that pull request, so once it's merged or closed they only take
+# up the repository's cache space, where GitHub would otherwise keep them for a week.
 on:
   pull_request:
     types: [closed]
@@ -13,6 +13,8 @@ permissions:
 jobs:
   delete:
     name: Delete the pull request's caches
+    # A fork's pull request gets a token that can't delete them; its caches are left to expire.
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - env:

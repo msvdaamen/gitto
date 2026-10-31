@@ -46,7 +46,9 @@ pub async fn rebase_branch(
     let target = preflight::target(reference, branch)?;
     let git_dir = git_dirs(repo).await?.git_dir;
     // One write, so nothing else changes the branch, or starts another operation, halfway.
-    repo.exclusive(|run| async move {
+    let (reference, branch) = (reference.to_owned(), branch.to_owned());
+    repo.exclusive(move |run| async move {
+        let (reference, branch) = (reference.as_str(), branch.as_str());
         let Checked { sha, head: before } = preflight(
             &run,
             &git_dir,
