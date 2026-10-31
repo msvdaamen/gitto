@@ -18,7 +18,7 @@ use crate::data::git::{GitTask, file_input};
 use crate::data::keyed::Hold;
 use crate::data::loaded::Loaded;
 use crate::data::opaque::Opaque;
-use gitto_ui_logic::git::diff_source::{DiffFileKey, DiffSource};
+use gitto_ui_logic::git::diff_source::{DiffFileKey, DiffSource, is_uncommitted};
 
 impl Repository {
     /// Which remote branch has the commit `sha`, if that's loaded.
@@ -372,6 +372,26 @@ impl Repository {
             },
             cx,
         )
+    }
+
+    /// Loads again what's held by a key, of what never changes, and failed to load: once git works
+    /// again, say. What's of the uncommitted changes is reloaded with them, and what failed that
+    /// nothing holds is loaded again once it's asked for (see `Loaded::is_stale`).
+    pub(crate) fn reload_failed(&mut self, cx: &mut Context<Self>) {
+        for sha in self.commits.held_failed() {
+            drop(self.load_commit(sha, cx));
+        }
+        for key in self.files.held_failed() {
+            drop(self.load_files(key, cx));
+        }
+        for sha in self.messages.held_failed() {
+            drop(self.load_message(sha, cx));
+        }
+        for key in self.patches.held_failed() {
+            if !is_uncommitted(&key.source) {
+                drop(self.load_patch(key, cx));
+            }
+        }
     }
 
     /// The commit `sha`'s whole message, if it's loaded.

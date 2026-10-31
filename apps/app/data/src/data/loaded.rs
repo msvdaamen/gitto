@@ -93,9 +93,10 @@ impl<T> Loaded<T> {
         self.is_fetching() && self.data.is_some()
     }
 
-    /// Whether it's to be loaded when it's next shown: it never was, or it's out of date.
+    /// Whether it's to be loaded when it's next shown: it never was, it failed to with nothing
+    /// loaded (git may work again), or it's out of date.
     pub fn is_stale(&self) -> bool {
-        self.stale || (self.data.is_none() && self.error.is_none())
+        self.stale || self.data.is_none()
     }
 
     /// How many times it's been loaded or set: changes with each load that went through, equal
@@ -255,6 +256,21 @@ mod tests {
         assert!(!loaded.is_success());
         loaded.settle(Ok(1));
         assert!(loaded.error().is_none());
+    }
+
+    #[test]
+    fn is_loaded_again_when_its_next_shown_after_failing_with_nothing_loaded() {
+        let mut loaded = Loaded::<i32>::default();
+        loaded.start(Task::ready(()));
+        loaded.settle(Err(DataError::msg("No.")));
+        assert!(loaded.is_stale() && loaded.wants_load());
+        loaded.start(Task::ready(()));
+        assert!(!loaded.wants_load());
+        loaded.settle(Ok(1));
+        loaded.start(Task::ready(()));
+        loaded.settle(Err(DataError::msg("No.")));
+        // What's loaded stays on show, until it's out of date.
+        assert!(!loaded.is_stale());
     }
 
     #[test]

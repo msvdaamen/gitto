@@ -120,6 +120,17 @@ impl<K: Clone + Eq + Hash, T, A> Keyed<K, T, A> {
             .collect()
     }
 
+    /// The keys of the entries something holds whose last load failed, and that aren't loading.
+    pub fn held_failed(&self) -> Vec<K> {
+        self.entries
+            .iter()
+            .filter(|(_, entry)| {
+                entry.is_held() && entry.loaded.is_error() && !entry.loaded.is_fetching()
+            })
+            .map(|(key, _)| key.clone())
+            .collect()
+    }
+
     /// Drops the entries nothing holds or loads: for a repository that's gone off show, which
     /// needn't keep them till it's shown again.
     pub fn drop_unheld(&mut self) {

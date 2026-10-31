@@ -190,6 +190,7 @@ impl Repositories {
                 if repository.overview.is_used() {
                     drop(repository.reload(Field::Overview, cx));
                 }
+                repository.reload_failed(cx);
             });
         }
     }

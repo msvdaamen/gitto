@@ -1190,6 +1190,63 @@ mod tests {
         });
     }
 
+    /// A repository's git that can't read commits until the test says it can; counts what it's
+    /// asked.
+    #[derive(Default)]
+    struct Unreachable {
+        works: Cell<bool>,
+        commits: Cell<usize>,
+    }
+
+    impl RepositoryGit for Unreachable {
+        fn commit(&self, sha: gitto_git::input::Sha) -> GitTask<Commit> {
+            self.commits.set(self.commits.get() + 1);
+            let result = if self.works.get() {
+                Ok(commit(sha.as_str()))
+            } else {
+                Err(DataError::msg("The share is unreachable."))
+            };
+            async move { result }.boxed()
+        }
+    }
+
+    #[gpui_kit::test]
+    fn loads_a_commit_again_once_its_shown_again_after_failing(cx: &mut TestAppContext) {
+        let git = Rc::new(Unreachable::default());
+        let shared: Rc<dyn RepositoryGit> = git.clone();
+        let repository = cx.new(|_| Repository::new(repository_id(), shared));
+        let sha = format!("{:040x}", 1);
+        let hold = repository.update(cx, |repository, cx| repository.hold_commit(&sha, cx));
+        cx.run_until_parked();
+        assert!(repository.read_with(cx, |repository, _| repository.commit_error(&sha).is_some()));
+        drop(hold);
+
+        git.works.set(true);
+        let _hold = repository.update(cx, |repository, cx| repository.hold_commit(&sha, cx));
+        cx.run_until_parked();
+        assert_eq!(git.commits.get(), 2);
+        repository.read_with(cx, |repository, _| {
+            assert_eq!(repository.commit(&sha).unwrap().sha, sha);
+            assert!(repository.commit_error(&sha).is_none());
+        });
+    }
+
+    #[gpui_kit::test]
+    fn loads_again_what_failed_of_every_repository_once_git_works_again(cx: &mut TestAppContext) {
+        let git = Rc::new(Unreachable::default());
+        let shared: Rc<dyn RepositoryGit> = git.clone();
+        let repository = cx.update(|cx| Repositories::insert(&repository_id(), shared, cx));
+        let sha = format!("{:040x}", 1);
+        let _hold = repository.update(cx, |repository, cx| repository.hold_commit(&sha, cx));
+        cx.run_until_parked();
+
+        git.works.set(true);
+        cx.update(Repositories::reload_all);
+        cx.run_until_parked();
+        assert_eq!(git.commits.get(), 2);
+        assert!(repository.read_with(cx, |repository, _| repository.commit_error(&sha).is_none()));
+    }
+
     // `git/queries/operation.test.ts`.
 
     #[gpui_kit::test]
