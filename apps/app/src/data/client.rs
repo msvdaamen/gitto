@@ -142,6 +142,10 @@ pub type Fetcher<T> = Rc<dyn Fn(Option<&T>, &App) -> BoxFuture<'static, Result<T
 /// A setting that may depend on the query's data, like `version.ts`'s stale time.
 pub type BySetting<T, V> = Rc<dyn Fn(Option<&T>) -> V>;
 
+/// Data a query starts with, read from what else is cached, e.g. a commit from the log (TanStack's
+/// `initialData`); `None` if there's none.
+pub type InitialData<T> = Rc<dyn Fn(&App) -> Option<T>>;
+
 /// What a query is and how it loads (TanStack's query options). Built by each query's module
 /// (`status_query`…), and given to `Query::new`.
 pub struct QueryOptions<T> {
@@ -150,6 +154,9 @@ pub struct QueryOptions<T> {
     pub(crate) enabled: bool,
     pub(crate) stale_time: Option<BySetting<T, StaleTime>>,
     pub(crate) refetch_on_window_focus: Option<BySetting<T, RefetchOnFocus>>,
+    pub(crate) gc_time: Option<Duration>,
+    pub(crate) keep_previous_data: bool,
+    pub(crate) initial_data: Option<InitialData<T>>,
 }
 
 impl<T: 'static> QueryOptions<T> {
@@ -164,6 +171,9 @@ impl<T: 'static> QueryOptions<T> {
             enabled: true,
             stale_time: None,
             refetch_on_window_focus: None,
+            gc_time: None,
+            keep_previous_data: false,
+            initial_data: None,
         }
     }
 
@@ -201,6 +211,28 @@ impl<T: 'static> QueryOptions<T> {
         refetch: impl Fn(Option<&T>) -> RefetchOnFocus + 'static,
     ) -> Self {
         self.refetch_on_window_focus = Some(Rc::new(refetch));
+        self
+    }
+
+    /// How long it's kept once nothing shows it, rather than [`GC_TIME`] (TanStack's `gcTime`):
+    /// shorter for what's big and quick to load again, like a file's contents.
+    pub fn gc_time(mut self, gc_time: Duration) -> Self {
+        self.gc_time = Some(gc_time);
+        self
+    }
+
+    /// While a `Query` switched to this one (`Query::set_options`) has nothing loaded of it, it
+    /// shows what it showed before, as `Query::is_placeholder_data` says, rather than nothing
+    /// (TanStack's `placeholderData: keepPreviousData`): what's on show stays until the next is in.
+    pub fn keep_previous_data(mut self) -> Self {
+        self.keep_previous_data = true;
+        self
+    }
+
+    /// What it starts with when nothing's cached for it, if `initial` finds it elsewhere (TanStack's
+    /// `initialData`): it counts as loaded just now, so with a stale time it isn't loaded again.
+    pub fn initial_data(mut self, initial: impl Fn(&App) -> Option<T> + 'static) -> Self {
+        self.initial_data = Some(Rc::new(initial));
         self
     }
 }
@@ -241,12 +273,16 @@ pub struct QueryEntry<T> {
     data: Option<T>,
     error: Option<QueryError>,
     data_updated_at: Option<Instant>,
+    /// How many times it's been loaded or set (see `updates`).
+    updates: u64,
     is_fetching: bool,
     is_invalidated: bool,
     fetch: Option<Fetcher<T>>,
     stale_time: Option<BySetting<T, StaleTime>>,
     refetch_on_window_focus: Option<BySetting<T, RefetchOnFocus>>,
     defaults: QueryDefaults,
+    /// How long it's kept once nothing shows it.
+    gc_time: Duration,
     /// The load under way: dropped to cancel it.
     task: Option<Task<()>>,
     /// Told once the load under way is done, whichever replaced which.
@@ -262,12 +298,14 @@ impl<T: Clone + PartialEq + Send + 'static> QueryEntry<T> {
             data: None,
             error: None,
             data_updated_at: None,
+            updates: 0,
             is_fetching: false,
             is_invalidated: false,
             fetch: None,
             stale_time: None,
             refetch_on_window_focus: None,
             defaults,
+            gc_time: GC_TIME,
             task: None,
             waiters: Vec::new(),
             observers: Vec::new(),
@@ -309,6 +347,12 @@ impl<T: Clone + PartialEq + Send + 'static> QueryEntry<T> {
         self.data_updated_at
     }
 
+    /// How many times it's been loaded or set, equal data or not: what changes with
+    /// `data_updated_at`, to tell whether it's been loaded since, whatever the clock says.
+    pub fn updates(&self) -> u64 {
+        self.updates
+    }
+
     /// Takes on `options`' way of loading, as the latest `Query` to show it gives them: their
     /// settings, or the client's defaults for the ones they leave out, so what an earlier `Query`
     /// set (an unwatched one's stale time, say) doesn't stick to a watched one of the same key.
@@ -316,6 +360,9 @@ impl<T: Clone + PartialEq + Send + 'static> QueryEntry<T> {
         self.fetch = Some(options.fetch.clone());
         self.stale_time = options.stale_time.clone();
         self.refetch_on_window_focus = options.refetch_on_window_focus.clone();
+        if let Some(gc_time) = options.gc_time {
+            self.gc_time = gc_time;
+        }
     }
 
     pub(crate) fn observe(&mut self, enabled: Rc<std::cell::Cell<bool>>) {
@@ -389,6 +436,30 @@ impl<T: Clone + PartialEq + Send + 'static> QueryEntry<T> {
         Some(wait)
     }
 
+    /// A receiver told once the load under way is done; `None` if none is.
+    pub fn wait(&mut self) -> Option<oneshot::Receiver<()>> {
+        if !self.is_fetching {
+            return None;
+        }
+        let (done, wait) = oneshot::channel();
+        self.waiters.push(done);
+        Some(wait)
+    }
+
+    /// Stops the load under way, if any, leaving the data as it was (TanStack's `cancelQueries`):
+    /// e.g. so one that started before a change can't overwrite what the change set.
+    pub fn cancel(&mut self, cx: &mut Context<Self>) {
+        if !self.is_fetching {
+            return;
+        }
+        self.task = None;
+        self.is_fetching = false;
+        for waiter in self.waiters.drain(..) {
+            let _ = waiter.send(());
+        }
+        cx.notify();
+    }
+
     fn settle(&mut self, result: Result<T, QueryError>, cx: &mut Context<Self>) {
         let now = cx.background_executor().now();
         match result {
@@ -400,6 +471,7 @@ impl<T: Clone + PartialEq + Send + 'static> QueryEntry<T> {
                 }
                 self.error = None;
                 self.data_updated_at = Some(now);
+                self.updates += 1;
                 self.is_invalidated = false;
             }
             Err(error) => self.error = Some(error),
@@ -418,6 +490,7 @@ impl<T: Clone + PartialEq + Send + 'static> QueryEntry<T> {
         self.data = Some(data);
         self.error = None;
         self.data_updated_at = Some(cx.background_executor().now());
+        self.updates += 1;
         self.is_invalidated = false;
         cx.notify();
     }
@@ -430,6 +503,7 @@ trait AnyQueryEntry {
     /// Marks it invalidated, and loads it again if it's shown; told once that's done.
     fn invalidate(&self, cx: &mut App) -> Option<oneshot::Receiver<()>>;
     fn refetch_on_focus(&self, now: Instant, cx: &mut App);
+    fn cancel(&self, cx: &mut App);
 }
 
 /// What a predicate given to `QueryClient::invalidate_where` sees of an entry.
@@ -437,9 +511,12 @@ trait AnyQueryEntry {
 pub struct EntryInfo {
     pub key: QueryKey,
     pub data_updated_at: Option<Instant>,
+    pub updates: u64,
     pub is_active: bool,
     pub is_fetching: bool,
     pub is_observed: bool,
+    /// How long it's kept once nothing shows it.
+    pub gc_time: Duration,
 }
 
 impl<T: Clone + PartialEq + Send + 'static> AnyQueryEntry for Entity<QueryEntry<T>> {
@@ -452,9 +529,11 @@ impl<T: Clone + PartialEq + Send + 'static> AnyQueryEntry for Entity<QueryEntry<
         EntryInfo {
             key: entry.key.clone(),
             data_updated_at: entry.data_updated_at,
+            updates: entry.updates,
             is_active: entry.is_active(),
             is_fetching: entry.is_fetching,
             is_observed: entry.is_observed(),
+            gc_time: entry.gc_time,
         }
     }
 
@@ -484,6 +563,10 @@ impl<T: Clone + PartialEq + Send + 'static> AnyQueryEntry for Entity<QueryEntry<
                 entry.fetch(cx);
             }
         });
+    }
+
+    fn cancel(&self, cx: &mut App) {
+        self.update(cx, |entry, cx| entry.cancel(cx));
     }
 }
 
@@ -597,6 +680,79 @@ impl QueryClient {
         Self::entry::<T>(key, cx).update(cx, |entry, cx| entry.set_data(data, cx));
     }
 
+    /// Changes what's cached for `key` with `update`, if anything is; whether it did (TanStack's
+    /// `setQueryData` with an updater that keeps `undefined`).
+    pub fn update_data<T: Clone + PartialEq + Send + 'static>(
+        key: &QueryKey,
+        update: impl FnOnce(&T) -> T,
+        cx: &mut App,
+    ) -> bool {
+        let Some(entry) = Self::get_entry::<T>(key, cx) else {
+            return false;
+        };
+        let Some(data) = entry.read(cx).data.as_ref().map(update) else {
+            return false;
+        };
+        entry.update(cx, |entry, cx| entry.set_data(data, cx));
+        true
+    }
+
+    /// How many times what's cached for `key` has been loaded or set (see `QueryEntry::updates`);
+    /// 0 if nothing is.
+    pub fn updates(key: &QueryKey, cx: &App) -> u64 {
+        cx.global::<QueryClient>()
+            .entries
+            .get(key)
+            .map_or(0, |entry| entry.info(cx).updates)
+    }
+
+    /// The query `options`' data: what's cached, if it's fresh, or else what it loads (TanStack's
+    /// `fetchQuery`), e.g. to load what's about to be shown ahead of it. A load under way is waited
+    /// for rather than started again. What it loads is cached as any query's, and dropped once
+    /// nothing has shown it for its gc time.
+    pub fn fetch_query<T: Clone + PartialEq + Send + 'static>(
+        options: QueryOptions<T>,
+        cx: &mut App,
+    ) -> Task<Result<T, QueryError>> {
+        let entry = Self::entry::<T>(options.key(), cx);
+        let now = Self::now(cx);
+        let wait = entry.update(cx, |entry, cx| {
+            entry.set_options(&options);
+            if entry.data.is_some() && !entry.is_stale(now) {
+                None
+            } else if entry.is_fetching {
+                entry.wait()
+            } else {
+                entry.fetch(cx)
+            }
+        });
+        cx.spawn(async move |cx| {
+            let loaded = wait.is_some();
+            if let Some(wait) = wait {
+                let _ = wait.await;
+            }
+            cx.update(|cx| {
+                let entry = entry.read(cx);
+                match (&entry.error, &entry.data) {
+                    // Fresh: what's cached, even if a load since failed.
+                    (_, Some(data)) if !loaded => Ok(data.clone()),
+                    (Some(error), _) => Err(error.clone()),
+                    (None, Some(data)) => Ok(data.clone()),
+                    (None, None) => Err(QueryError::msg("The query was cancelled.")),
+                }
+            })
+        })
+    }
+
+    /// Stops the load under way of the query `key`, exactly, if there is one (see
+    /// [`QueryEntry::cancel`]).
+    pub fn cancel(key: &QueryKey, cx: &mut App) {
+        let entry = cx.global::<QueryClient>().entries.get(key).cloned();
+        if let Some(entry) = entry {
+            entry.cancel(cx);
+        }
+    }
+
     /// Marks every query under `prefix` invalidated, and loads again those that are shown; the
     /// others load once they're shown again (TanStack's `invalidateQueries`). The future resolves
     /// once those loads are done.
@@ -654,7 +810,7 @@ impl QueryClient {
         client.inactive.clear();
     }
 
-    /// Drops the queries nothing has shown for [`GC_TIME`]: noticed here, as `Query`s go without
+    /// Drops the queries nothing has shown for their gc time ([`GC_TIME`] by default): noticed here, as `Query`s go without
     /// telling their entry.
     fn collect_garbage(cx: &mut App) {
         let now = Self::now(cx);
@@ -672,7 +828,7 @@ impl QueryClient {
                 continue;
             }
             // Its first time seen unobserved starts the clock.
-            if !Self::mark_inactive(&key, now, cx) {
+            if !Self::mark_inactive(&key, now, info.gc_time, cx) {
                 continue;
             }
             expired.push(key);
@@ -684,14 +840,14 @@ impl QueryClient {
         }
     }
 
-    /// Whether `entry`, unobserved, has been for [`GC_TIME`]; starts timing it if it wasn't.
-    fn mark_inactive(key: &QueryKey, now: Instant, cx: &mut App) -> bool {
+    /// Whether `entry`, unobserved, has been for `gc_time`; starts timing it if it wasn't.
+    fn mark_inactive(key: &QueryKey, now: Instant, gc_time: Duration, cx: &mut App) -> bool {
         let since = cx
             .global_mut::<QueryClient>()
             .inactive
             .entry(key.clone())
             .or_insert(now);
-        now.duration_since(*since) >= GC_TIME
+        now.duration_since(*since) >= gc_time
     }
 }
 
@@ -765,6 +921,149 @@ mod tests {
         });
         cx.run_until_parked();
         assert_eq!(loads.get(), 2);
+    }
+
+    type Answers = Rc<std::cell::RefCell<Vec<oneshot::Sender<Result<String, QueryError>>>>>;
+
+    /// A query of a commit's (outside `keys::repository`), loaded with what `answers` gives: its
+    /// answers, in turn, when the test says.
+    fn commit_options(sha: &str, answers: &Answers) -> QueryOptions<String> {
+        let answers = Rc::clone(answers);
+        QueryOptions::new(
+            crate::data::keys::commit_message(&repo(), sha),
+            move |_, _| {
+                let (answer, answered) = oneshot::channel();
+                answers.borrow_mut().push(answer);
+                async move { answered.await.unwrap() }.boxed()
+            },
+        )
+        .stale_time(StaleTime::Infinite)
+    }
+
+    fn answer(answers: &Answers, result: Result<&str, &str>) {
+        let answer = answers.borrow_mut().remove(0);
+        let _ = answer.send(result.map(str::to_owned).map_err(QueryError::msg));
+    }
+
+    struct Shown {
+        query: Query<String>,
+    }
+
+    #[gpui_kit::test]
+    fn keeps_what_was_shown_while_another_loads(cx: &mut TestAppContext) {
+        cx.update(QueryClient::init);
+        let answers = Answers::default();
+        let shown = cx.new(|cx| Shown {
+            query: Query::new(commit_options("a", &answers), cx),
+        });
+        cx.run_until_parked();
+        answer(&answers, Ok("First"));
+        cx.run_until_parked();
+
+        shown.update(cx, |shown, cx| {
+            shown
+                .query
+                .set_options(commit_options("b", &answers).keep_previous_data(), cx)
+        });
+        cx.run_until_parked();
+        shown.read_with(cx, |shown, _| {
+            assert_eq!(shown.query.data().as_deref(), Some("First"));
+            assert!(shown.query.is_placeholder_data());
+            assert!(shown.query.is_success());
+            assert!(shown.query.is_refetching());
+        });
+        answer(&answers, Ok("Second"));
+        cx.run_until_parked();
+        shown.read_with(cx, |shown, _| {
+            assert_eq!(shown.query.data().as_deref(), Some("Second"));
+            assert!(!shown.query.is_placeholder_data());
+        });
+
+        // Without it, nothing's shown until the other has loaded.
+        shown.update(cx, |shown, cx| {
+            shown.query.set_options(commit_options("c", &answers), cx)
+        });
+        assert!(shown.read_with(cx, |shown, _| shown.query.data()).is_none());
+    }
+
+    #[gpui_kit::test]
+    fn fetches_what_isnt_fresh_once(cx: &mut TestAppContext) {
+        cx.update(QueryClient::init);
+        let answers = Answers::default();
+        let first = cx.update(|cx| QueryClient::fetch_query(commit_options("a", &answers), cx));
+        // Waits for the load under way rather than starting another.
+        let second = cx.update(|cx| QueryClient::fetch_query(commit_options("a", &answers), cx));
+        cx.run_until_parked();
+        assert_eq!(answers.borrow().len(), 1);
+        answer(&answers, Ok("Message"));
+        cx.run_until_parked();
+        assert_eq!(first.now_or_never().unwrap().unwrap(), "Message");
+        assert_eq!(second.now_or_never().unwrap().unwrap(), "Message");
+
+        // Fresh: what's cached.
+        let cached = cx.update(|cx| QueryClient::fetch_query(commit_options("a", &answers), cx));
+        cx.run_until_parked();
+        assert!(answers.borrow().is_empty());
+        assert_eq!(cached.now_or_never().unwrap().unwrap(), "Message");
+
+        let failed = cx.update(|cx| QueryClient::fetch_query(commit_options("b", &answers), cx));
+        cx.run_until_parked();
+        answer(&answers, Err("No such commit."));
+        cx.run_until_parked();
+        assert_eq!(
+            failed.now_or_never().unwrap().unwrap_err().message(),
+            "No such commit."
+        );
+    }
+
+    #[gpui_kit::test]
+    fn cancels_a_load_leaving_the_data_alone(cx: &mut TestAppContext) {
+        cx.update(QueryClient::init);
+        let answers = Answers::default();
+        let key = crate::data::keys::commit_message(&repo(), "a");
+        let shown = cx.new(|cx| Shown {
+            query: Query::new(commit_options("a", &answers), cx),
+        });
+        cx.run_until_parked();
+        answer(&answers, Ok("Before"));
+        cx.run_until_parked();
+
+        drop(shown.update(cx, |shown, cx| shown.query.refetch(cx)));
+        cx.update(|cx| QueryClient::cancel(&key, cx));
+        assert!(cx.update(|cx| QueryClient::update_data::<String>(
+            &key,
+            |last| format!("{last}, changed"),
+            cx
+        )));
+        answer(&answers, Ok("Reloaded"));
+        cx.run_until_parked();
+        shown.read_with(cx, |shown, _| {
+            assert_eq!(shown.query.data().as_deref(), Some("Before, changed"));
+            assert!(!shown.query.is_fetching());
+        });
+        // Nothing to change where there's nothing.
+        let other = crate::data::keys::commit_message(&repo(), "b");
+        assert!(!cx.update(|cx| QueryClient::update_data::<String>(&other, Clone::clone, cx)));
+    }
+
+    #[gpui_kit::test]
+    fn drops_a_query_with_a_gc_time_of_its_own_sooner(cx: &mut TestAppContext) {
+        cx.update(QueryClient::init);
+        let answers = Answers::default();
+        let options = commit_options("a", &answers).gc_time(Duration::from_secs(60));
+        let key = options.key().clone();
+        cx.update(|cx| QueryClient::fetch_query(options, cx).detach());
+        cx.run_until_parked();
+        answer(&answers, Ok("Message"));
+        cx.run_until_parked();
+        // Noticed unshown, then kept for a minute.
+        cx.update(|cx| QueryClient::entry::<i32>(&crate::data::keys::log(&repo()), cx));
+        cx.executor().advance_clock(Duration::from_secs(60));
+        cx.update(|cx| QueryClient::entry::<i32>(&crate::data::keys::log(&repo()), cx));
+        assert!(
+            cx.update(|cx| QueryClient::get_entry::<String>(&key, cx))
+                .is_none()
+        );
     }
 
     #[gpui_kit::test]

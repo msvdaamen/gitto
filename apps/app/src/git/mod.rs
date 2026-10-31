@@ -5,6 +5,8 @@
 //! Cargo.toml, use its versions of these, and delete this module: each item here is named as
 //! there, so that's a change of import.
 
+pub mod changes;
 pub mod diff_source;
+pub mod patch;
 pub mod rows;
 pub mod status;

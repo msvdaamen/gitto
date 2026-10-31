@@ -18,6 +18,7 @@ use super::client::{QueryClient, QueryEntry, QueryError, QueryOptions, QueryStat
 /// What a view sees of a query: its selection (`S`, all of `T` by default), and its state.
 pub struct Query<T: 'static, S: 'static = T> {
     entry: Entity<QueryEntry<T>>,
+    select: Rc<dyn Fn(&T) -> S>,
     snapshot: Rc<RefCell<Snapshot<S>>>,
     enabled: Rc<Cell<bool>>,
     _subscription: Subscription,
@@ -27,24 +28,37 @@ pub struct Query<T: 'static, S: 'static = T> {
 #[derive(Clone, PartialEq)]
 struct Snapshot<S> {
     data: Option<S>,
+    /// What was shown of the query before, while this one has nothing (see
+    /// `QueryOptions::keep_previous_data`); dropped once it has.
+    placeholder: Option<S>,
     error: Option<QueryError>,
     status: QueryStatus,
     is_fetching: bool,
     data_updated_at: Option<Instant>,
+    updates: u64,
 }
 
-impl<S> Snapshot<S> {
+impl<S: Clone> Snapshot<S> {
     fn of<T: Clone + PartialEq + Send + 'static>(
         entry: &QueryEntry<T>,
         select: &dyn Fn(&T) -> S,
+        placeholder: Option<S>,
     ) -> Self {
+        let status = entry.status();
         Snapshot {
             data: entry.data().map(select),
+            placeholder: placeholder.filter(|_| status == QueryStatus::Pending),
             error: entry.error().cloned(),
-            status: entry.status(),
+            status,
             is_fetching: entry.is_fetching(),
             data_updated_at: entry.data_updated_at(),
+            updates: entry.updates(),
         }
+    }
+
+    /// The data, or the placeholder while there's none.
+    fn shown(&self) -> Option<&S> {
+        self.data.as_ref().or(self.placeholder.as_ref())
     }
 }
 
@@ -64,24 +78,65 @@ impl<T: Clone + PartialEq + Send + 'static, S: Clone + PartialEq + 'static> Quer
         select: impl Fn(&T) -> S + 'static,
         cx: &mut Context<V>,
     ) -> Self {
+        Query::build(options, Rc::new(select), None, cx)
+    }
+
+    /// Shows the query `options` instead, with the same selection (TanStack's `useQuery` given
+    /// another key): another commit's, say. Of the same query, it only takes on its options (and
+    /// whether it's enabled). Of another, with `QueryOptions::keep_previous_data`, what was shown
+    /// stays on show until the other has loaded (see [`is_placeholder_data`](Self::is_placeholder_data)).
+    pub fn set_options<V: 'static>(&mut self, options: QueryOptions<T>, cx: &mut Context<V>) {
+        if options.key() == self.entry.read(cx).key() {
+            self.entry
+                .update(cx, |entry, _| entry.set_options(&options));
+            self.set_enabled(options.enabled, cx);
+            return;
+        }
+        let placeholder = if options.keep_previous_data {
+            self.snapshot.borrow().shown().cloned()
+        } else {
+            None
+        };
+        *self = Query::build(options, Rc::clone(&self.select), placeholder, cx);
+        cx.notify();
+    }
+
+    fn build<V: 'static>(
+        options: QueryOptions<T>,
+        select: Rc<dyn Fn(&T) -> S>,
+        placeholder: Option<S>,
+        cx: &mut Context<V>,
+    ) -> Self {
         let entry = QueryClient::entry::<T>(options.key(), cx);
         let enabled = Rc::new(Cell::new(options.enabled));
+        let initial = match &options.initial_data {
+            Some(initial) if entry.read(cx).data().is_none() => initial(cx),
+            _ => None,
+        };
         let now = QueryClient::now(cx);
         entry.update(cx, |entry, cx| {
             entry.set_options(&options);
             entry.observe(Rc::clone(&enabled));
+            if let Some(initial) = initial {
+                entry.set_data(initial, cx);
+            }
             // Shown, it's loaded if it's stale (TanStack's `refetchOnMount`), unless it's loading.
             if options.enabled && entry.is_stale(now) && !entry.is_fetching() {
                 entry.fetch(cx);
             }
         });
 
-        let select: Rc<dyn Fn(&T) -> S> = Rc::new(select);
-        let snapshot = Rc::new(RefCell::new(Snapshot::of(entry.read(cx), &*select)));
+        let snapshot = Rc::new(RefCell::new(Snapshot::of(
+            entry.read(cx),
+            &*select,
+            placeholder,
+        )));
         let subscription = {
             let snapshot = Rc::clone(&snapshot);
+            let select = Rc::clone(&select);
             cx.observe(&entry, move |_, entry, cx| {
-                let next = Snapshot::of(entry.read(cx), &*select);
+                let placeholder = snapshot.borrow().placeholder.clone();
+                let next = Snapshot::of(entry.read(cx), &*select, placeholder);
                 if *snapshot.borrow() != next {
                     *snapshot.borrow_mut() = next;
                     cx.notify();
@@ -90,6 +145,7 @@ impl<T: Clone + PartialEq + Send + 'static, S: Clone + PartialEq + 'static> Quer
         };
         Query {
             entry,
+            select,
             snapshot,
             enabled,
             _subscription: subscription,
@@ -99,9 +155,17 @@ impl<T: Clone + PartialEq + Send + 'static, S: Clone + PartialEq + 'static> Quer
 
 impl<T: Clone + PartialEq + Send + 'static, S: Clone + 'static> Query<T, S> {
     /// What's selected of the data; `None` until it's loaded. The data from before stays while
-    /// it loads again, or if that fails.
+    /// it loads again, or if that fails; so does another query's it was switched from, while this
+    /// one has none (see [`is_placeholder_data`](Self::is_placeholder_data)).
     pub fn data(&self) -> Option<S> {
-        self.snapshot.borrow().data.clone()
+        self.snapshot.borrow().shown().cloned()
+    }
+
+    /// Whether [`data`](Self::data) is the query's it was switched from, as this one hasn't loaded
+    /// yet (TanStack's `isPlaceholderData`; see `QueryOptions::keep_previous_data`).
+    pub fn is_placeholder_data(&self) -> bool {
+        let snapshot = self.snapshot.borrow();
+        snapshot.data.is_none() && snapshot.placeholder.is_some()
     }
 
     /// Why the last load failed, if it did.
@@ -109,7 +173,11 @@ impl<T: Clone + PartialEq + Send + 'static, S: Clone + 'static> Query<T, S> {
         self.snapshot.borrow().error.clone()
     }
 
+    /// Where it is; [`QueryStatus::Success`] while it shows a placeholder, as TanStack has it.
     pub fn status(&self) -> QueryStatus {
+        if self.is_placeholder_data() {
+            return QueryStatus::Success;
+        }
         self.snapshot.borrow().status
     }
 
@@ -131,19 +199,25 @@ impl<T: Clone + PartialEq + Send + 'static, S: Clone + 'static> Query<T, S> {
         self.snapshot.borrow().is_fetching
     }
 
-    /// Loading for the first time: nothing to show yet.
+    /// Loading for the first time: nothing of it to show yet.
     pub fn is_loading(&self) -> bool {
-        self.is_fetching() && self.snapshot.borrow().data.is_none()
+        self.is_fetching() && self.snapshot.borrow().shown().is_none()
     }
 
     /// Loading again, with the data from before on show (what `UpdatingIndicator` says).
     pub fn is_refetching(&self) -> bool {
-        self.is_fetching() && self.snapshot.borrow().data.is_some()
+        self.is_fetching() && self.snapshot.borrow().shown().is_some()
     }
 
     /// When it last loaded.
     pub fn data_updated_at(&self) -> Option<Instant> {
         self.snapshot.borrow().data_updated_at
+    }
+
+    /// How many times it's been loaded or set (see `QueryEntry::updates`): changes whenever
+    /// [`data_updated_at`](Self::data_updated_at) does.
+    pub fn updates(&self) -> u64 {
+        self.snapshot.borrow().updates
     }
 
     /// Turns loading on or off (TanStack's `enabled`, changed): turned on, it loads if stale.
