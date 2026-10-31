@@ -15,8 +15,11 @@ pub struct Loaded<T> {
     error: Option<DataError>,
     /// The load under way: dropped to cancel it.
     load: Option<Task<()>>,
-    /// Told once the load under way is done, or cancelled.
+    /// Told once the load under way is done, or cancelled: after the one it was asked again
+    /// during, if it was.
     waiters: Vec<oneshot::Sender<()>>,
+    /// Whether it was asked to load again as it loaded (see [`load_again`](Self::load_again)).
+    again: bool,
     /// Whether it's to be loaded again when it's next shown: the repository changed while it
     /// wasn't, say.
     stale: bool,
@@ -36,6 +39,7 @@ impl<T> Default for Loaded<T> {
             error: None,
             load: None,
             waiters: Vec::new(),
+            again: false,
             stale: false,
             revision: 0,
             load_revision: 0,
@@ -139,6 +143,14 @@ impl<T> Loaded<T> {
         self.load_revision = self.revision;
     }
 
+    /// Asks for it to be loaded again once the load under way is done, which is out of date (see
+    /// [`mark_stale`](Self::mark_stale)): its owner starts that load as it settles (see
+    /// [`settle`](Self::settle)), and what waits for this one waits for that one.
+    pub(crate) fn load_again(&mut self) {
+        self.mark_stale();
+        self.again = true;
+    }
+
     /// A receiver told once the load under way is done; `None` if none is.
     pub fn wait(&mut self) -> Option<oneshot::Receiver<()>> {
         self.load.as_ref()?;
@@ -149,8 +161,9 @@ impl<T> Loaded<T> {
 
     /// Takes what a load brought: the data (kept as it was if it's equal), or why it failed (with
     /// what was there before kept). Data a load read before it went out of date stays out of
-    /// date.
-    pub(crate) fn settle(&mut self, result: Result<T, DataError>)
+    /// date. Whether it's to be loaded again now, as it was asked to while it loaded (see
+    /// [`load_again`](Self::load_again)).
+    pub(crate) fn settle(&mut self, result: Result<T, DataError>) -> bool
     where
         T: PartialEq,
     {
@@ -162,14 +175,19 @@ impl<T> Loaded<T> {
             Err(error) => self.error = Some(error),
         }
         self.load = None;
+        if std::mem::take(&mut self.again) {
+            return true;
+        }
         for waiter in self.waiters.drain(..) {
             let _ = waiter.send(());
         }
+        false
     }
 
     /// Stops the load under way, if any, leaving the data as it was: so one that started before a
     /// change can't overwrite what the change set. Whether one was.
     pub fn cancel(&mut self) -> bool {
+        self.again = false;
         if self.load.take().is_none() {
             return false;
         }
@@ -246,6 +264,23 @@ mod tests {
 
         loaded.start(Task::ready(()));
         loaded.settle(Ok(3));
+        assert!(!loaded.is_stale());
+    }
+
+    #[test]
+    fn waits_for_the_load_it_was_asked_again_during() {
+        let mut loaded = Loaded::with(1);
+        loaded.start(Task::ready(()));
+        let mut first = loaded.wait().unwrap();
+        loaded.load_again();
+        assert!(loaded.settle(Ok(2)));
+        assert_eq!(loaded.data(), Some(&2));
+        // Not told yet: it's loaded again first.
+        assert_eq!(first.try_recv(), Ok(None));
+
+        loaded.start(Task::ready(()));
+        assert!(!loaded.settle(Ok(3)));
+        assert_eq!(first.try_recv(), Ok(Some(())));
         assert!(!loaded.is_stale());
     }
 

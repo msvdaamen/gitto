@@ -14,7 +14,7 @@ use super::{Part, Repository, failed, loaded_result};
 use crate::data::diff::{ChangedFiles, FilesOf};
 use crate::data::error::DataError;
 use crate::data::file_diff::FilePatch;
-use crate::data::git::file_input;
+use crate::data::git::{GitTask, file_input};
 use crate::data::keyed::Hold;
 use crate::data::loaded::Loaded;
 use crate::data::opaque::Opaque;
@@ -42,15 +42,15 @@ impl Repository {
         sha: String,
         cx: &mut Context<Self>,
     ) -> Option<oneshot::Receiver<()>> {
-        let fetch = match Sha::parse(sha.clone()) {
-            Ok(commit) => self.git.pushed_to(commit),
-            Err(error) => failed(self.git.invalid(error)),
-        };
         self.pushed_to.entry(sha.clone());
+        let key = sha.clone();
         self.start(
             Part::PushedTo,
-            move |repo| repo.pushed_to.get_mut(&sha),
-            fetch,
+            move |repo| repo.pushed_to.get_mut(&key),
+            move |repo, _| match Sha::parse(sha.clone()) {
+                Ok(commit) => repo.git.pushed_to(commit),
+                Err(error) => failed(repo.git.invalid(error)),
+            },
             cx,
         )
     }
@@ -110,9 +110,21 @@ impl Repository {
         file: ChangedFile,
         cx: &mut Context<Self>,
     ) -> Option<oneshot::Receiver<()>> {
-        let patch = match file_input(&file) {
+        let key = DiffFileKey::new(&source, &file.path);
+        self.patches.entry(key.clone());
+        self.start(
+            Part::Patches,
+            move |repo| repo.patches.get_mut(&key),
+            move |repo, _| repo.fetch_file_patch(&source, &file),
+            cx,
+        )
+    }
+
+    /// Asks git for the patch of `file` in `source`.
+    fn fetch_file_patch(&self, source: &DiffSource, file: &ChangedFile) -> GitTask<FilePatch> {
+        let patch = match file_input(file) {
             Err(error) => failed(self.git.invalid(error)),
-            Ok(input) => match &source {
+            Ok(input) => match source {
                 DiffSource::Commit { sha } => match Sha::parse(sha.clone()) {
                     Ok(commit) => self.git.commit_file_patch(commit, input),
                     Err(error) => failed(self.git.invalid(error)),
@@ -128,23 +140,16 @@ impl Repository {
                 DiffSource::Staged => self.git.staged_file_patch(input),
             },
         };
-        let key = DiffFileKey::new(&source, &file.path);
-        let fetch = async move {
-            let patch = patch.await?;
+        let key = DiffFileKey::new(source, &file.path);
+        let file = file.clone();
+        async move {
             Ok(FilePatch {
-                key: DiffFileKey::new(&source, &file.path),
+                key,
                 file,
-                patch: patch.into(),
+                patch: patch.await?.into(),
             })
         }
-        .boxed();
-        self.patches.entry(key.clone());
-        self.start(
-            Part::Patches,
-            move |repo| repo.patches.get_mut(&key),
-            fetch,
-            cx,
-        )
+        .boxed()
     }
 
     /// The conflicted file at `path`, if it's loaded.
@@ -203,15 +208,15 @@ impl Repository {
         path: String,
         cx: &mut Context<Self>,
     ) -> Option<oneshot::Receiver<()>> {
-        let fetch = match RepoPath::parse(path.clone()) {
-            Ok(file) => self.git.conflict(file),
-            Err(error) => failed(self.git.invalid(error)),
-        };
         self.conflicts.entry(path.clone());
+        let key = path.clone();
         self.start(
             Part::Conflicts,
-            move |repo| repo.conflicts.get_mut(&path),
-            fetch,
+            move |repo| repo.conflicts.get_mut(&key),
+            move |repo, _| match RepoPath::parse(path.clone()) {
+                Ok(file) => repo.git.conflict(file),
+                Err(error) => failed(repo.git.invalid(error)),
+            },
             cx,
         )
     }
@@ -229,15 +234,14 @@ impl Repository {
             if loaded.is_fetching() {
                 loaded.wait()
             } else if loaded.is_stale() {
-                let fetch = match FullSha::parse(oid.clone()) {
-                    Ok(blob) => self.git.blob(blob),
-                    Err(error) => failed(self.git.invalid(error)),
-                };
-                let key = oid.clone();
+                let (key, blob) = (oid.clone(), oid.clone());
                 self.start(
                     Part::Patches,
                     move |repo| repo.blobs.get_mut(&key),
-                    fetch,
+                    move |repo, _| match FullSha::parse(blob.clone()) {
+                        Ok(blob) => repo.git.blob(blob),
+                        Err(error) => failed(repo.git.invalid(error)),
+                    },
                     cx,
                 )
             } else {
@@ -282,19 +286,26 @@ impl Repository {
         } else if self.commits.entry(sha.to_owned()).is_stale()
             && !self.commits.entry(sha.to_owned()).is_fetching()
         {
-            let sha = sha.to_owned();
-            let fetch = match Sha::parse(sha.clone()) {
-                Ok(commit) => self.git.commit(commit),
-                Err(error) => failed(self.git.invalid(error)),
-            };
-            drop(self.start(
-                Part::Commits,
-                move |repo| repo.commits.get_mut(&sha),
-                fetch,
-                cx,
-            ));
+            drop(self.load_commit(sha.to_owned(), cx));
         }
         hold
+    }
+
+    fn load_commit(
+        &mut self,
+        sha: String,
+        cx: &mut Context<Self>,
+    ) -> Option<oneshot::Receiver<()>> {
+        let key = sha.clone();
+        self.start(
+            Part::Commits,
+            move |repo| repo.commits.get_mut(&key),
+            move |repo, _| match Sha::parse(sha.clone()) {
+                Ok(commit) => repo.git.commit(commit),
+                Err(error) => failed(repo.git.invalid(error)),
+            },
+            cx,
+        )
     }
 
     /// The files the commit or stash `sha` changed, if they're loaded.
@@ -308,32 +319,42 @@ impl Repository {
         let hold = self.files.hold(key.clone());
         let loaded = self.files.entry(key.clone());
         if loaded.is_stale() && !loaded.is_fetching() {
-            let sha = sha.to_owned();
-            let files = match of {
-                FilesOf::Commit => match Sha::parse(sha.clone()) {
-                    Ok(commit) => self.git.commit_files(commit),
-                    Err(error) => failed(self.git.invalid(error)),
-                },
-                FilesOf::Stash => match FullSha::parse(sha.clone()) {
-                    Ok(stash) => self.git.stash_files(stash),
-                    Err(error) => failed(self.git.invalid(error)),
-                },
-            };
-            let fetch = async move {
-                Ok(ChangedFiles {
-                    sha,
-                    files: Opaque::new(files.await?),
-                })
-            }
-            .boxed();
-            drop(self.start(
-                Part::Commits,
-                move |repo| repo.files.get_mut(&key),
-                fetch,
-                cx,
-            ));
+            drop(self.load_files(key, cx));
         }
         hold
+    }
+
+    fn load_files(
+        &mut self,
+        (of, sha): (FilesOf, String),
+        cx: &mut Context<Self>,
+    ) -> Option<oneshot::Receiver<()>> {
+        let key = (of, sha.clone());
+        self.start(
+            Part::Commits,
+            move |repo| repo.files.get_mut(&key),
+            move |repo, _| {
+                let files = match of {
+                    FilesOf::Commit => match Sha::parse(sha.clone()) {
+                        Ok(commit) => repo.git.commit_files(commit),
+                        Err(error) => failed(repo.git.invalid(error)),
+                    },
+                    FilesOf::Stash => match FullSha::parse(sha.clone()) {
+                        Ok(stash) => repo.git.stash_files(stash),
+                        Err(error) => failed(repo.git.invalid(error)),
+                    },
+                };
+                let sha = sha.clone();
+                async move {
+                    Ok(ChangedFiles {
+                        sha,
+                        files: Opaque::new(files.await?),
+                    })
+                }
+                .boxed()
+            },
+            cx,
+        )
     }
 
     /// The commit `sha`'s whole message, if it's loaded.
@@ -346,18 +367,25 @@ impl Repository {
         let hold = self.messages.hold(sha.to_owned());
         let loaded = self.messages.entry(sha.to_owned());
         if loaded.is_stale() && !loaded.is_fetching() {
-            let sha = sha.to_owned();
-            let fetch = match Sha::parse(sha.clone()) {
-                Ok(commit) => self.git.commit_message(commit),
-                Err(error) => failed(self.git.invalid(error)),
-            };
-            drop(self.start(
-                Part::Commits,
-                move |repo| repo.messages.get_mut(&sha),
-                fetch,
-                cx,
-            ));
+            drop(self.load_message(sha.to_owned(), cx));
         }
         hold
+    }
+
+    fn load_message(
+        &mut self,
+        sha: String,
+        cx: &mut Context<Self>,
+    ) -> Option<oneshot::Receiver<()>> {
+        let key = sha.clone();
+        self.start(
+            Part::Commits,
+            move |repo| repo.messages.get_mut(&key),
+            move |repo, _| match Sha::parse(sha.clone()) {
+                Ok(commit) => repo.git.commit_message(commit),
+                Err(error) => failed(repo.git.invalid(error)),
+            },
+            cx,
+        )
     }
 }

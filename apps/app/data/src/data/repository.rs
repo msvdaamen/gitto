@@ -9,7 +9,7 @@
 //! the entity never notifies, which would render again every view that read it, whatever it
 //! read of it. It asks for what it shows with [`Repository::show`] (and `hold_*` for what's
 //! loaded by key), which loads it unless it's loaded. Git runs on the background executor, through
-//! [`RepositoryGit`]; loading something again drops the load under way, which cancels it.
+//! [`RepositoryGit`]; loading something again as it loads loads it once more once that's done.
 //!
 //! What's loaded is kept up to date by `super::watch::RepositoryWatcher`, which reloads it when the
 //! repository changes on disk (see [`Repository::reload_all`]), and nothing else does: not focus,
@@ -839,13 +839,116 @@ mod tests {
         });
         repository.update(cx, |repository, cx| {
             drop(repository.reload(Field::Refs, cx));
-            // Loading again, in place of the load under way, isn't a change.
+            // Loading again as it loads, once it's done, isn't a change yet.
+            drop(repository.reload(Field::Refs, cx));
             drop(repository.reload(Field::Refs, cx));
         });
+        assert_eq!(*said.borrow(), [Part::Refs]);
         cx.run_until_parked();
-        // As it started loading, and as it was done.
-        assert_eq!(*said.borrow(), [Part::Refs, Part::Refs]);
+        // As it started loading, as that was done and it loaded again, and as that was done.
+        assert_eq!(*said.borrow(), [Part::Refs, Part::Refs, Part::Refs]);
+        assert_eq!(git.refs.get(), 2);
         assert_eq!(notified.get(), 0);
+    }
+
+    /// A repository's git that answers each status asked for when the test says, and stages all
+    /// at once.
+    #[derive(Default)]
+    struct Statuses(RefCell<Vec<oneshot::Sender<StatusReply>>>);
+
+    impl RepositoryGit for Statuses {
+        fn status(&self, _: Option<gitto_git::ContentVersion>) -> GitTask<StatusReply> {
+            let (answer, answered) = oneshot::channel();
+            self.0.borrow_mut().push(answer);
+            async move { answered.await.map_err(|_| DataError::msg("Not answered.")) }.boxed()
+        }
+
+        fn stage_all(&self) -> GitTask<()> {
+            async { Ok(()) }.boxed()
+        }
+    }
+
+    impl Statuses {
+        /// How many statuses are waiting for an answer.
+        fn waiting(&self) -> usize {
+            self.0.borrow().len()
+        }
+
+        /// Answers the first status asked for that's waiting, at `version`.
+        fn answer(&self, version: &str) {
+            let mut status = uncommitted();
+            status.version = version.into();
+            let reply = StatusReply::Status(Box::new(status));
+            assert!(self.0.borrow_mut().remove(0).send(reply).is_ok());
+        }
+    }
+
+    fn version(repository: &Entity<Repository>, cx: &mut TestAppContext) -> Option<String> {
+        repository.read_with(cx, |repository, _| {
+            let status = repository.status().data()?;
+            Some(status.version.to_string())
+        })
+    }
+
+    #[gpui_kit::test]
+    fn loads_once_more_after_the_load_under_way_rather_than_cancelling_it(cx: &mut TestAppContext) {
+        let git = Rc::new(Statuses::default());
+        let shared: Rc<dyn RepositoryGit> = git.clone();
+        let repository = cx.new(|_| Repository::new(repository_id(), shared));
+        repository.update(cx, |repository, cx| repository.show(Field::Status, cx));
+        cx.run_until_parked();
+        // Files keep changing as git reads the status, as a build's can.
+        for _ in 0..3 {
+            repository.update(cx, |repository, cx| drop(repository.reload_uncommitted(cx)));
+            cx.run_until_parked();
+        }
+        assert_eq!(git.waiting(), 1);
+
+        git.answer("v1");
+        cx.run_until_parked();
+        // What it read is shown, and read again, as it may be out of date.
+        assert_eq!(version(&repository, cx).as_deref(), Some("v1"));
+        assert_eq!(git.waiting(), 1);
+        git.answer("v2");
+        cx.run_until_parked();
+        assert_eq!(version(&repository, cx).as_deref(), Some("v2"));
+        assert_eq!(git.waiting(), 0);
+        repository.read_with(cx, |repository, _| {
+            assert!(!repository.status().is_fetching() && !repository.status().is_stale());
+        });
+    }
+
+    #[gpui_kit::test]
+    fn a_change_that_waits_for_its_reload_waits_for_the_load_after_the_one_under_way(
+        cx: &mut TestAppContext,
+    ) {
+        let git = Rc::new(Statuses::default());
+        let shared: Rc<dyn RepositoryGit> = git.clone();
+        let repository = cx.new(|_| Repository::new(repository_id(), shared));
+        repository.update(cx, |repository, cx| repository.show(Field::Status, cx));
+        cx.run_until_parked();
+
+        let done = Rc::new(Cell::new(false));
+        let staging = repository.update(cx, |repository, cx| {
+            repository.stage(crate::data::staging::StagingTarget::All, cx)
+        });
+        cx.update(|cx| {
+            let done = Rc::clone(&done);
+            cx.spawn(async move |_| {
+                staging.await.unwrap();
+                done.set(true);
+            })
+            .detach();
+        });
+        cx.run_until_parked();
+        // The status read before staging, then the one read after it.
+        git.answer("before");
+        cx.run_until_parked();
+        assert!(!done.get());
+        git.answer("after");
+        cx.run_until_parked();
+        assert!(done.get());
+        assert_eq!(version(&repository, cx).as_deref(), Some("after"));
     }
 
     #[gpui_kit::test]

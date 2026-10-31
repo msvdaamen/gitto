@@ -37,8 +37,9 @@
 //!
 //! Git, SQLite and the file system never block the UI: the repository asks git through
 //! [`git::RepositoryGit`] (gitto-git's `GitRepo`), whose futures run on the background executor. A
-//! load is a task; loading again drops it, which cancels it. Data too big to compare, like the
-//! uncommitted files, is an [`Opaque`]: shared, equal only to itself.
+//! load is a task, which dropping cancels; loading again as it loads loads once more once it's
+//! done, rather than starting over, so it settles however often the repository changes. Data too
+//! big to compare, like the uncommitted files, is an [`Opaque`]: shared, equal only to itself.
 //!
 //! # Tests
 //!

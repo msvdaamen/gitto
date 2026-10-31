@@ -15,6 +15,12 @@ use crate::data::loaded::{LoadState, Loaded};
 use crate::data::opaque::Opaque;
 use gitto_ui_logic::git::diff_source::is_uncommitted;
 
+/// Where what a load loads is, in a repository (see [`Repository::start`]).
+type At<T> = Rc<dyn Fn(&mut Repository) -> Option<&mut Loaded<T>>>;
+
+/// What a load asks git, as the repository is when it starts.
+type Fetch<T> = Rc<dyn Fn(&mut Repository, &mut Context<Repository>) -> GitTask<T>>;
+
 impl Repository {
     /// Loads `field` unless it's loaded, or loading: for a view about to show it.
     pub fn show(&mut self, field: Field, cx: &mut Context<Self>) {
@@ -39,22 +45,22 @@ impl Repository {
         }
     }
 
-    /// Loads `field` again now, in place of (and so cancelling) a load under way; resolves once
-    /// it's done.
+    /// Loads `field` again: now, or once the load under way is done, which is out of date then;
+    /// resolves once it's loaded. Cancelling that load to start over would never settle if the
+    /// repository changed more often than it loads, as git's status can in a large repository.
     pub fn reload(&mut self, field: Field, cx: &mut Context<Self>) -> Reloading {
-        let git = Rc::clone(&self.git);
         let part = field.part();
         if self.is_seeded(part) {
             return Reloading(Vec::new());
         }
         let wait = match field {
-            Field::Status => {
-                let previous = self.status.data().cloned();
-                let since = previous.as_ref().map(|status| status.version.clone());
-                let reply = git.status(since);
-                self.start(
-                    part,
-                    |repo| Some(&mut repo.status),
+            Field::Status => self.start(
+                part,
+                |repo| Some(&mut repo.status),
+                |repo, _| {
+                    let previous = repo.status.data().cloned();
+                    let since = previous.as_ref().map(|status| status.version.clone());
+                    let reply = repo.git.status(since);
                     async move {
                         match reply.await? {
                             // Only ever the answer when there was a previous status to compare
@@ -65,80 +71,128 @@ impl Repository {
                             StatusReply::Status(status) => Ok(Opaque::new(*status)),
                         }
                     }
-                    .boxed(),
-                    cx,
-                )
-            }
-            Field::Operation => {
-                self.start(part, |repo| Some(&mut repo.operation), git.operation(), cx)
-            }
-            Field::Log => {
-                let loaded = self.log.data().map_or(0, |log| log.commits.len());
-                let fetch = log_page(&*git, &self.id, 0, reload_limit(loaded));
-                // Loading more of the log as it was would leave it out of order.
-                if self.more.task.take().is_some() || self.more.error.take().is_some() {
-                    cx.emit(Changed(Part::More));
-                }
-                self.start(part, |repo| Some(&mut repo.log), fetch, cx)
-            }
-            Field::Refs => {
-                let refs = git.refs();
-                let fetch = async move { Ok(refs.await?.into()) }.boxed();
-                self.start(part, |repo| Some(&mut repo.refs), fetch, cx)
-            }
-            Field::Remotes => self.start(part, |repo| Some(&mut repo.remotes), git.remotes(), cx),
-            Field::Stashes => {
-                let stashes = git.stashes();
-                let fetch = async move { Ok(stashes.await?.into()) }.boxed();
-                self.start(part, |repo| Some(&mut repo.stashes), fetch, cx)
-            }
-            Field::Worktrees => {
-                let worktrees = git.worktrees();
-                let fetch = async move { Ok(worktrees.await?.into()) }.boxed();
-                self.start(part, |repo| Some(&mut repo.worktrees), fetch, cx)
-            }
+                    .boxed()
+                },
+                cx,
+            ),
+            Field::Operation => self.start(
+                part,
+                |repo| Some(&mut repo.operation),
+                |repo, _| repo.git.operation(),
+                cx,
+            ),
+            Field::Log => self.start(
+                part,
+                |repo| Some(&mut repo.log),
+                |repo, cx| {
+                    let loaded = repo.log.data().map_or(0, |log| log.commits.len());
+                    // Loading more of the log as it was would leave it out of order.
+                    if repo.more.task.take().is_some() || repo.more.error.take().is_some() {
+                        cx.emit(Changed(Part::More));
+                    }
+                    log_page(&*repo.git, &repo.id, 0, reload_limit(loaded))
+                },
+                cx,
+            ),
+            Field::Refs => self.start(
+                part,
+                |repo| Some(&mut repo.refs),
+                |repo, _| {
+                    let refs = repo.git.refs();
+                    async move { Ok(refs.await?.into()) }.boxed()
+                },
+                cx,
+            ),
+            Field::Remotes => self.start(
+                part,
+                |repo| Some(&mut repo.remotes),
+                |repo, _| repo.git.remotes(),
+                cx,
+            ),
+            Field::Stashes => self.start(
+                part,
+                |repo| Some(&mut repo.stashes),
+                |repo, _| {
+                    let stashes = repo.git.stashes();
+                    async move { Ok(stashes.await?.into()) }.boxed()
+                },
+                cx,
+            ),
+            Field::Worktrees => self.start(
+                part,
+                |repo| Some(&mut repo.worktrees),
+                |repo, _| {
+                    let worktrees = repo.git.worktrees();
+                    async move { Ok(worktrees.await?.into()) }.boxed()
+                },
+                cx,
+            ),
             Field::PushTarget => self.start(
                 part,
                 |repo| Some(&mut repo.push_target),
-                git.push_target(),
+                |repo, _| repo.git.push_target(),
                 cx,
             ),
-            Field::Overview => {
-                self.start(part, |repo| Some(&mut repo.overview), git.overview(), cx)
-            }
+            Field::Overview => self.start(
+                part,
+                |repo| Some(&mut repo.overview),
+                |repo, _| repo.git.overview(),
+                cx,
+            ),
         };
         Reloading(wait.into_iter().collect())
     }
 
-    /// Loads, with `fetch`, what `at` finds, in place of a load under way; a receiver told once
-    /// it's done. Says it `Changed` as it starts loading, unless it was loading already, and as
-    /// it's done.
+    /// Loads, with what `fetch` asks git, what `at` finds: now, or, if it's loading, once that's
+    /// done (see [`reload`](Self::reload)); a receiver told once it's loaded. Says it `Changed` as
+    /// it starts loading, unless it was loading already, and as it's done.
     pub(super) fn start<T: PartialEq + Send + 'static>(
         &mut self,
         part: Part,
         at: impl Fn(&mut Self) -> Option<&mut Loaded<T>> + 'static,
-        fetch: GitTask<T>,
+        fetch: impl Fn(&mut Self, &mut Context<Self>) -> GitTask<T> + 'static,
         cx: &mut Context<Self>,
     ) -> Option<oneshot::Receiver<()>> {
-        let at = Rc::new(at);
-        let fetch = cx.background_spawn(fetch);
-        let settle = Rc::clone(&at);
-        let task = cx.spawn(async move |this, cx| {
-            let result = fetch.await;
-            let _ = this.update(cx, |repo, cx| {
-                if let Some(loaded) = settle(repo) {
-                    loaded.settle(result);
-                    cx.emit(Changed(part));
-                }
-            });
+        self.load(part, Rc::new(at), Rc::new(fetch), cx)
+    }
+
+    fn load<T: PartialEq + Send + 'static>(
+        &mut self,
+        part: Part,
+        at: At<T>,
+        fetch: Fetch<T>,
+        cx: &mut Context<Self>,
+    ) -> Option<oneshot::Receiver<()>> {
+        {
+            let loaded = at(self)?;
+            if loaded.is_fetching() {
+                loaded.load_again();
+                return loaded.wait();
+            }
+        }
+        let fetching = fetch(self, cx);
+        let fetching = cx.background_spawn(fetching);
+        let task = cx.spawn({
+            let at = Rc::clone(&at);
+            async move |this, cx| {
+                let result = fetching.await;
+                let _ = this.update(cx, |repo, cx| {
+                    let Some(loaded) = at(repo) else {
+                        return;
+                    };
+                    if loaded.settle(result) {
+                        // Says it changed as that starts.
+                        drop(repo.load(part, at, fetch, cx));
+                    } else {
+                        cx.emit(Changed(part));
+                    }
+                });
+            }
         });
         let loaded = at(self)?;
-        let was_loading = loaded.is_fetching();
         loaded.start(task);
         let wait = loaded.wait();
-        if !was_loading {
-            cx.emit(Changed(part));
-        }
+        cx.emit(Changed(part));
         wait
     }
 
