@@ -536,7 +536,7 @@ impl RenderOnce for CommitSummary {
             .border_color(palette.border)
             .child(
                 h_flex()
-                    .gap(rems(0.6))
+                    .gap(base_px(9.))
                     .child(
                         Avatar::new(initials(&commit.author_name))
                             .color(avatar_color(&commit.author_email))
@@ -576,7 +576,7 @@ impl RenderOnce for CommitSummary {
                 this.child(
                     div()
                         .id("description")
-                        .max_h(rems(7.4))
+                        .max_h(base_px(111.))
                         .overflow_y_scroll()
                         .text_xs()
                         .line_height(rems(1.24))
@@ -615,7 +615,7 @@ impl RenderOnce for CommitSummary {
                                 .items_center()
                                 .justify_center()
                                 .h(base_px(23.))
-                                .w(rems(1.6))
+                                .w(base_px(24.))
                                 .border_l_1()
                                 .border_color(palette.border_soft)
                                 .bg(palette.panel_raised)

@@ -38,6 +38,7 @@ pub const MONO_FONT_SIZE: f32 = 13.;
 pub const fn base_px(px: f32) -> Rems {
     Rems(px / FONT_SIZE)
 }
+
 /// Controls' corners (`rounded-[7px]`), and large surfaces' (`rounded-[11px]`).
 pub const RADIUS: usize = 7;
 pub const RADIUS_LG: usize = 11;

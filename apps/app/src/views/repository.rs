@@ -325,8 +325,9 @@ impl RepositoryView {
         self._operation_bar_events = operation_bar_events;
         self.branch_menu
             .update(cx, |menu, cx| menu.set_repository(id.clone(), window, cx));
-        self.refs_sidebar
-            .update(cx, |sidebar, cx| sidebar.set_repository(id.clone(), cx));
+        self.refs_sidebar.update(cx, |sidebar, cx| {
+            sidebar.set_repository(id.clone(), window, cx)
+        });
         self.history
             .update(cx, |history, cx| history.set_repository(id.clone(), cx));
         self.commit_details
