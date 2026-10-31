@@ -144,11 +144,13 @@ struct ParsedPatch {
 }
 
 impl ParsedPatches {
-    /// `patch`, parsed lately with `key`, if it was.
+    /// `patch`, parsed lately with `key`, if it was: told by its key, which names what's in it
+    /// (an uncommitted file's by its version, see `patch_cache_key`), and its length, rather than
+    /// by comparing all of it, which can be megabytes, on the main thread.
     pub fn get(&self, patch: &str, key: &str) -> Option<Arc<FileDiff>> {
         self.entries
             .iter()
-            .find(|entry| entry.key == key && *entry.patch == *patch)
+            .find(|entry| entry.key == key && entry.patch.len() == patch.len())
             .map(|entry| Arc::clone(&entry.diff))
     }
 

@@ -396,11 +396,14 @@ struct NextPatch {
     cache_key: String,
 }
 
+/// The same patch: of the same file, named the same in the highlighting cache, which names what's
+/// in it (see `PatchProps::cache_key`), and as long, rather than compared whole, which can be
+/// megabytes, on the main thread, whenever an uncommitted file's is loaded again.
 impl PartialEq for NextPatch {
     fn eq(&self, other: &Self) -> bool {
         self.file_key == other.file_key
             && self.cache_key == other.cache_key
-            && (Arc::ptr_eq(&self.patch, &other.patch) || self.patch == other.patch)
+            && self.patch.len() == other.patch.len()
     }
 }
 
@@ -2066,6 +2069,19 @@ mod tests {
                 .contains(&(Side::Additions, 0))
         });
         assert!(drawn, "row {row}");
+    }
+
+    #[test]
+    fn tells_patches_apart_by_their_names_rather_than_their_whole_text() {
+        let next = |patch: &str, cache_key: &str| NextPatch {
+            patch: patch.into(),
+            file_key: DiffFileKey::new(&DiffSource::Unstaged, "f.txt"),
+            cache_key: cache_key.into(),
+        };
+        // Loaded again: the same text, shared anew.
+        assert!(next(PATCH, "unstaged::f.txt:80:1a") == next(PATCH, "unstaged::f.txt:80:1a"));
+        // Changed: named by what's in it.
+        assert!(next(PATCH, "unstaged::f.txt:80:1a") != next(PATCH, "unstaged::f.txt:80:2b"));
     }
 
     #[test]

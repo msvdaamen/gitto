@@ -3,6 +3,8 @@
 //! staging the file and resolving its conflicts read from, rather than each deriving its own.
 //! Ported from `shown-file.ts`.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use gitto_git::FileStatus;
@@ -13,7 +15,7 @@ use gitto_ui_logic::git::changes::{
     LineCounts, counts_of, has_patch, is_known_binary, is_nested_repository, total_lines,
 };
 use gitto_ui_logic::git::patch::{PatchSummary, is_link, staged_whole, summarize_patch};
-use gpui_kit::{App, AppContext as _, Context, Entity, Subscription};
+use gpui_kit::{AppContext as _, Context, Entity, Subscription, Task};
 
 use gitto_app_data::data::file_diff::{DiffSourceFiles, FilePatch};
 use gitto_app_data::data::keyed::Hold;
@@ -55,8 +57,8 @@ pub fn patch_cache_key(source: &DiffSource, data: &FilePatch) -> String {
 }
 
 /// A loaded patch, with what the view reads of it worked out once, as it's loaded, rather than
-/// each time it's read: a patch can be megabytes, and an uncommitted one is loaded again whenever
-/// the working tree changes.
+/// each time it's read, and off the main thread (see `ShownFile::prepare_loaded`): a patch can be
+/// megabytes, and an uncommitted one is loaded again whenever the working tree changes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedPatch {
     pub data: FilePatch,
@@ -87,8 +89,13 @@ impl PreparedPatch {
 
     /// Whether it's `data`, as loaded: the same patch, not another one alike.
     fn is(&self, data: &FilePatch) -> bool {
-        self.data.key == data.key && Arc::ptr_eq(&self.data.patch, &data.patch)
+        same_patch(&self.data, data)
     }
+}
+
+/// Whether `a` and `b` are the same patch as loaded, not only alike.
+fn same_patch(a: &FilePatch, b: &FilePatch) -> bool {
+    a.key == b.key && Arc::ptr_eq(&a.patch, &b.patch)
 }
 
 /// The patch on show, and the file it's of.
@@ -136,8 +143,12 @@ pub struct ShownFile {
     /// Holds the patch while it's loaded (see `sync`).
     patch_hold: Option<Hold>,
     /// The patch loaded last, as last synced: this file's, or the last one's while this one's
-    /// loads.
+    /// loads, or is prepared.
     patch: Option<PreparedPatch>,
+    /// The patch loaded since, being prepared off the main thread, and where it's put once it is,
+    /// for the next sync to take.
+    preparing: Option<(FilePatch, Task<()>)>,
+    prepared: Rc<RefCell<Option<PreparedPatch>>>,
     /// Why this file's patch couldn't be loaded, as last synced.
     patch_error: Option<DataError>,
     /// The patch on show: going to another file, the last one stays on show until the new one's
@@ -180,6 +191,8 @@ impl ShownFile {
             patch_enabled: false,
             patch_hold: None,
             patch: None,
+            preparing: None,
+            prepared: Rc::default(),
             patch_error: None,
             shown_patch: None,
             loading_files: false,
@@ -251,19 +264,50 @@ impl ShownFile {
     }
 
     /// Takes the patch loaded last, prepared, unless it has already, and why this file's couldn't
-    /// be loaded. The last one's stays while this one's loads.
-    fn prepare_loaded(&mut self, cx: &App) {
+    /// be loaded. It's prepared off the main thread, the view told once it is; the last one stays
+    /// meanwhile, as it does while this one's loads.
+    fn prepare_loaded<V: 'static>(&mut self, cx: &mut Context<V>) {
+        // One prepared since: taken if it's still the one wanted.
+        let ready = self.prepared.borrow_mut().take();
+        if let Some(prepared) = ready
+            && self
+                .preparing
+                .as_ref()
+                .is_some_and(|(data, _)| prepared.is(data))
+        {
+            self.patch = Some(prepared);
+            self.preparing = None;
+        }
         let loaded = self
             .repository
             .read(cx)
             .patch(&self.source, &self.patch_file.path);
-        if let Some(data) = loaded.and_then(Loaded::data)
-            && !self
+        if let Some(data) = loaded.and_then(Loaded::data) {
+            if self
                 .patch
                 .as_ref()
                 .is_some_and(|prepared| prepared.is(data))
-        {
-            self.patch = Some(PreparedPatch::new(&self.source, data.clone()));
+            {
+                // Back to the one prepared already: another being prepared isn't wanted now.
+                self.preparing = None;
+            } else if !self
+                .preparing
+                .as_ref()
+                .is_some_and(|(being, _)| same_patch(being, data))
+            {
+                let source = self.source.clone();
+                let into = Rc::clone(&self.prepared);
+                let data = data.clone();
+                let to_prepare = data.clone();
+                let task = cx.spawn(async move |view, cx| {
+                    let prepared = cx
+                        .background_spawn(async move { PreparedPatch::new(&source, to_prepare) })
+                        .await;
+                    *into.borrow_mut() = Some(prepared);
+                    let _ = view.update(cx, |_, cx| cx.notify());
+                });
+                self.preparing = Some((data, task));
+            }
         }
         self.patch_error = loaded
             .and_then(Loaded::error)
