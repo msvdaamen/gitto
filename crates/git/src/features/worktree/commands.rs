@@ -499,9 +499,10 @@ mod tests {
                 .await
                 .unwrap_err();
             assert!(
+                // As git words it: with `/`, on Windows too.
                 error.to_string().contains(&format!(
                     "fatal: 'main' is already used by worktree at '{}'",
-                    s(&path)
+                    s(&path).replace('\\', "/")
                 )),
                 "{error}"
             );
