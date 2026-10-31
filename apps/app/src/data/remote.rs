@@ -8,12 +8,11 @@ use gitto_git::features::remote::commands::{fetch_all, list_remotes};
 use gitto_git::features::remote::push::{get_push_target, push};
 use gitto_git::features::remote::schema::PushTarget;
 use gitto_git::input::{BranchShortName, RepositoryId};
-use gpui_kit::{App, AppContext as _, Context, Entity};
+use gpui_kit::{App, AppContext as _, Context};
 
 use super::call::{call, loads, parse};
 use super::client::{QueryClient, QueryError, QueryOptions, StaleTime};
 use super::keys;
-use super::mutation::Mutation;
 use super::operation::{OperationState, Operations, RepositoryOperation, reloading};
 use super::query::Query;
 
@@ -32,26 +31,24 @@ pub fn remotes_query<V: 'static>(id: &RepositoryId, cx: &mut Context<V>) -> Quer
     Query::new(remotes_options(id, cx), cx)
 }
 
-/// Fetches every remote of the repository whose id it's given (`useFetch`). The id is the
-/// mutation's input (`Mutation::input`), so a fetch still running after switching repositories
-/// reloads the one it fetched, and its state can be told apart from the current repository's.
-pub fn fetch_mutation(cx: &mut App) -> Entity<Mutation<RepositoryId>> {
-    Mutation::new(
-        |id: RepositoryId, cx: &mut App| {
-            let fetching = call(cx, "remote.fetch", &id, |repo| async move {
-                fetch_all(&repo).await
-            });
-            cx.spawn(async move |cx| {
-                cx.background_spawn(fetching).await?;
-                // The watcher would catch the new remote refs too, but reloading right away feels
-                // snappier.
-                cx.update(|cx| QueryClient::invalidate(&keys::repository(&id), cx))
-                    .await;
-                Ok(())
-            })
-        },
-        cx,
-    )
+const FETCH: &str = "fetch";
+
+/// Fetches every remote of a repository, then reloads it (`useFetch`); whether that's running,
+/// and why it last failed, are the repository's, whichever is on show.
+pub fn fetch_operation() -> RepositoryOperation<()> {
+    RepositoryOperation::new(FETCH, |id, (), cx: &mut App| {
+        let fetching = call(cx, "remote.fetch", &id, |repo| async move {
+            fetch_all(&repo).await
+        });
+        cx.spawn(async move |cx| {
+            cx.background_spawn(fetching).await?;
+            // The watcher would catch the new remote refs too, but reloading right away feels
+            // snappier.
+            cx.update(|cx| QueryClient::invalidate(&keys::repository(&id), cx))
+                .await;
+            Ok(())
+        })
+    })
 }
 
 /// Pulls the current branch's upstream; whether a pull is running, and why the last one failed
@@ -62,6 +59,12 @@ pub struct PullOperation {
 }
 
 impl PullOperation {
+    /// A pull that `operation` does, which a test makes up; it must be named "pull".
+    #[cfg(test)]
+    pub(crate) fn with_operation(operation: RepositoryOperation<()>) -> Self {
+        PullOperation { operation }
+    }
+
     /// Pulls into the repository `id`, unless it's pulling already.
     pub fn pull(
         &self,
@@ -101,7 +104,7 @@ pub fn pull_operation() -> PullOperation {
     }
 }
 
-const PULL_BRANCH: &str = "pull-branch";
+pub(crate) const PULL_BRANCH: &str = "pull-branch";
 
 /// Pulls a local branch that isn't checked out, by its short name, fast-forwarding it to its
 /// upstream without touching the working tree; whether that's running, and why it last failed
@@ -132,6 +135,13 @@ pub struct PushOperation {
 }
 
 impl PushOperation {
+    /// A push that `operation` does, given whether to force, which a test makes up; it must be
+    /// named "push".
+    #[cfg(test)]
+    pub(crate) fn with_operation(operation: RepositoryOperation<bool>) -> Self {
+        PushOperation { operation }
+    }
+
     pub fn push(
         &self,
         id: &RepositoryId,

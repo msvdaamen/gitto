@@ -21,10 +21,12 @@ use super::operation::{OneAtATime, OperationState, Operations, RepositoryOperati
 use crate::git::status::{branch_name, is_checked_out};
 
 const CREATE: &str = "branch";
-const SWITCH: &str = "switch";
-const MERGE: &str = "merge";
-const REBASE: &str = "rebase";
-const DELETE: &str = "delete-branch";
+// The names of the changes of the branches the toolbar's current branch shows (see
+// `toolbar::BranchChangeKind`), and dismisses by them.
+pub(crate) const SWITCH: &str = "switch";
+pub(crate) const MERGE: &str = "merge";
+pub(crate) const REBASE: &str = "rebase";
+pub(crate) const DELETE: &str = "delete-branch";
 /// Adding a worktree (see `worktree::worktree_actions`), which checks out a branch there, or
 /// creates one.
 pub const ADD_WORKTREE: &str = "add-worktree";
@@ -56,7 +58,8 @@ impl<T, R> Clone for BranchChange<T, R> {
 }
 
 impl<T: 'static, R: 'static> BranchChange<T, R> {
-    fn new(operation: RepositoryOperation<T, R>) -> Self {
+    /// `operation`, as one of the changes of the branches: the data layer's own, or a test's.
+    pub(crate) fn new(operation: RepositoryOperation<T, R>) -> Self {
         BranchChange {
             operation: operation.one_at_a_time(branches_changing),
         }

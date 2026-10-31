@@ -3,9 +3,10 @@
 
 use gitto_git::input::RepositoryId;
 use gpui_kit::prelude::*;
-use gpui_kit::{Context, EventEmitter, SharedString, Window, div};
+use gpui_kit::{Context, Entity, EventEmitter, SharedString, Window, div};
 
 use crate::components::placeholder::Placeholder;
+use crate::components::repository::branch_menu::BranchMenuProvider;
 use crate::git::rows::WIP_ID;
 use crate::theme::PaletteExt as _;
 
@@ -29,6 +30,8 @@ pub enum HistoryEvent {
 /// Stub: renders a placeholder, and a button selecting the uncommitted changes.
 pub struct HistoryTable {
     repository_id: RepositoryId,
+    /// What its branches' menus are built from (see `branch_menu`); the stub has none.
+    _branch_menu: Entity<BranchMenuProvider>,
     search: SharedString,
     selected_id: Option<String>,
     /// The row the details show: the selected one, once the selection stops moving quickly.
@@ -38,9 +41,15 @@ pub struct HistoryTable {
 impl EventEmitter<HistoryEvent> for HistoryTable {}
 
 impl HistoryTable {
-    pub fn new(repository_id: RepositoryId, _: &mut Window, _: &mut Context<Self>) -> Self {
+    pub fn new(
+        repository_id: RepositoryId,
+        branch_menu: Entity<BranchMenuProvider>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Self {
         HistoryTable {
             repository_id,
+            _branch_menu: branch_menu,
             search: SharedString::default(),
             selected_id: None,
             details_id: None,
