@@ -132,12 +132,32 @@ impl RepositorySummaries {
 
 #[cfg(test)]
 mod tests {
+    use futures::FutureExt as _;
+    use gitto_app_data::data::git::{GitTask, RepositoryGit};
     use gpui_kit::{IntoElement, Render, TestAppContext, Window, div};
 
     use super::*;
     use crate::components::repository::test_support::{
-        changed, repository, repository_id, set_status, setup, status,
+        changed, fake_git, repository, repository_id, set_status, setup, status,
     };
+
+    /// A repository's git that answers its overview, which the summaries load beside the status
+    /// the test gives: nothing done in it.
+    struct Git;
+
+    impl RepositoryGit for Git {
+        fn overview(&self) -> GitTask<Overview> {
+            async {
+                Ok(Overview {
+                    remote: None,
+                    fetched_at: None,
+                    committed_at: None,
+                    activity: Vec::new(),
+                })
+            }
+            .boxed()
+        }
+    }
 
     struct Host {
         summaries: RepositorySummaries,
@@ -154,6 +174,7 @@ mod tests {
         let _dir = setup(cx);
         let id = repository_id();
         set_status(&id, status(), cx);
+        fake_git(&id, Rc::new(Git), cx);
         let listed = [repository(&id, "/work/gitto")];
         let (_, host) = crate::test_support::open(cx, |_, cx| {
             let mut summaries = RepositorySummaries::new();
