@@ -1,11 +1,11 @@
 //! What a merge, rebase or `git am` left unfinished in a repository, and what to tell the user
 //! about a pull that stopped at it.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use super::blockers::{Action, detached_head};
 use crate::core::errors::{Error, GitError, Integration, Result};
 use crate::core::repo::{GitCommand, has_conflicts, ref_exists, succeeds};
+use crate::features::operation::commands::rebase_state;
 
 /// What a merge, rebase or `git am` left unfinished in a repository.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -22,39 +22,6 @@ impl Progress {
     pub fn in_progress(self) -> bool {
         self.conflicts || self.merging || self.rebasing || self.applying
     }
-}
-
-/// Whether `file` is there; a folder counts.
-async fn file_exists(file: PathBuf) -> bool {
-    async_fs::metadata(file).await.is_ok()
-}
-
-/// Whether a rebase, or `git am`, is stopped in a worktree (see `rebase_state`).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct RebaseState {
-    pub rebasing: bool,
-    pub applying: bool,
-}
-
-/// Whether a rebase, or `git am`, is stopped in the worktree whose git directory is `git_dir`:
-/// they keep their state there meanwhile, `am` where some rebases do, with a file saying it's
-/// `am`'s.
-pub async fn rebase_state(git_dir: &Path) -> RebaseState {
-    let (rebase_merge, rebase_apply, applying) = futures::join!(
-        file_exists(git_dir.join("rebase-merge")),
-        file_exists(git_dir.join("rebase-apply")),
-        file_exists(git_dir.join("rebase-apply").join("applying")),
-    );
-    RebaseState {
-        rebasing: rebase_merge || (rebase_apply && !applying),
-        applying,
-    }
-}
-
-/// Why HEAD, detached in the worktree whose git directory is `git_dir`, can't be pulled into or
-/// pushed: a rebase may have stopped there.
-pub async fn why_detached(git_dir: &Path, action: Action) -> String {
-    detached_head(action, rebase_state(git_dir).await.rebasing)
 }
 
 /// What's unfinished in the repository, read at once.
@@ -171,41 +138,9 @@ fn capitalize(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use super::*;
     use crate::test_support::conflicts::text_conflict;
     use crate::test_support::{Fixture, git};
-
-    #[test]
-    fn rebase_state_tells_a_rebase_from_git_am() {
-        let fx = Fixture::new();
-        let path = fx.create_repo("rebase-state");
-        let git_dir = path.join(".git");
-        smol::block_on(async {
-            assert_eq!(rebase_state(&git_dir).await, RebaseState::default());
-            fs::create_dir(git_dir.join("rebase-apply")).unwrap();
-            assert_eq!(
-                rebase_state(&git_dir).await,
-                RebaseState {
-                    rebasing: true,
-                    applying: false
-                }
-            );
-            fs::write(git_dir.join("rebase-apply").join("applying"), "").unwrap();
-            assert_eq!(
-                rebase_state(&git_dir).await,
-                RebaseState {
-                    rebasing: false,
-                    applying: true
-                }
-            );
-            assert_eq!(
-                why_detached(&git_dir, Action::Push).await,
-                "HEAD is detached: check out a branch to push it."
-            );
-        });
-    }
 
     #[test]
     fn a_merge_that_conflicted_interrupts_the_pull() {
