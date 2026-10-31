@@ -41,7 +41,9 @@ pub async fn add_worktree(
     let target = branch_target(branch)?;
     let path = resolve(repo.path(), folder);
     // One write, so nothing else changes the branches halfway.
-    repo.exclusive(|run| async move {
+    let (branch, new_branch) = (branch.to_owned(), new_branch.map(str::to_owned));
+    repo.exclusive(move |run| async move {
+        let (branch, new_branch) = (branch.as_str(), new_branch.as_deref());
         // That ref itself, rather than git reading `branch` as a revision, like
         // `refs/heads/main~3`.
         if !is_ref(&run, branch).await? {
@@ -104,7 +106,9 @@ pub async fn add_worktree(
 pub async fn remove_worktree(repo: &Repo, path: &str) -> Result<()> {
     let root = repo.path().to_owned();
     // One write, so no other change of the worktrees can move it between finding and removing it.
-    repo.exclusive(|run| async move {
+    let path = path.to_owned();
+    repo.exclusive(move |run| async move {
+        let path = path.as_str();
         let Some(worktree) = find_worktree(&root, &run, path).await? else {
             return Err(Error::RepositoryChanged(
                 "The worktree is gone: the worktrees changed before it could be removed."
@@ -162,11 +166,23 @@ async fn listed(root: &Path, run: &GitCommand) -> Result<(Vec<Worktree>, Vec<Pat
     Ok((worktrees, paths))
 }
 
-/// What orders paths roughly as JavaScript's `localeCompare` does: by their letters regardless of
-/// case first, then lowercase before uppercase. Punctuation is ordered by code point, where ICU has
-/// an order of its own (`a-b`, `a.b`, `a_b` here; `a_b`, `a-b`, `a.b` in TS), which only moves a
-/// worktree about in the list.
-fn locale_key(path: &str) -> (String, String) {
+/// The printable ASCII characters in the order of ICU's root collation, which JavaScript's
+/// `localeCompare` uses, at its first strength: letters regardless of case.
+const ROOT_ORDER: &str = " _-,;:!?.'\"()[]{}@*/\\&#%`^+<=>|~$0123456789abcdefghijklmnopqrstuvwxyz";
+
+/// What orders paths as JavaScript's `localeCompare` does: by their characters, in ICU's order,
+/// regardless of case first, then lowercase before uppercase. Other characters than ASCII come
+/// after those, by code point, where ICU has an order of its own, which only moves a worktree
+/// about in the list.
+fn locale_key(path: &str) -> (Vec<u32>, String) {
+    let order = path
+        .to_lowercase()
+        .chars()
+        .map(|c| match ROOT_ORDER.find(c) {
+            Some(rank) => rank as u32,
+            None => ROOT_ORDER.len() as u32 + u32::from(c),
+        })
+        .collect();
     // Lowercase first, as ICU's tertiary strength has it.
     let mut swapped_case = String::with_capacity(path.len());
     for c in path.chars() {
@@ -176,7 +192,7 @@ fn locale_key(path: &str) -> (String, String) {
             swapped_case.extend(c.to_uppercase());
         }
     }
-    (path.to_lowercase(), swapped_case)
+    (order, swapped_case)
 }
 
 /// Where `path` really is, symlinks resolved; `path` itself if it's gone.
@@ -622,6 +638,39 @@ mod tests {
         let mut paths = ["/r/b", "/r/A", "/r/a", "/r/B", "/r/ab"];
         paths.sort_by_cached_key(|path| locale_key(path));
         assert_eq!(paths, ["/r/a", "/r/A", "/r/ab", "/r/b", "/r/B"]);
+    }
+
+    #[test]
+    fn orders_punctuation_and_digits_as_icu_does() {
+        // As `localeCompare` orders them in Node.
+        let ordered = [
+            "/r/a",
+            "/r/A",
+            "/r/a b",
+            "/r/a_b",
+            "/r/A_b",
+            "/r/a-b",
+            "/r/a,b",
+            "/r/a.b",
+            "/r/a(b)",
+            "/r/a@b",
+            "/r/a/b",
+            "/r/a+b",
+            "/r/a~b",
+            "/r/a$b",
+            "/r/a1",
+            "/r/a10",
+            "/r/a9b",
+            "/r/ab",
+            "/r/b",
+            "/r/B",
+            "/r/linked-check",
+            "/r/linked-feature",
+        ];
+        let mut paths = ordered;
+        paths.reverse();
+        paths.sort_by_cached_key(|path| locale_key(path));
+        assert_eq!(paths, ordered);
     }
 
     #[test]

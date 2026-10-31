@@ -52,7 +52,7 @@ mod tests {
 
     fn fixture() -> Fixture {
         let dir = tempfile::tempdir().unwrap();
-        let db = Db::open(dir.path().join("gitto.db")).unwrap();
+        let db = Db::open(dir.path().join("gitto-app.db")).unwrap();
         let service = RepositoryService::new(RepositoryStore::new(db.clone()));
         Fixture {
             api: GitApi::new(service.clone()),
