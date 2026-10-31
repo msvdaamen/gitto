@@ -39,6 +39,7 @@ jobs:
       - run: pnpm test
 
   # Formatting needs no build, so it gets no cache or system libraries and fails within seconds.
+  # The Rust jobs install the Rust that rust-toolchain.toml has: change them with it.
   rust-format:
     name: Rust format
     runs-on: ubuntu-latest
@@ -63,11 +64,17 @@ jobs:
         with:
           components: clippy
       # The dependencies' build, kept between runs: keyed by the job, the toolchain and Cargo.lock,
-      # and restored from the closest match when those changed. A pull request restores its own
-      # cache, or else main's; base branches that aren't main never save one, as CI only runs on
-      # push to main. The workspace's crates are left out, as they're the ones that change.
+      # and restored from the closest match when those changed. Only main's is saved, which pull
+      # requests restore: each pull request's own, about a gigabyte, would soon fill the
+      # repository's cache space. The workspace's crates are left out, as they're the ones that
+      # change.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy -p gitto-git --all-targets --locked -- -D warnings
+      # Without the tests, and the features their dev-dependencies turn on (`test-support`), as
+      # the app is built: code that only builds with those fails here.
+      - run: cargo clippy -p gitto-git --locked -- -D warnings
 
   rust-test:
     name: Rust test
@@ -80,4 +87,42 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.97.0
       # Cached as in rust-lint.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test -p gitto-git --locked
+
+  # The code that's only built for Windows or macOS (running git there, say), linted and tested on
+  # each, as Gitto ships for both. In one job each, as their runners take longer to start.
+  rust-platforms:
+    name: Rust (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Windows, os: windows-latest }
+          - { name: macOS, os: macos-latest }
+    runs-on: ${{ matrix.os }}
+    env:
+      CARGO_PROFILE_DEV_DEBUG: 0
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.97.0
+        with:
+          components: clippy
+      # Cached as in rust-lint.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo clippy -p gitto-git --all-targets --locked -- -D warnings
+      - run: cargo test -p gitto-git --locked
+
+  # Known vulnerabilities in the Rust dependencies, and ones that are unmaintained or yanked, from
+  # RustSec's advisories (see deny.toml). Needs no build.
+  rust-advisories:
+    name: Rust advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories
