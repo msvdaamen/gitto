@@ -52,7 +52,8 @@ pub async fn branches_in_use(run: &GitCommand) -> Result<HashMap<String, InUse>>
             in_use.insert(
                 local.to_owned(),
                 InUse::CheckedOut {
-                    worktree: PathBuf::from(worktree),
+                    // As the OS writes it: git writes `C:/…` on Windows.
+                    worktree: Path::new(worktree).components().collect(),
                 },
             );
         }
