@@ -377,9 +377,24 @@ impl Repository {
         self.seed(Part::PushedTo, cx);
     }
 
+    /// The version of the patch of the file at `path` in `source`, if it's there (see
+    /// [`replace_patch`](Self::replace_patch)).
+    pub(crate) fn patch_version(&self, source: &DiffSource, path: &str) -> Option<(u64, u64)> {
+        let loaded = self.patches.get(&DiffFileKey::new(source, path))?;
+        Some(loaded.version())
+    }
+
     /// Puts `patch` in place of the patch of the file at `path` in `source`, and of a load of it
-    /// under way, as of the file as it was last asked for; whether there was one to replace.
-    pub(crate) fn replace_patch(&mut self, source: &DiffSource, path: &str, patch: &str) -> bool {
+    /// under way, as of the file as it was last asked for; whether there was one to replace. Not if
+    /// that went out of date, or started loading, since it was at `version` (see
+    /// `Loaded::version`): what loads then may be newer than `patch`.
+    pub(crate) fn replace_patch(
+        &mut self,
+        source: &DiffSource,
+        path: &str,
+        patch: &str,
+        version: Option<(u64, u64)>,
+    ) -> bool {
         let key = DiffFileKey::new(source, path);
         let file = self.patches.asked(&key).cloned();
         let Some(loaded) = self.patches.get_mut(&key) else {
@@ -388,6 +403,9 @@ impl Repository {
         let Some(last) = loaded.data().cloned() else {
             return false;
         };
+        if version != Some(loaded.version()) {
+            return false;
+        }
         loaded.cancel();
         loaded.set(FilePatch {
             file: file.unwrap_or(last.file),
@@ -1070,6 +1088,104 @@ mod tests {
         });
         assert!(shown.patch.ends_with("+c\n"));
         assert_eq!(shown.file, file("modified"));
+    }
+
+    #[gpui_kit::test]
+    fn keeps_a_patch_loaded_as_lines_were_staged_rather_than_what_they_left(
+        cx: &mut TestAppContext,
+    ) {
+        /// Answers each patch, and the staging of lines, when the test says.
+        #[derive(Default)]
+        struct Gated {
+            patches: RefCell<Vec<oneshot::Sender<String>>>,
+            staging: RefCell<Option<oneshot::Sender<String>>>,
+        }
+
+        impl RepositoryGit for Gated {
+            fn unstaged_file_patch(&self, _: FileInput, _: bool) -> GitTask<String> {
+                let (answer, answered) = oneshot::channel();
+                self.patches.borrow_mut().push(answer);
+                async move { answered.await.map_err(|_| DataError::msg("Cancelled.")) }.boxed()
+            }
+
+            fn stage_lines(
+                &self,
+                _: FileInput,
+                _: bool,
+                _: PatchVersion,
+                _: LineSelection,
+            ) -> GitTask<String> {
+                let (answer, answered) = oneshot::channel();
+                *self.staging.borrow_mut() = Some(answer);
+                async move { answered.await.map_err(|_| DataError::msg("Cancelled.")) }.boxed()
+            }
+        }
+
+        impl Gated {
+            fn answer(&self, patch: &str) {
+                let answer = self.patches.borrow_mut().remove(0);
+                assert!(answer.send(format!("diff\n@@ -1 +1 @@\n{patch}\n")).is_ok());
+            }
+        }
+
+        let git = Rc::new(Gated::default());
+        let shared: Rc<dyn RepositoryGit> = git.clone();
+        let repository = cx.new(|_| Repository::new(repository_id(), shared));
+        let file = uncommitted().changes.unstaged[0].clone();
+        let _hold = repository.update(cx, |repository, cx| {
+            repository.hold_patch(&DiffSource::Unstaged, &file, cx)
+        });
+        cx.run_until_parked();
+        git.answer("+picked");
+        cx.run_until_parked();
+
+        let lines = LineSelection {
+            deletions: vec![],
+            additions: vec![],
+        };
+        let staged = repository.update(cx, |repository, cx| {
+            let version = PatchVersion::of("picked");
+            repository.stage_lines(StageAction::Stage, file.clone(), version, lines, cx)
+        });
+        cx.run_until_parked();
+        // An editor saves the file as the lines are staged.
+        repository.update(cx, |repository, cx| drop(repository.reload_uncommitted(cx)));
+        cx.run_until_parked();
+        let staging = git.staging.borrow_mut().take().unwrap();
+        staging.send("diff\n@@ -1 +1 @@\n+left\n".into()).unwrap();
+        cx.run_until_parked();
+        assert!(staged.now_or_never().unwrap().is_ok());
+        // The load after the save goes on, and is loaded again after, as staging changed it too.
+        git.answer("+saved");
+        cx.run_until_parked();
+        git.answer("+saved and staged");
+        cx.run_until_parked();
+        let shown = repository.read_with(cx, |repository, _| {
+            let patch = repository.patch(&DiffSource::Unstaged, &file.path).unwrap();
+            patch.data().unwrap().patch.clone()
+        });
+        assert!(shown.ends_with("+saved and staged\n"), "{shown}");
+    }
+
+    #[gpui_kit::test]
+    fn says_patches_changed_only_when_one_on_show_did(cx: &mut TestAppContext) {
+        let git = Rc::new(Statuses::default());
+        let shared: Rc<dyn RepositoryGit> = git.clone();
+        let repository = cx.new(|_| Repository::new(repository_id(), shared));
+        repository.update(cx, |repository, cx| repository.show(Field::Status, cx));
+        git.answer("v1");
+        cx.run_until_parked();
+        let said = Rc::new(RefCell::new(Vec::new()));
+        let _subscription = cx.update(|cx| {
+            let said = Rc::clone(&said);
+            cx.subscribe(&repository, move |_, Changed(part), _| {
+                said.borrow_mut().push(*part)
+            })
+        });
+        repository.update(cx, |repository, cx| drop(repository.reload_uncommitted(cx)));
+        git.answer("v2");
+        cx.run_until_parked();
+        assert_eq!(*said.borrow(), [Part::Status, Part::Status]);
     }
 
     // `git/queries/history.test.ts`.

@@ -30,6 +30,8 @@ pub struct Loaded<T> {
     load_revision: u64,
     /// How many times it's been loaded or set, equal data or not.
     updates: u64,
+    /// How many loads it started.
+    loads: u64,
 }
 
 impl<T> Default for Loaded<T> {
@@ -44,6 +46,7 @@ impl<T> Default for Loaded<T> {
             revision: 0,
             load_revision: 0,
             updates: 0,
+            loads: 0,
         }
     }
 }
@@ -142,6 +145,13 @@ impl<T> Loaded<T> {
     pub(crate) fn start(&mut self, load: Task<()>) {
         self.load = Some(load);
         self.load_revision = self.revision;
+        self.loads += 1;
+    }
+
+    /// Changes each time it goes out of date, or starts loading: for a change that read it, to
+    /// tell whether a load since may bring what's newer than what the change left.
+    pub(crate) fn version(&self) -> (u64, u64) {
+        (self.revision, self.loads)
     }
 
     /// Asks for it to be loaded again once the load under way is done, which is out of date (see

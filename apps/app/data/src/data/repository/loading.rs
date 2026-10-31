@@ -236,16 +236,23 @@ impl Repository {
         if self.status.is_used() {
             waits.extend(self.reload(Field::Status, cx).0);
         }
-        let patches = self.patches.held_and_drop_rest(|key| {
+        // Those reloaded say so as they start loading; the ones dropped, here.
+        let (patches, conflicts) = (self.patches.len(), self.conflicts.len());
+        let held = self.patches.held_and_drop_rest(|key| {
             is_uncommitted(&key.source) && kept.as_ref().is_none_or(|kept| kept != key)
         });
-        for key in patches {
+        for key in held {
             waits.extend(self.load_patch(key, cx));
         }
         for path in self.conflicts.held_and_drop_rest(|_| true) {
             waits.extend(self.load_conflict(path, cx));
         }
-        cx.emit(Changed(Part::Patches));
+        if self.patches.len() < patches {
+            cx.emit(Changed(Part::Patches));
+        }
+        if self.conflicts.len() < conflicts {
+            cx.emit(Changed(Part::Conflicts));
+        }
         Reloading(waits)
     }
 

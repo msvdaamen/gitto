@@ -711,6 +711,7 @@ impl Repository {
         cx: &mut Context<Self>,
     ) -> Task<Result<String, DataError>> {
         let path = file.path.clone();
+        let shown = self.patch_version(&picked_from(action), &path);
         let git = self.git().clone();
         let staging = self.checked(file_input(&file), |input| match action {
             StageAction::Stage => {
@@ -723,7 +724,7 @@ impl Repository {
         cx.spawn(async move |this, cx| match staging.await {
             Ok(patch) => {
                 let _ = this.update(cx, |repository, cx| {
-                    repository.show_patch_left(action, &path, &patch, cx)
+                    repository.show_patch_left(action, &path, &patch, shown, cx)
                 });
                 Ok(patch)
             }
@@ -739,22 +740,23 @@ impl Repository {
     }
 
     /// Shows `patch`, what staging or unstaging lines of the file at `path` left of its changes,
-    /// in place of the patch they were picked from, if it has changes left; and reloads the rest
-    /// of the uncommitted changes, without waiting for them.
+    /// in place of the patch they were picked from, if it has changes left, and that patch is as it
+    /// was (at `version`) when they were picked: one that loaded since, after the file was saved,
+    /// say, may be newer. Reloads the rest of the uncommitted changes, without waiting for them.
     fn show_patch_left(
         &mut self,
         action: StageAction,
         path: &str,
         patch: &str,
+        version: Option<(u64, u64)>,
         cx: &mut Context<Self>,
     ) {
-        let source = match action {
-            StageAction::Stage => DiffSource::Unstaged,
-            StageAction::Unstage => DiffSource::Staged,
-        };
-        let shown = has_hunks(patch) && self.replace_patch(&source, path, patch);
+        let source = picked_from(action);
+        let shown = has_hunks(patch) && self.replace_patch(&source, path, patch, version);
         drop(self.reload_uncommitted_but(shown.then(|| DiffFileKey::new(&source, path)), cx));
-        cx.emit(Changed(Part::Patches));
+        if shown {
+            cx.emit(Changed(Part::Patches));
+        }
     }
 
     // Resolving conflicts: a view's own change.
@@ -801,6 +803,15 @@ fn after_staging(result: &Result<(), DataError>) -> Then {
     match result {
         Ok(()) => Then::AwaitReload(Scope::Uncommitted),
         Err(_) => Then::Settle,
+    }
+}
+
+/// Where the lines `action` stages or unstages are picked from: the unstaged changes' patch, or
+/// the staged ones'.
+fn picked_from(action: StageAction) -> DiffSource {
+    match action {
+        StageAction::Stage => DiffSource::Unstaged,
+        StageAction::Unstage => DiffSource::Staged,
     }
 }
 
