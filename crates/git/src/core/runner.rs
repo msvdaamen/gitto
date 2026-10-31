@@ -206,7 +206,8 @@ static STOP_ON_EXIT: Mutex<Option<HashSet<i32>>> = Mutex::new(None);
 
 /// Stops the commands that are to be stopped when Gitto exits (see `RunOptions::stop_on_exit`).
 /// Done by itself when the process exits normally (`exit`, or returning from `main`); the app can
-/// also call it as it quits.
+/// also call it as it quits. On Windows, Windows does it as Gitto's process ends, however it ends
+/// (see `Job`).
 pub fn stop_commands_on_exit() {
     #[cfg(unix)]
     for group in lock(&STOP_ON_EXIT).take().unwrap_or_default() {
@@ -268,6 +269,118 @@ impl Drop for Group {
             stop_group(self.id);
         }
     }
+}
+
+/// Git's job object, on Windows: what git starts is in it too, so it's stopped with git, as with
+/// `Group` on Unix, if the command's future is dropped before git exits. Windows has no SIGTERM,
+/// so they're terminated, as `kill_on_drop` would git alone. One to stop when Gitto exits is
+/// stopped as its handle is closed, which Windows does as Gitto's process ends, however it ends.
+///
+/// Git is put in it as soon as it's started: what it starts before that, in the moment between,
+/// isn't in it, but git starts nothing that soon.
+#[cfg(windows)]
+struct Job {
+    handle: windows_sys::Win32::Foundation::HANDLE,
+    stop_on_exit: bool,
+    exited: bool,
+}
+
+// SAFETY: a job's handle can be used, and closed, from any thread, and its functions can be called
+// on it from several at once.
+#[cfg(windows)]
+unsafe impl Send for Job {}
+#[cfg(windows)]
+unsafe impl Sync for Job {}
+
+#[cfg(windows)]
+impl Job {
+    /// A job for `child`, just started, with it in it; `None` if Windows couldn't make one.
+    fn new(child: &async_process::Child, stop_on_exit: bool) -> Option<Job> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        };
+
+        // SAFETY: makes a job of its own, not inherited (no security attributes), which the
+        // `Job` closes, and puts `child`'s process, whose handle outlives the call, in it.
+        unsafe {
+            let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if handle.is_null() {
+                return None;
+            }
+            let mut job = Job {
+                handle,
+                stop_on_exit: false,
+                exited: true,
+            };
+            if stop_on_exit && job.set_limits(JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE) {
+                job.stop_on_exit = true;
+            }
+            if AssignProcessToJobObject(handle, child.as_raw_handle()) == 0 {
+                return None;
+            }
+            job.exited = false;
+            Some(job)
+        }
+    }
+
+    /// Sets the job's limits to `flags`; whether that worked.
+    fn set_limits(&self, flags: u32) -> bool {
+        use windows_sys::Win32::System::JobObjects::{
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+            SetInformationJobObject,
+        };
+
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        limits.BasicLimitInformation.LimitFlags = flags;
+        // SAFETY: `limits` is the struct the information class says, of the size given.
+        unsafe {
+            SetInformationJobObject(
+                self.handle,
+                JobObjectExtendedLimitInformation,
+                (&raw const limits).cast(),
+                size_of_val(&limits) as u32,
+            ) != 0
+        }
+    }
+
+    /// Stops everything in the job, git first among them.
+    fn stop(&self) {
+        // SAFETY: fails harmlessly if all in it have exited.
+        unsafe {
+            windows_sys::Win32::System::JobObjects::TerminateJobObject(self.handle, 1);
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for Job {
+    fn drop(&mut self) {
+        if !self.exited {
+            self.stop();
+        } else if self.stop_on_exit {
+            // What git left running is left be, as on Unix, rather than stopped as it's closed.
+            self.set_limits(0);
+        }
+        // SAFETY: the job's own handle, closed once.
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.handle);
+        }
+    }
+}
+
+/// Has `command` start without a console window of its own, on Windows: Gitto has none for it to
+/// share, so each git it starts would flash one up. What git starts has none either, so ssh, say,
+/// can't ask for a passphrase there, where no one would answer, and asks with its askpass program
+/// instead, or fails.
+pub(crate) fn no_console_window(command: &mut std::process::Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    let _ = command;
 }
 
 /// Runs `git` in `cwd` and resolves to its stdout, decoded as UTF-8 (lossily); fails with a
@@ -384,6 +497,7 @@ fn git_command(
         command.env("GIT_LITERAL_PATHSPECS", "0");
     }
     command.envs(options.env.iter().map(|(key, value)| (key, value)));
+    no_console_window(&mut command);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -414,7 +528,8 @@ async fn run(cwd: PathBuf, args: Vec<OsString>, options: RunOptions) -> Result<V
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    // On Unix the group is stopped instead (see `Group`), with SIGTERM rather than SIGKILL.
+    // On Unix the group is stopped instead (see `Group`), with SIGTERM rather than SIGKILL, and
+    // on Windows the job, if there's one (see `Job`).
     #[cfg(not(unix))]
     command.kill_on_drop(true);
 
@@ -451,6 +566,16 @@ async fn run(cwd: PathBuf, args: Vec<OsString>, options: RunOptions) -> Result<V
         }
     };
 
+    #[cfg(windows)]
+    let mut job = Job::new(&child, options.stop_on_exit);
+    // Whether git can be stopped with what it started.
+    #[cfg(unix)]
+    let stops_all = true;
+    #[cfg(windows)]
+    let stops_all = job.is_some();
+    #[cfg(not(any(unix, windows)))]
+    let stops_all = false;
+
     let mut stdin = child.stdin.take();
     let mut stdout = child.stdout.take();
     let mut stderr = child.stderr.take();
@@ -472,8 +597,12 @@ async fn run(cwd: PathBuf, args: Vec<OsString>, options: RunOptions) -> Result<V
                     // With what it started, like a textconv filter, as when it's cancelled.
                     #[cfg(unix)]
                     stop_group(group.id);
-                    // Without groups, git is stopped once its output is no longer read.
-                    cfg!(unix)
+                    #[cfg(windows)]
+                    if let Some(job) = &job {
+                        job.stop();
+                    }
+                    // Otherwise, git is stopped once its output is no longer read.
+                    stops_all
                 })
                 .await
             }
@@ -508,6 +637,10 @@ async fn run(cwd: PathBuf, args: Vec<OsString>, options: RunOptions) -> Result<V
     #[cfg(unix)]
     {
         group.exited = true;
+    }
+    #[cfg(windows)]
+    if let Some(job) = &mut job {
+        job.exited = true;
     }
     let code = match status {
         Ok(status) => status.code(),
