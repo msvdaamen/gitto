@@ -75,10 +75,21 @@ pub fn relative_time(timestamp: i64, now: i64) -> String {
     let diff = timestamp - now;
     for (unit, size) in TIME_UNITS {
         if diff.abs() >= size {
-            return format_relative((diff as f64 / size as f64).round() as i64, unit);
+            return format_relative(round_half_up(diff as f64 / size as f64), unit);
         }
     }
     "Just now".to_owned()
+}
+
+/// `x` rounded as JS's `Math.round` rounds it: halves up, so -1.5 is -1 (`f64::round` makes it
+/// -2).
+fn round_half_up(x: f64) -> i64 {
+    let floor = x.floor();
+    if x - floor >= 0.5 {
+        floor as i64 + 1
+    } else {
+        floor as i64
+    }
 }
 
 /// `Intl.RelativeTimeFormat("en", { numeric: "auto" }).format(value, unit)`, for a `value` that
@@ -121,10 +132,19 @@ pub fn compact_count(count: u64) -> String {
         return count.to_string();
     }
     if count >= 10_000 {
+        // TS's `toFixed(0)`: a half (10.5) is exact, and rounds up.
         return format!("{}k", (count + 500) / 1000);
     }
-    // Under 10k, to a tenth of a thousand, rounded halves up.
-    let tenths = (count + 50) / 100;
+    // Under 10k, to a tenth of a thousand, as TS's `toFixed(1)` rounds `count / 1000`: halves up,
+    // but it rounds the nearest double, which for some halves (1.15, 9.95) is just under them.
+    // (`mul_add` takes the count from that double times 1000 exactly, so the sign is right.)
+    let thousands = count as f64 / 1000.;
+    let under = thousands.mul_add(1000., -(count as f64)) < 0.;
+    let tenths = if count % 100 == 50 && under {
+        count / 100
+    } else {
+        (count + 50) / 100
+    };
     match tenths % 10 {
         0 => format!("{}k", tenths / 10),
         tenth => format!("{}.{tenth}k", tenths / 10),
@@ -181,6 +201,15 @@ mod tests {
                 "1,500 years ago"
             );
         }
+
+        #[test]
+        fn rounds_halves_up_as_math_round_does() {
+            // What TS told these times as.
+            assert_eq!(relative_time(NOW - 3 * MINUTE / 2, NOW), "1 minute ago");
+            assert_eq!(relative_time(NOW + 3 * MINUTE / 2, NOW), "in 2 minutes");
+            assert_eq!(relative_time(NOW - 36 * HOUR, NOW), "yesterday");
+            assert_eq!(relative_time(NOW - 5 * HOUR / 2, NOW), "2 hours ago");
+        }
     }
 
     mod compact_count {
@@ -192,6 +221,28 @@ mod tests {
             assert_eq!(compact_count(1234), "1.2k");
             assert_eq!(compact_count(2000), "2k");
             assert_eq!(compact_count(12_345), "12k");
+        }
+
+        #[test]
+        fn rounds_as_to_fixed_does() {
+            // What TS's `compactCount` gave.
+            for (count, compact) in [
+                (1050, "1.1k"),
+                (1150, "1.1k"),
+                (1250, "1.3k"),
+                (1450, "1.4k"),
+                (1950, "1.9k"),
+                (2050, "2k"),
+                (9850, "9.8k"),
+                (9949, "9.9k"),
+                (9950, "9.9k"),
+                (9951, "10k"),
+                (9999, "10k"),
+                (10_499, "10k"),
+                (10_500, "11k"),
+            ] {
+                assert_eq!(compact_count(count), compact, "{count}");
+            }
         }
     }
 
