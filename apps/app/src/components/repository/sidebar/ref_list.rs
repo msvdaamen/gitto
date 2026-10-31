@@ -15,7 +15,7 @@ use gitto_ui_logic::git::status::branch_name;
 use gitto_ui_logic::git::worktree::{can_open_worktree, describe_worktree, worktree_on};
 use gpui_kit::base::actions::{Confirm, SelectDown, SelectFirst, SelectLast, SelectUp};
 use gpui_kit::component::menu::PopupMenu;
-use gpui_kit::component::{WindowExt as _, v_flex};
+use gpui_kit::component::v_flex;
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, Context, DismissEvent, Entity, FocusHandle, Focusable, KeyBinding,
@@ -36,7 +36,7 @@ use gitto_app_data::services::Services;
 use gitto_app_data::state::clock::Clock;
 use gitto_app_data::state::collapsed::Collapsed;
 use gitto_app_kit::theme::base_px;
-use gitto_app_kit::ui::{EmptyState, IconName, LoadingState};
+use gitto_app_kit::ui::{DialogId, EmptyState, IconName, LoadingState};
 
 actions!(
     ref_list,
@@ -338,7 +338,7 @@ pub struct RefList {
     stash_menu: RowMenu,
     /// The worktree whose menu is open, by its path.
     worktree_menu: RowMenu,
-    asking: Option<Asking>,
+    asking: Option<(Asking, DialogId)>,
     scrolls: [UniformListScrollHandle; 5],
     trees: Trees,
     other_worktrees: OtherWorktrees,
@@ -428,8 +428,8 @@ impl RefList {
         if let Some(open) = self.keyboard_menu.take() {
             open.menu.update(cx, |_, cx| cx.emit(DismissEvent));
         }
-        if self.asking.take().is_some() {
-            window.close_dialog(cx);
+        if let Some((_, dialog)) = self.asking.take() {
+            dialog.close(window, cx);
         }
         for scroll in &self.scrolls {
             scroll.scroll_to_item(0, ScrollStrategy::Top);
@@ -549,10 +549,10 @@ impl RefList {
 
     /// Asks before deleting `stash`.
     fn ask_to_drop(&mut self, stash: Stash, window: &mut Window, cx: &mut Context<Self>) {
-        self.asking = Some(Asking::Drop(self.repository.id(cx).clone(), stash.clone()));
+        let asking = Asking::Drop(self.repository.id(cx).clone(), stash.clone());
         let list = cx.entity().downgrade();
         let cancelled = list.clone();
-        open_drop_stash_dialog(
+        let dialog = open_drop_stash_dialog(
             &stash,
             move |_, cx| {
                 let _ = list.update(cx, |list, cx| list.answer(true, cx));
@@ -563,17 +563,15 @@ impl RefList {
             window,
             cx,
         );
+        self.asking = Some((asking, dialog));
     }
 
     /// Asks before removing `worktree`.
     fn ask_to_remove(&mut self, worktree: Worktree, window: &mut Window, cx: &mut Context<Self>) {
-        self.asking = Some(Asking::Remove(
-            self.repository.id(cx).clone(),
-            worktree.clone(),
-        ));
+        let asking = Asking::Remove(self.repository.id(cx).clone(), worktree.clone());
         let list = cx.entity().downgrade();
         let cancelled = list.clone();
-        open_remove_worktree_dialog(
+        let dialog = open_remove_worktree_dialog(
             &worktree,
             move |_, cx| {
                 let _ = list.update(cx, |list, cx| list.answer(true, cx));
@@ -584,12 +582,13 @@ impl RefList {
             window,
             cx,
         );
+        self.asking = Some((asking, dialog));
     }
 
     /// The dialog was answered: deletes the stash, or removes the worktree, if `confirmed`, and
     /// it's still of the repository on show. Doesn't run while another of their actions is.
     fn answer(&mut self, confirmed: bool, cx: &mut Context<Self>) {
-        let Some(asking) = self.asking.take() else {
+        let Some((asking, _)) = self.asking.take() else {
             return;
         };
         if !confirmed {

@@ -7,7 +7,7 @@ use gitto_ui_logic::git::status::branch_name;
 use gitto_ui_logic::git::worktree::{checked_out_in, suggest_worktree_folder};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{InputEvent, InputState};
-use gpui_kit::component::{Disableable as _, WindowExt as _, h_flex, v_flex};
+use gpui_kit::component::{Disableable as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     App, Context, Entity, FocusHandle, Focusable as _, FontWeight, SharedString, Subscription,
@@ -22,7 +22,7 @@ use gitto_app_data::data::{AppData, AppPart, Part, Repository, Shown};
 use gitto_app_data::services::SystemContext;
 use gitto_app_data::state::lingering::Lingering;
 use gitto_app_kit::theme::PaletteExt as _;
-use gitto_app_kit::ui::{FormField, Icon, IconName};
+use gitto_app_kit::ui::{DialogId, FormField, Icon, IconName};
 
 /// The folder's hint once one was picked whose path isn't UTF-8.
 const UNUSABLE_PICK: &str = "That folder's path can't be used: pick or type another";
@@ -54,7 +54,8 @@ pub struct AddWorktreeDialog {
     unusable_pick: bool,
     /// Around Browse…, to tell whether Enter is on it.
     browse_focus: FocusHandle,
-    open: bool,
+    /// The dialog, while it's open.
+    dialog: Option<DialogId>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -96,7 +97,7 @@ impl AddWorktreeDialog {
             placeholder: SharedString::default(),
             unusable_pick: false,
             browse_focus: cx.focus_handle(),
-            open: false,
+            dialog: None,
             _subscriptions: subscriptions,
         }
     }
@@ -116,14 +117,13 @@ impl AddWorktreeDialog {
             input.update(cx, |input, cx| input.set_value("", window, cx));
         }
         self.unusable_pick = false;
-        if self.open {
-            self.open = false;
-            window.close_dialog(cx);
+        if let Some(dialog) = self.dialog.take() {
+            dialog.close(window, cx);
         }
     }
 
     pub fn is_open(&self) -> bool {
-        self.open
+        self.dialog.is_some()
     }
 
     pub fn folder(&self) -> &Entity<InputState> {
@@ -225,14 +225,13 @@ impl AddWorktreeDialog {
         }
         self.branch.update(Some(branch));
         self.update_placeholder(window, cx);
-        if self.open {
+        if self.dialog.is_some() {
             cx.notify();
             return;
         }
-        self.open = true;
         let this = cx.entity().downgrade();
         let focus = self.folder.focus_handle(cx);
-        window.open_dialog(cx, move |dialog, window, cx| {
+        let dialog = DialogId::open(window, cx, move |_, dialog, window, cx| {
             let Some(shown) = this.upgrade() else {
                 return dialog;
             };
@@ -255,13 +254,14 @@ impl AddWorktreeDialog {
                 })
                 .on_cancel(move |_, _, cx| {
                     let _ = cancel.update(cx, |this, cx| {
-                        this.open = false;
+                        this.dialog = None;
                         cx.notify();
                     });
                     true
                 })
                 .child(Self::render_form(&shown, cx))
         });
+        self.dialog = Some(dialog);
         focus.focus(window, cx);
         cx.notify();
     }
@@ -383,7 +383,10 @@ impl AddWorktreeDialog {
     /// Adds the worktree, and closes the dialog. Once it's added, the folder and name are
     /// cleared, unless others are typed by then.
     fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.open || !self.is_valid(cx) || self.repository.read(cx).add_worktree_blocked() {
+        if self.dialog.is_none()
+            || !self.is_valid(cx)
+            || self.repository.read(cx).add_worktree_blocked()
+        {
             return;
         }
         let Some(branch) = self.branch.get().cloned() else {
@@ -391,8 +394,9 @@ impl AddWorktreeDialog {
         };
         let path = Self::typed(&self.folder, cx);
         let made = Self::typed(&self.new_branch, cx);
-        self.open = false;
-        window.close_dialog(cx);
+        if let Some(dialog) = self.dialog.take() {
+            dialog.close(window, cx);
+        }
         cx.notify();
         let new_branch = (!made.is_empty()).then(|| made.clone());
         let input = AddWorktreeInput::parse(path.clone(), branch, new_branch);
@@ -431,6 +435,7 @@ mod tests {
     use futures::FutureExt as _;
     use gitto_git::features::refs::schema::{Ref, RefKind};
     use gitto_git::input::{BranchName, BranchRef, Folder};
+    use gpui_kit::component::WindowExt as _;
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{AnyWindowHandle, AppContext as _, IntoElement, Render, TestAppContext};
 
@@ -771,10 +776,9 @@ mod tests {
         let folder = dialog.read_with(cx, |dialog, _| dialog.folder.clone());
         cx.update_window(window, |_, window, cx| {
             folder.update(cx, |input, cx| input.set_value("/elsewhere", window, cx));
-            window.close_dialog(cx);
+            window.press("escape", cx);
         })
         .unwrap();
-        dialog.update(cx, |dialog, _| dialog.open = false);
 
         open(window, &dialog, "refs/heads/main", cx);
         assert_eq!(value(&folder, cx), "/elsewhere");

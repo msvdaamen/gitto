@@ -20,6 +20,8 @@ pub mod app;
 pub mod assets;
 pub mod components;
 pub mod identity;
+pub mod menus;
+pub mod single_instance;
 pub mod util;
 pub mod views;
 

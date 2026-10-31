@@ -1,5 +1,6 @@
 //! What the home page shows of each repository. Ported from `components/home/summaries.ts`.
 
+use std::cell::Cell;
 use std::rc::Rc;
 
 use gitto_git::features::overview::schema::Overview;
@@ -37,6 +38,10 @@ struct Entry {
 #[derive(Default)]
 pub struct RepositorySummaries {
     entries: Vec<Entry>,
+    /// What [`summaries`](Self::summaries) last made, kept until a repository's status or
+    /// overview changes (`stale`), or the list does: the page draws again every minute.
+    made: Option<Rc<[RepositorySummary]>>,
+    stale: Rc<Cell<bool>>,
 }
 
 impl RepositorySummaries {
@@ -59,6 +64,7 @@ impl RepositorySummaries {
     /// Follows `repositories`: what's shown of them is kept for the ones still there, opened for new ones,
     /// and dropped for those that are gone (`mapArray`).
     pub fn sync<V: 'static>(&mut self, repositories: &[Repository], cx: &mut Context<V>) {
+        self.made = None;
         let mut previous = std::mem::take(&mut self.entries);
         for repository in repositories {
             if let Some(at) = previous
@@ -72,8 +78,10 @@ impl RepositorySummaries {
             }
             let data = Repositories::open(&repository.id, cx);
             Self::reload(&data, cx);
-            let subscription = cx.subscribe(&data, |_, _, Changed(part), cx| {
+            let stale = Rc::clone(&self.stale);
+            let subscription = cx.subscribe(&data, move |_, _, Changed(part), cx| {
                 if matches!(part, Part::Status | Part::Overview) {
+                    stale.set(true);
                     cx.notify();
                 }
             });
@@ -93,9 +101,16 @@ impl RepositorySummaries {
         }
     }
 
-    /// What's loaded of each repository, in the list's order.
-    pub fn summaries(&self, cx: &App) -> Rc<[RepositorySummary]> {
-        self.entries
+    /// What's loaded of each repository, in the list's order: the same as last time, until
+    /// something of it changes.
+    pub fn summaries(&mut self, cx: &App) -> Rc<[RepositorySummary]> {
+        if !self.stale.replace(false)
+            && let Some(made) = &self.made
+        {
+            return Rc::clone(made);
+        }
+        let made: Rc<[RepositorySummary]> = self
+            .entries
             .iter()
             .map(|entry| {
                 let data = entry.data.read(cx);
@@ -109,6 +124,56 @@ impl RepositorySummaries {
                     settled: status.data().is_some() || status.is_error(),
                 }
             })
-            .collect()
+            .collect();
+        self.made = Some(Rc::clone(&made));
+        made
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::{IntoElement, Render, TestAppContext, Window, div};
+
+    use super::*;
+    use crate::components::repository::test_support::{
+        changed, repository, repository_id, set_status, setup, status,
+    };
+
+    struct Host {
+        summaries: RepositorySummaries,
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    #[gpui_kit::test]
+    fn makes_the_summaries_again_only_once_something_of_them_changes(cx: &mut TestAppContext) {
+        let _dir = setup(cx);
+        let id = repository_id();
+        set_status(&id, status(), cx);
+        let listed = [repository(&id, "/work/gitto")];
+        let (_, host) = crate::test_support::open(cx, |_, cx| {
+            let mut summaries = RepositorySummaries::new();
+            summaries.sync(&listed, cx);
+            Host { summaries }
+        });
+        cx.run_until_parked();
+        let summaries =
+            |cx: &mut TestAppContext| host.update(cx, |host, cx| host.summaries.summaries(cx));
+
+        let first = summaries(cx);
+        assert!(Rc::ptr_eq(&first, &summaries(cx)));
+
+        set_status(&id, changed(status(), 1), cx);
+        cx.run_until_parked();
+        let again = summaries(cx);
+        assert!(!Rc::ptr_eq(&first, &again));
+        assert_eq!(
+            again[0].status.as_ref().map(|status| status.counts.files),
+            Some(1)
+        );
     }
 }

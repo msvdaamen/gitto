@@ -45,12 +45,17 @@ objc2.workspace = true
 objc2-app-kit.workspace = true
 objc2-foundation.workspace = true
 
+# The socket a second launch tells the Gitto running through (see `single_instance.rs`).
+[target.'cfg(windows)'.dependencies]
+uds_windows.workspace = true
+
 # The .exe's icon and the name Windows shows for it (see `build.rs`).
 [build-dependencies]
 winresource.workspace = true
 
 [dev-dependencies]
 gitto-git = { workspace = true, features = ["test-support"] }
+smol.workspace = true
 gpui-kit = { workspace = true, features = ["syntect", "test-support"] }
 gitto-app-data = { workspace = true, features = ["test-support"] }
 serde_json.workspace = true

@@ -119,6 +119,8 @@ pub struct Tabs {
     remove_error: Option<DataError>,
     /// Each repository's tab's, made and dropped as the list of repositories changes.
     focus: HashMap<RepositoryId, FocusHandle>,
+    /// The home tab's, a Tab stop as the repositories' tabs are.
+    home_focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -150,6 +152,7 @@ impl Tabs {
             removing: None,
             remove_error: None,
             focus: HashMap::new(),
+            home_focus: cx.focus_handle().tab_stop(true),
             _subscriptions: subscriptions,
         };
         tabs.sync_focus(cx);
@@ -288,6 +291,7 @@ impl Tabs {
         tab_frame("home-tab", selected, cx)
             .w(if narrow { base_px(53.) } else { base_px(116.) })
             .flex_none()
+            .track_focus(&self.home_focus)
             .aria_label("Home")
             .when(narrow, |this| this.justify_center())
             .when(!narrow, |this| this.px_3p5())
@@ -680,6 +684,25 @@ mod ui_tests {
         };
         assert_eq!(next(&ids[0], cx).as_ref(), Some(&ids[1]));
         assert_eq!(next(&ids[1], cx).as_ref(), Some(&ids[2]));
+    }
+
+    #[gpui_kit::test]
+    fn goes_home_from_the_keyboard(cx: &mut TestAppContext) {
+        let (_dir, _saved, ids, window, host) = render_tabs(cx);
+        cx.update(|cx| Router::navigate(Route::Repository(ids[0].clone()), cx));
+        cx.run_until_parked();
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            let tabs = host.read(cx).tabs.read(cx);
+            let (first, home) = (tabs.focus[&ids[0]].clone(), tabs.home_focus.clone());
+            window.focus(&first, cx);
+            window.focus_prev(cx);
+            assert!(home.is_focused(window));
+            window.press("enter", cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert_eq!(cx.update(|cx| Router::current(cx)), Route::Home);
     }
 
     #[gpui_kit::test]

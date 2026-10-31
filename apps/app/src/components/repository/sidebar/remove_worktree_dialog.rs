@@ -6,7 +6,7 @@ use gitto_ui_logic::git::status::branch_name;
 use gpui_kit::component::button::ButtonVariant;
 use gpui_kit::{App, Window};
 
-use gitto_app_kit::ui::{ConfirmDialog, IconName, Tone};
+use gitto_app_kit::ui::{ConfirmDialog, DialogId, IconName, Tone};
 
 /// What removing `worktree` does, as the dialog says it: its folder goes, with any uncommitted
 /// changes in it; its branch, if it's on one, is kept.
@@ -31,12 +31,12 @@ pub fn open_remove_worktree_dialog(
     on_cancel: impl Fn(&mut Window, &mut App) + 'static,
     window: &mut Window,
     cx: &mut App,
-) {
+) -> DialogId {
     ConfirmDialog::new(IconName::FolderX, Tone::Coral, "Remove worktree?")
         .description(remove_worktree_description(worktree))
-        .action("Remove", ButtonVariant::Primary, on_remove)
+        .action("Remove", ButtonVariant::Danger, on_remove)
         .on_cancel(on_cancel)
-        .open(window, cx);
+        .open(window, cx)
 }
 
 #[cfg(test)]

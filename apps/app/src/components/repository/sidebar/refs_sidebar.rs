@@ -2,7 +2,7 @@
 
 use gitto_git::input::RepositoryId;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::{Selectable as _, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{Disableable as _, Selectable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{Context, Entity, SharedString, Subscription, Window, div};
 
@@ -190,12 +190,15 @@ impl Render for RefsSidebar {
                 .into_any_element(),
             SidebarMode::Agents => AgentPlaceholder::new(rail).into_any_element(),
         };
+        // It doesn't do anything yet: disabled, saying so, as Undo and Redo are.
         let configure = Button::new("configure-sidebar")
             .ghost()
             .xsmall()
             .when(!rail, |button| button.label("Configure sidebar"))
             .icon(Icon::new(IconName::Settings))
             .accessibility_label("Configure sidebar")
+            .tooltip("Configure sidebar (coming soon)")
+            .disabled(true)
             .text_color(palette.faint);
         v_flex()
             .id("refs-sidebar")
@@ -293,6 +296,8 @@ mod tests {
         assert!(!has(window, "rail-local", cx));
         cx.update_window(window, |_, window, _| {
             assert!(window.try_find_by_label("Configure sidebar").is_some());
+            // Still to come: disabled, rather than a Tab stop that does nothing.
+            assert_eq!(window.find("configure-sidebar").disabled(), Some(true));
         })
         .unwrap();
         // Only one view, so no switch between them.

@@ -10,6 +10,7 @@ use gpui_kit::{
 
 use crate::assets::AppAssets;
 use crate::identity;
+use crate::single_instance::{self, Instance, Running};
 use crate::views::root::AppShell;
 use gitto_app_data::services::{AppPaths, Services, logger};
 use gitto_app_data::state::router::{Route, Router};
@@ -32,9 +33,24 @@ pub const MIN_HEIGHT: f32 = 400.;
 
 /// Runs Gitto: starts its services, then opens its window. Quits once the window's closed, as
 /// the Electron app did everywhere but macOS (`window-all-closed`); there, it stays running, and
-/// opens the window again when it's launched again, from the Dock say (`activate`).
+/// opens the window again when it's launched again, from the Dock say (`activate`). Launched
+/// again while it runs, on the same profile, the one running comes forward instead (see
+/// `single_instance`).
 pub fn run() {
     logger::init();
+    let paths = AppPaths::resolve();
+    let running = match paths
+        .as_ref()
+        .map(|paths| single_instance::claim(paths.user_data()))
+    {
+        Some(Ok(Instance::First(running))) => Some(running),
+        Some(Ok(Instance::Second)) => return,
+        Some(Err(error)) => {
+            log::warn!("Couldn't tell whether Gitto's running already: {error}");
+            None
+        }
+        None => None,
+    };
     // Git runs with the PATH the user's shell has, as from a terminal, not only the one a Dock or
     // a launcher gave Gitto.
     gitto_git::use_path_from_shell();
@@ -47,7 +63,7 @@ pub fn run() {
     application.run(|cx: &mut App| {
         gpui_kit::init(cx);
         identity::init(cx);
-        let services = match start_services() {
+        let services = match start_services(paths) {
             Ok(services) => services,
             Err(error) => {
                 quit_with_error("Gitto couldn't start", &error, cx);
@@ -62,19 +78,45 @@ pub fn run() {
             }
         })
         .detach();
+        if let Some(running) = running {
+            come_forward_when_launched(running, cx);
+        }
     });
 }
 
 /// The services, on the database in Gitto's `userData` folder (see `AppPaths::resolve`).
-fn start_services() -> anyhow::Result<Services> {
-    let paths = AppPaths::resolve()
-        .ok_or_else(|| anyhow::anyhow!("There's no home folder to keep Gitto's files in."))?;
+fn start_services(paths: Option<AppPaths>) -> anyhow::Result<Services> {
+    let paths =
+        paths.ok_or_else(|| anyhow::anyhow!("There's no home folder to keep Gitto's files in."))?;
     Services::start(paths)
 }
 
+/// Brings Gitto forward each time it's launched again, as `second-instance` did in main.ts.
+fn come_forward_when_launched(mut running: Running, cx: &mut App) {
+    cx.spawn(async move |cx| {
+        while running.launched().await.is_some() {
+            cx.update(come_forward);
+        }
+    })
+    .detach();
+}
+
+/// Brings Gitto's window forward, or opens it if there's none (on macOS, where Gitto runs on
+/// without one).
+pub fn come_forward(cx: &mut App) {
+    match cx.windows().first() {
+        Some(window) => {
+            let _ = window.update(cx, |_, window, _| window.activate_window());
+        }
+        None if cx.has_global::<Services>() => open_main_window(cx),
+        None => {}
+    }
+    cx.activate(true);
+}
+
 /// Sets up what every window needs, on `services`, starting on `route`: the services, the theme
-/// the user picked, the data layer, the app's state, the router and the key bindings. Call after
-/// `gpui_kit::init`.
+/// and zoom the user picked, the data layer, the app's state, the router, the key bindings and
+/// the menu bar. Call after `gpui_kit::init`.
 pub fn init(services: Services, route: Route, cx: &mut App) {
     let storage = services.storage().clone();
     cx.set_global(services);
@@ -84,6 +126,12 @@ pub fn init(services: Services, route: Route, cx: &mut App) {
         move |picked| storage.set_item(theme::STORAGE_KEY, picked.as_str())
     });
     theme::init(saved.as_deref(), Some(save), cx);
+    let saved_zoom = storage.get_item(theme::zoom::STORAGE_KEY);
+    let save_zoom: theme::zoom::SaveZoom = Box::new({
+        let storage = storage.clone();
+        move |zoom| storage.set_item(theme::zoom::STORAGE_KEY, zoom)
+    });
+    theme::zoom::init(saved_zoom.as_deref(), Some(save_zoom), cx);
     gitto_app_data::data::init(cx);
     gitto_app_data::state::init(cx);
     Router::init(route, cx);
@@ -94,6 +142,7 @@ pub fn init(services: Services, route: Route, cx: &mut App) {
     crate::components::tabs::bind_keys(cx);
     gitto_app_kit::ui::resize_handle::bind_keys(cx);
     cx.on_action(|_: &Quit, cx| cx.quit());
+    crate::menus::init(cx);
     // What the UI remembers is saved off the UI thread: what's still being saved is, before
     // Gitto goes.
     cx.on_app_quit(move |_| {
@@ -196,5 +245,15 @@ mod tests {
         cx.simulate_prompt_answer("Quit");
         cx.run_until_parked();
         assert!(cx.update(|cx| cx.windows().is_empty()));
+    }
+
+    #[gpui_kit::test]
+    fn comes_forward_in_the_window_it_has(cx: &mut TestAppContext) {
+        let _dir = crate::test_support::init(cx, |services| services);
+        crate::test_support::open(cx, |_, _| ErrorWindow);
+        cx.update(come_forward);
+        cx.run_until_parked();
+        // Rather than opening another.
+        assert_eq!(cx.update(|cx| cx.windows().len()), 1);
     }
 }

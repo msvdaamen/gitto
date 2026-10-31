@@ -5,7 +5,7 @@ use gitto_git::features::stash::schema::Stash;
 use gpui_kit::component::button::ButtonVariant;
 use gpui_kit::{App, Window};
 
-use gitto_app_kit::ui::{ConfirmDialog, IconName, Tone};
+use gitto_app_kit::ui::{ConfirmDialog, DialogId, IconName, Tone};
 
 /// What deleting `stash` does, as the dialog says it.
 pub fn drop_stash_description(stash: &Stash) -> String {
@@ -23,12 +23,12 @@ pub fn open_drop_stash_dialog(
     on_cancel: impl Fn(&mut Window, &mut App) + 'static,
     window: &mut Window,
     cx: &mut App,
-) {
+) -> DialogId {
     ConfirmDialog::new(IconName::Trash, Tone::Coral, "Delete stash?")
         .description(drop_stash_description(stash))
-        .action("Delete", ButtonVariant::Primary, on_drop)
+        .action("Delete", ButtonVariant::Danger, on_drop)
         .on_cancel(on_cancel)
-        .open(window, cx);
+        .open(window, cx)
 }
 
 #[cfg(test)]
