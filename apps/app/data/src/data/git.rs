@@ -37,8 +37,8 @@ use super::error::DataError;
 pub type GitTask<T> = BoxFuture<'static, Result<T, DataError>>;
 
 /// Writes [`RepositoryGit`], with a method for each of `GitRepo`'s, as gitto-git lists them
-/// (`for_each_repo_method!`, whose bodies are gitto-git's own): which [`GitRepository`] runs, and
-/// which panics by default, for tests.
+/// (`for_each_repo_method!`, whose bodies are gitto-git's own): which [`GitRepository`] runs, which
+/// [`Removed`] fails, and which panics by default, for tests.
 macro_rules! repository_git {
     ($(
         $(#[$attr:meta])*
@@ -81,8 +81,22 @@ macro_rules! repository_git {
                 self.api.fail("input", error).into()
             }
         }
+
+        impl RepositoryGit for Removed {
+            $(
+                fn $name(&self $(, $arg: $ty)*) -> GitTask<$out> {
+                    $(let _ = $arg;)*
+                    let error = super::repository::removed();
+                    async move { Err(error) }.boxed()
+                }
+            )*
+        }
     };
 }
+
+/// The git of a repository that was removed from Gitto: everything fails, saying so. What a view
+/// that's about to go with it asks it for (see `Repositories::open`).
+pub struct Removed;
 
 /// The repository `id`, as gitto-git runs it: opened once (see `GitApi::repo`), and again after
 /// a method failed, in case that's why. Cheap to clone; the clones share what's opened.

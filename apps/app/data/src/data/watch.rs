@@ -15,7 +15,7 @@ use gitto_git::input::RepositoryId;
 use gitto_git::{ApiError, GitApi};
 use gpui_kit::{AppContext as _, Context, Entity, Task, WeakEntity};
 
-use super::repository::Repository;
+use super::repository::{Repositories, Repository};
 
 /// How long the working tree stays watched after the window loses focus. Starting to watch walks
 /// the whole tree, so switching to an editor and back shouldn't start over every time.
@@ -84,13 +84,10 @@ impl RepositoryWatcher {
         // last on show) may be out of date. What's loading isn't loaded twice: it's loading since
         // it came on show (see `Repository::reload_when_shown`).
         repository.update(cx, |repository, cx| repository.reload_when_shown(cx));
+        Repositories::came_on_show(&watcher.id, cx);
         // The view drops it as the repository goes off show.
-        cx.on_release(|watcher: &mut Self, cx| {
-            let _ = watcher
-                .repository
-                .update(cx, |repository, _| repository.went_off_show());
-        })
-        .detach();
+        cx.on_release(|watcher: &mut Self, cx| Repositories::went_off_show(&watcher.id, cx))
+            .detach();
         watcher.watch_git_dir(cx);
         watcher.focus_changed(None, cx);
         watcher

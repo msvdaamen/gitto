@@ -1459,4 +1459,75 @@ mod tests {
                 .is_none()
         );
     }
+
+    #[gpui_kit::test]
+    fn doesnt_open_again_a_repository_removed_from_gitto(cx: &mut TestAppContext) {
+        let git: Rc<dyn RepositoryGit> = Rc::new(Git::default());
+        cx.update(|cx| Repositories::insert(&repository_id(), git, cx));
+        cx.update(|cx| Repositories::close(&repository_id(), cx));
+        // A view about to go with it, say, or a save done after it was removed.
+        let repository = cx.update(|cx| Repositories::open(&repository_id(), cx));
+        assert!(
+            cx.update(|cx| Repositories::get(&repository_id(), cx))
+                .is_none()
+        );
+        repository.update(cx, |repository, cx| repository.show(Field::Refs, cx));
+        cx.run_until_parked();
+        let error = repository.read_with(cx, |repository, _| repository.refs().error().cloned());
+        assert_eq!(
+            error.unwrap().to_string(),
+            "The repository was removed from Gitto."
+        );
+    }
+
+    #[gpui_kit::test]
+    fn settles_a_load_of_a_repository_removed_as_it_loaded(cx: &mut TestAppContext) {
+        let git = Rc::new(Statuses::default());
+        let shared: Rc<dyn RepositoryGit> = git.clone();
+        let repository = cx.update(|cx| Repositories::insert(&repository_id(), shared, cx));
+        repository.update(cx, |repository, cx| repository.show(Field::Status, cx));
+        cx.run_until_parked();
+        cx.update(|cx| Repositories::close(&repository_id(), cx));
+        git.answer("v1");
+        cx.run_until_parked();
+        // What still shows it has it, and it isn't opened again.
+        assert_eq!(version(&repository, cx).as_deref(), Some("v1"));
+        assert!(
+            cx.update(|cx| Repositories::get(&repository_id(), cx))
+                .is_none()
+        );
+    }
+
+    #[gpui_kit::test]
+    fn forgets_what_only_their_page_shows_of_repositories_off_show_long_ago(
+        cx: &mut TestAppContext,
+    ) {
+        let ids: Vec<RepositoryId> = (0..5).map(|_| RepositoryId::generate()).collect();
+        for id in &ids {
+            let git: Rc<dyn RepositoryGit> = Rc::new(Git::default());
+            let repository = cx.update(|cx| Repositories::insert(id, git, cx));
+            repository.update(cx, |repository, cx| {
+                repository.set_status(uncommitted(), cx);
+                repository.set_refs(vec![], cx);
+            });
+        }
+        let kept = |id: &RepositoryId, cx: &mut TestAppContext| {
+            let repository = cx.update(|cx| Repositories::get(id, cx).unwrap());
+            repository.read_with(cx, |repository, _| {
+                assert!(repository.status().data().is_some());
+                repository.refs().data().is_some()
+            })
+        };
+        // Shown in turn, the last one again.
+        for id in &ids[..4] {
+            cx.update(|cx| {
+                Repositories::came_on_show(id, cx);
+                Repositories::went_off_show(id, cx);
+            });
+        }
+        cx.update(|cx| Repositories::came_on_show(&ids[1], cx));
+        cx.update(|cx| Repositories::went_off_show(&ids[1], cx));
+        let kept: Vec<bool> = ids.iter().map(|id| kept(id, cx)).collect();
+        assert_eq!(kept, [false, true, true, true, true]);
+    }
 }

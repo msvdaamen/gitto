@@ -277,6 +277,37 @@ impl Repository {
         drop(self.conflicts.held_and_drop_rest(|_| true));
     }
 
+    /// Drops what's loaded that only its page shows, and isn't loading: for a repository that went
+    /// off show a while ago (see `Repositories::went_off_show`). The status and the overview stay,
+    /// as the home page shows them. What's shown again is loaded again.
+    pub(crate) fn forget_its_page(&mut self, cx: &mut Context<Self>) {
+        fn forget<T>(loaded: &mut Loaded<T>) -> bool {
+            if !loaded.is_used() || loaded.is_fetching() {
+                return false;
+            }
+            *loaded = Loaded::default();
+            true
+        }
+        let forgot = [
+            (Part::Operation, forget(&mut self.operation)),
+            (Part::Log, forget(&mut self.log)),
+            (Part::Refs, forget(&mut self.refs)),
+            (Part::Remotes, forget(&mut self.remotes)),
+            (Part::Stashes, forget(&mut self.stashes)),
+            (Part::Worktrees, forget(&mut self.worktrees)),
+            (Part::PushTarget, forget(&mut self.push_target)),
+        ];
+        // More of the log as it was, which is gone.
+        if forgot[1].1 {
+            self.more = Default::default();
+        }
+        for (part, forgot) in forgot {
+            if forgot {
+                cx.emit(Changed(part));
+            }
+        }
+    }
+
     /// Drops what's kept by a key that nothing shows, as the repository went off show (see
     /// `RepositoryWatcher`): each repository opened kept some of each, for the rest of the
     /// session. What's shown again is loaded again.
