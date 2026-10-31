@@ -281,7 +281,9 @@ async fn check_operation(git_dir: &Path, kind: OperationKind) -> Result<()> {
 /// Fails with `Error::EditorNeeded` for a rebase that rewords or squashes commits from here on:
 /// their messages are the user's to write, in an editor, which Gitto can't open.
 pub async fn continue_operation(repo: &Repo, kind: OperationKind) -> Result<()> {
-    repo.exclusive(|run| async move {
+    let owned = repo.clone();
+    repo.exclusive(move |run| async move {
+        let repo = &owned;
         let git_dir = git_dirs(repo).await?.git_dir;
         let (conflicted, before, ()) = futures::try_join!(
             has_conflicts(&run),
@@ -416,7 +418,9 @@ fn asks_for_message(line: &str) -> bool {
 /// Aborts the operation `kind`, putting the repository back as it was before it started: the
 /// conflicts and how they were resolved so far go with it.
 pub async fn abort_operation(repo: &Repo, kind: OperationKind) -> Result<()> {
-    repo.exclusive(|run| async move {
+    let owned = repo.clone();
+    repo.exclusive(move |run| async move {
+        let repo = &owned;
         check_operation(&git_dirs(repo).await?.git_dir, kind).await?;
         run.run_with(
             operation_args(kind, OperationAction::Abort),

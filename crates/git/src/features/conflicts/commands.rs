@@ -130,7 +130,10 @@ pub struct ShownConflict {
 /// `Error::FileChangedOnDisk` if the file changed on disk since, which keeping a side would lose.
 pub async fn keep_side(repo: &Repo, path: &str, side: Side, shown: &ShownConflict) -> Result<()> {
     check_path(path)?;
-    repo.exclusive(|run| async move {
+    // Owned, as the write runs on its own (see `Repo::exclusive`).
+    let (owned, path, shown) = (repo.clone(), path.to_owned(), shown.clone());
+    repo.exclusive(move |run| async move {
+        let (repo, path) = (&owned, path.as_str());
         let sides = read_sides(&run, path).await?;
         if sides != shown.sides {
             return Err(Error::ConflictChanged {
@@ -207,7 +210,11 @@ pub async fn mark_resolved(
     with_markers: bool,
 ) -> Result<()> {
     check_path(path)?;
-    repo.exclusive(|run| async move {
+    // Owned, as the write runs on its own (see `Repo::exclusive`).
+    let (owned, path) = (repo.clone(), path.to_owned());
+    let version = version.map(str::to_owned);
+    repo.exclusive(move |run| async move {
+        let (repo, path) = (&owned, path.as_str());
         let sides = read_sides(&run, path).await?;
         if sides.base.is_none() && sides.ours.is_none() && sides.theirs.is_none() {
             return Ok(());
@@ -578,8 +585,9 @@ mod tests {
     /// The staging feature's `stage`, until it's ported: refuses conflict markers, then stages.
     async fn stage(repo: &Repo, paths: &[&str]) -> Result<()> {
         let paths: Vec<String> = paths.iter().map(|path| path.to_string()).collect();
-        repo.exclusive(|run| async move {
-            refuse_conflict_markers(repo, &run, Some(&paths)).await?;
+        let owned = repo.clone();
+        repo.exclusive(move |run| async move {
+            refuse_conflict_markers(&owned, &run, Some(&paths)).await?;
             let stdin: String = paths.iter().map(|path| format!("{path}\0")).collect();
             run.run_with(
                 ["add", "--pathspec-from-file=-", "--pathspec-file-nul"],
@@ -593,8 +601,9 @@ mod tests {
 
     /// The staging feature's `stageAll`, until it's ported.
     async fn stage_all(repo: &Repo) -> Result<()> {
-        repo.exclusive(|run| async move {
-            refuse_conflict_markers(repo, &run, None).await?;
+        let owned = repo.clone();
+        repo.exclusive(move |run| async move {
+            refuse_conflict_markers(&owned, &run, None).await?;
             run.run(["add", "-A"]).await?;
             Ok(())
         })

@@ -48,5 +48,6 @@ Dependencies go in the root `Cargo.toml`'s `[workspace.dependencies]`, used with
 ```sh
 cargo fmt --all
 cargo clippy -p gitto-git --all-targets --locked -- -D warnings
+cargo clippy -p gitto-git --locked -- -D warnings
 cargo test -p gitto-git --locked
 ```

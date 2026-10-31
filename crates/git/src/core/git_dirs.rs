@@ -18,7 +18,8 @@ pub struct GitDirs {
 /// The repository's git directories, symlinks resolved (that's how the watcher reports paths).
 pub async fn git_dirs(repo: &Repo) -> Result<GitDirs> {
     let output = repo
-        .read([
+        .git()
+        .run_bytes([
             "rev-parse",
             "--path-format=absolute",
             "--git-dir",
@@ -27,15 +28,27 @@ pub async fn git_dirs(repo: &Repo) -> Result<GitDirs> {
             "info/exclude",
         ])
         .await?;
-    let mut lines = output.split('\n');
-    let mut next = || lines.next().unwrap_or_default().to_owned();
+    let mut lines = output.split(|byte| *byte == b'\n');
+    let mut next = || path_from_git(lines.next().unwrap_or_default());
     let (git_dir, common_dir, exclude_file) = (next(), next(), next());
     let (git_dir, common_dir) = futures::try_join!(real_path(&git_dir), real_path(&common_dir))?;
     Ok(GitDirs {
         git_dir,
         common_dir,
-        exclude_file: PathBuf::from(exclude_file),
+        exclude_file,
     })
+}
+
+/// A path as git printed it, e.g. a line of `rev-parse --git-dir`. As bytes on Unix, where a path
+/// needn't be UTF-8; git prints them in UTF-8 on Windows.
+pub(crate) fn path_from_git(bytes: &[u8]) -> PathBuf {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        PathBuf::from(std::ffi::OsStr::from_bytes(bytes))
+    }
+    #[cfg(not(unix))]
+    PathBuf::from(String::from_utf8_lossy(bytes).into_owned())
 }
 
 /// `path` with symlinks resolved, as Node's `realpath` has it (not as a `\\?\` path on Windows).
@@ -88,6 +101,31 @@ mod tests {
             assert_eq!(other.git_dir, path.join(".git/worktrees/dirs-linked"));
             assert_eq!(other.common_dir, path.join(".git"));
         });
+    }
+
+    // Such names are only made on Unix (see `non_utf8_names`).
+    #[cfg(unix)]
+    #[test]
+    fn are_found_in_a_folder_whose_name_isnt_utf8() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        use crate::test_support::non_utf8_names;
+        if !non_utf8_names() {
+            return;
+        }
+        let fx = Fixture::new();
+        let path = fx.root().join(OsStr::from_bytes(b"caf\xe9"));
+        std::fs::create_dir(&path).unwrap();
+        git(&path, ["init", "-q"]);
+        fx.add_path("non-utf8", &path);
+        let dirs = smol::block_on(async {
+            git_dirs(&fx.repos.open("non-utf8").await.unwrap())
+                .await
+                .unwrap()
+        });
+        assert_eq!(dirs.git_dir, path.join(".git"));
+        assert_eq!(dirs.exclude_file, path.join(".git/info/exclude"));
     }
 
     #[test]
