@@ -387,7 +387,8 @@ impl WorkingTree {
         let mut roots = vec![Root {
             dir: self.root.clone(),
             ignore,
-            ignore_in: &[],
+            // Nested repositories and old-style submodules: what's in them isn't this one's.
+            ignore_in: &[".git"],
             leave_out: Some(leave_out),
             on_events,
             optional: false,
@@ -857,6 +858,25 @@ mod tests {
             }
 
             write(path.join("file.txt"), "x");
+            assert!(is_change(changes.next().await));
+        });
+    }
+
+    #[test]
+    fn the_working_tree_leaves_out_nested_repositories() {
+        let fx = Fixture::new();
+        let path = fx.create_repo("watched-nested");
+        git(&path, ["init", "-q", "nested"]);
+        smol::block_on(async {
+            let repo = fx.repos.open("watched-nested").await.unwrap();
+            let changes = watched_tree(&repo).await;
+
+            // As git does in it.
+            git(path.join("nested"), ["config", "user.name", "Nested"]);
+            write(path.join("nested").join(".git").join("description"), "x");
+            assert!(changes.quiet().await);
+
+            write(path.join("nested").join("file.txt"), "x");
             assert!(is_change(changes.next().await));
         });
     }
