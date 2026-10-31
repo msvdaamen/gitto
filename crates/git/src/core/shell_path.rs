@@ -12,7 +12,7 @@ use std::ffi::OsString;
 use std::ffi::{OsStr, c_char};
 use std::sync::OnceLock;
 #[cfg(unix)]
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[cfg(unix)]
 use futures::future::FutureExt;
@@ -25,6 +25,11 @@ const MARKER: &str = "_GITTO_SHELL_PATH_";
 /// How long the user's shell may take to start before git runs with the PATH Gitto was given.
 #[cfg(unix)]
 const TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long what the shell printed is read for once it's exited, if that didn't end with the PATH:
+/// a job its startup files left in the background can keep its output open for good.
+#[cfg(unix)]
+const READ_AFTER_EXIT: Duration = Duration::from_millis(200);
 
 /// The PATH from the user's shell, once `use_path_from_shell` asked for it; `None` in it if the
 /// shell couldn't say.
@@ -53,7 +58,8 @@ pub(crate) async fn git_path() -> Option<OsString> {
 /// couldn't say.
 #[cfg(unix)]
 async fn path_from_shell() -> Option<OsString> {
-    let shell = login_shell()?;
+    // On a thread of its own: looking the account up can wait on the network (NSS, LDAP).
+    let shell = blocking::unblock(login_shell).await?;
     let path = read_shell_path(&shell, TIMEOUT).await?;
     let path = merge_paths(&path, &std::env::var_os("PATH").unwrap_or_default());
     super::trace::trace(format_args!("git runs with the PATH {}", path.display()));
@@ -97,7 +103,7 @@ async fn read_shell_path(shell: &OsStr, timeout: Duration) -> Option<OsString> {
     use std::os::unix::process::CommandExt;
     use std::process::Stdio;
 
-    use futures_lite::AsyncReadExt;
+    use futures_lite::{AsyncReadExt, FutureExt};
 
     // printenv rather than $PATH, which fish has as a list.
     let script = format!("printf '%s' {MARKER}; printenv PATH; printf '%s' {MARKER}");
@@ -125,9 +131,39 @@ async fn read_shell_path(shell: &OsStr, timeout: Duration) -> Option<OsString> {
     // Its session is its process group too, numbered after it.
     let group = child.id() as i32;
     let mut stdout = child.stdout.take()?;
+    // Until the shell's exited and its output has the PATH, or ends: a job its startup files left
+    // in the background (`foo &` in `.zshrc`) keeps that open as long as it runs.
     let read = async {
         let mut output = Vec::new();
-        let _ = stdout.read_to_end(&mut output).await;
+        let mut buffer = [0; 4096];
+        let mut exited = None;
+        loop {
+            if exited.is_some() && memchr::memmem::find_iter(&output, MARKER).count() >= 2 {
+                break;
+            }
+            let read = async { Some(stdout.read(&mut buffer).await) };
+            let read = match exited {
+                None => {
+                    read.or(async {
+                        let _ = child.status().await;
+                        None
+                    })
+                    .await
+                }
+                Some(at) => {
+                    read.or(async {
+                        async_io::Timer::at(at + READ_AFTER_EXIT).await;
+                        Some(Ok(0))
+                    })
+                    .await
+                }
+            };
+            match read {
+                Some(Ok(0) | Err(_)) => break,
+                Some(Ok(read)) => output.extend_from_slice(&buffer[..read]),
+                None => exited = Some(Instant::now()),
+            }
+        }
         let _ = child.status().await;
         Some(output)
     };
@@ -135,7 +171,7 @@ async fn read_shell_path(shell: &OsStr, timeout: Duration) -> Option<OsString> {
         async_io::Timer::after(timeout).await;
         None
     };
-    let Some(output) = futures_lite::FutureExt::or(read, waited).await else {
+    let Some(output) = read.or(waited).await else {
         // SAFETY: only signals; fails harmlessly if the group is already gone.
         unsafe {
             libc::kill(-group, libc::SIGTERM);
@@ -175,7 +211,6 @@ fn merge_paths(first: &OsStr, rest: &OsStr) -> OsString {
 #[cfg(all(test, unix))]
 mod tests {
     use std::path::Path;
-    use std::time::Instant;
 
     use super::*;
     use crate::test_support::write_script;
@@ -220,6 +255,35 @@ mod tests {
         let path = smol::block_on(read_shell_path(&shell, TIMEOUT)).unwrap();
         let mut dirs = std::env::split_paths(&path);
         assert_eq!(dirs.next().unwrap(), Path::new("/opt/homebrew/bin"));
+    }
+
+    #[test]
+    fn doesnt_wait_for_a_job_the_startup_files_left_running() {
+        let dir = tempfile::tempdir().unwrap();
+        // It keeps the shell's output open after the shell's exited.
+        let printing = shell(
+            &dir,
+            "sleep 3 &\nPATH=\"/opt/homebrew/bin:$PATH\"\nexport PATH",
+        );
+        let start = Instant::now();
+        let path = smol::block_on(read_shell_path(&printing, TIMEOUT)).unwrap();
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            start.elapsed()
+        );
+        let mut dirs = std::env::split_paths(&path);
+        assert_eq!(dirs.next().unwrap(), Path::new("/opt/homebrew/bin"));
+
+        // Nor, for long, when it's not printed the PATH.
+        let silent = shell(&dir, "sleep 3 &\nexit 0");
+        let start = Instant::now();
+        assert_eq!(smol::block_on(read_shell_path(&silent, TIMEOUT)), None);
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            start.elapsed()
+        );
     }
 
     #[test]
