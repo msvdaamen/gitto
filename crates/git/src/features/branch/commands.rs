@@ -9,10 +9,10 @@ use regex::Regex;
 use crate::core::errors::{Error, GitError, Result};
 use crate::core::repo::{GitCommand, Repo, current_branch, resolve_ref, succeeds};
 use crate::core::runner::RunOptions;
+use crate::features::branch::tracking::{local_name, pick_tracking};
 use crate::features::refs::parse::{RefName, parse_ref_name};
 use crate::features::refs::schema::RefKind;
 use crate::features::remote::commands::list_remotes;
-use crate::features::remote::remote_name::remote_of;
 use crate::features::stash::commands::{pop_newest, stash_changes};
 use crate::input::{BranchName, BranchRef};
 
@@ -236,15 +236,13 @@ pub enum Tracking {
 pub async fn tracking_branch(run: &GitCommand, reference: &str, name: &str) -> Result<Tracking> {
     let (tracking, remotes) =
         futures::try_join!(tracking_locals(run, reference), list_remotes(run))?;
-    // Without the remote, or (the remote's gone, its branches left) the name's first part.
-    let local = remote_of(&remotes, name)
-        .and_then(|remote| name.strip_prefix(remote)?.strip_prefix('/'))
-        .unwrap_or_else(|| name.split_once('/').map_or(name, |(_, rest)| rest));
-    let branch = tracking
-        .iter()
-        .find(|candidate| candidate.current)
-        .or_else(|| tracking.iter().find(|candidate| candidate.name == local))
-        .or_else(|| tracking.first());
+    let local = local_name(&remotes, name);
+    let branch = pick_tracking(
+        &tracking,
+        local,
+        |branch| &branch.name,
+        |branch| branch.current,
+    );
     Ok(match branch {
         Some(branch) => Tracking::Existing(branch.name.clone()),
         None => Tracking::Local(local.to_owned()),

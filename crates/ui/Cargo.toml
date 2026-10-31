@@ -1,0 +1,17 @@
+[package]
+name = "gitto-ui"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+description = "What Gitto's UI works out for itself, without GPUI: the history graph, its rows, labels and search, commit messages, and what to call things."
+publish = false
+
+[lib]
+name = "gitto_ui"
+
+[dependencies]
+gitto-git.workspace = true
+indexmap.workspace = true
+memchr.workspace = true
+serde_json.workspace = true
+url.workspace = true

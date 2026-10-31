@@ -2035,6 +2035,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "gitto-ui"
+version = "0.1.0"
+dependencies = [
+ "gitto-git",
+ "indexmap",
+ "memchr",
+ "serde_json",
+ "url",
+]
+
+[[package]]
 name = "gl_generator"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
