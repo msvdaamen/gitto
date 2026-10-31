@@ -165,6 +165,10 @@ fn hermetic_env() {
                 "GIT_COMMITTER_NAME",
                 "GIT_COMMITTER_EMAIL",
                 "GIT_COMMITTER_DATE",
+                // And these how fetches run ssh (see `network_options`).
+                "GIT_SSH",
+                "GIT_SSH_COMMAND",
+                "GIT_SSH_VARIANT",
             ]
             .iter()
             .chain(REPOSITORY_ENV)

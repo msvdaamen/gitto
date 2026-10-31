@@ -175,6 +175,72 @@ fn config_env(vars: impl IntoIterator<Item = OsString>) -> impl Iterator<Item = 
     })
 }
 
+/// The slowest a remote may send over HTTP, in bytes a second, for `NETWORK_TIMEOUT` before a
+/// command talking to it gives up (see `network_options`).
+const LOW_SPEED_LIMIT: &str = "1000";
+
+/// How long a remote may be slower than `LOW_SPEED_LIMIT`, or answer nothing over ssh, before a
+/// command talking to it gives up, in seconds (see `network_options`).
+const NETWORK_TIMEOUT: u32 = 60;
+
+/// `options` for a command that may talk to a remote, a fetch's say (see `Repo::fetch`), with
+/// timeouts: git waits on a connection that's stopped answering for good otherwise, holding up
+/// every fetch of the repository after it. Over HTTP, the transfer gives up once it's been under
+/// `LOW_SPEED_LIMIT` for `NETWORK_TIMEOUT`; over ssh, the connection gives up if it can't be made
+/// in 30s, or the remote stops answering for `NETWORK_TIMEOUT`.
+///
+/// Only where the user hasn't set it up themselves: the HTTP settings unless their config has
+/// either, and ssh only as git runs it by default, without GIT_SSH or GIT_SSH_COMMAND, nor
+/// `core.sshCommand` or `ssh.variant`, so a program of their own, like plink, is run as they have
+/// it. These take over from the ones in their ssh config, if it has any, but they're long enough
+/// for any connection that works; one that needs others can be set up with `core.sshCommand`.
+pub(crate) async fn network_options(cwd: &Path, mut options: RunOptions) -> RunOptions {
+    let configured = run_git(
+        cwd,
+        [
+            "config",
+            "--get-regexp",
+            r"^(http\.lowspeedlimit|http\.lowspeedtime|core\.sshcommand|ssh\.variant)$",
+        ],
+        RunOptions::default(),
+    )
+    .await
+    // None set exits with 1; any other failure is the command's own to report.
+    .unwrap_or_default();
+    let configured: Vec<&str> = configured
+        .lines()
+        .filter_map(|line| line.split(' ').next())
+        .collect();
+    if !configured
+        .iter()
+        .any(|key| key.starts_with("http.lowspeed"))
+    {
+        options = options
+            .config(format!("http.lowSpeedLimit={LOW_SPEED_LIMIT}"))
+            .config(format!("http.lowSpeedTime={NETWORK_TIMEOUT}"));
+    }
+    let set = |key: &str| {
+        std::env::var_os(key).is_some() || options.env.iter().any(|(set, _)| set == key)
+    };
+    let own_ssh = ["GIT_SSH", "GIT_SSH_COMMAND", "GIT_SSH_VARIANT"]
+        .into_iter()
+        .any(set)
+        || configured
+            .iter()
+            .any(|key| matches!(*key, "core.sshcommand" | "ssh.variant"));
+    if !own_ssh {
+        let interval = NETWORK_TIMEOUT / 4;
+        options = options.env(
+            "GIT_SSH_COMMAND",
+            format!(
+                "ssh -o ConnectTimeout=30 -o ServerAliveInterval={interval} \
+                 -o ServerAliveCountMax=4"
+            ),
+        );
+    }
+    options
+}
+
 /// Locks `mutex`, whether or not a thread panicked holding it: what's kept behind these stays
 /// consistent between statements.
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

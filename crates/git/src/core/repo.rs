@@ -16,8 +16,8 @@ use futures::future::BoxFuture;
 
 use super::errors::{Error, Result};
 use super::runner::{
-    CommitGraphs, IndexRefreshes, RunOptions, ShownStatuses, WriteQueue, lock, os_args,
-    run_git_bytes,
+    CommitGraphs, IndexRefreshes, RunOptions, ShownStatuses, WriteQueue, lock, network_options,
+    os_args, run_git_bytes,
 };
 
 /// Finds the folder of a repository that's been added to Gitto, by its id (TS's
@@ -244,7 +244,7 @@ impl Repo {
     /// Runs a fetch. Not queued with writes: it waits on the network, which a commit or staging a
     /// file shouldn't wait for, and it only updates remote-tracking refs and FETCH_HEAD, which they
     /// don't touch. Fetches of the same repository do run one at a time, and are stopped if Gitto
-    /// exits.
+    /// exits, or if a remote stops answering (see `network_options`).
     pub fn fetch<I, S>(&self, args: I) -> BoxFuture<'static, Result<String>>
     where
         I: IntoIterator<Item = S>,
@@ -399,9 +399,10 @@ enum Via {
     Exclusive,
     /// Each one as a write of its own, after the earlier ones, to its end.
     Writes,
-    /// Each one as a fetch of its own, after the earlier ones, stopped if Gitto exits.
+    /// Each one as a fetch of its own, after the earlier ones, stopped if Gitto exits, and with
+    /// timeouts for the network (see `network_options`).
     Fetches,
-    /// Straight away, inside `Repo::fetching`, stopped if Gitto exits.
+    /// Straight away, inside `Repo::fetching`, as `Fetches` are.
     Fetching,
 }
 
@@ -506,12 +507,16 @@ impl GitCommand {
                 let turn = repo.shared.fetches.turn(repo.path.clone());
                 Box::pin(async move {
                     let _turn = turn.await;
+                    let options = network_options(&repo.path, options).await;
                     run_now(repo, args, options).await
                 })
             }
             Via::Fetching => {
                 options.stop_on_exit = true;
-                Box::pin(run_now(repo, args, options))
+                Box::pin(async move {
+                    let options = network_options(&repo.path, options).await;
+                    run_now(repo, args, options).await
+                })
             }
         };
         #[cfg(test)]
@@ -876,6 +881,38 @@ mod tests {
             drop(read);
             async_io::Timer::after(Duration::from_millis(1500)).await;
             assert!(!path.join("finished").exists());
+        });
+    }
+
+    #[test]
+    fn fetches_give_up_on_a_remote_that_stops_answering_unless_the_user_says_otherwise() {
+        let fx = Fixture::new();
+        let path = fx.create_repo("timeouts");
+        smol::block_on(async {
+            let repo = fx.repos.open("timeouts").await.unwrap();
+            let ssh_command =
+                RunOptions::default().config("alias.ssh-command=!echo \"$GIT_SSH_COMMAND\"");
+            let low_speed = ["config", "--get", "http.lowSpeedLimit"];
+            assert_eq!(repo.fetch(low_speed).await.unwrap(), "1000\n");
+            let ssh = repo
+                .fetch_with(["ssh-command"], ssh_command.clone())
+                .await
+                .unwrap();
+            assert!(ssh.starts_with("ssh -o ConnectTimeout=30 "), "{ssh}");
+            // Also inside `fetching`; not for other commands.
+            let fetching = repo.fetching(|run| async move { run.run(low_speed).await });
+            assert_eq!(fetching.await.unwrap(), "1000\n");
+            assert!(repo.read(low_speed).await.unwrap_err().is_exit(1));
+
+            git(&path, ["config", "http.lowSpeedTime", "5"]);
+            git(&path, ["config", "core.sshCommand", "plink"]);
+            assert!(repo.fetch(low_speed).await.unwrap_err().is_exit(1));
+            let ssh = repo.fetch_with(["ssh-command"], ssh_command.clone());
+            assert_eq!(ssh.await.unwrap(), "\n");
+
+            git(&path, ["config", "--unset", "core.sshCommand"]);
+            let own = ssh_command.env("GIT_SSH", "plink");
+            assert_eq!(repo.fetch_with(["ssh-command"], own).await.unwrap(), "\n");
         });
     }
 
