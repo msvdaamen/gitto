@@ -416,14 +416,24 @@ async fn run(cwd: PathBuf, args: Vec<OsString>, options: RunOptions) -> Result<V
     #[cfg(not(unix))]
     command.kill_on_drop(true);
 
-    let mut child = command.spawn().map_err(|error| {
-        let message = if error.kind() == std::io::ErrorKind::NotFound {
-            "Git is not installed or not on the PATH.".to_owned()
-        } else {
-            error.to_string()
-        };
-        Error::Git(GitError::new(message, shown_args.clone(), None, ""))
-    })?;
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        // Git can't start in a folder that's gone, which the OS words as if git were missing: the
+        // repository's folder was moved or deleted while it's open, say.
+        Err(_) if !async_fs::metadata(&cwd).await.is_ok_and(|cwd| cwd.is_dir()) => {
+            return Err(Error::FolderNotFound {
+                path: cwd.display().to_string(),
+            });
+        }
+        Err(error) => {
+            let message = if error.kind() == std::io::ErrorKind::NotFound {
+                "Git is not installed or not on the PATH.".to_owned()
+            } else {
+                error.to_string()
+            };
+            return Err(Error::Git(GitError::new(message, shown_args, None, "")));
+        }
+    };
 
     // Its own session is its own process group too, numbered after it.
     #[cfg(unix)]
@@ -737,6 +747,16 @@ mod tests {
                     .is_ok()
             );
         });
+    }
+
+    #[test]
+    fn says_the_folder_is_gone_rather_than_git() {
+        let fx = Fixture::new();
+        let path = fx.create_repo("gone");
+        std::fs::remove_dir_all(&path).unwrap();
+        let error = smol::block_on(run_git(&path, ["status"], RunOptions::default())).unwrap_err();
+        assert!(matches!(error, Error::FolderNotFound { .. }), "{error:?}");
+        assert!(!error.api().is_bug());
     }
 
     #[test]
