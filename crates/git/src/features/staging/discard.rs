@@ -76,16 +76,18 @@ pub async fn discard(repo: &Repo, file: &Discarded) -> Result<()> {
             path: file.path.clone(),
         }));
     }
-    let orig_path = match (&file.status, file.orig_path.as_deref()) {
-        (FileStatus::Renamed, Some(orig_path)) if !orig_path.is_empty() => Some(orig_path),
-        _ => None,
-    };
-    let paths: Vec<&str> = match orig_path {
-        Some(orig_path) => vec![&file.path, orig_path],
-        None => vec![&file.path],
-    };
-    let paths = &paths;
-    repo.exclusive(|run| async move {
+    let (owned, file) = (repo.clone(), file.clone());
+    repo.exclusive(move |run| async move {
+        let (repo, file) = (&owned, &file);
+        let orig_path = match (&file.status, file.orig_path.as_deref()) {
+            (FileStatus::Renamed, Some(orig_path)) if !orig_path.is_empty() => Some(orig_path),
+            _ => None,
+        };
+        let paths: Vec<&str> = match orig_path {
+            Some(orig_path) => vec![&file.path, orig_path],
+            None => vec![&file.path],
+        };
+        let paths = &paths;
         // Not `has_head`, which takes git failing for there being none: the file would be deleted
         // then.
         let has_head = ref_exists(&run, "HEAD").await?;
@@ -355,8 +357,8 @@ async fn in_the_way(
 /// nothing it would discard, but the changes it keeps.
 pub async fn discard_all(repo: &Repo) -> Result<()> {
     let git_dir = git_dirs(repo).await?.git_dir;
-    let git_dir = &git_dir;
-    repo.exclusive(|run| async move {
+    repo.exclusive(move |run| async move {
+        let git_dir = &git_dir;
         let (operation, conflicted, has_head) = futures::try_join!(
             async { Ok(operation_under_way(git_dir).await) },
             has_conflicts(&run),

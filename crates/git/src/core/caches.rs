@@ -11,8 +11,9 @@ use std::time::{Duration, UNIX_EPOCH};
 use futures::future::{BoxFuture, FutureExt, Shared};
 
 use super::errors::Result;
+use super::git_dirs::path_from_git;
 use super::queue::WriteQueue;
-use super::runner::{RunOptions, lock, run_git, spawn_detached};
+use super::runner::{RunOptions, lock, run_git, run_git_bytes, spawn_detached};
 use super::trace::trace;
 
 /// Writes each repository's commit-graph, once per run of the app. With it, git looks commits up
@@ -123,14 +124,16 @@ impl IndexRefreshes {
             async_io::Timer::after(REFRESH_INDEX_AFTER).await;
             {
                 let mut timers = lock(&this.timers);
-                if timers
+                if !timers
                     .get(&key)
                     .is_some_and(|(scheduled, _)| *scheduled == number)
                 {
-                    // Itself: left to run to its end, rather than cancelled by being dropped.
-                    if let Some((_, task)) = timers.remove(&key) {
-                        task.detach();
-                    }
+                    // Scheduled again since, which cancels this one as soon as it can.
+                    return;
+                }
+                // Itself: left to run to its end, rather than cancelled by being dropped.
+                if let Some((_, task)) = timers.remove(&key) {
+                    task.detach();
                 }
             }
             // `-q` and `--unmerged`: files that did change, and conflicts, aren't errors.
@@ -184,13 +187,14 @@ impl IndexRefreshes {
 async fn unsure_files(path: &Path) -> Result<usize> {
     let (entries, index) = futures::try_join!(
         run_git(path, ["ls-files", "--debug"], RunOptions::default()),
-        run_git(
+        run_git_bytes(
             path,
             ["rev-parse", "--path-format=absolute", "--git-path", "index"],
             RunOptions::default(),
         ),
     )?;
-    let modified = async_fs::metadata(index.trim_end()).await?.modified()?;
+    let index = path_from_git(index.strip_suffix(b"\n").unwrap_or(&index));
+    let modified = async_fs::metadata(index).await?.modified()?;
     let written = modified
         .duration_since(UNIX_EPOCH)
         .map_or(0, |since| since.as_secs());

@@ -15,9 +15,10 @@ use std::time::Duration;
 use futures::future::BoxFuture;
 
 use super::errors::{Error, RepositoryListError, Result};
+use super::git_dirs::real_path;
 use super::runner::{
-    CommitGraphs, IndexRefreshes, RunOptions, ShownStatuses, WriteQueue, lock, os_args,
-    run_git_bytes,
+    CommitGraphs, IndexRefreshes, RunOptions, ShownStatuses, WriteQueue, lock, network_options,
+    os_args, run_git_bytes,
 };
 use crate::input::RepositoryId;
 
@@ -63,7 +64,9 @@ pub struct GitRepos {
 struct GitReposInner {
     lookup: Box<dyn RepositoryLookup>,
     shared: Arc<Shared>,
-    /// Each repository, by its path: the same path is the same repository, whatever its id.
+    /// Each repository, by its folder's real path (see `real_path`): the same folder is the same
+    /// repository, whatever its id, or however its path is written (`C:\Repo` or `c:\repo\`, a
+    /// symlink to it), so its writes are all in one line.
     repos: Mutex<HashMap<PathBuf, Repo>>,
 }
 
@@ -98,8 +101,7 @@ impl GitRepos {
                 repository_id: repository_id.clone(),
             });
         };
-        // Checked up front: git can't start in a missing folder, and spawning it reports that as
-        // it does a missing git binary.
+        // Checked up front: git can't start in a missing folder.
         let is_folder = async_fs::metadata(&path)
             .await
             .is_ok_and(|metadata| metadata.is_dir());
@@ -108,8 +110,11 @@ impl GitRepos {
                 path: path.display().to_string(),
             });
         }
+        // As it's written if the file system can't say, as a few network drives on Windows can't.
+        let real = real_path(&path).await.unwrap_or_else(|_| path.clone());
         let mut repos = lock(&self.inner.repos);
-        let repo = repos.entry(path.clone()).or_insert_with(|| Repo {
+        // Run in the folder as the first id to open it has it.
+        let repo = repos.entry(real).or_insert_with(|| Repo {
             inner: Arc::new(RepoInner {
                 path,
                 shared: Arc::clone(&self.inner.shared),
@@ -229,8 +234,9 @@ impl Repo {
         self.git().run_with(args, options)
     }
 
-    /// Runs a command that changes the repository, after any earlier writes to it have finished:
-    /// ones whose future was polled before this one's (see `GitCommand`).
+    /// Runs a command that changes the repository, after the writes to it asked for before this
+    /// one have finished (see `GitCommand`). It runs to its end, even if the future is dropped once
+    /// it's started, so it's never stopped partway, as TS's never were.
     pub fn write<I, S>(&self, args: I) -> BoxFuture<'static, Result<String>>
     where
         I: IntoIterator<Item = S>,
@@ -255,7 +261,7 @@ impl Repo {
     /// Runs a fetch. Not queued with writes: it waits on the network, which a commit or staging a
     /// file shouldn't wait for, and it only updates remote-tracking refs and FETCH_HEAD, which they
     /// don't touch. Fetches of the same repository do run one at a time, and are stopped if Gitto
-    /// exits.
+    /// exits, or if a remote stops answering (see `network_options`).
     pub fn fetch<I, S>(&self, args: I) -> BoxFuture<'static, Result<String>>
     where
         I: IntoIterator<Item = S>,
@@ -295,21 +301,26 @@ impl Repo {
 
     /// Runs `task`, which runs commands through the `GitCommand` it's given, as one write: no
     /// other write to the repository runs before it's done. For a write that checks the repository
-    /// before and after. Its place in line is taken when the future is first polled. Don't use
+    /// before and after. Its place in line is taken now, as a `write`'s is, and once it's started
+    /// it runs to its end even if the future is dropped, so it's never left halfway (between a
+    /// stash and its pop, say): it runs on smol's global executor, so it's `'static`. Don't use
     /// `writer()`/`write` inside it, nor a feature that does: that waits for `task` to end, which
     /// never comes (it's logged as a warning after a while, see `WriteQueue`). Run its commands
     /// through the `GitCommand` it's given.
-    pub fn exclusive<T, F, Fut>(&self, task: F) -> impl Future<Output = T> + use<T, F, Fut>
+    pub fn exclusive<T, F, Fut>(
+        &self,
+        task: F,
+    ) -> impl Future<Output = T> + Send + 'static + use<T, F, Fut>
     where
-        F: FnOnce(GitCommand) -> Fut,
-        Fut: Future<Output = T>,
+        F: FnOnce(GitCommand) -> Fut + Send + 'static,
+        Fut: Future<Output = T> + Send + 'static,
+        T: Send + 'static,
     {
-        let turn = self.inner.shared.writes.turn(self.inner.path.clone());
         let run = self.command(Via::Exclusive);
-        async move {
-            let _turn = turn.await;
-            task(run).await
-        }
+        self.inner
+            .shared
+            .writes
+            .run(self.inner.path.clone(), async move { task(run).await })
     }
 
     /// Told how long reading the status took: the index is refreshed if the first one of this run
@@ -401,13 +412,14 @@ impl Repo {
 enum Via {
     /// Straight away: reads.
     Now,
-    /// Straight away, inside `Repo::exclusive`.
+    /// Straight away, inside `Repo::exclusive`, to its end with it.
     Exclusive,
-    /// Each one as a write of its own, after the earlier ones.
+    /// Each one as a write of its own, after the earlier ones, to its end.
     Writes,
-    /// Each one as a fetch of its own, after the earlier ones, stopped if Gitto exits.
+    /// Each one as a fetch of its own, after the earlier ones, stopped if Gitto exits, and with
+    /// timeouts for the network (see `network_options`).
     Fetches,
-    /// Straight away, inside `Repo::fetching`, stopped if Gitto exits.
+    /// Straight away, inside `Repo::fetching`, as `Fetches` are.
     Fetching,
 }
 
@@ -417,15 +429,19 @@ enum Via {
 ///
 /// Its futures, and those of everything that runs git, block while they start it: the first poll
 /// forks and execs git, which takes a while in a large process like the app. Poll them on a
-/// background executor (GPUI's `background_spawn`, say), never the UI thread. What runs in the
-/// background without anyone waiting on it, like refreshing the index, runs on smol's global
-/// executor, whichever executor the caller polls on.
+/// background executor (GPUI's `background_spawn`, say), never the UI thread. Writes, and what
+/// runs in the background without anyone waiting on it, like refreshing the index, run on smol's
+/// global executor, whichever executor the caller polls on.
 ///
-/// Each method takes the arguments when it's called and returns a `'static` future; git starts
-/// when it's first polled, and is stopped, with all it started, if it's dropped before git exits.
-/// A write's or fetch's place in line is taken when it's first polled too, not when it's made:
-/// futures made ahead can be awaited in any order, and ones polled together (with `join!`, say)
-/// run in the order they're first polled.
+/// Each method takes the arguments when it's called and returns a `'static` future.
+///
+/// - A read, or a fetch, starts git when it's first polled, and stops it, with all it started, if
+///   it's dropped before git exits. A fetch's place in line is taken when it's first polled too:
+///   fetches polled together (with `join!`, say) run in the order they're first polled.
+/// - A write's place in line is taken when it's called, and it runs on smol's global executor
+///   when its turn comes, polled or not: writes run in the order they were asked for, whichever
+///   threads poll them, and futures made ahead can be awaited in any order. Dropped before its
+///   turn, it doesn't run; dropped after, it runs to its end all the same (see `Repo::write`).
 #[derive(Clone)]
 pub struct GitCommand {
     repo: Arc<RepoInner>,
@@ -500,23 +516,24 @@ impl GitCommand {
         let run: BoxFuture<'static, Result<Vec<u8>>> = match self.via {
             Via::Now | Via::Exclusive => Box::pin(run_now(repo, args, options)),
             Via::Writes => {
-                let turn = repo.shared.writes.turn(repo.path.clone());
-                Box::pin(async move {
-                    let _turn = turn.await;
-                    run_now(repo, args, options).await
-                })
+                let writes = &self.repo.shared.writes;
+                Box::pin(writes.run(repo.path.clone(), run_now(repo, args, options)))
             }
             Via::Fetches => {
                 options.stop_on_exit = true;
                 let turn = repo.shared.fetches.turn(repo.path.clone());
                 Box::pin(async move {
                     let _turn = turn.await;
+                    let options = network_options(&repo.path, options).await;
                     run_now(repo, args, options).await
                 })
             }
             Via::Fetching => {
                 options.stop_on_exit = true;
-                Box::pin(run_now(repo, args, options))
+                Box::pin(async move {
+                    let options = network_options(&repo.path, options).await;
+                    run_now(repo, args, options).await
+                })
             }
         };
         #[cfg(test)]
@@ -820,26 +837,28 @@ mod tests {
         fx.create_repo("exclusive");
         smol::block_on(async {
             let repo = fx.repos.open("exclusive").await.unwrap();
-            let order = &Mutex::new(Vec::new());
+            let order = Arc::new(Mutex::new(Vec::new()));
             let (finish, finished) = async_channel::bounded::<()>(1);
-            let finished = &finished;
-            let exclusive = repo.exclusive(|run| async move {
-                run.run(["status"]).await.unwrap();
-                finished.recv().await.unwrap();
-                lock(order).push("exclusive");
+            let exclusive = repo.exclusive({
+                let order = Arc::clone(&order);
+                move |run| async move {
+                    run.run(["status"]).await.unwrap();
+                    finished.recv().await.unwrap();
+                    lock(&order).push("exclusive");
+                }
             });
             let write = repo.write(["status"]);
             let write = async {
                 write.await.unwrap();
-                lock(order).push("write");
+                lock(&order).push("write");
             };
             let release = async {
                 async_io::Timer::after(Duration::from_millis(200)).await;
                 finish.send(()).await.unwrap();
             };
-            // Polled in this order, and so run in it.
-            futures::join!(exclusive, write, release);
-            assert_eq!(*lock(order), ["exclusive", "write"]);
+            // The write's polled first, but asked for after.
+            futures::join!(write, exclusive, release);
+            assert_eq!(*lock(&order), ["exclusive", "write"]);
         });
     }
 
@@ -856,6 +875,89 @@ mod tests {
             second.await.unwrap();
             exclusive.await.unwrap();
             first.await.unwrap();
+        });
+    }
+
+    /// An alias, as `RunOptions::config` takes it, that writes `started` in the repository, then
+    /// `finished` a second later.
+    fn slow_alias() -> String {
+        "alias.slow=!echo > started && sleep 1 && echo > finished".to_owned()
+    }
+
+    #[test]
+    fn a_write_runs_to_its_end_once_its_started_even_if_its_dropped() {
+        let fx = Fixture::new();
+        let path = fx.create_repo("write-dropped");
+        smol::block_on(async {
+            let repo = fx.repos.open("write-dropped").await.unwrap();
+            // Started without being polled: its turn came.
+            let write = repo.write_with(["slow"], RunOptions::default().config(slow_alias()));
+            wait_for(Duration::from_secs(5), || path.join("started").exists()).await;
+            drop(write);
+            wait_for(Duration::from_secs(5), || path.join("finished").exists()).await;
+
+            // Nor is an exclusive write left halfway.
+            let exclusive = repo.exclusive(|run| async move {
+                run.run(["config", "gitto.first", "1"]).await?;
+                async_io::Timer::after(Duration::from_millis(200)).await;
+                run.run(["config", "gitto.second", "1"]).await
+            });
+            wait_for(Duration::from_secs(5), || {
+                fs::read_to_string(path.join(".git/config")).is_ok_and(|c| c.contains("first"))
+            })
+            .await;
+            drop(exclusive);
+            wait_for(Duration::from_secs(5), || {
+                fs::read_to_string(path.join(".git/config")).is_ok_and(|c| c.contains("second"))
+            })
+            .await;
+        });
+    }
+
+    #[test]
+    fn a_read_is_stopped_with_what_it_started_when_its_dropped() {
+        let fx = Fixture::new();
+        let path = fx.create_repo("read-dropped");
+        smol::block_on(async {
+            let repo = fx.repos.open("read-dropped").await.unwrap();
+            let mut read = repo.read_with(["slow"], RunOptions::default().config(slow_alias()));
+            assert!(futures_lite::future::poll_once(&mut read).await.is_none());
+            wait_for(Duration::from_secs(5), || path.join("started").exists()).await;
+            drop(read);
+            async_io::Timer::after(Duration::from_millis(1500)).await;
+            assert!(!path.join("finished").exists());
+        });
+    }
+
+    #[test]
+    fn fetches_give_up_on_a_remote_that_stops_answering_unless_the_user_says_otherwise() {
+        let fx = Fixture::new();
+        let path = fx.create_repo("timeouts");
+        smol::block_on(async {
+            let repo = fx.repos.open("timeouts").await.unwrap();
+            let ssh_command =
+                RunOptions::default().config("alias.ssh-command=!echo \"$GIT_SSH_COMMAND\"");
+            let low_speed = ["config", "--get", "http.lowSpeedLimit"];
+            assert_eq!(repo.fetch(low_speed).await.unwrap(), "1000\n");
+            let ssh = repo
+                .fetch_with(["ssh-command"], ssh_command.clone())
+                .await
+                .unwrap();
+            assert!(ssh.starts_with("ssh -o ConnectTimeout=30 "), "{ssh}");
+            // Also inside `fetching`; not for other commands.
+            let fetching = repo.fetching(|run| async move { run.run(low_speed).await });
+            assert_eq!(fetching.await.unwrap(), "1000\n");
+            assert!(repo.read(low_speed).await.unwrap_err().is_exit(1));
+
+            git(&path, ["config", "http.lowSpeedTime", "5"]);
+            git(&path, ["config", "core.sshCommand", "plink"]);
+            assert!(repo.fetch(low_speed).await.unwrap_err().is_exit(1));
+            let ssh = repo.fetch_with(["ssh-command"], ssh_command.clone());
+            assert_eq!(ssh.await.unwrap(), "\n");
+
+            git(&path, ["config", "--unset", "core.sshCommand"]);
+            let own = ssh_command.env("GIT_SSH", "plink");
+            assert_eq!(repo.fetch_with(["ssh-command"], own).await.unwrap(), "\n");
         });
     }
 
@@ -945,6 +1047,23 @@ mod tests {
             );
             // The same repository, as far as what's kept for it goes.
             assert!(repo.sorts_log());
+        });
+    }
+
+    #[test]
+    fn opens_one_repository_for_each_folder_however_its_path_is_written() {
+        let fx = Fixture::new();
+        let path = fx.create_repo("written");
+        let mut trailing = path.clone().into_os_string();
+        trailing.push(std::path::MAIN_SEPARATOR_STR);
+        fx.add_path("trailing", trailing);
+        fx.add_path("dotted", path.join("."));
+        smol::block_on(async {
+            let repo = fx.repos.open("written").await.unwrap();
+            for id in ["trailing", "dotted"] {
+                let other = fx.repos.open(id).await.unwrap();
+                assert!(Arc::ptr_eq(&repo.inner, &other.inner), "{id}");
+            }
         });
     }
 
