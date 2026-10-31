@@ -1530,4 +1530,34 @@ mod tests {
         let kept: Vec<bool> = ids.iter().map(|id| kept(id, cx)).collect();
         assert_eq!(kept, [false, true, true, true, true]);
     }
+
+    #[gpui_kit::test]
+    async fn loads_a_real_repository_with_git_off_the_main_thread(cx: &mut TestAppContext) {
+        // Git runs as a process, which wakes the test from another thread.
+        cx.executor().allow_parking();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("repo");
+        std::fs::create_dir(&path).unwrap();
+        let init = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&path)
+            .output()
+            .expect("git runs");
+        assert!(init.status.success(), "{init:?}");
+        std::fs::write(path.join("a.txt"), "a\n").unwrap();
+        let api = gitto_git::GitApi::new(move |_: &RepositoryId| Some(path.clone()));
+        let services = crate::services::Services::in_memory(dir.path())
+            .unwrap()
+            .with_git(api);
+        cx.update(|cx| cx.set_global(services));
+
+        let repository = cx.update(|cx| Repositories::open(&repository_id(), cx));
+        let reloading =
+            repository.update(cx, |repository, cx| repository.reload(Field::Status, cx));
+        reloading.await;
+        let status = repository.read_with(cx, |repository, _| repository.status().data().cloned());
+        let unstaged = status.unwrap().changes.unstaged.clone();
+        assert_eq!(unstaged.len(), 1);
+        assert_eq!(unstaged[0].path, "a.txt");
+    }
 }

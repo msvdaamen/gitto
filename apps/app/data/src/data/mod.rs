@@ -43,11 +43,13 @@
 //!
 //! # Tests
 //!
-//! GPUI's test scheduler refuses wakeups from other threads, so a GPUI test can't run real git or
-//! SQLite: a test gives a repository's entity its data (`set_*`), or a [`git::RepositoryGit`] of
-//! its own that answers at once, and the app made-up sources (`watch::WatchStreams`,
-//! `repositories::RepositorySource`), through `Services::with_*` and the app's `test_support`. Real
-//! repositories are for plain `#[test]`s with `smol::block_on`.
+//! GPUI's test scheduler is deterministic: it doesn't wait for wakeups from other threads, as git's
+//! processes and SQLite's thread make, unless a test lets it (`allow_parking`), which only a few
+//! tests of the real thing do. So a test gives a repository's entity its data (`set_*`), or a
+//! [`git::RepositoryGit`] of its own that answers when the test says, and the app made-up sources
+//! (`watch::WatchStreams`, `repositories::RepositorySource`), through `Services::with_*` and the
+//! app's `test_support`. Real repositories are otherwise for plain `#[test]`s with
+//! `smol::block_on`.
 //!
 //! # The modules
 //!
