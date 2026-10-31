@@ -39,6 +39,7 @@ jobs:
       - run: pnpm test
 
   # Formatting needs no build, so it gets no cache or system libraries and fails within seconds.
+  # The Rust jobs install the Rust that rust-toolchain.toml has: change them with it.
   rust-format:
     name: Rust format
     runs-on: ubuntu-latest
@@ -63,10 +64,13 @@ jobs:
         with:
           components: clippy
       # The dependencies' build, kept between runs: keyed by the job, the toolchain and Cargo.lock,
-      # and restored from the closest match when those changed. A pull request restores its own
-      # cache, or else main's; base branches that aren't main never save one, as CI only runs on
-      # push to main. The workspace's crates are left out, as they're the ones that change.
+      # and restored from the closest match when those changed. Only main's is saved, which pull
+      # requests restore: each pull request's own, about a gigabyte, would soon fill the
+      # repository's cache space. The workspace's crates are left out, as they're the ones that
+      # change.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy -p gitto-git --all-targets --locked -- -D warnings
 
   rust-test:
@@ -80,4 +84,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.97.0
       # Cached as in rust-lint.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test -p gitto-git --locked
