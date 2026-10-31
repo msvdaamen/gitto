@@ -1,5 +1,6 @@
-//! Where the Electron app keeps its database, so the Rust app opens the same file: `gitto.db` in
-//! Electron's `app.getPath("userData")` (see `openDatabase` in `apps/electron/src/main.ts`).
+//! Where Gitto keeps its database: `gitto-app.db` in Electron's `app.getPath("userData")`, the
+//! Electron app's folder. A file of its own, not the Electron app's `gitto.db` beside it (see
+//! `openDatabase` in `apps/electron/src/main.ts`), whose schema is Drizzle's.
 //!
 //! Electron sets `userData` to `appData` joined with the app's name, its `productName` ("Gitto",
 //! in `apps/electron/package.json`). `appData` is, as Electron's path provider has it:
@@ -18,7 +19,7 @@ use std::path::PathBuf;
 pub const PRODUCT_NAME: &str = "Gitto";
 
 /// The database's file in `userData`.
-pub const DATABASE_FILE: &str = "gitto.db";
+pub const DATABASE_FILE: &str = "gitto-app.db";
 
 /// Which of the Electron app's profiles: the installed app's, or a development run's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -49,7 +50,7 @@ pub fn user_data_dir(profile: Profile) -> Option<PathBuf> {
     Some(app_data_dir()?.join(user_data_name(profile)))
 }
 
-/// The Electron app's database in `profile`: `gitto.db` in [`user_data_dir`].
+/// The database in `profile`: `gitto-app.db` in [`user_data_dir`].
 pub fn database_path(profile: Profile) -> Option<PathBuf> {
     Some(user_data_dir(profile)?.join(DATABASE_FILE))
 }
@@ -126,11 +127,11 @@ mod tests {
         );
         assert_eq!(
             database_path(Profile::Installed).unwrap(),
-            app_data.join("Gitto").join("gitto.db")
+            app_data.join("Gitto").join("gitto-app.db")
         );
         assert_eq!(
             database_path(Profile::Development).unwrap(),
-            app_data.join("Gitto-dev").join("gitto.db")
+            app_data.join("Gitto-dev").join("gitto-app.db")
         );
     }
 
