@@ -463,8 +463,8 @@ mod tests {
 
     use super::*;
     use crate::components::repository::test_support::{
-        Repositories, click_label, has_dialog, repository, repository_id, set_refs, set_remotes,
-        set_worktrees, setup_with,
+        Repositories, has_dialog, repository, repository_id, set_refs, set_remotes, set_worktrees,
+        setup_with,
     };
     use crate::data::{QueryError, RepositoryOperation};
 
@@ -738,6 +738,8 @@ mod tests {
         use std::ffi::OsStr;
         use std::os::unix::ffi::OsStrExt as _;
         use std::path::PathBuf;
+
+        use crate::components::repository::test_support::click_label;
 
         let adds = Rc::new(RefCell::new(Vec::new()));
         let (_dir, window, dialog) = render(cx, &adds);
