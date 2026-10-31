@@ -83,6 +83,8 @@ impl GitDir {
                 Root {
                     dir: root,
                     ignore,
+                    ignore_in: &[],
+                    leave_out: None,
                     on_events,
                     optional: false,
                 }
@@ -342,6 +344,8 @@ impl WorkingTree {
         let mut roots = vec![Root {
             dir: self.root.clone(),
             ignore,
+            ignore_in: &[],
+            leave_out: None,
             on_events,
             optional: false,
         }];
@@ -352,6 +356,8 @@ impl WorkingTree {
             roots.push(Root {
                 dir: info.to_owned(),
                 ignore: Vec::new(),
+                ignore_in: &[],
+                leave_out: None,
                 on_events: Box::new(move |events| match events {
                     Events::Changed(paths) if paths.contains(&exclude_file) => {
                         changes.add(TreeChange::Excludes);
@@ -607,13 +613,7 @@ mod tests {
                         let _ = probe.gate.1.recv().await;
                     }
                     let roots = roots.into_iter().map(|root| {
-                        let Root {
-                            dir,
-                            ignore,
-                            on_events,
-                            optional,
-                        } = root;
-                        let told = Arc::new(Mutex::new(on_events));
+                        let told = Arc::new(Mutex::new(root.on_events));
                         lock(&probe.roots).push(Arc::clone(&told));
                         let probe = Arc::clone(&probe);
                         let on_events: OnEvents = Box::new(move |events| {
@@ -622,12 +622,7 @@ mod tests {
                             }
                             (lock(&told))(events);
                         });
-                        Root {
-                            dir,
-                            ignore,
-                            on_events,
-                            optional,
-                        }
+                        Root { on_events, ..root }
                     });
                     let subscription = watcher::subscribe(roots.collect()).await?;
                     probe.subscribed.fetch_add(1, Ordering::SeqCst);
@@ -803,6 +798,32 @@ mod tests {
             fs::create_dir(path.join("dist")).unwrap();
             assert!(changes.quiet().await);
             write(path.join("dist").join("a.js"), "x");
+            assert!(changes.quiet().await);
+        });
+    }
+
+    #[test]
+    fn the_working_tree_stays_quiet_while_git_reads_it() {
+        let fx = Fixture::new();
+        let path = fx.create_repo("watched-status");
+        for folder in ["a/b/c", "d/e", "f"] {
+            fs::create_dir_all(path.join(folder)).unwrap();
+            write(path.join(folder).join("file.txt"), "x");
+        }
+        git(&path, ["add", "."]);
+        git(&path, ["commit", "-q", "-m", "First"]);
+        smol::block_on(async {
+            let repo = fx.repos.open("watched-status").await.unwrap();
+            let changes = watched_tree(&repo).await;
+
+            write(path.join("f").join("file.txt"), "y");
+            assert!(is_change(changes.next().await));
+
+            // As the UI reads the status after every change: that's no change, nor a rescan.
+            for _ in 0..3 {
+                git(&path, ["status", "--untracked-files=all"]);
+                get_status(&repo).await.unwrap();
+            }
             assert!(changes.quiet().await);
         });
     }

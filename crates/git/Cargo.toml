@@ -20,7 +20,6 @@ futures.workspace = true
 futures-lite.workspace = true
 log.workspace = true
 memchr.workspace = true
-notify.workspace = true
 regex.workspace = true
 serde.workspace = true
 sha1_smol.workspace = true
@@ -30,6 +29,13 @@ uuid.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
+
+# Linux watches with inotify directly, the others with notify (see `features/watch/linux.rs`).
+[target.'cfg(target_os = "linux")'.dependencies]
+inotify.workspace = true
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+notify.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

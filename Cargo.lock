@@ -1980,6 +1980,7 @@ dependencies = [
  "event-listener",
  "futures",
  "futures-lite",
+ "inotify",
  "libc",
  "log",
  "memchr",
