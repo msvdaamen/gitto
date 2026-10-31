@@ -12,6 +12,13 @@ use crate::types::Repository;
 /// A repository's columns, without where it's listed.
 const COLUMNS: &str = r#""id", "name", "path""#;
 
+/// Where the id is `?`, which is in lower case, as ids are written: the row's is compared in lower
+/// case too, so one put in by hand in upper case is found as well.
+const ID_IS: &str = r#"lower("repositories"."id") = ?"#;
+
+/// Where the path is `?`: exactly that path.
+const PATH_IS: &str = r#""repositories"."path" = ?"#;
+
 /// Reads and changes the list of repositories, each on a thread of its own (see [`Db::run`]).
 /// Cheap to clone; clones share the database.
 #[derive(Debug, Clone)]
@@ -31,12 +38,12 @@ impl RepositoryStore {
 
     pub async fn get_by_id(&self, id: &RepositoryId) -> rusqlite::Result<Option<Repository>> {
         let id = id.to_string();
-        self.db.run(move |conn| get_by(conn, "id", &id)).await
+        self.db.run(move |conn| get_by(conn, ID_IS, &id)).await
     }
 
     pub async fn get_by_path(&self, path: &str) -> rusqlite::Result<Option<Repository>> {
         let path = path.to_owned();
-        self.db.run(move |conn| get_by(conn, "path", &path)).await
+        self.db.run(move |conn| get_by(conn, PATH_IS, &path)).await
     }
 
     /// Adds `repository` after the others, unless one with its path is listed already: resolves to
@@ -60,7 +67,7 @@ impl RepositoryStore {
 }
 
 /// A repository's row. Ids are written hyphenated and in lower case, but read in either case, as
-/// they're the Electron app's too; one that isn't a repository id fails, as it's no row of Gitto's.
+/// one put in by hand may not be; one that isn't a repository id fails, as it's no row of Gitto's.
 fn repository(row: &Row<'_>) -> rusqlite::Result<Repository> {
     let id: String = row.get(0)?;
     let id = RepositoryId::parse(id).map_err(|error| {
@@ -81,15 +88,15 @@ fn get_all(conn: &Connection) -> rusqlite::Result<Vec<Repository>> {
     .collect()
 }
 
-/// The repository whose `column` is `value`, if there's one. `column` goes into the SQL as it is,
-/// so it's only ever a literal.
+/// The repository where `condition` holds for `value` ([`ID_IS`] or [`PATH_IS`]), if there's one.
+/// `condition` goes into the SQL as it is, so it's only ever a literal.
 fn get_by(
     conn: &Connection,
-    column: &'static str,
+    condition: &'static str,
     value: &str,
 ) -> rusqlite::Result<Option<Repository>> {
     conn.query_row(
-        &format!(r#"select {COLUMNS} from "repositories" where "repositories"."{column}" = ?"#),
+        &format!(r#"select {COLUMNS} from "repositories" where {condition}"#),
         [value],
         repository,
     )
@@ -102,12 +109,12 @@ fn create(conn: &Connection, repository: &Repository) -> rusqlite::Result<Reposi
         params![repository.id.to_string(), repository.name, repository.path],
     )?;
     // There is one now, whichever add put it there.
-    get_by(conn, "path", &repository.path)?.ok_or(rusqlite::Error::QueryReturnedNoRows)
+    get_by(conn, PATH_IS, &repository.path)?.ok_or(rusqlite::Error::QueryReturnedNoRows)
 }
 
 fn delete(conn: &Connection, id: &str) -> rusqlite::Result<()> {
     conn.execute(
-        r#"delete from "repositories" where "repositories"."id" = ?"#,
+        &format!(r#"delete from "repositories" where {ID_IS}"#),
         [id],
     )?;
     Ok(())
@@ -127,11 +134,9 @@ fn reorder(conn: &mut Connection, ids: &[String]) -> rusqlite::Result<()> {
         r#"update "repositories" set "position" = "repositories"."position" + ?"#,
         [rest],
     )?;
+    let update = format!(r#"update "repositories" set "position" = ? where {ID_IS}"#);
     for (index, id) in ids.iter().enumerate() {
-        tx.execute(
-            r#"update "repositories" set "position" = ? where "repositories"."id" = ?"#,
-            params![position(index)?, id],
-        )?;
+        tx.execute(&update, params![position(index)?, id])?;
     }
     tx.commit()
 }
@@ -250,34 +255,45 @@ mod tests {
         );
     }
 
-    #[test]
-    fn reads_ids_in_lower_case_and_refuses_ones_that_arent_repository_ids() {
-        let store = store();
-        smol::block_on(store.db.run(|conn| {
-            conn.execute_batch(
-                r#"insert into "repositories" ("id", "name", "path", "position")
-                   values ('01900000-0000-7000-8000-00000000000A', 'a', '/repos/a', 0)"#,
-            )
+    /// Puts a row in by hand, as `values` of its `id`, `name`, `path` and `position`.
+    fn insert(store: &RepositoryStore, values: &'static str) {
+        smol::block_on(store.db.run(move |conn| {
+            conn.execute_batch(&format!(
+                r#"insert into "repositories" ("id", "name", "path", "position") values {values}"#
+            ))
         }))
         .unwrap();
+    }
+
+    #[test]
+    fn reads_finds_removes_and_moves_a_repository_whose_id_is_in_upper_case() {
+        let store = store_with(&["a"]);
+        insert(
+            &store,
+            "('01900000-0000-7000-8000-00000000000B', 'b', '/repos/b', 1)",
+        );
+        let b = RepositoryId::parse("01900000-0000-7000-8000-00000000000b").unwrap();
         let all = smol::block_on(store.get_all()).unwrap();
+        assert_eq!(all[1].id, b);
         assert_eq!(
-            all[0].id.to_string(),
-            "01900000-0000-7000-8000-00000000000a"
+            all[1].id.to_string(),
+            "01900000-0000-7000-8000-00000000000b"
+        );
+        assert_eq!(
+            smol::block_on(store.get_by_id(&b)).unwrap(),
+            Some(all[1].clone())
         );
 
-        smol::block_on(store.db.run(|conn| {
-            conn.execute_batch(
-                r#"insert into "repositories" ("id", "name", "path", "position")
-                   values ('b', 'b', '/repos/b', 1)"#,
-            )
-        }))
-        .unwrap();
-        let error = smol::block_on(store.get_all()).unwrap_err();
-        assert!(
-            error.to_string().contains("Not a repository id. (\"b\")"),
-            "{error}"
-        );
+        smol::block_on(store.reorder(&[b.clone(), id("a")])).unwrap();
+        let order: Vec<RepositoryId> = smol::block_on(store.get_all())
+            .unwrap()
+            .into_iter()
+            .map(|repository| repository.id)
+            .collect();
+        assert_eq!(order, [b.clone(), id("a")]);
+
+        smol::block_on(store.delete(&b)).unwrap();
+        assert_eq!(ids(&store), ["a"]);
     }
 
     #[test]
