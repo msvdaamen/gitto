@@ -36,9 +36,10 @@ ported).
   (`commands.ts` → `commands.rs`, `in-use.ts` → `in_use.rs`), declared in that feature's `mod.rs`.
 - `src/test_support/`: `packages/git/src/test/` (real repositories in a temp dir), for tests only.
 
-`gitto-db` (`crates/db`) is Gitto's SQLite database. Its schema is its own, not the Electron app's
-Drizzle one: change it by adding a migration to `crates/db/migrations` and `MIGRATIONS`, never by
-editing one that's shipped.
+`gitto-db` (`crates/db`) is Gitto's SQLite database, `gitto-app.db`: a file of its own, not the
+Electron app's `gitto.db` (see `crates/db/src/paths.rs`). Its schema is its own, not the Electron
+app's Drizzle one: change it by adding a migration to `crates/db/migrations` and `MIGRATIONS`, never
+by editing one that's shipped.
 
 Porting a TS file: keep its behavior, including error messages, and the reasoning in its doc
 comments, which say why as much as what. Port its tests one for one, as `#[cfg(test)] mod tests`
@@ -52,12 +53,6 @@ Dependencies go in the root `Cargo.toml`'s `[workspace.dependencies]`, used with
 ```sh
 cargo fmt --all
 cargo clippy -p gitto-git -p gitto-db --all-targets --locked -- -D warnings
+cargo clippy -p gitto-git -p gitto-db --locked -- -D warnings
 cargo test -p gitto-git -p gitto-db --locked
 ```
-
-## Gitto's database
-
-While both apps ship, the Rust app opens the Electron app's `gitto.db` (see `crates/db/src/paths.rs`),
-whose schema each migrates its own way: Drizzle in `apps/electron/migrations`, `user_version` in
-`crates/db/migrations`. A change to a table they share, like `repositories`, goes into both, and
-`check_shared_tables` in `crates/db/src/migrations.rs` brings a table the other app made up to date.
