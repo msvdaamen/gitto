@@ -4,11 +4,14 @@
 //! step in: a test's implements what its view asks for, and asking it for the rest panics, so a
 //! test can't pass with a part of its view failing to load unnoticed.
 
+use std::cell::RefCell;
 use std::future::Future;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use futures::FutureExt as _;
-use futures::future::BoxFuture;
+use futures::channel::oneshot;
+use futures::future::{self, BoxFuture, Shared};
 use gitto_git::Discarded;
 use gitto_git::Page;
 use gitto_git::ShownConflict;
@@ -38,7 +41,7 @@ pub type GitTask<T> = BoxFuture<'static, Result<T, DataError>>;
 
 /// Writes [`RepositoryGit`], with a method for each of `GitRepo`'s, as gitto-git lists them
 /// (`for_each_repo_method!`, whose bodies are gitto-git's own): which [`GitRepository`] runs, which
-/// [`Removed`] fails, and which panics by default, for tests.
+/// [`Removed`] fails, which [`InOrder`] puts in order, and which panics by default, for tests.
 macro_rules! repository_git {
     ($(
         $(#[$attr:meta])*
@@ -82,6 +85,23 @@ macro_rules! repository_git {
             }
         }
 
+        impl RepositoryGit for InOrder {
+            $(
+                fn $name(&self $(, $arg: $ty)*) -> GitTask<$out> {
+                    let task = self.git.$name($($arg),*);
+                    if writes(stringify!($name)) {
+                        self.after_the_writes(task)
+                    } else {
+                        task
+                    }
+                }
+            )*
+
+            fn invalid(&self, error: gitto_git::Error) -> DataError {
+                self.git.invalid(error)
+            }
+        }
+
         impl RepositoryGit for Removed {
             $(
                 fn $name(&self $(, $arg: $ty)*) -> GitTask<$out> {
@@ -92,6 +112,77 @@ macro_rules! repository_git {
             )*
         }
     };
+}
+
+/// Whether `GitRepo`'s method `method` changes the repository: all do but those that read it, and
+/// `fetch`, which only updates what's fetched, in a line of its own (see `Repo::fetch`).
+fn writes(method: &str) -> bool {
+    !matches!(
+        method,
+        "status"
+            | "working_tree_file"
+            | "staged_file_patch"
+            | "unstaged_file_patch"
+            | "commit_files"
+            | "commit_file_patch"
+            | "blob"
+            | "log"
+            | "commit"
+            | "commit_message"
+            | "pushed_to"
+            | "overview"
+            | "refs"
+            | "remotes"
+            | "fetch"
+            | "push_target"
+            | "operation"
+            | "conflict"
+            | "stashes"
+            | "stash_files"
+            | "stash_file_patch"
+            | "worktrees"
+    )
+}
+
+/// A repository's git, `git`, whose writes reach git in the order they're asked for: each starts
+/// once those asked for before it are done, or dropped. gitto-git's take their place in the
+/// repository's line of writes only when they get to it, once the repository's open, say, not when
+/// they're asked for: a push asked for after a commit could otherwise run first, and push without
+/// it. What reads the repository, and fetching, doesn't wait.
+pub struct InOrder {
+    git: Rc<dyn RepositoryGit>,
+    /// Done once the last write asked for is, and every one before it.
+    last_write: RefCell<Shared<BoxFuture<'static, ()>>>,
+}
+
+impl InOrder {
+    pub fn new(git: Rc<dyn RepositoryGit>) -> Self {
+        InOrder {
+            git,
+            last_write: RefCell::new(future::ready(()).boxed().shared()),
+        }
+    }
+
+    /// `write`, once the writes asked for before it are done.
+    fn after_the_writes<T: Send + 'static>(&self, write: GitTask<T>) -> GitTask<T> {
+        let before = self.last_write.borrow().clone();
+        // `done` is dropped once `write` is done, or dropped: the writes after it wait for that, and
+        // for those before it, should it be dropped before they're done.
+        let (done, dropped) = oneshot::channel::<()>();
+        let earlier = before.clone();
+        *self.last_write.borrow_mut() = async move {
+            earlier.await;
+            dropped.await.ok();
+        }
+        .boxed()
+        .shared();
+        async move {
+            let _done = done;
+            before.await;
+            write.await
+        }
+        .boxed()
+    }
 }
 
 /// The git of a repository that was removed from Gitto: everything fails, saying so. What a view
@@ -170,6 +261,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use gitto_git::ApiCode;
+    use gpui_kit::TestAppContext;
 
     use super::*;
 
@@ -198,6 +290,111 @@ mod tests {
     #[should_panic(expected = "Not in this test: refs.")]
     fn panics_when_a_test_asks_its_git_what_it_doesnt_answer() {
         drop(NoGit.refs());
+    }
+
+    /// A write asked for, by its method, and what answers it.
+    type Asked = (&'static str, oneshot::Sender<Result<(), DataError>>);
+
+    /// A repository's git that says what it got to, in turn: its writes, which answer when the test
+    /// says, and its remotes, a read, which answer at once.
+    #[derive(Default)]
+    struct Gated {
+        reached: Arc<Mutex<Vec<&'static str>>>,
+        answers: RefCell<Vec<Asked>>,
+    }
+
+    impl Gated {
+        fn write(&self, method: &'static str) -> GitTask<()> {
+            let (answer, answered) = oneshot::channel();
+            self.answers.borrow_mut().push((method, answer));
+            let reached = Arc::clone(&self.reached);
+            async move {
+                lock(&reached).push(method);
+                answered.await.unwrap()
+            }
+            .boxed()
+        }
+
+        /// Answers the write `method` with `answer`.
+        fn answer(&self, method: &str, answer: Result<(), DataError>) {
+            let mut answers = self.answers.borrow_mut();
+            let at = answers.iter().position(|(asked, _)| *asked == method);
+            drop(answers.remove(at.unwrap()).1.send(answer));
+        }
+
+        fn reached(&self) -> Vec<&'static str> {
+            lock(&self.reached).clone()
+        }
+    }
+
+    impl RepositoryGit for Gated {
+        fn stage_all(&self) -> GitTask<()> {
+            self.write("stage_all")
+        }
+
+        fn discard_all(&self) -> GitTask<()> {
+            self.write("discard_all")
+        }
+
+        fn push(&self, _: bool) -> GitTask<()> {
+            self.write("push")
+        }
+
+        fn remotes(&self) -> GitTask<Vec<String>> {
+            let reached = Arc::clone(&self.reached);
+            async move {
+                lock(&reached).push("remotes");
+                Ok(Vec::new())
+            }
+            .boxed()
+        }
+    }
+
+    #[gpui_kit::test]
+    fn runs_the_writes_in_the_order_theyre_asked_for_and_reads_meanwhile(cx: &mut TestAppContext) {
+        let gated = Rc::new(Gated::default());
+        let git = InOrder::new(gated.clone());
+        let stage = cx.executor().spawn(git.stage_all());
+        let discard = cx.executor().spawn(git.discard_all());
+        let push = cx.executor().spawn(git.push(false));
+        let remotes = cx.executor().spawn(git.remotes());
+        cx.run_until_parked();
+        let mut reached = gated.reached();
+        reached.sort();
+        assert_eq!(reached, ["remotes", "stage_all"]);
+        assert!(smol::block_on(remotes).is_ok());
+
+        // Once the one before is done, failed or not.
+        gated.answer("stage_all", Err(DataError::msg("Couldn't stage.")));
+        cx.run_until_parked();
+        assert_eq!(gated.reached()[2..], ["discard_all"]);
+        gated.answer("discard_all", Ok(()));
+        cx.run_until_parked();
+        assert_eq!(gated.reached()[2..], ["discard_all", "push"]);
+        gated.answer("push", Ok(()));
+        cx.run_until_parked();
+        assert!(smol::block_on(stage).is_err());
+        assert!(smol::block_on(discard).is_ok());
+        assert!(smol::block_on(push).is_ok());
+    }
+
+    #[gpui_kit::test]
+    fn holds_a_write_up_for_those_before_one_dropped_before_them(cx: &mut TestAppContext) {
+        let gated = Rc::new(Gated::default());
+        let git = InOrder::new(gated.clone());
+        let stage = cx.executor().spawn(git.stage_all());
+        drop(git.discard_all());
+        let push = cx.executor().spawn(git.push(false));
+        cx.run_until_parked();
+        assert_eq!(gated.reached(), ["stage_all"]);
+
+        gated.answer("stage_all", Ok(()));
+        cx.run_until_parked();
+        assert_eq!(gated.reached(), ["stage_all", "push"]);
+        gated.answer("push", Ok(()));
+        cx.run_until_parked();
+        assert!(smol::block_on(stage).is_ok());
+        assert!(smol::block_on(push).is_ok());
     }
 
     #[test]

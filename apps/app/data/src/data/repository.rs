@@ -41,7 +41,7 @@ use super::changes::{Change, ChangeGroup, Done};
 use super::diff::{ChangedFiles, FilesOf};
 use super::error::DataError;
 use super::file_diff::FilePatch;
-use super::git::{GitTask, RepositoryGit};
+use super::git::{GitTask, InOrder, RepositoryGit};
 use super::history::Log;
 use super::keyed::Keyed;
 use super::loaded::Loaded;
@@ -234,11 +234,12 @@ struct LoadingMore {
 impl EventEmitter<Changed> for Repository {}
 
 impl Repository {
-    /// The repository `id`, asking `git` for what it loads. Nothing's loaded until it's shown.
+    /// The repository `id`, asking `git` for what it loads. Nothing's loaded until it's shown. Its
+    /// changes reach git in the order they're made (see [`InOrder`]).
     pub fn new(id: RepositoryId, git: Rc<dyn RepositoryGit>) -> Self {
         Repository {
             id,
-            git,
+            git: Rc::new(InOrder::new(git)),
             status: Loaded::default(),
             operation: Loaded::default(),
             log: Loaded::default(),
@@ -274,7 +275,7 @@ impl Repository {
     /// Asks `git` from now on: for tests, which make up what a repository's git answers.
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_git(&mut self, git: Rc<dyn RepositoryGit>) {
-        self.git = git;
+        self.git = Rc::new(InOrder::new(git));
     }
 
     pub fn status(&self) -> &Loaded<Opaque<Uncommitted>> {
