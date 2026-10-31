@@ -5,7 +5,7 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use futures::Stream;
@@ -14,11 +14,11 @@ use super::batches::Batches;
 use super::git_dirs::{classify, inside};
 use super::schema::GitDirChange;
 use super::stream::{Watched, watch_stream};
-use super::watcher::{self, Events, OnEvents, Root, Subscribe, Subscription};
+use super::watcher::{self, Events, LeaveOut, OnEvents, Root, Subscribe, Subscription};
 use crate::core::errors::Result;
 use crate::core::git_dirs::{git_dirs, real_path};
 use crate::core::repo::Repo;
-use crate::core::runner::RunOptions;
+use crate::core::runner::{RunOptions, lock};
 use crate::core::trace::{trace, tracing};
 use crate::features::status::commands::status_snapshot;
 
@@ -195,6 +195,9 @@ struct WorkingTree {
     subscription: Option<Subscription>,
     /// What the current subscription leaves out.
     ignored: HashSet<String>,
+    /// The folders git ignores that the current subscription left out since, as they were created
+    /// (see `LeaveOut`).
+    left_out: Arc<Mutex<HashSet<String>>>,
     /// Ignored paths that changed in the batch last yielded for, to leave out before the next.
     dropped: Vec<String>,
 }
@@ -216,6 +219,7 @@ impl WorkingTree {
             changes: Arc::new(Batches::new()),
             subscription: None,
             ignored: HashSet::new(),
+            left_out: Arc::default(),
             dropped: Vec::new(),
         };
         tree.watch_tree(None).await?;
@@ -326,8 +330,31 @@ impl WorkingTree {
             None => ignored_paths(&self.repo).await,
         };
         let start = Instant::now();
+        let left_out = Arc::default();
+        // Started before the one it replaces is stopped, so nothing goes unwatched while it walks
+        // the tree. Meanwhile both report what changes in what they both watch, which only adds
+        // to the same batch.
+        let next = (self.subscribe)(self.roots(&now_ignored, &left_out)).await?;
+        trace(format_args!(
+            "watching {} ({} ignored paths, set up in {:.0}ms)",
+            self.root.display(),
+            now_ignored.len(),
+            start.elapsed().as_secs_f64() * 1000.0
+        ));
+        if let Some(previous) = self.subscription.replace(next) {
+            previous.unsubscribe().await;
+        }
+        self.ignored = now_ignored.into_iter().collect();
+        self.left_out = left_out;
+        Ok(())
+    }
+
+    /// The tree to watch, but the git directory and `ignored` (as `watch_tree` reads them), and
+    /// `.git/info/exclude`. Folders created since that git ignores are left out as they come, and
+    /// kept in `left_out`.
+    fn roots(&self, ignored: &[String], left_out: &Arc<Mutex<HashSet<String>>>) -> Vec<Root> {
         let ignore = std::iter::once(self.git_dir.clone())
-            .chain(now_ignored.iter().map(|path| self.root.join(path)))
+            .chain(ignored.iter().map(|path| self.root.join(path)))
             .collect();
         let (changes, root) = (Arc::clone(&self.changes), self.root.clone());
         let on_events: OnEvents = Box::new(move |events| match events {
@@ -341,11 +368,27 @@ impl WorkingTree {
             Events::Rescan => changes.add(TreeChange::Rescan),
             Events::Failed(error) => changes.fail(error),
         });
+        // Asked on the watcher's thread, before it walks them: a fresh `node_modules` can have
+        // tens of thousands of folders.
+        let (repo, root, left_out) = (self.repo.clone(), self.root.clone(), Arc::clone(left_out));
+        let leave_out: LeaveOut = Box::new(move |folders| {
+            let paths: Vec<String> = folders
+                .iter()
+                .filter_map(|folder| inside(&root, folder))
+                .collect();
+            let ignored = smol::block_on(ignored_among(&repo, &paths));
+            lock(&left_out).extend(ignored.iter().cloned());
+            folders
+                .iter()
+                .filter(|folder| inside(&root, folder).is_some_and(|path| ignored.contains(&path)))
+                .cloned()
+                .collect()
+        });
         let mut roots = vec![Root {
             dir: self.root.clone(),
             ignore,
             ignore_in: &[],
-            leave_out: None,
+            leave_out: Some(leave_out),
             on_events,
             optional: false,
         }];
@@ -369,39 +412,29 @@ impl WorkingTree {
                 optional: true,
             });
         }
-        // Started before the one it replaces is stopped, so nothing goes unwatched while it walks
-        // the tree. Meanwhile both report what changes in what they both watch, which only adds
-        // to the same batch.
-        let next = (self.subscribe)(roots).await?;
-        trace(format_args!(
-            "watching {} ({} ignored paths, set up in {:.0}ms)",
-            self.root.display(),
-            now_ignored.len(),
-            start.elapsed().as_secs_f64() * 1000.0
-        ));
-        if let Some(previous) = self.subscription.replace(next) {
-            previous.unsubscribe().await;
-        }
-        self.ignored = now_ignored.into_iter().collect();
-        Ok(())
+        roots
     }
 
     /// Starts over without the folders `dropped` (ignored paths that changed) are, or are in, if
     /// they weren't left out yet, so their changes stop coming in. Not for single files, which are
     /// dropped as they come: they're cheap, and starting over walks the whole tree on Linux. The
     /// folder itself counts: on Linux, a file written right after its folder was created is often
-    /// written before the folder is watched, so only the folder is reported.
+    /// written before the folder is watched, so only the folder is reported. There, the watcher
+    /// leaves most new ignored folders out itself (see `roots`), so this only starts over for one
+    /// it was told of too late.
     async fn leave_out_new_ignored_folders(&mut self, dropped: &[String]) -> Result<()> {
         if dropped.is_empty() {
             return Ok(());
         }
         let listed = list_ignored(&self.repo).await;
+        let left_out = lock(&self.left_out).clone();
         let new_folders: Vec<&str> = listed
             .iter()
             .filter(|path| path.ends_with('/'))
             .map(|path| without_slash(path))
             .filter(|path| {
                 !self.ignored.contains(*path)
+                    && !left_out.contains(*path)
                     && dropped.iter().any(|changed| {
                         changed == path
                             || changed
@@ -522,7 +555,6 @@ mod tests {
     use futures::StreamExt;
 
     use super::*;
-    use crate::core::runner::lock;
     use crate::features::status::commands::get_status;
     use crate::test_support::{Fixture, git, wait_for};
 
@@ -799,6 +831,33 @@ mod tests {
             assert!(changes.quiet().await);
             write(path.join("dist").join("a.js"), "x");
             assert!(changes.quiet().await);
+        });
+    }
+
+    #[test]
+    fn the_working_tree_leaves_out_a_new_ignored_folder_before_watching_it() {
+        let fx = Fixture::new();
+        let path = fx.create_repo("watched-new-node-modules");
+        write(path.join(".gitignore"), "node_modules/\n");
+        let probe = Probe::new();
+        smol::block_on(async {
+            let repo = fx.repos.open("watched-new-node-modules").await.unwrap();
+            let changes = watching(watch_working_tree_with(repo, probe.subscribe()));
+            probe.subscribed(1).await;
+
+            // A first `npm install`.
+            fs::create_dir_all(path.join("node_modules/a/lib")).unwrap();
+            write(path.join("node_modules/a/lib/index.js"), "x");
+            assert!(changes.quiet().await);
+            write(path.join("node_modules/a/lib/index.js"), "y");
+            assert!(changes.quiet().await);
+            // On Linux, where it'd walk it, it's left out without starting over.
+            if cfg!(target_os = "linux") {
+                assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
+            }
+
+            write(path.join("file.txt"), "x");
+            assert!(is_change(changes.next().await));
         });
     }
 
