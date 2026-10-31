@@ -441,8 +441,8 @@ mod tests {
 
     use super::*;
     use crate::components::repository::test_support::{
-        Repositories, click_label, fake_git, has_dialog, repository, repository_id, set_refs,
-        set_remotes, set_worktrees, setup_with,
+        Repositories, fake_git, has_dialog, repository, repository_id, set_refs, set_remotes,
+        set_worktrees, setup_with,
     };
     use gitto_app_data::data::git::{GitTask, RepositoryGit};
 
@@ -717,6 +717,8 @@ mod tests {
         use std::ffi::OsStr;
         use std::os::unix::ffi::OsStrExt as _;
         use std::path::PathBuf;
+
+        use crate::components::repository::test_support::click_label;
 
         let adds = Rc::new(Adds::default());
         let (_dir, window, dialog) = render(cx, &adds);
