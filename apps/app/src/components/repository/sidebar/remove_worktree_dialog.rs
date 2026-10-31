@@ -34,7 +34,7 @@ pub fn open_remove_worktree_dialog(
 ) -> DialogId {
     ConfirmDialog::new(IconName::FolderX, Tone::Coral, "Remove worktree?")
         .description(remove_worktree_description(worktree))
-        .action("Remove", ButtonVariant::Primary, on_remove)
+        .action("Remove", ButtonVariant::Danger, on_remove)
         .on_cancel(on_cancel)
         .open(window, cx)
 }

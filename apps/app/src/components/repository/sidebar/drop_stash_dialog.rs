@@ -26,7 +26,7 @@ pub fn open_drop_stash_dialog(
 ) -> DialogId {
     ConfirmDialog::new(IconName::Trash, Tone::Coral, "Delete stash?")
         .description(drop_stash_description(stash))
-        .action("Delete", ButtonVariant::Primary, on_drop)
+        .action("Delete", ButtonVariant::Danger, on_drop)
         .on_cancel(on_cancel)
         .open(window, cx)
 }

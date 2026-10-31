@@ -151,7 +151,7 @@ pub fn open_discard_dialog(
             .child(
                 div().track_focus(&discard_focus).child(
                     Button::new("discard-confirm")
-                        .primary()
+                        .danger()
                         .label("Discard")
                         .on_click({
                             let on_discard = Rc::clone(&on_discard);
