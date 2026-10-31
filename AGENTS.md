@@ -29,9 +29,10 @@ Gitto is moving to Rust, with a GPUI ([gpui-kit](https://crates.io/crates/gpui-k
 `apps/app`, which calls the crates in `crates/` directly (no oRPC):
 
 - `gitto-git` (`crates/git`): `packages/git`.
-- `gitto-db` (`crates/db`): Gitto's SQLite database. Its schema is its own, not the Electron app's
-  Drizzle one: change it by adding a migration to `crates/db/migrations` and `MIGRATIONS`, never by
-  editing one that's shipped.
+- `gitto-db` (`crates/db`): Gitto's SQLite database, `gitto-app.db`: a file of its own, not the
+  Electron app's `gitto.db` (see `crates/db/src/paths.rs`). Its schema is its own, not the Electron
+  app's Drizzle one: change it by adding a migration to `crates/db/migrations` and `MIGRATIONS`,
+  never by editing one that's shipped.
 - `gitto-repository` (`crates/repository`): `packages/repository`'s `server/`. Its
   `RepositoryService` is gitto-git's `RepositoryLookup`, so `GitApi::new(service)` opens the
   repositories added to Gitto.
@@ -97,12 +98,6 @@ Dependencies go in the root `Cargo.toml`'s `[workspace.dependencies]`, used with
 ```sh
 cargo fmt --all
 cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo clippy --workspace --locked -- -D warnings
 cargo test --workspace --locked
 ```
-
-## Gitto's database
-
-While both apps ship, the Rust app opens the Electron app's `gitto.db` (see `crates/db/src/paths.rs`),
-whose schema each migrates its own way: Drizzle in `apps/electron/migrations`, `user_version` in
-`crates/db/migrations`. A change to a table they share, like `repositories`, goes into both, and
-`check_shared_tables` in `crates/db/src/migrations.rs` brings a table the other app made up to date.

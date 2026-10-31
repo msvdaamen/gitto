@@ -201,9 +201,10 @@ fn hermetic_env() {
                 "GIT_COMMITTER_NAME",
                 "GIT_COMMITTER_EMAIL",
                 "GIT_COMMITTER_DATE",
-                "GIT_CONFIG",
-                "GIT_CONFIG_COUNT",
-                "GIT_CONFIG_PARAMETERS",
+                // And these how fetches run ssh (see `network_options`).
+                "GIT_SSH",
+                "GIT_SSH_COMMAND",
+                "GIT_SSH_VARIANT",
             ]
             .iter()
             .chain(REPOSITORY_ENV)
@@ -300,6 +301,10 @@ pub async fn wait_for(timeout: Duration, mut done: impl FnMut() -> bool) {
 }
 
 /// Writes the executable script `file`, a hook, say.
+#[cfg_attr(
+    not(unix),
+    allow(dead_code, reason = "only Unix-only tests may use it")
+)]
 pub fn write_script(file: &Path, script: &str) {
     fs::write(file, script).unwrap();
     #[cfg(unix)]

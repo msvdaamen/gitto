@@ -2,6 +2,7 @@
 name = "gitto-ui"
 version = "0.1.0"
 edition.workspace = true
+rust-version.workspace = true
 description = "What Gitto's UI works out for itself, without GPUI: the history graph, its rows, labels and search, commit messages, the model of a diff, and what to call things."
 publish = false
 

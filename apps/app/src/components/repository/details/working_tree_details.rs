@@ -760,6 +760,36 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn forgets_the_file_asked_about_when_enter_cancels(cx: &mut TestAppContext) {
+        let details = render_details(
+            cx,
+            with_changes(vec![modified("a.txt"), modified("b.txt")], vec![]),
+        );
+        details.open_menu("unstaged-files", "a.txt", cx);
+        details.choose_discard(cx);
+        details.press("enter", cx);
+        assert_eq!(details.asked(cx), None);
+        assert!(
+            details
+                .details
+                .read_with(cx, |details, _| details.discarding.is_none())
+        );
+        assert!(details.discarded().is_empty());
+
+        // So its changes going away doesn't close another dialog.
+        cx.update_window(details.window, |_, window, cx| {
+            window.open_dialog(cx, |dialog, _, _| dialog)
+        })
+        .unwrap();
+        details.fakes.set_changes(vec![modified("b.txt")], vec![]);
+        details.reload(cx);
+        let open = cx
+            .update_window(details.window, |_, window, cx| window.has_active_dialog(cx))
+            .unwrap();
+        assert!(open);
+    }
+
+    #[gpui_kit::test]
     fn says_what_an_unstaged_changes_file_is_put_back_as_whats_staged_or_the_last_commit(
         cx: &mut TestAppContext,
     ) {

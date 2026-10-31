@@ -5,12 +5,13 @@ use std::panic::{self, AssertUnwindSafe};
 use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
 use rusqlite::Connection;
 use rusqlite::config::DbConfig;
 
 use crate::Result;
-use crate::migrations::{MIGRATIONS, check_shared_tables, migrate};
+use crate::migrations::{MIGRATIONS, migrate};
 
 /// A use of the connection, sent to its thread (see [`Db::run`]).
 type Job = Box<dyn FnOnce(&mut Connection) + Send>;
@@ -51,9 +52,16 @@ impl Db {
         // misspelt column: it's always an identifier here, so that fails.
         conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DQS_DML, false)?;
         conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DQS_DDL, false)?;
-        conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
+        // Another Gitto running at the same time can hold the write lock for a moment: wait for
+        // it, rather than fail with "database is locked". rusqlite's default, said here so it's
+        // not left to it.
+        conn.busy_timeout(Duration::from_secs(5))?;
+        // `NORMAL` is enough with WAL: a power cut can lose the last commits, but can't corrupt the
+        // file, and a commit doesn't wait for the disk.
+        conn.execute_batch(
+            "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;",
+        )?;
         migrate(&mut conn, migrations)?;
-        check_shared_tables(&mut conn)?;
         let (jobs, received) = mpsc::channel::<Job>();
         thread::Builder::new()
             .name("gitto-db".to_owned())
@@ -127,15 +135,17 @@ mod tests {
     #[test]
     fn opens_a_database_in_wal_mode_with_foreign_keys_on() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Db::open(dir.path().join("gitto.db")).unwrap();
+        let db = Db::open(dir.path().join("gitto-app.db")).unwrap();
         assert_eq!(pragma(&db, "journal_mode"), "wal");
+        assert_eq!(pragma(&db, "synchronous"), "1");
         assert_eq!(pragma(&db, "foreign_keys"), "1");
+        assert_eq!(pragma(&db, "busy_timeout"), "5000");
     }
 
     #[test]
     fn creates_the_database_and_its_tables() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("gitto.db");
+        let path = dir.path().join("gitto-app.db");
         let db = Db::open(&path).unwrap();
         assert!(path.is_file());
         let tables: Vec<String> = smol::block_on(db.run(|conn| {
@@ -151,7 +161,7 @@ mod tests {
     #[test]
     fn refuses_a_database_in_a_folder_that_isnt_there() {
         let dir = tempfile::tempdir().unwrap();
-        let error = Db::open(dir.path().join("missing/gitto.db")).unwrap_err();
+        let error = Db::open(dir.path().join("missing/gitto-app.db")).unwrap_err();
         assert!(
             error.to_string().contains("unable to open database file"),
             "{error}"
@@ -238,26 +248,6 @@ mod tests {
             (conn.is_autocommit(), count.unwrap())
         }));
         assert!(autocommit);
-        assert_eq!(count, 0);
-    }
-
-    #[test]
-    fn opens_the_electron_apps_first_database_adding_the_position() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("gitto.db");
-        Connection::open(&path)
-            .unwrap()
-            .execute_batch(include_str!(
-                "../../../apps/electron/migrations/20260930091652_dapper_captain_stacy/migration.sql"
-            ))
-            .unwrap();
-        let db = Db::open(&path).unwrap();
-        let count: i64 = smol::block_on(db.run(|conn| {
-            conn.query_row("SELECT count(`position`) FROM repositories", [], |row| {
-                row.get(0)
-            })
-        }))
-        .unwrap();
         assert_eq!(count, 0);
     }
 

@@ -89,7 +89,7 @@ async fn read_fetched_at(repo: &Repo) -> Result<Option<i64>> {
 /// When HEAD's commit was made, in milliseconds since the epoch.
 async fn read_committed_at(repo: &Repo) -> Result<i64> {
     let output = repo.read(["log", "-1", "--format=%ct", "HEAD"]).await?;
-    millis(&output)
+    Ok(millis(&output))
 }
 
 /// HEAD's latest activity, from its reflog: at most `MAX_ACTIVITY` entries.
@@ -105,7 +105,7 @@ async fn read_activity(repo: &Repo) -> Result<Vec<Activity>> {
             "HEAD",
         ])
         .await?;
-    let mut activity = parse_reflog(&output)?;
+    let mut activity = parse_reflog(&output);
     activity.truncate(MAX_ACTIVITY);
     Ok(activity)
 }
