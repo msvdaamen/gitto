@@ -1,12 +1,13 @@
 //! Where Gitto keeps its files: the Electron app's `userData` folder, which both apps share while
-//! both ship (see `gitto_db::user_data_dir`), so the Rust app opens the same database, settings
-//! and "last seen version" as the Electron one (see `apps/electron/src/main.ts`).
+//! both ship (see `gitto_db::user_data_dir`), so the Rust app reads the same settings and "last
+//! seen version" as the Electron one (see `apps/electron/src/main.ts`). The database is its own,
+//! `gitto-app.db`.
 
 use std::path::{Path, PathBuf};
 
 use gitto_db::Profile;
 
-/// Overrides the folder, e.g. to try the app with a database of its own: `GITTO_USER_DATA_DIR`.
+/// Overrides the folder, e.g. to try the app with a profile of its own: `GITTO_USER_DATA_DIR`.
 pub const USER_DATA_DIR_VAR: &str = "GITTO_USER_DATA_DIR";
 
 /// The files Gitto keeps in its `userData` folder.
@@ -42,7 +43,7 @@ impl AppPaths {
         &self.user_data
     }
 
-    /// The database, `gitto.db` (`openDatabase` in main.ts).
+    /// The database, `gitto-app.db` (see `gitto_db::DATABASE_FILE`).
     pub fn database(&self) -> PathBuf {
         self.user_data.join(gitto_db::DATABASE_FILE)
     }
@@ -73,7 +74,7 @@ mod tests {
     #[test]
     fn keeps_its_files_in_the_user_data_folder() {
         let paths = AppPaths::new("/data/Gitto");
-        assert_eq!(paths.database(), Path::new("/data/Gitto/gitto.db"));
+        assert_eq!(paths.database(), Path::new("/data/Gitto/gitto-app.db"));
         assert_eq!(paths.settings(), Path::new("/data/Gitto/settings.json"));
         assert_eq!(
             paths.last_seen_version(),
