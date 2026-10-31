@@ -67,6 +67,9 @@ two-face = { version = "0.4.5", default-features = false, features = [
   "syntect-fancy",
   "syntect-onig",
 ] }
+# How many columns a character of a diff's lines takes, e.g. two for CJK (already in the tree, from
+# gpui-kit).
+unicode-width = "0.2.2"
 
 # crates/ui-logic: what the UI works out for itself, e.g. the order of the sidebar's folders.
 indexmap = "2.14.2"

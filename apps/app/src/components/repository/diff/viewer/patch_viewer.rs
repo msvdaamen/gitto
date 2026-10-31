@@ -28,6 +28,7 @@ use gpui_kit::{
     UniformListScrollHandle, WeakEntity, Window, canvas, combine_highlights, div, font, point, px,
     rems, uniform_list,
 };
+use unicode_width::{UnicodeWidthChar as _, UnicodeWidthStr as _};
 
 use super::highlight::{DiffHighlights, highlight_name};
 use super::line_picker::{KeyOutcome, LinePicker, LineStaging, PickerKey, StagedAt, Viewport};
@@ -53,17 +54,19 @@ pub(in crate::components::repository::diff) const ROW_REMS: f32 = 4. / 3.;
 /// whole would hold up every frame it's in view.
 const MAX_DRAWN_LINE: usize = 4000;
 
-/// The spaces a tab is drawn as.
+/// The columns between tab stops: a tab is drawn as the spaces to the next one, as editors and a
+/// browser's `tab-size` do.
 const TAB_WIDTH: usize = 4;
 
 /// A line of code as it's drawn, here and in the conflicts' viewer: its line end left off, tabs
-/// as spaces, a long one cut (with an ellipsis).
+/// as spaces to the next tab stop, a long one cut (with an ellipsis).
 pub(in crate::components::repository::diff) struct DrawnLine {
     pub text: String,
     /// The bytes of the line that are drawn.
     cut: usize,
-    /// Where its tabs are in the line.
-    tabs: Vec<usize>,
+    /// Where its tabs are in the line, and how many bytes more the text drawn has by the end of
+    /// each, as each is drawn as up to `TAB_WIDTH` spaces.
+    tabs: Vec<(usize, usize)>,
 }
 
 impl DrawnLine {
@@ -71,16 +74,25 @@ impl DrawnLine {
         let content = line.trim_end_matches(['\n', '\r']);
         let cut = &content[..content.floor_char_boundary(MAX_DRAWN_LINE)];
         let ellipsis = cut.len() < content.len();
-        let tabs: Vec<usize> = cut
-            .bytes()
-            .enumerate()
-            .filter(|(_, byte)| *byte == b'\t')
-            .map(|(offset, _)| offset)
-            .collect();
-        let mut text = if tabs.is_empty() {
-            cut.to_owned()
+        let mut tabs = Vec::new();
+        let mut text = if cut.contains('\t') {
+            let mut text = String::with_capacity(cut.len() + TAB_WIDTH);
+            let mut column = 0;
+            for (offset, character) in cut.char_indices() {
+                if character == '\t' {
+                    let spaces = TAB_WIDTH - column % TAB_WIDTH;
+                    text.extend(std::iter::repeat_n(' ', spaces));
+                    column += spaces;
+                    let extra = tabs.last().map_or(0, |(_, extra)| *extra) + spaces - 1;
+                    tabs.push((offset, extra));
+                } else {
+                    text.push(character);
+                    column += character.width().unwrap_or(0);
+                }
+            }
+            text
         } else {
-            cut.replace('\t', &" ".repeat(TAB_WIDTH))
+            cut.to_owned()
         };
         if ellipsis {
             text.push('…');
@@ -95,7 +107,8 @@ impl DrawnLine {
     /// Where a byte offset in the line is in the text drawn.
     pub fn offset(&self, offset: usize) -> usize {
         let offset = offset.min(self.cut);
-        offset + self.tabs.partition_point(|tab| *tab < offset) * (TAB_WIDTH - 1)
+        let tabs = self.tabs.partition_point(|(tab, _)| *tab < offset);
+        offset + tabs.checked_sub(1).map_or(0, |tab| self.tabs[tab].1)
     }
 
     /// The line's syntax, as `highlights` have it for line `ix` of `side`, where it's drawn.
@@ -118,7 +131,8 @@ impl DrawnLine {
     }
 }
 
-/// The widest of `lines`, in characters as drawn (see [`DrawnLine`]).
+/// The widest of `lines`, in columns as drawn (see [`DrawnLine`]): a wide character, such as a
+/// CJK one, takes two, as it does in a monospaced font.
 pub(in crate::components::repository::diff) fn widest_line<'a>(
     lines: impl IntoIterator<Item = &'a str>,
 ) -> usize {
@@ -128,8 +142,15 @@ pub(in crate::components::repository::diff) fn widest_line<'a>(
             // As `DrawnLine` draws it: cut, with an ellipsis, and its tabs as spaces.
             let line = line.trim_end_matches(['\n', '\r']);
             let cut = &line[..line.floor_char_boundary(MAX_DRAWN_LINE)];
-            let tabs = cut.bytes().filter(|byte| *byte == b'\t').count();
-            cut.chars().count() + usize::from(cut.len() < line.len()) + tabs * (TAB_WIDTH - 1)
+            let columns = if cut.contains('\t') {
+                cut.chars().fold(0, |column, character| match character {
+                    '\t' => column + TAB_WIDTH - column % TAB_WIDTH,
+                    _ => column + character.width().unwrap_or(0),
+                })
+            } else {
+                cut.width()
+            };
+            columns + usize::from(cut.len() < line.len())
         })
         .max()
         .unwrap_or(0)
@@ -318,7 +339,7 @@ struct Shown {
     diff: Arc<FileDiff>,
     patch: NextPatch,
     highlights: SharedHighlights,
-    /// The widest line, in characters as drawn, and the highest line number.
+    /// The widest line, in columns as drawn, and the highest line number.
     widest: usize,
     highest: usize,
 }
@@ -1042,7 +1063,7 @@ impl PatchViewer {
     }
 }
 
-/// The widest line of `diff`, in characters as drawn, and its highest line number.
+/// The widest line of `diff`, in columns as drawn, and its highest line number.
 fn measure(diff: &FileDiff) -> (usize, usize) {
     let widest = widest_line(diff.deletion_lines.iter().chain(diff.addition_lines.iter()));
     let mut highest = diff.deletion_lines.len().max(diff.addition_lines.len());
@@ -1691,7 +1712,7 @@ mod tests {
     }
 
     #[test]
-    fn measures_lines_in_characters_as_drawn() {
+    fn measures_lines_in_columns_as_drawn() {
         let patch = "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-\u{e9}\u{e9}\u{e9}\n+\ta\n";
         let diff = gitto_ui_logic::diff::diff_metadata::parse_patch_files(patch, None).remove(0);
         // Three characters of two bytes each, and a tab drawn as four spaces before a letter.
@@ -1703,6 +1724,41 @@ mod tests {
         let diff = gitto_ui_logic::diff::diff_metadata::parse_patch_files(&long, None).remove(0);
         // Cut at as many bytes, with an ellipsis.
         assert_eq!(measure(&diff).0, MAX_DRAWN_LINE / 2 + 1);
+    }
+
+    #[test]
+    fn measures_wide_characters_as_two_columns() {
+        assert_eq!(widest_line(["中文字", "abcde"]), 6);
+        assert_eq!(widest_line(["😀😀\n"]), 4);
+        // Up to the tab stop after the wide character's two columns.
+        assert_eq!(widest_line(["中\tx"]), TAB_WIDTH + 1);
+    }
+
+    #[test]
+    fn draws_a_tab_as_the_spaces_to_the_next_tab_stop() {
+        assert_eq!(DrawnLine::new("\tx\n").text, "    x");
+        assert_eq!(DrawnLine::new("a\tb").text, "a   b");
+        assert_eq!(DrawnLine::new("abcd\tx").text, "abcd    x");
+        assert_eq!(
+            DrawnLine::new("int x;\t// a\t\tb").text,
+            "int x;  // a        b"
+        );
+        assert_eq!(widest_line(["int x;\t// a\t\tb"]), 21);
+    }
+
+    #[test]
+    fn finds_where_a_byte_of_the_line_is_drawn_past_tabs_and_wide_characters() {
+        // `é` is two bytes and a column, so the tab after it is three spaces.
+        let line = DrawnLine::new("\u{e9}\tb\tc");
+        assert_eq!(line.text, "\u{e9}   b   c");
+        assert_eq!(&line.text[line.offset(3)..line.offset(4)], "b");
+        assert_eq!(&line.text[line.offset(5)..], "c");
+        // `中` is three bytes and two columns: the tab after it is two spaces.
+        let line = DrawnLine::new("\u{4e2d}\tx");
+        assert_eq!(line.text, "\u{4e2d}  x");
+        assert_eq!(&line.text[line.offset(4)..], "x");
+        // A tab's spaces are all the tab's.
+        assert_eq!(line.offset(3)..line.offset(4), 3..5);
     }
 
     #[gpui_kit::test]

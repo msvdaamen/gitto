@@ -210,6 +210,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "two-face",
+ "unicode-width",
  "uuid",
  "winresource",
 ]

@@ -106,7 +106,7 @@ struct Shown {
     /// Its conflicts, if they're shown one by one.
     state: Option<Arc<ConflictState>>,
     problem: Option<String>,
-    /// The widest line, in characters as drawn.
+    /// The widest line, in columns as drawn.
     widest: usize,
 }
 
@@ -117,7 +117,7 @@ struct ReadResult {
     /// Its version on disk; `None` while that isn't known.
     version: Option<ContentVersion>,
     read: ReadConflicts,
-    /// The widest line of its conflicts' sides, in characters as drawn.
+    /// The widest line of its conflicts' sides, in columns as drawn.
     widest: usize,
 }
 
@@ -857,7 +857,7 @@ pub fn prepare_conflicts(
     .detach();
 }
 
-/// The widest line of `state`'s sides, in characters as drawn.
+/// The widest line of `state`'s sides, in columns as drawn.
 fn widest(state: &ConflictState) -> usize {
     widest_line(state.ours().iter().chain(state.theirs().iter()))
 }

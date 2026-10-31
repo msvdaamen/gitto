@@ -37,6 +37,7 @@ similar.workspace = true
 syntect.workspace = true
 thiserror.workspace = true
 two-face.workspace = true
+unicode-width.workspace = true
 
 # The Dock's icon, set as the app starts (see `identity.rs`).
 [target.'cfg(target_os = "macos")'.dependencies]
