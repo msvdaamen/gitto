@@ -36,10 +36,11 @@ impl CreateBranchDialog {
     pub fn new(repository_id: RepositoryId, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let name = cx.new(|cx| InputState::new(window, cx).placeholder(NAME_PLACEHOLDER));
         let subscriptions = vec![
-            cx.subscribe_in(&name, window, |this, _, event, window, cx| match event {
-                InputEvent::PressEnter { .. } => this.submit(window, cx),
-                InputEvent::Change => cx.notify(),
-                _ => {}
+            // Enter in it is the dialog's: see its `on_ok`.
+            cx.subscribe(&name, |_, _, event, cx| {
+                if let InputEvent::Change = event {
+                    cx.notify()
+                }
             }),
         ];
         CreateBranchDialog {
@@ -100,10 +101,17 @@ impl CreateBranchDialog {
                 )
             };
             let cancel = this.clone();
+            let ok = this.clone();
             let submit = this.clone();
             dialog
                 .w(rems(WIDTH).to_pixels(window.rem_size()))
                 .close_button(false)
+                // Enter, in the name or on Create branch: submitted, it closes itself; otherwise
+                // it stays open.
+                .on_ok(move |_, window, cx| {
+                    let _ = ok.update(cx, |this, cx| this.submit(window, cx));
+                    false
+                })
                 .on_cancel(move |_, _, cx| {
                     let _ = cancel.update(cx, |this, cx| {
                         this.open = false;
@@ -289,6 +297,96 @@ mod tests {
             dialog.read_with(cx, |dialog, cx| dialog.name.read(cx).value().to_string()),
             ""
         );
+    }
+
+    /// Opens it for `main`, in a window with what `render` makes.
+    fn open_for_main(
+        cx: &mut TestAppContext,
+    ) -> (
+        tempfile::TempDir,
+        AnyWindowHandle,
+        Entity<CreateBranchDialog>,
+        Rc<Creates>,
+    ) {
+        let dir = setup(cx);
+        let id = repository_id();
+        set_status(&id, status(), cx);
+        let calls = Rc::new(Creates::default());
+        let (window, dialog) = render(cx, &id, &calls);
+        cx.update_window(window, |_, window, cx| {
+            dialog.update(cx, |dialog, cx| {
+                dialog.open("refs/heads/main".into(), window, cx)
+            })
+        })
+        .unwrap();
+        cx.run_until_parked();
+        (dir, window, dialog, calls)
+    }
+
+    #[gpui_kit::test]
+    fn stays_open_on_enter_without_a_name(cx: &mut TestAppContext) {
+        let (_dir, window, dialog, calls) = open_for_main(cx);
+        cx.update_window(window, |_, window, cx| window.press("enter", cx))
+            .unwrap();
+        cx.run_until_parked();
+        assert!(calls.0.borrow().is_empty());
+        assert!(dialog.read_with(cx, |dialog, _| dialog.is_open()));
+        assert!(has_dialog(window, cx));
+
+        // Still told when it's closed, so it opens again after.
+        cx.update_window(window, |_, window, cx| window.press("escape", cx))
+            .unwrap();
+        cx.run_until_parked();
+        assert!(!dialog.read_with(cx, |dialog, _| dialog.is_open()));
+        assert!(!has_dialog(window, cx));
+    }
+
+    #[gpui_kit::test]
+    fn creates_it_on_enter_on_create_branch(cx: &mut TestAppContext) {
+        let (_dir, window, dialog, calls) = open_for_main(cx);
+        cx.update_window(window, |_, window, cx| {
+            window.input("topic", cx);
+            window.press("tab", cx);
+        })
+        .unwrap();
+        let name = dialog.read_with(cx, |dialog, cx| dialog.name.focus_handle(cx));
+        assert!(
+            !cx.update_window(window, |_, window, _| name.is_focused(window))
+                .unwrap()
+        );
+        cx.update_window(window, |_, window, cx| window.press("enter", cx))
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(calls.0.borrow().len(), 1);
+        assert!(!dialog.read_with(cx, |dialog, _| dialog.is_open()));
+        assert!(!has_dialog(window, cx));
+    }
+
+    #[gpui_kit::test]
+    fn closes_only_itself_on_enter(cx: &mut TestAppContext) {
+        let _dir = setup(cx);
+        let id = repository_id();
+        set_status(&id, status(), cx);
+        let calls = Rc::new(Creates::default());
+        let (window, dialog) = render(cx, &id, &calls);
+        cx.update_window(window, |_, window, cx| {
+            window.open_dialog(cx, |dialog, _, _| dialog);
+            dialog.update(cx, |dialog, cx| {
+                dialog.open("refs/heads/main".into(), window, cx)
+            });
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update_window(window, |_, window, cx| {
+            window.input("topic", cx);
+            window.press("enter", cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert_eq!(calls.0.borrow().len(), 1);
+        assert!(!dialog.read_with(cx, |dialog, _| dialog.is_open()));
+        // The one under it is still open.
+        assert!(has_dialog(window, cx));
     }
 
     #[gpui_kit::test]

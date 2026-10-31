@@ -10,7 +10,8 @@ use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::{Disableable as _, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    App, Context, Entity, Focusable as _, FontWeight, SharedString, Subscription, Window, div, rems,
+    App, Context, Entity, FocusHandle, Focusable as _, FontWeight, SharedString, Subscription,
+    Window, div, rems,
 };
 
 use super::branch_form::NAME_PLACEHOLDER;
@@ -51,6 +52,8 @@ pub struct AddWorktreeDialog {
     /// The folder last picked had a path that isn't UTF-8, which git is given as text: it's
     /// said so, until another is picked or typed.
     unusable_pick: bool,
+    /// Around Browse…, to tell whether Enter is on it.
+    browse_focus: FocusHandle,
     open: bool,
     _subscriptions: Vec<Subscription>,
 }
@@ -59,23 +62,21 @@ impl AddWorktreeDialog {
     pub fn new(repository_id: RepositoryId, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let folder = cx.new(|cx| InputState::new(window, cx).placeholder("/path/to/folder"));
         let new_branch = cx.new(|cx| InputState::new(window, cx));
+        // Enter in them is the dialog's: see its `on_ok`.
         let on_input = |this: &mut Self,
-                        input: &Entity<InputState>,
+                        input: Entity<InputState>,
                         event: &InputEvent,
-                        window: &mut Window,
-                        cx: &mut Context<Self>| match event {
-            InputEvent::PressEnter { .. } => this.submit(window, cx),
-            InputEvent::Change => {
-                if *input == this.folder {
+                        cx: &mut Context<Self>| {
+            if let InputEvent::Change = event {
+                if input == this.folder {
                     this.unusable_pick = false;
                 }
                 cx.notify()
             }
-            _ => {}
         };
         let subscriptions = vec![
-            cx.subscribe_in(&folder, window, on_input),
-            cx.subscribe_in(&new_branch, window, on_input),
+            cx.subscribe(&folder, on_input),
+            cx.subscribe(&new_branch, on_input),
             // The worktrees and refs, which say whether a new branch has to be named, notify it.
             cx.observe_in(&cx.entity(), window, |this, _, window, cx| {
                 this.update_placeholder(window, cx)
@@ -94,6 +95,7 @@ impl AddWorktreeDialog {
             suggested: String::new(),
             placeholder: SharedString::default(),
             unusable_pick: false,
+            browse_focus: cx.focus_handle(),
             open: false,
             _subscriptions: subscriptions,
         }
@@ -235,9 +237,22 @@ impl AddWorktreeDialog {
                 return dialog;
             };
             let cancel = this.clone();
+            let ok = this.clone();
             dialog
                 .w(rems(WIDTH).to_pixels(window.rem_size()))
                 .close_button(false)
+                // Enter: on Browse…, it browses; elsewhere it submits, and closes itself, if it
+                // can, and stays open otherwise.
+                .on_ok(move |_, window, cx| {
+                    let _ = ok.update(cx, |this, cx| {
+                        if this.browse_focus.contains_focused(window, cx) {
+                            this.browse(window, cx);
+                        } else {
+                            this.submit(window, cx);
+                        }
+                    });
+                    false
+                })
                 .on_cancel(move |_, _, cx| {
                     let _ = cancel.update(cx, |this, cx| {
                         this.open = false;
@@ -280,6 +295,7 @@ impl AddWorktreeDialog {
                 shown.unusable_pick,
             )
         };
+        let browse_focus = this.read(cx).browse_focus.clone();
         let naming = !Self::typed(&new_branch, cx).is_empty();
         let browse = this.downgrade();
         let submit = this.downgrade();
@@ -316,11 +332,13 @@ impl AddWorktreeDialog {
                 h_flex()
                     .gap_2()
                     .child(
-                        Button::new("browse")
-                            .label("Browse…")
-                            .on_click(move |_, window, cx| {
-                                let _ = browse.update(cx, |this, cx| this.browse(window, cx));
-                            }),
+                        div().track_focus(&browse_focus).child(
+                            Button::new("browse").label("Browse…").on_click(
+                                move |_, window, cx| {
+                                    let _ = browse.update(cx, |this, cx| this.browse(window, cx));
+                                },
+                            ),
+                        ),
                     )
                     .child(
                         Button::new("add-worktree")
@@ -413,6 +431,7 @@ mod tests {
     use futures::FutureExt as _;
     use gitto_git::features::refs::schema::{Ref, RefKind};
     use gitto_git::input::{BranchName, BranchRef, Folder};
+    use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{AnyWindowHandle, AppContext as _, IntoElement, Render, TestAppContext};
 
     use super::*;
@@ -559,6 +578,86 @@ mod tests {
         );
         assert!(!dialog.read_with(cx, |dialog, _| dialog.is_open()));
         assert_eq!(value(&folder, cx), "");
+    }
+
+    fn press(window: AnyWindowHandle, keys: &[&str], cx: &mut TestAppContext) {
+        cx.update_window(window, |_, window, cx| {
+            for key in keys {
+                window.press(key, cx);
+            }
+        })
+        .unwrap();
+        cx.run_until_parked();
+    }
+
+    #[gpui_kit::test]
+    fn stays_open_on_enter_without_a_folder(cx: &mut TestAppContext) {
+        let adds = Rc::new(Adds::default());
+        let (_dir, window, dialog) = render(cx, &adds);
+        open(window, &dialog, "refs/heads/topic", cx);
+        let folder = dialog.read_with(cx, |dialog, _| dialog.folder.clone());
+        cx.update_window(window, |_, window, cx| {
+            folder.update(cx, |input, cx| input.set_value("", window, cx))
+        })
+        .unwrap();
+
+        press(window, &["enter"], cx);
+        assert!(adds.0.borrow().is_empty());
+        assert!(dialog.read_with(cx, |dialog, _| dialog.is_open()));
+        assert!(has_dialog(window, cx));
+
+        // Still told when it's closed, so it opens again after.
+        press(window, &["escape"], cx);
+        assert!(!dialog.read_with(cx, |dialog, _| dialog.is_open()));
+        assert!(!has_dialog(window, cx));
+    }
+
+    #[gpui_kit::test]
+    fn adds_it_on_enter_on_add_worktree(cx: &mut TestAppContext) {
+        let adds = Rc::new(Adds::default());
+        let (_dir, window, dialog) = render(cx, &adds);
+        open(window, &dialog, "refs/heads/topic", cx);
+        // From the folder, past the new branch and Browse….
+        press(window, &["tab", "tab", "tab"], cx);
+        let inputs = dialog.read_with(cx, |dialog, cx| {
+            [&dialog.folder, &dialog.new_branch].map(|input| input.focus_handle(cx))
+        });
+        cx.update_window(window, |_, window, _| {
+            assert!(!inputs.iter().any(|input| input.is_focused(window)))
+        })
+        .unwrap();
+        press(window, &["enter"], cx);
+        assert_eq!(adds.0.borrow().len(), 1);
+        assert!(!cx.did_prompt_for_paths());
+        assert!(!dialog.read_with(cx, |dialog, _| dialog.is_open()));
+        assert!(!has_dialog(window, cx));
+    }
+
+    #[gpui_kit::test]
+    fn browses_on_enter_on_browse(cx: &mut TestAppContext) {
+        let adds = Rc::new(Adds::default());
+        let (_dir, window, dialog) = render(cx, &adds);
+        open(window, &dialog, "refs/heads/topic", cx);
+        press(window, &["tab", "tab", "enter"], cx);
+        assert!(cx.did_prompt_for_paths());
+        assert!(adds.0.borrow().is_empty());
+        assert!(dialog.read_with(cx, |dialog, _| dialog.is_open()));
+    }
+
+    #[gpui_kit::test]
+    fn closes_only_itself_on_enter(cx: &mut TestAppContext) {
+        let adds = Rc::new(Adds::default());
+        let (_dir, window, dialog) = render(cx, &adds);
+        cx.update_window(window, |_, window, cx| {
+            window.open_dialog(cx, |dialog, _, _| dialog)
+        })
+        .unwrap();
+        open(window, &dialog, "refs/heads/topic", cx);
+        press(window, &["enter"], cx);
+        assert_eq!(adds.0.borrow().len(), 1);
+        assert!(!dialog.read_with(cx, |dialog, _| dialog.is_open()));
+        // The one under it is still open.
+        assert!(has_dialog(window, cx));
     }
 
     #[gpui_kit::test]
