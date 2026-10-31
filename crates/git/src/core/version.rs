@@ -11,7 +11,7 @@ use futures::future::{BoxFuture, FutureExt, Shared};
 use regex::Regex;
 
 use super::errors::{Error, Result};
-use super::runner::lock;
+use super::runner::{lock, no_console_window};
 use super::shell_path::git_path;
 use crate::schema::GitInstall;
 
@@ -79,12 +79,13 @@ pub(crate) fn parse_git_version(output: &str) -> Option<String> {
 
 /// Runs `git version`; resolves to its output, or `None` if git couldn't be run.
 async fn read_git_version() -> Option<String> {
-    let mut command = async_process::Command::new("git");
+    let mut command = std::process::Command::new("git");
     // The git that runs the commands (see `shell_path`).
     if let Some(path) = git_path().await {
         command.env("PATH", path);
     }
-    let output = command
+    no_console_window(&mut command);
+    let output = async_process::Command::from(command)
         .arg("version")
         .env("LC_ALL", "C")
         .stdin(Stdio::null())

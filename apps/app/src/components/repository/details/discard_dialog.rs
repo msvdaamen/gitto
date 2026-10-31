@@ -113,8 +113,8 @@ impl DiscardPrompt {
 
 /// Asks before discarding changes, which are lost: the ones `prompt` says, read again whenever
 /// the dialog is drawn, so it asks about them as they are now (a file staged in a terminal
-/// meanwhile, say); still named once they're gone, as the dialog closes. Escape, a click outside,
-/// or Cancel runs `on_cancel`; Discard runs `on_discard` with the changes asked about.
+/// meanwhile, say); still named once they're gone, as the dialog closes. Escape, Enter, a click
+/// outside, or Cancel runs `on_cancel`; Discard runs `on_discard` with the changes asked about.
 pub fn open_discard_dialog(
     prompt: impl Fn(&App) -> Option<DiscardPrompt> + 'static,
     on_cancel: impl Fn(&mut Window, &mut App) + 'static,
@@ -162,10 +162,16 @@ pub fn open_discard_dialog(
                         }
                     }),
             );
+        let on_ok = Rc::clone(&on_cancel);
         let on_cancel = Rc::clone(&on_cancel);
         dialog
             .w(CONFIRM_WIDTH.to_pixels(window.rem_size()))
             .close_button(false)
+            // Kit's dialog takes Enter as OK: it cancels, as Escape does.
+            .on_ok(move |_, window, cx| {
+                on_ok(window, cx);
+                true
+            })
             .on_cancel(move |_, window, cx| {
                 on_cancel(window, cx);
                 true
@@ -180,7 +186,21 @@ pub fn open_discard_dialog(
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{Context, IntoElement, Render, TestAppContext};
+
     use super::*;
+    use crate::test_support;
+
+    struct Host;
+
+    impl Render for Host {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
 
     fn file(path: &str, status: FileStatus, orig_path: Option<&str>) -> ChangedFile {
         ChangedFile {
@@ -206,6 +226,34 @@ mod tests {
             file,
             also_staged: false,
         }
+    }
+
+    #[gpui_kit::test]
+    fn cancels_on_enter(cx: &mut TestAppContext) {
+        let _dir = test_support::init(cx, |services| services);
+        let (window, _) = test_support::open(cx, |_, _| Host);
+        let (cancelled, discarded) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+        cx.update_window(window, |_, window, cx| {
+            let (cancelled, discarded) = (Rc::clone(&cancelled), Rc::clone(&discarded));
+            open_discard_dialog(
+                |_| Some(DiscardPrompt::All),
+                move |_, _| cancelled.set(cancelled.get() + 1),
+                move |_, _, _| discarded.set(discarded.get() + 1),
+                window,
+                cx,
+            );
+        })
+        .unwrap();
+        cx.run_until_parked();
+
+        cx.update_window(window, |_, window, cx| window.press("enter", cx))
+            .unwrap();
+        cx.run_until_parked();
+        assert!(
+            !cx.update_window(window, |_, window, cx| window.has_active_dialog(cx))
+                .unwrap()
+        );
+        assert_eq!((cancelled.get(), discarded.get()), (1, 0));
     }
 
     #[test]

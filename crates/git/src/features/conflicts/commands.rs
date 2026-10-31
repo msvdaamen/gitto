@@ -127,8 +127,10 @@ pub async fn keep_side(
     side: Side,
     shown: &ShownConflict,
 ) -> Result<()> {
-    let path = path.as_str();
-    repo.exclusive(|run| async move {
+    // Owned, as the write runs on its own (see `Repo::exclusive`).
+    let (owned, path, shown) = (repo.clone(), path.clone(), shown.clone());
+    repo.exclusive(move |run| async move {
+        let (repo, path) = (&owned, path.as_str());
         let sides = read_sides(&run, path).await?;
         if sides != shown.sides {
             return Err(Error::ConflictChanged {
@@ -207,15 +209,17 @@ pub async fn mark_resolved(
     version: Option<&ContentVersion>,
     with_markers: bool,
 ) -> Result<()> {
-    let shown = path;
-    let path = path.as_str();
-    repo.exclusive(|run| async move {
+    // Owned, as the write runs on its own (see `Repo::exclusive`).
+    let (owned, shown, version) = (repo.clone(), path.clone(), version.cloned());
+    repo.exclusive(move |run| async move {
+        let (repo, shown) = (&owned, &shown);
+        let path = shown.as_str();
         let sides = read_sides(&run, path).await?;
         if sides.base.is_none() && sides.ours.is_none() && sides.theirs.is_none() {
             return Ok(());
         }
         if let Some(version) = version {
-            check_version(repo, path, &FileVersion::Content(version.to_owned())).await?;
+            check_version(repo, path, &FileVersion::Content(version)).await?;
         }
         if !with_markers {
             refuse_conflict_markers(repo, &run, Some(std::slice::from_ref(shown))).await?;
