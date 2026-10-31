@@ -651,6 +651,7 @@ fn says_which_other_worktree_a_branch_is_checked_out_in() {
 
 #[test]
 fn says_when_a_stash_was_made() {
+    gitto_ui_logic::format::tell_relative_times_in("en");
     let now = 10 * 60 * 1000;
     let made = stash('a', "On main: try", now - 3 * 60 * 1000);
     assert_eq!(
