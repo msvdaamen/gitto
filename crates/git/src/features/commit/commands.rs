@@ -142,6 +142,7 @@ pub async fn get_pushed_to(repo: &Repo, sha: &Sha) -> Result<Option<String>> {
 mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::pin::pin;
 
     use super::*;
     use crate::core::errors::GitErrorKind;
@@ -267,7 +268,9 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("empty").await.unwrap();
             let (amended_message, amended) = (message("Amended first"), head(&path));
-            let amending = create_commit(&repo, &amended_message, Some(&amended));
+            let mut amending = pin!(create_commit(&repo, &amended_message, Some(&amended)));
+            // Polled once, which takes its place in line, before the other is asked for.
+            assert!(futures::poll!(amending.as_mut()).is_pending());
             let other = repo.write(["commit", "-q", "--allow-empty", "-m", "Queued after"]);
             let (amended, committed) = futures::join!(amending, other);
             amended.unwrap();
