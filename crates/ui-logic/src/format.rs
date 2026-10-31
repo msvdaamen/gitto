@@ -18,16 +18,16 @@ pub fn initials(name: &str) -> String {
 pub const AVATAR_COLORS: [u32; 6] = [0x7c5ce7, 0x38bda9, 0xa978dd, 0xe2a646, 0x5b9be6, 0xe0707a];
 
 /// An avatar colour, as `0xRRGGBB`, picked by `key` (e.g. an email address), whatever its case,
-/// the same one every time: by the 32-bit FNV-1a hash of its lowercase UTF-8.
+/// the same one every time, and the one the Electron app picked: by TS's hash of its lowercase
+/// text, `hash * 31 + c` over each character's first UTF-16 unit, in 32 bits.
 pub fn avatar_color(key: &str) -> u32 {
-    let mut hash: u32 = 0x811c_9dc5;
-    let mut utf8 = [0; 4];
-    for c in key.chars().flat_map(char::to_lowercase) {
-        for byte in c.encode_utf8(&mut utf8).bytes() {
-            hash = (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193);
-        }
+    let mut hash: i32 = 0;
+    let mut utf16 = [0; 2];
+    for c in key.to_lowercase().chars() {
+        let unit = c.encode_utf16(&mut utf16)[0];
+        hash = hash.wrapping_mul(31).wrapping_add(i32::from(unit));
     }
-    AVATAR_COLORS[hash as usize % AVATAR_COLORS.len()]
+    AVATAR_COLORS[hash.unsigned_abs() as usize % AVATAR_COLORS.len()]
 }
 
 const MINUTE: i64 = 60 * 1000;
@@ -196,17 +196,23 @@ mod tests {
     }
 
     #[test]
-    fn picks_avatar_colors_by_the_fnv_1a_hash_of_the_lowercase_key() {
-        // FNV-1a: "" hashes to 0x811c9dc5, "a" to 0xe40c292c.
-        assert_eq!(avatar_color(""), AVATAR_COLORS[0x811c_9dc5 % 6]);
-        assert_eq!(avatar_color("A"), AVATAR_COLORS[0xe40c_292c % 6]);
-        assert_eq!(
-            avatar_color("ada@example.com"),
-            avatar_color("Ada@Example.com")
-        );
-        assert_eq!(
-            avatar_color("ÉMILE@example.com"),
-            avatar_color("émile@example.com")
-        );
+    fn picks_avatar_colors_as_ts_did() {
+        // What TS's `avatarColor` picked.
+        for (key, color) in [
+            ("", 0x7c5ce7),
+            ("a", 0x38bda9),
+            ("ada@example.com", 0xe2a646),
+            ("Ada@Example.com", 0xe2a646),
+            ("ÉMILE@example.com", 0xe0707a),
+            ("linus@kernel.org", 0x5b9be6),
+            ("🦀rust@example.com", 0xe0707a),
+            ("ΟΔΟΣ", 0x7c5ce7),
+            (
+                "a-very-long-email-address-to-overflow@example.com",
+                0xe2a646,
+            ),
+        ] {
+            assert_eq!(avatar_color(key), color, "{key}");
+        }
     }
 }
