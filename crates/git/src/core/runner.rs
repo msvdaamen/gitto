@@ -534,6 +534,42 @@ async fn read_output(
     output
 }
 
+/// The most of git's stderr that's kept: what's at its end, where git says why it failed. A
+/// command can warn of each of many files, like `add` of their line endings, which a message
+/// needn't hold all of.
+const MAX_STDERR: usize = 64 * 1024;
+
+/// Reads `pipe` (git's stderr) to its end, or until it fails, keeping the last `MAX_STDERR` bytes
+/// of it, from the start of a line, after a line that says the rest was cut.
+async fn read_stderr(pipe: &mut (impl futures_lite::AsyncRead + Unpin)) -> Output {
+    let mut output = Output::default();
+    let mut cut = false;
+    let mut buffer = vec![0; 64 * 1024];
+    loop {
+        match pipe.read(&mut buffer).await {
+            Ok(0) => break,
+            Ok(read) => output.bytes.extend_from_slice(&buffer[..read]),
+            Err(error) => {
+                output.failed = Some(error);
+                break;
+            }
+        }
+        // Cut once it's twice what's kept, so it isn't moved for every read.
+        if output.bytes.len() > 2 * MAX_STDERR {
+            output.bytes.drain(..output.bytes.len() - MAX_STDERR);
+            cut = true;
+        }
+    }
+    if cut || output.bytes.len() > MAX_STDERR {
+        let from = output.bytes.len().saturating_sub(MAX_STDERR);
+        let line = memchr::memchr(b'\n', &output.bytes[from..]).map_or(from, |at| from + at + 1);
+        let mut kept = b"(What git printed before this was cut.)\n".to_vec();
+        kept.extend_from_slice(&output.bytes[line..]);
+        output.bytes = kept;
+    }
+    output
+}
+
 /// `git` with `args`, to run in `cwd` with `options`, in a session of its own (see
 /// `run_git_bytes`), and with the PATH `path`, if it's not Gitto's own (see `shell_path`).
 fn git_command(
@@ -678,15 +714,12 @@ async fn run(cwd: PathBuf, args: Vec<OsString>, options: RunOptions) -> Result<V
         output
     };
     let read_stderr = async {
-        let mut err = Vec::new();
-        let mut failed = None;
-        if let Some(pipe) = stderr.as_mut()
-            && let Err(error) = pipe.read_to_end(&mut err).await
-        {
-            failed = Some(error);
-        }
+        let output = match stderr.as_mut() {
+            Some(pipe) => read_stderr(pipe).await,
+            None => Output::default(),
+        };
         drop(stderr.take());
-        (err, failed)
+        (output.bytes, output.failed)
     };
     let ((), output, (err, stderr_failed)) = futures::join!(write_stdin, read_stdout, read_stderr);
     let Output {
@@ -958,6 +991,27 @@ mod tests {
         let error = smol::block_on(run_git(&path, ["status"], RunOptions::default())).unwrap_err();
         assert!(matches!(error, Error::FolderNotFound { .. }), "{error:?}");
         assert!(!error.api().is_bug());
+    }
+
+    #[test]
+    fn keeps_the_end_of_a_long_stderr() {
+        let lines: String = (0..20_000)
+            .map(|i| format!("warning: line {i}\n"))
+            .collect();
+        let mut pipe = futures_lite::io::Cursor::new(lines.as_bytes());
+        let output = smol::block_on(read_stderr(&mut pipe));
+        let kept = String::from_utf8(output.bytes).unwrap();
+        assert!(kept.len() <= MAX_STDERR + 100, "{}", kept.len());
+        assert!(
+            kept.starts_with("(What git printed before this was cut.)\nwarning: line "),
+            "{}",
+            &kept[..60]
+        );
+        assert!(kept.ends_with("warning: line 19999\n"));
+
+        let mut pipe = futures_lite::io::Cursor::new(b"fatal: short\n");
+        let output = smol::block_on(read_stderr(&mut pipe));
+        assert_eq!(output.bytes, b"fatal: short\n");
     }
 
     #[test]
