@@ -183,6 +183,8 @@ pub struct HistoryTable {
     /// Whether the keyboard moved the selection last, rather than the pointer: the selected row
     /// is outlined then, while the list has the focus.
     keyboard: bool,
+    /// Under a file on show (TS's `inert`): the keyboard doesn't move its selection.
+    inert: bool,
     scroll: UniformListScrollHandle,
     /// Scrolls the table sideways when its pane is narrower than the table's least width.
     sideways: ScrollHandle,
@@ -267,6 +269,7 @@ impl HistoryTable {
             asked_for_more: 0,
             focus: cx.focus_handle(),
             keyboard: false,
+            inert: false,
             scroll: UniformListScrollHandle::new(),
             sideways: ScrollHandle::new(),
             viewport: Rc::new(Cell::new(Pixels::ZERO)),
@@ -322,6 +325,14 @@ impl HistoryTable {
             self.needle = search_needle(&search);
             self.search = search;
             self.sync(cx);
+            cx.notify();
+        }
+    }
+
+    /// Leaves the keyboard alone while it's under a file on show, or takes it again.
+    pub fn set_inert(&mut self, inert: bool, cx: &mut Context<Self>) {
+        if self.inert != inert {
+            self.inert = inert;
             cx.notify();
         }
     }
@@ -1073,13 +1084,15 @@ impl Render for HistoryTable {
                                             .test_support()
                                             .aria_label("Commit history")
                                             .track_focus(&self.focus)
-                                            .key_context(KEY_CONTEXT)
-                                            .on_action(cx.listener(Self::select_up))
-                                            .on_action(cx.listener(Self::select_down))
-                                            .on_action(cx.listener(Self::select_page_up))
-                                            .on_action(cx.listener(Self::select_page_down))
-                                            .on_action(cx.listener(Self::select_first))
-                                            .on_action(cx.listener(Self::select_last))
+                                            .when(!self.inert, |list| {
+                                                list.key_context(KEY_CONTEXT)
+                                                    .on_action(cx.listener(Self::select_up))
+                                                    .on_action(cx.listener(Self::select_down))
+                                                    .on_action(cx.listener(Self::select_page_up))
+                                                    .on_action(cx.listener(Self::select_page_down))
+                                                    .on_action(cx.listener(Self::select_first))
+                                                    .on_action(cx.listener(Self::select_last))
+                                            })
                                             .relative()
                                             .flex_1()
                                             .min_h_0()

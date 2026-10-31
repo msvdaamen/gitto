@@ -8,8 +8,8 @@ use gitto_ui_logic::git::rows::RowId;
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    Context, DragMoveEvent, Entity, SharedString, Subscription, Task, WeakEntity, Window, div, px,
-    rems,
+    Context, DragMoveEvent, Entity, Focusable as _, SharedString, Subscription, Task, WeakEntity,
+    Window, div, px, rems,
 };
 
 use crate::components::repository::BeforeChange;
@@ -335,6 +335,8 @@ impl RepositoryView {
             return;
         }
         self.repository_id = id.clone();
+        // A file asked for in the other one isn't opened in this one.
+        self.pending = None;
         self.watcher = Self::watch(&id, &self.streams, window, cx);
         let (toolbar, toolbar_events) = Self::toolbar(&id, window, cx);
         let (sidebar, details) = (self.sidebar_open, self.details_open);
@@ -414,6 +416,16 @@ impl RepositoryView {
         if self.open_file.is_some() && self.shown_file(cx).is_none() {
             self.open_file = None;
         }
+        // Under the file on show, the history doesn't take the keyboard, nor keep the focus.
+        let shown_view = self.shown_file(cx).map(|open| open.view.clone());
+        self.history.update(cx, |history, cx| {
+            history.set_inert(shown_view.is_some(), cx)
+        });
+        if let Some(view) = shown_view
+            && self.history.focus_handle(cx).contains_focused(window, cx)
+        {
+            view.focus_handle(cx).focus(window, cx);
+        }
         let shown = self
             .shown_file(cx)
             .map(|open| (open.source.clone(), open.file.path.clone()));
@@ -457,13 +469,17 @@ impl RepositoryView {
         if same {
             return;
         }
+        let repository_id = self.repository_id.clone();
         let leave = self.may_leave_file(cx);
         self.pending = Some(cx.spawn_in(window, async move |this, cx| {
             if !leave.await {
                 return;
             }
             let _ = this.update_in(cx, |this, window, cx| {
-                let repository_id = this.repository_id.clone();
+                // The row and the file are of the repository it was asked in.
+                if this.repository_id != repository_id {
+                    return;
+                }
                 // The view on show takes the other file: the last one stays on show until the
                 // next one's changes are in.
                 if let Some(open) = this.open_file.as_mut()
@@ -532,13 +548,17 @@ impl RepositoryView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let repository_id = self.repository_id.clone();
         let leave = self.may_leave_file(cx);
         self.pending = Some(cx.spawn_in(window, async move |this, cx| {
             if !leave.await {
                 return;
             }
             let _ = this.update_in(cx, |this, window, cx| {
-                this.resolving = Some((this.repository_id.clone(), file));
+                if this.repository_id != repository_id {
+                    return;
+                }
+                this.resolving = Some((repository_id, file));
                 this.select(RowId::Wip, window, cx);
             });
         }));
@@ -829,6 +849,13 @@ mod tests {
             .borrow_mut()
             .push(repository(&id, "/work/repo"));
         let dir = setup_with(cx, repositories);
+        seed(&id, cx);
+        (dir, id)
+    }
+
+    /// What [`loaded`] gives the repository `id`.
+    fn seed(id: &RepositoryId, cx: &mut TestAppContext) {
+        let id = id.clone();
         set_status(
             &id,
             uncommitted(Head::Branch {
@@ -875,7 +902,6 @@ mod tests {
             };
             set_patch(&id, &source, patch, cx);
         }
-        (dir, id)
     }
 
     /// The page of the repository [`loaded`].
@@ -981,5 +1007,44 @@ mod tests {
         assert_eq!(page.shown_file(cx), None);
         page.click(keyed("commit", "b1"), cx);
         assert_eq!(page.details(cx), Some(commit_id("b1")));
+    }
+
+    #[gpui_kit::test]
+    fn leaves_the_keyboard_to_a_file_over_the_history(cx: &mut TestAppContext) {
+        let page = render(cx);
+        page.click(keyed("commit", "a1"), cx);
+        page.click("file:first.txt", cx);
+        assert!(page.shown_file(cx).is_some());
+
+        // Even with the focus in the history, the arrows don't move its selection.
+        let history = page
+            .view
+            .read_with(cx, |view, cx| view.history.focus_handle(cx));
+        cx.update_window(page.window, |_, window, cx| {
+            history.focus(window, cx);
+            window.press("up", cx);
+        })
+        .unwrap();
+        settle(cx);
+        assert_eq!(page.selected(cx), Some(commit_id("a1")));
+        assert!(page.shown_file(cx).is_some());
+    }
+
+    #[gpui_kit::test]
+    fn doesnt_open_a_file_asked_for_in_another_repository(cx: &mut TestAppContext) {
+        let page = render(cx);
+        let other = repository_id();
+        seed(&other, cx);
+        let view = page.view.clone();
+        cx.update_window(page.window, |_, window, cx| {
+            view.update(cx, |view, cx| {
+                let source = DiffSource::Commit { sha: "b1".into() };
+                view.open_file_of(commit_id("b1"), source, added("second.txt"), window, cx);
+                view.set_repository(other, window, cx);
+            })
+        })
+        .unwrap();
+        settle(cx);
+        assert!(page.view.read_with(cx, |view, _| view.open_file.is_none()));
     }
 }
