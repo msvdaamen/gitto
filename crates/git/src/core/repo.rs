@@ -15,6 +15,7 @@ use std::time::Duration;
 use futures::future::BoxFuture;
 
 use super::errors::{Error, Result};
+use super::git_dirs::real_path;
 use super::runner::{
     CommitGraphs, IndexRefreshes, RunOptions, ShownStatuses, WriteQueue, lock, network_options,
     os_args, run_git_bytes,
@@ -54,7 +55,9 @@ pub struct GitRepos {
 struct GitReposInner {
     lookup: Box<dyn RepositoryLookup>,
     shared: Arc<Shared>,
-    /// Each repository, by its path: the same path is the same repository, whatever its id.
+    /// Each repository, by its folder's real path (see `real_path`): the same folder is the same
+    /// repository, whatever its id, or however its path is written (`C:\Repo` or `c:\repo\`, a
+    /// symlink to it), so its writes are all in one line.
     repos: Mutex<HashMap<PathBuf, Repo>>,
 }
 
@@ -86,8 +89,7 @@ impl GitRepos {
                 repository_id: repository_id.to_owned(),
             });
         };
-        // Checked up front: git can't start in a missing folder, and spawning it reports that as
-        // it does a missing git binary.
+        // Checked up front: git can't start in a missing folder.
         let is_folder = async_fs::metadata(&path)
             .await
             .is_ok_and(|metadata| metadata.is_dir());
@@ -96,8 +98,11 @@ impl GitRepos {
                 path: path.display().to_string(),
             });
         }
+        // As it's written if the file system can't say, as a few network drives on Windows can't.
+        let real = real_path(&path).await.unwrap_or_else(|_| path.clone());
         let mut repos = lock(&self.inner.repos);
-        let repo = repos.entry(path.clone()).or_insert_with(|| Repo {
+        // Run in the folder as the first id to open it has it.
+        let repo = repos.entry(real).or_insert_with(|| Repo {
             inner: Arc::new(RepoInner {
                 path,
                 shared: Arc::clone(&self.inner.shared),
@@ -1002,6 +1007,23 @@ mod tests {
             );
             // The same repository, as far as what's kept for it goes.
             assert!(repo.sorts_log());
+        });
+    }
+
+    #[test]
+    fn opens_one_repository_for_each_folder_however_its_path_is_written() {
+        let fx = Fixture::new();
+        let path = fx.create_repo("written");
+        let mut trailing = path.clone().into_os_string();
+        trailing.push(std::path::MAIN_SEPARATOR_STR);
+        fx.add_path("trailing", trailing);
+        fx.add_path("dotted", path.join("."));
+        smol::block_on(async {
+            let repo = fx.repos.open("written").await.unwrap();
+            for id in ["trailing", "dotted"] {
+                let other = fx.repos.open(id).await.unwrap();
+                assert!(Arc::ptr_eq(&repo.inner, &other.inner), "{id}");
+            }
         });
     }
 
