@@ -2,6 +2,7 @@
 name = "gitto-repository"
 version = "0.1.0"
 edition.workspace = true
+rust-version.workspace = true
 description = "Gitto's list of repositories: the ones added to it, in the order of their tabs."
 publish = false
 
