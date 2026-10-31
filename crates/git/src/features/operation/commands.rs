@@ -469,6 +469,32 @@ mod tests {
     // a merge
 
     #[test]
+    fn rebase_state_tells_a_rebase_from_git_am() {
+        let fx = Fixture::new();
+        let path = fx.create_repo("rebase-state");
+        let git_dir = path.join(".git");
+        smol::block_on(async {
+            assert_eq!(rebase_state(&git_dir).await, RebaseState::default());
+            fs::create_dir(git_dir.join("rebase-apply")).unwrap();
+            assert_eq!(
+                rebase_state(&git_dir).await,
+                RebaseState {
+                    rebasing: true,
+                    applying: false
+                }
+            );
+            fs::write(git_dir.join("rebase-apply").join("applying"), "").unwrap();
+            assert_eq!(
+                rebase_state(&git_dir).await,
+                RebaseState {
+                    rebasing: false,
+                    applying: true
+                }
+            );
+        });
+    }
+
+    #[test]
     fn a_merge_is_under_way_once_it_stops_at_conflicts_and_continues_once_theyre_resolved() {
         let fx = Fixture::new();
         let path = fx.create_merge_conflict("op-merge", None, &text_conflict());
@@ -955,32 +981,6 @@ mod tests {
         assert_eq!(steps(None, Some("2")), None);
         assert_eq!(steps(Some(""), Some("2")), None);
         assert_eq!(steps(Some("1"), None), None);
-    }
-
-    #[test]
-    fn rebase_state_tells_a_rebase_from_git_am() {
-        let fx = Fixture::new();
-        let path = fx.create_repo("rebase-state");
-        let git_dir = path.join(".git");
-        smol::block_on(async {
-            assert_eq!(rebase_state(&git_dir).await, RebaseState::default());
-            fs::create_dir(git_dir.join("rebase-apply")).unwrap();
-            assert_eq!(
-                rebase_state(&git_dir).await,
-                RebaseState {
-                    rebasing: true,
-                    applying: false
-                }
-            );
-            fs::write(git_dir.join("rebase-apply").join("applying"), "").unwrap();
-            assert_eq!(
-                rebase_state(&git_dir).await,
-                RebaseState {
-                    rebasing: false,
-                    applying: true
-                }
-            );
-        });
     }
 
     #[test]
