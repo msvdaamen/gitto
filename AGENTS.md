@@ -81,9 +81,9 @@ Building the app on Linux takes libxkbcommon, Wayland and fontconfig's headers
 (`libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libfontconfig-dev`). To run it headless,
 start a display with `Xvfb :99 -screen 0 1400x900x24 &`, and run `cargo run -p app` with
 `DISPLAY=:99` and `GITTO_USER_DATA_DIR` set to a folder of its own. There's no folder picker
-without a desktop portal, so add repositories as rows of that folder's `gitto.db` (`repositories`:
-a UUIDv7 `id`, `name`, `path` and `position`), e.g. one `.claude/skills/run-app/make-demo-repo.sh`
-made. Screenshot with `import -window root shot.png` and drive it with `xdotool`. Software
+without a desktop portal, so add repositories as rows of that folder's `gitto-app.db`
+(`repositories`: a UUIDv7 `id`, `name`, `path` and `position`), e.g. one
+`.claude/skills/run-app/make-demo-repo.sh` made. Screenshot with `import -window root shot.png` and drive it with `xdotool`. Software
 rendering needs Mesa's Vulkan driver (lavapipe).
 
 Porting a TS file: keep its behavior, including error messages, and the reasoning in its doc
