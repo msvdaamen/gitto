@@ -13,7 +13,9 @@ use gitto_ui::git::conflicts::{ConflictKind, conflict_kind, describe_conflict};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{Disableable as _, Sizable as _, v_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, App, Context, Entity, EventEmitter, Subscription, Task, Window, div};
+use gpui_kit::{
+    AnyElement, App, Context, Entity, EventEmitter, FontWeight, Subscription, Task, Window, div,
+};
 
 use super::conflict_sides::ConflictSides;
 use super::conflict_viewer::{
@@ -22,14 +24,16 @@ use super::conflict_viewer::{
 use super::file_diff_view::{FileDiffEvent, FileDiffView};
 use super::file_editing::{EditSession, FileIo, Overwrite, SaveRequest};
 use super::markers_dialog::open_markers_dialog;
-use crate::components::ui::{EmptyState, IconButton, IconName, LoadingState, Notice};
+use crate::components::ui::{
+    EmptyState, IconButton, IconName, LoadingState, Notice, action_button,
+};
 use crate::data::conflicts::{
     ConflictResolution, FileToResolve, conflict_query, conflict_query_options,
     resolve_file_mutation,
 };
 use crate::data::{Mutation, Query, QueryError, keys};
-use crate::git::diff_source::DiffSource;
 use crate::theme::PaletteExt as _;
+use gitto_ui::git::diff_source::{DiffFileKey, DiffSource};
 
 /// Resolves a conflicted file whole: keeps a side, or marks it resolved.
 pub type ResolveFileMutation = Entity<Mutation<FileToResolve>>;
@@ -39,9 +43,9 @@ pub type ResolveFileMutation = Entity<Mutation<FileToResolve>>;
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolutionFile {
     pub repository_id: RepositoryId,
-    /// The file on show, and its key (see `DiffSource::file_key`).
+    /// The file on show, and its key.
     pub file: ChangedFile,
-    pub file_key: String,
+    pub file_key: DiffFileKey,
     /// Whether it's resolved here: a conflicted file's unstaged changes.
     pub active: bool,
     /// Whether its conflicts are what the view shows.
@@ -100,7 +104,7 @@ pub struct ConflictResolutionView {
     /// The viewer's progress, of the file it says.
     progress: Option<ConflictProgress>,
     /// Why the last thing done to the conflict failed, and of which file (its key).
-    error: Option<(String, String)>,
+    error: Option<(DiffFileKey, String)>,
     resolving: bool,
     resolve: ResolveFileMutation,
     /// What the view reads and writes the working tree with (see `FileEditing::io`).
@@ -307,7 +311,7 @@ impl ConflictResolutionView {
     /// one's conflicts are being highlighted.
     pub fn shown_progress(&self) -> Option<&ConflictProgress> {
         let progress = self.progress.as_ref()?;
-        (self.is_text() && progress.file_key.as_deref() == Some(self.file.file_key.as_str()))
+        (self.is_text() && progress.file_key.as_ref() == Some(&self.file.file_key))
             .then_some(progress)
     }
 
@@ -593,8 +597,7 @@ impl ConflictResolutionView {
                 div()
                     .ml_1()
                     .child(
-                        Button::new("mark-resolved")
-                            .small()
+                        action_button("mark-resolved")
                             .when(ready, |button| button.primary())
                             .icon(crate::components::ui::Icon::new(IconName::Check))
                             .label("Mark resolved")
@@ -644,6 +647,7 @@ impl ConflictResolutionView {
                         Button::new("keep-all-ours")
                             .ghost()
                             .small()
+                            .font_weight(FontWeight::SEMIBOLD)
                             .label("Keep all of ours")
                             .disabled(busy)
                             .on_click(move |_, _, cx| {
@@ -655,6 +659,7 @@ impl ConflictResolutionView {
                         Button::new("keep-all-theirs")
                             .ghost()
                             .small()
+                            .font_weight(FontWeight::SEMIBOLD)
                             .label("Keep all of theirs")
                             .disabled(busy)
                             .on_click(move |_, _, cx| {
@@ -1010,7 +1015,7 @@ mod tests {
         resolution.update(cx, |resolution, cx| {
             resolution.on_viewer(
                 &ConflictViewerEvent::Progress(ConflictProgress {
-                    file_key: Some(DiffSource::Unstaged.file_key("b.txt")),
+                    file_key: Some(DiffFileKey::new(&DiffSource::Unstaged, "b.txt")),
                     left: 0,
                     current: None,
                     saving: false,

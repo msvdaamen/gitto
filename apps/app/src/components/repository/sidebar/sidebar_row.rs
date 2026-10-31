@@ -13,7 +13,7 @@ use gpui_kit::{
     anchored, deferred, div, px,
 };
 
-use crate::components::ui::{Icon, IconName};
+use crate::components::ui::{Icon, IconName, menu_frame};
 use crate::theme::{PaletteExt as _, base_px};
 
 /// Space below every row in a section.
@@ -371,7 +371,7 @@ impl RenderOnce for SidebarRow {
             });
         match self.menu {
             Some(menu) => row
-                .context_menu(move |popup, window, cx| menu(popup, window, cx))
+                .context_menu(move |popup, window, cx| menu(menu_frame(popup), window, cx))
                 .into_any_element(),
             None => row.into_any_element(),
         }

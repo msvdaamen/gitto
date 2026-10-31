@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use gpui_kit::prelude::*;
-use gpui_kit::{Div, ElementId, Hsla, Rems, Rgba, SharedString, rems};
+use gpui_kit::{Div, ElementId, Hsla, Rems, SharedString, rems};
 
 use crate::theme::base_px;
 
@@ -53,6 +53,9 @@ pub enum Column {
     Date,
 }
 
+/// The table's least width, less the graph's: the other columns' (445px).
+pub const MIN_WIDTH: Rems = base_px(445.);
+
 /// The date column's width (100px).
 const DATE_WIDTH: Rems = base_px(100.);
 
@@ -95,34 +98,14 @@ pub fn tinted(color: Hsla, alpha: f32) -> Hsla {
     }
 }
 
-/// `color-mix(in srgb, color share%, other)`: the two mixed channel by channel in sRGB, as the
-/// TS's borders mixed a lane's colour into the border's.
-pub fn mixed(color: Hsla, share: f32, other: Hsla) -> Hsla {
-    let a = Rgba::from(color);
-    let b = Rgba::from(other);
-    let mix = |x: f32, y: f32| x * share + y * (1. - share);
-    Rgba {
-        r: mix(a.r, b.r),
-        g: mix(a.g, b.g),
-        b: mix(a.b, b.b),
-        a: mix(a.a, b.a),
-    }
-    .into()
-}
-
 #[cfg(test)]
 mod tests {
-    use gpui_kit::{hsla, rgb};
+    use gpui_kit::hsla;
 
     use super::*;
 
     #[test]
-    fn mixes_colors_channel_by_channel() {
-        let red: Hsla = rgb(0xff0000).into();
-        let blue: Hsla = rgb(0x0000ff).into();
-        let half = Rgba::from(mixed(red, 0.5, blue));
-        assert!((half.r - 0.5).abs() < 0.01 && (half.b - 0.5).abs() < 0.01);
-        assert_eq!(mixed(red, 1., blue), red);
+    fn tints_a_color() {
         assert_eq!(tinted(hsla(0.5, 0.5, 0.5, 1.), 0.16).a, 0.16);
     }
 }

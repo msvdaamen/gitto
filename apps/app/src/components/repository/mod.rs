@@ -5,8 +5,7 @@
 //! its events. When the page shows another repository, it makes the toolbar and the operation
 //! bar again, for that one, so nothing of the other's is left in them; the areas that keep their
 //! place (the sidebar, the history, the details, and the branch menus they share) are told
-//! (`set_repository`). The ones still to be built are **stubs** that render a placeholder, with
-//! their final interface.
+//! (`set_repository`).
 
 pub mod details;
 pub mod diff;

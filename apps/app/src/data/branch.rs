@@ -18,7 +18,7 @@ use super::client::{QueryClient, QueryError};
 use super::keys;
 use super::opaque::Opaque;
 use super::operation::{OneAtATime, OperationState, Operations, RepositoryOperation, reloading};
-use crate::git::status::{branch_name, is_checked_out};
+use gitto_ui::git::status::{branch_name, is_checked_out};
 
 const CREATE: &str = "branch";
 // The names of the changes of the branches the toolbar's current branch shows (see

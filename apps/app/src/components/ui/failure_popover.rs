@@ -10,7 +10,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::{Anchor, App, ElementId, FontWeight, SharedString, Window, div};
 
 use super::icons::{Icon, IconName};
-use crate::theme::PaletteExt as _;
+use crate::theme::{PaletteExt as _, mixed};
 
 type OnDismiss = Rc<dyn Fn(&mut Window, &mut App) + 'static>;
 
@@ -52,13 +52,18 @@ impl<T: Selectable + IntoElement + 'static> FailurePopover<T> {
 }
 
 impl<T: Selectable + IntoElement + 'static> RenderOnce for FailurePopover<T> {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let open = self.error.is_some();
         let message = self.error.unwrap_or_default();
         let title = self.title;
         let on_dismiss = self.on_dismiss;
         let dismiss = on_dismiss.clone();
+        // TS's border: the coral mixed into the border, 30% of it.
+        let palette = *cx.palette();
+        let border = mixed(palette.coral, 0.3, palette.border);
         Popover::new(self.id)
+            .border_1()
+            .border_color(border)
             .anchor(Anchor::TopLeft)
             .open(open)
             .on_open_change(move |open, window, cx| {

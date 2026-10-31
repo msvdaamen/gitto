@@ -24,7 +24,7 @@ use super::diff::{select_shown_files, working_tree_lists_query};
 use super::keys::{self, UncommittedSide};
 use super::opaque::Opaque;
 use super::query::Query;
-use crate::git::diff_source::DiffSource;
+use gitto_ui::git::diff_source::{DiffFileKey, DiffSource, is_uncommitted};
 
 /// The files whose changes a [`DiffSource`] has, to step through, kept up to date for uncommitted
 /// ones (`useDiffSourceFiles`). A view keeps one, made in its constructor, and tells it when the
@@ -49,7 +49,7 @@ impl DiffSourceFiles {
             select_shown_files(),
             cx,
         );
-        let working_tree = working_tree_lists_query(id, source.is_uncommitted(), cx);
+        let working_tree = working_tree_lists_query(id, is_uncommitted(&source), cx);
         DiffSourceFiles {
             source,
             commit,
@@ -70,7 +70,7 @@ impl DiffSourceFiles {
             .set_options(source_files_options(id, &source, FilesOf::Commit, cx), cx);
         self.stash
             .set_options(source_files_options(id, &source, FilesOf::Stash, cx), cx);
-        self.working_tree.set_enabled(source.is_uncommitted(), cx);
+        self.working_tree.set_enabled(is_uncommitted(&source), cx);
         self.source = source;
         cx.notify();
     }
@@ -111,7 +111,7 @@ impl DiffSourceFiles {
 
     /// The files' lines weren't counted, so one without line counts isn't known to be binary.
     pub fn uncounted(&self) -> bool {
-        self.source.is_uncommitted()
+        is_uncommitted(&self.source)
             && self
                 .working_tree
                 .data()
@@ -151,11 +151,10 @@ fn source_files_options(
     changed_files_options(id, sha, of, enabled, cx)
 }
 
-/// One file's patch in a source, with the file and its `DiffSource::file_key`, so what's shown can
-/// match.
+/// One file's patch in a source, with the file and its key, so what's shown can match.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FilePatch {
-    pub key: String,
+    pub key: DiffFileKey,
     pub file: ChangedFile,
     /// Shared: a patch can be megabytes, and it's read every time it's rendered.
     pub patch: Arc<str>,
@@ -211,7 +210,7 @@ pub fn file_patch_options(
                     DiffSource::Staged => get_staged_file_patch(&repo, &input).await?,
                 };
                 Ok(FilePatch {
-                    key: source.file_key(&file.path),
+                    key: DiffFileKey::new(&source, &file.path),
                     file,
                     patch: patch.into(),
                 })

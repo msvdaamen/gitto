@@ -11,8 +11,9 @@ publish = false
 name = "app"
 path = "src/lib.rs"
 
+# Named as the Electron app's on Linux, so the OS and its task bar call the process Gitto's.
 [[bin]]
-name = "app"
+name = "gitto"
 path = "src/main.rs"
 
 [dependencies]
@@ -29,6 +30,7 @@ gitto-ui.workspace = true
 anyhow.workspace = true
 async-fs.workspace = true
 futures.workspace = true
+image.workspace = true
 log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -37,6 +39,16 @@ thiserror.workspace = true
 similar.workspace = true
 syntect.workspace = true
 two-face.workspace = true
+
+# The Dock's icon, set as the app starts (see `identity.rs`).
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+objc2-app-kit.workspace = true
+objc2-foundation.workspace = true
+
+# The .exe's icon and the name Windows shows for it (see `build.rs`).
+[build-dependencies]
+winresource.workspace = true
 
 [dev-dependencies]
 gitto-git = { workspace = true, features = ["test-support"] }

@@ -21,15 +21,18 @@ use gitto_ui::git::status::head_label;
 use gpui_kit::base::actions::{
     SelectDown, SelectFirst, SelectLast, SelectPageDown, SelectPageUp, SelectUp,
 };
+use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, KeyBinding,
-    Pixels, Rems, Role, ScrollStrategy, SharedString, Subscription, Task, TestSupportExt as _,
-    UniformListScrollHandle, WeakEntity, Window, canvas, div,
+    Pixels, Rems, Role, ScrollHandle, ScrollStrategy, SharedString, Subscription, Task,
+    TestSupportExt as _, UniformListScrollHandle, WeakEntity, Window, canvas, div, rems,
 };
 
-use super::columns::{CELL_PADDING, Column, HEADER_HEIGHT, LABEL_TEXT, ROW_HEIGHT, SMALL_TEXT};
+use super::columns::{
+    CELL_PADDING, Column, HEADER_HEIGHT, LABEL_TEXT, MIN_WIDTH, ROW_HEIGHT, SMALL_TEXT,
+};
 use super::commit_menu::CommitMenu;
 use super::commit_row::{HistoryCommitRow, RowProps};
 use super::history_graph::graph_width;
@@ -46,10 +49,10 @@ use crate::data::branch::{BranchChange, switch_branch_operation};
 use crate::data::diff::{ChangedFiles, FilesOf, ShownFiles, changed_files_query};
 use crate::data::history::{GetLog, History, git_log};
 use crate::data::{Operations, Query};
-use crate::git::changes::LineCounts;
 use crate::state::clock::Clock;
 use crate::state::delayed::{DELAY, Delayed};
 use crate::theme::PaletteExt as _;
+use gitto_ui::git::changes::LineCounts;
 
 /// How many rows from the end of the history loaded so far the rows in view come before more is
 /// loaded: a few screenfuls, so it's usually there before it's scrolled to.
@@ -188,6 +191,8 @@ pub struct HistoryTable {
     /// is outlined then, while the list has the focus.
     keyboard: bool,
     scroll: UniformListScrollHandle,
+    /// Scrolls the table sideways when its pane is narrower than the table's least width.
+    sideways: ScrollHandle,
     /// The height of the list's view, as last laid out: what Page Up and Down move by.
     viewport: Rc<Cell<Pixels>>,
     _history_subscriptions: Vec<Subscription>,
@@ -288,12 +293,15 @@ impl HistoryTable {
             focus: cx.focus_handle(),
             keyboard: false,
             scroll: UniformListScrollHandle::new(),
+            sideways: ScrollHandle::new(),
             viewport: Rc::new(Cell::new(Pixels::ZERO)),
             _history_subscriptions: Vec::new(),
             _subscriptions: subscriptions,
         };
         table.watch_history(cx);
-        table.sync(cx);
+        // The row it falls back to isn't reported: nothing listens yet. Its owner reads it
+        // ([`selected`](Self::selected)) once it's made.
+        table.bring_up_to_date(cx);
         table
     }
 
@@ -431,15 +439,23 @@ impl HistoryTable {
         &self.scroll
     }
 
+    /// Brings what follows from the data and the selection up to date (see
+    /// [`bring_up_to_date`](Self::bring_up_to_date)), and reports the row it fell back to, if it
+    /// did, so the details show it too.
+    fn sync(&mut self, cx: &mut Context<Self>) {
+        if let Some(to) = self.bring_up_to_date(cx) {
+            cx.emit(HistoryEvent::Select(to));
+        }
+    }
+
     /// Brings what follows from the data and the selection up to date: the rows, those the search
     /// shows, falling back to the first row, the line totals' files, and what says the history
-    /// is loading.
-    fn sync(&mut self, cx: &mut Context<Self>) {
+    /// is loading. The row it fell back to, if it did: nothing was selected yet, or the selected
+    /// row is gone.
+    fn bring_up_to_date(&mut self, cx: &mut Context<Self>) -> Option<RowId> {
         self.lay_out();
         self.filter();
 
-        // Nothing selected yet, or the selected row is gone: report the row the table falls back
-        // to, so the details show it too.
         let fallback = self
             .selected()
             .filter(|row| {
@@ -447,10 +463,9 @@ impl HistoryTable {
                     && !self.selected_id.as_ref().is_some_and(|id| row.is(id))
             })
             .map(HistoryRow::id);
-        if let Some(to) = fallback {
+        if let Some(to) = &fallback {
             self.fell_back = Some((self.selected_id.clone(), to.clone()));
             self.selected_id = Some(to.clone());
-            cx.emit(HistoryEvent::Select(to));
         }
 
         self.sync_totals(cx);
@@ -462,6 +477,7 @@ impl HistoryTable {
         self.loading_more
             .update(cx, |loading, cx| loading.set(more_pending, cx));
         cx.notify();
+        fallback
     }
 
     /// Lays the rows out again, if what they're made of changed.
@@ -1033,41 +1049,69 @@ impl Render for HistoryTable {
         };
         let footer = self.render_footer(cx);
         let viewport = Rc::clone(&self.viewport);
+        // The table's least width: its other columns', plus the graph's. A narrower pane scrolls
+        // it sideways, header and all.
+        let min_width = rems(MIN_WIDTH.0 + graph.0);
         v_flex()
             .id("history")
             .size_full()
             .min_w_0()
             .min_h_0()
             .bg(palette.bg)
-            .child(self.render_header(graph, updating, cx))
             .child(
                 div()
-                    .id("history-list")
-                    .role(Role::ListBox)
-                    .test_support()
-                    .aria_label("Commit history")
-                    .track_focus(&self.focus)
-                    .key_context(KEY_CONTEXT)
-                    .on_action(cx.listener(Self::select_up))
-                    .on_action(cx.listener(Self::select_down))
-                    .on_action(cx.listener(Self::select_page_up))
-                    .on_action(cx.listener(Self::select_page_down))
-                    .on_action(cx.listener(Self::select_first))
-                    .on_action(cx.listener(Self::select_last))
                     .relative()
                     .flex_1()
                     .min_h_0()
                     .w_full()
-                    .child(body)
-                    // Measures the view, for Page Up and Down.
                     .child(
-                        canvas(
-                            move |bounds, _, _| viewport.set(bounds.size.height),
-                            |_, _, _, _| {},
-                        )
-                        .absolute()
-                        .size_full(),
-                    ),
+                        div()
+                            .id("history-sideways")
+                            .size_full()
+                            .overflow_x_scroll()
+                            // Not with the wheel's vertical turns, which scroll the rows.
+                            .restrict_scroll_to_axis()
+                            .track_scroll(&self.sideways)
+                            .child(
+                                v_flex()
+                                    .h_full()
+                                    .w_full()
+                                    .min_w(min_width)
+                                    .child(self.render_header(graph, updating, cx))
+                                    .child(
+                                        div()
+                                            .id("history-list")
+                                            .role(Role::ListBox)
+                                            .test_support()
+                                            .aria_label("Commit history")
+                                            .track_focus(&self.focus)
+                                            .key_context(KEY_CONTEXT)
+                                            .on_action(cx.listener(Self::select_up))
+                                            .on_action(cx.listener(Self::select_down))
+                                            .on_action(cx.listener(Self::select_page_up))
+                                            .on_action(cx.listener(Self::select_page_down))
+                                            .on_action(cx.listener(Self::select_first))
+                                            .on_action(cx.listener(Self::select_last))
+                                            .relative()
+                                            .flex_1()
+                                            .min_h_0()
+                                            .w_full()
+                                            .child(body)
+                                            // Measures the view, for Page Up and Down.
+                                            .child(
+                                                canvas(
+                                                    move |bounds, _, _| {
+                                                        viewport.set(bounds.size.height)
+                                                    },
+                                                    |_, _, _, _| {},
+                                                )
+                                                .absolute()
+                                                .size_full(),
+                                            ),
+                                    ),
+                            ),
+                    )
+                    .child(Scrollbar::horizontal(&self.sideways)),
             )
             .children(footer)
     }

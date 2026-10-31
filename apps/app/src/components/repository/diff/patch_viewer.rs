@@ -16,6 +16,7 @@ use gitto_ui::diff::viewer_rows::{
     ExpandDirection, Layout, LayoutOptions, LineAt, LineKind, Row, SeparatorButtons, Separators,
     expand, gap_size, layout,
 };
+use gitto_ui::git::diff_source::DiffFileKey;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex};
@@ -24,8 +25,8 @@ use gpui_kit::{
     AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, HighlightStyle, Hsla,
     ListHorizontalSizingBehavior, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels,
     ScrollStrategy, SharedString, Size, StyledText, Subscription, Task, TextRun,
-    UniformListScrollHandle, WeakEntity, Window, combine_highlights, div, font, point, px, rems,
-    uniform_list,
+    UniformListScrollHandle, WeakEntity, Window, canvas, combine_highlights, div, font, point, px,
+    rems, uniform_list,
 };
 
 use super::highlight::{DiffHighlights, highlight_name};
@@ -251,14 +252,17 @@ fn scroll_list_by(
 #[derive(Debug, Clone, PartialEq)]
 pub enum PatchViewerEvent {
     /// The last patch given is on show (`onShown`), with the key of the file it's of.
-    Shown { file_key: String },
+    Shown { file_key: DiffFileKey },
     /// Whether the whole file is being loaded, to show more of it (`onLoadingFiles`).
     LoadingFiles(bool),
     /// Why the whole file couldn't be loaded, e.g. it's too large; `None` if it could
     /// (`onFilesError`).
     FilesError(Option<String>),
     /// Why the last patch given can't be shown: it couldn't be parsed.
-    Failed { file_key: String, message: String },
+    Failed {
+        file_key: DiffFileKey,
+        message: String,
+    },
     /// Stages (or unstages, as `LineStaging::action` says) `lines` of `patch`, the patch on show
     /// they were picked from. The owner says if they couldn't be
     /// ([`stage_failed`](PatchViewer::stage_failed)).
@@ -274,7 +278,7 @@ pub struct PatchProps {
     /// The patch, as git gave it.
     pub patch: Arc<str>,
     /// Names the file the patch is of: a new patch with the same name is of the same file.
-    pub file_key: String,
+    pub file_key: DiffFileKey,
     /// Names the patch in the highlighting cache, e.g. by its commit and path: another patch,
     /// even of the same file, needs another name, or it's shown with the last one's highlighting.
     pub cache_key: String,
@@ -287,7 +291,7 @@ pub struct PatchProps {
 #[derive(Clone)]
 struct NextPatch {
     patch: Arc<str>,
-    file_key: String,
+    file_key: DiffFileKey,
     cache_key: String,
 }
 
@@ -967,6 +971,9 @@ impl PatchViewer {
         let row_height = rems(ROW_REMS).to_pixels(rem);
         self.row_height = row_height;
         let char_width = self.char_width(font_size, window, cx);
+        // Until the list is laid out (the first frame) the window's width stands in for its own,
+        // which puts what's aligned to the rows' right out of sight: drawn again once the list's
+        // width is known, or has changed (see `width_check`).
         let viewport_width = ListScroll::of(&self.scroll)
             .view
             .map_or(window.viewport_size().width, |view| view.width);
@@ -1008,6 +1015,7 @@ impl PatchViewer {
             split,
             row_width,
             column_width,
+            viewport_width,
             gutter_width,
             row_height,
             font_size,
@@ -1045,6 +1053,8 @@ struct Frame {
     split: bool,
     row_width: Pixels,
     column_width: Pixels,
+    /// How wide the list was taken to be.
+    viewport_width: Pixels,
     gutter_width: Pixels,
     row_height: Pixels,
     font_size: Pixels,
@@ -1175,6 +1185,11 @@ impl Render for PatchViewer {
                     .size_full(),
                 )
                 .child(Scrollbar::new(&self.scroll))
+                .child(width_check(
+                    &self.scroll,
+                    frame.viewport_width,
+                    cx.entity().downgrade(),
+                ))
             })
             // The focus ring, inside: the view fills its panel.
             .when(focused, |this| {
@@ -1187,6 +1202,31 @@ impl Render for PatchViewer {
                 )
             })
     }
+}
+
+/// Checks, as the list `scroll` tracks is laid out, that it's `drawn_for` wide, as its rows were
+/// drawn; if it isn't (before its first layout, or once it's resized), `viewer` draws them again,
+/// once this frame's drawn (it can't be told to while it is). After the list, so it's laid out
+/// by then: nothing's put off but when its width changed.
+pub(super) fn width_check<V: 'static>(
+    scroll: &UniformListScrollHandle,
+    drawn_for: Pixels,
+    viewer: WeakEntity<V>,
+) -> impl IntoElement {
+    let scroll = scroll.clone();
+    canvas(
+        move |_, _, cx| {
+            let measured = ListScroll::of(&scroll).view;
+            if measured.is_some_and(|view| view.width != drawn_for) {
+                cx.defer(move |cx| {
+                    let _ = viewer.update(cx, |_, cx| cx.notify());
+                });
+            }
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .size_0()
 }
 
 /// The row `ix`.
@@ -1594,7 +1634,9 @@ fn line_text(
 
 #[cfg(test)]
 mod tests {
-    use gpui_kit::{AppContext as _, TestAppContext};
+    use gitto_ui::git::diff_source::DiffSource;
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{AppContext as _, TestAppContext, size};
 
     use super::super::viewer_runtime::LoadedFile;
     use super::*;
@@ -1614,7 +1656,7 @@ mod tests {
                 viewer.set_props(
                     PatchProps {
                         patch: PATCH.into(),
-                        file_key: "f.txt".into(),
+                        file_key: DiffFileKey::new(&DiffSource::Unstaged, "f.txt"),
                         cache_key: "test:f.txt".into(),
                         style: DiffStyle::Unified,
                         staging,
@@ -1691,7 +1733,7 @@ mod tests {
                 viewer.set_props(
                     PatchProps {
                         patch: "diff --git a/f.txt b/f.txt\nindex 1111111..2222222 100644\n--- a/f.txt\n+++ b/f.txt\n@@ -5,2 +5,2 @@\n five\n-six\n+SIX\n".into(),
-                        file_key: "f.txt".into(),
+                        file_key: DiffFileKey::new(&DiffSource::Unstaged, "f.txt"),
                         cache_key: "test:wide".into(),
                         style: DiffStyle::Unified,
                         staging: None,
@@ -1717,5 +1759,77 @@ mod tests {
         assert!(viewer.read_with(cx, |viewer, _| !viewer.shown_diff().unwrap().is_partial));
         let after = row_width(cx);
         assert!(after > before * 2., "{before:?} to {after:?}");
+    }
+
+    #[gpui_kit::test]
+    fn draws_its_rows_again_as_wide_as_the_list_once_its_resized(cx: &mut TestAppContext) {
+        let _dir = crate::test_support::init(cx, |services| services);
+        let load_file: LoadFile = Rc::new(|side, _, _| {
+            let contents = match side {
+                Side::Deletions => "one\ntwo\nthree\nfour\nfive\nsix\n",
+                Side::Additions => "one\ntwo\nthree\nfour\nfive\nSIX\n",
+            };
+            Task::ready(Ok(LoadedFile::Blob(contents.to_owned())))
+        });
+        let (window, viewer) =
+            crate::test_support::open(cx, |_, cx| PatchViewer::new(load_file, cx));
+        cx.update(|cx| {
+            viewer.update(cx, |viewer, cx| {
+                viewer.set_props(
+                    PatchProps {
+                        patch: "diff --git a/f.txt b/f.txt\nindex 1111111..2222222 100644\n--- a/f.txt\n+++ b/f.txt\n@@ -5,2 +5,2 @@\n five\n-six\n+SIX\n".into(),
+                        file_key: DiffFileKey::new(&DiffSource::Unstaged, "f.txt"),
+                        cache_key: "test:resized".into(),
+                        style: DiffStyle::Unified,
+                        staging: Some(LineStaging {
+                            action: crate::data::staging::StageAction::Stage,
+                            busy: false,
+                        }),
+                    },
+                    cx,
+                )
+            })
+        });
+        cx.run_until_parked();
+        let drawn = |cx: &mut TestAppContext| {
+            cx.update_window(window, |_, window, cx| window.render_frame(cx))
+                .unwrap();
+            cx.run_until_parked();
+        };
+        // The width of the list, and where what's aligned to its rows' right ends, as drawn last.
+        let widths = |cx: &mut TestAppContext| {
+            cx.update_window(window, |_, window, cx| {
+                let list = ListScroll::of(&viewer.read(cx).scroll)
+                    .view
+                    .map(|view| view.width);
+                let right = window.find(("stage-hunk", 0usize)).bounds().right();
+                (list.expect("laid out"), right)
+            })
+            .unwrap()
+        };
+        // In sight, by the list's right edge.
+        let in_sight = |(list, right): (Pixels, Pixels)| right <= list && right > list - px(40.);
+        let notified = Rc::new(std::cell::Cell::new(0));
+        let _observing = cx.update(|cx| {
+            let notified = Rc::clone(&notified);
+            cx.observe(&viewer, move |_, _| notified.set(notified.get() + 1))
+        });
+        drawn(cx);
+        drawn(cx);
+        let (list, right) = widths(cx);
+        assert!(in_sight((list, right)), "{right:?} in {list:?}");
+        // Drawn again as wide as it was laid out: it isn't asked to be drawn once more.
+        let settled = notified.get();
+        drawn(cx);
+        assert_eq!(notified.get(), settled);
+
+        // Drawn at the new size as it was laid out at the last, then again as it's laid out now.
+        cx.simulate_window_resize(window, size(px(700.), px(800.)));
+        drawn(cx);
+        assert!(notified.get() > settled);
+        drawn(cx);
+        let (resized, right) = widths(cx);
+        assert!(resized < list);
+        assert!(in_sight((resized, right)), "{right:?} in {resized:?}");
     }
 }

@@ -5,7 +5,7 @@ use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{AnyElement, App, Entity, SharedString, Window, div};
 
-use crate::theme::PaletteExt as _;
+use crate::theme::{PaletteExt as _, base_px};
 
 enum Control {
     Input(Entity<InputState>),
@@ -78,7 +78,13 @@ impl RenderOnce for FormField {
                     .justify_between()
                     .child(div().child(self.label))
                     .when_some(self.hint, |this, hint| {
-                        this.child(div().text_color(palette.faint).child(hint))
+                        // A `<small>` in TS: smaller than the label.
+                        this.child(
+                            div()
+                                .text_size(base_px(10.))
+                                .text_color(palette.faint)
+                                .child(hint),
+                        )
                     }),
             )
             .child(control)

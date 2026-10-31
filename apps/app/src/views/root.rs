@@ -3,7 +3,7 @@
 
 use gpui_kit::component::v_flex;
 use gpui_kit::prelude::*;
-use gpui_kit::{Context, Entity, Subscription, Window, div};
+use gpui_kit::{Context, Entity, FocusHandle, Subscription, Window, div};
 
 use super::home::HomeView;
 use super::repository::RepositoryView;
@@ -33,13 +33,28 @@ pub struct AppShell {
     page: Page,
     git_version: Entity<GitVersionDialog>,
     whats_new: Entity<WhatsNewDialog>,
+    /// The page's place, focused while nothing in it is: GPUI only hears keys, Tab among them,
+    /// along the focused element's path, so with nothing focused (where a browser has its body)
+    /// Tab wouldn't reach the first control, nor Esc what's on show.
+    page_focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
 
 impl AppShell {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let router = Router::global(cx);
+        let page_focus = cx.focus_handle();
+        window.focus(&page_focus, cx);
         let subscriptions = vec![
+            // When what had the focus goes (a file's changes, once its last lines are staged, or
+            // the page it was on), the closest thing around it that can take the focus does, else
+            // the page's place: keys go on reaching what's on show, as Esc to leave a file.
+            cx.on_focus_lost(window, |shell, window, cx| {
+                let target = window
+                    .focus_lost_restore_target(cx)
+                    .unwrap_or_else(|| shell.page_focus.clone());
+                window.focus(&target, cx);
+            }),
             cx.observe_in(&router, window, |shell, _, window, cx| {
                 shell.show_route(window, cx)
             }),
@@ -59,6 +74,7 @@ impl AppShell {
             page,
             git_version: cx.new(|cx| GitVersionDialog::new(window, cx)),
             whats_new: cx.new(|cx| WhatsNewDialog::new(window, cx)),
+            page_focus,
             _subscriptions: subscriptions,
         }
     }
@@ -126,6 +142,7 @@ impl Render for AppShell {
             .child(self.header.clone())
             .child(
                 div()
+                    .track_focus(&self.page_focus)
                     .flex_1()
                     .min_h_0()
                     .min_w_0()

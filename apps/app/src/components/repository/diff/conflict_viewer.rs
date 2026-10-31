@@ -14,6 +14,7 @@ use gitto_git::ContentVersion;
 use gitto_ui::diff::diff_metadata::Side;
 use gitto_ui::diff::patch_files::Expanded;
 use gitto_ui::diff::viewer_rows::{ExpandDirection, SeparatorButtons, expand};
+use gitto_ui::git::diff_source::DiffFileKey;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex};
@@ -35,7 +36,7 @@ use super::file_editing::EditSession;
 use super::highlight::DiffHighlights;
 use super::patch_viewer::{
     DrawnLine, FONT_REMS, ROW_REMS, Scroll, code_char_width, scroll_list, scroll_list_to,
-    widest_line,
+    widest_line, width_check,
 };
 use super::viewer_actions::{
     CONFLICT_VIEWER, ScrollDown, ScrollLeft, ScrollPageDown, ScrollPageUp, ScrollRight,
@@ -50,7 +51,7 @@ use crate::theme::{Palette, PaletteExt as _};
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ConflictProgress {
     /// Names the file on show (see `file_key`): another one's, until this one's is on show.
-    pub file_key: Option<String>,
+    pub file_key: Option<DiffFileKey>,
     /// How many conflicts are left.
     pub left: usize,
     /// Where the current one is among them, from 1; `None` without one.
@@ -93,7 +94,7 @@ pub enum ConflictViewerEvent {
 
 /// The file's text and what's shown of it: its conflicts, or the whole of it without.
 struct Shown {
-    file_key: String,
+    file_key: DiffFileKey,
     contents: Arc<str>,
     /// Its version on disk; `None` while that isn't known.
     version: Option<ContentVersion>,
@@ -106,7 +107,7 @@ struct Shown {
 
 /// A file's text as `show_text` read it, to put on show: its conflicts, or why they can't be read.
 struct ReadResult {
-    file_key: String,
+    file_key: DiffFileKey,
     contents: Arc<str>,
     /// Its version on disk; `None` while that isn't known.
     version: Option<ContentVersion>,
@@ -140,7 +141,7 @@ pub struct ConflictViewer {
     save: SaveResolved,
     path: SharedString,
     /// What the file's view last gave: the file, and the file as it was read from disk.
-    pub(super) given: Option<(String, Option<DiskFile>)>,
+    pub(super) given: Option<(DiffFileKey, Option<DiskFile>)>,
     shown: Option<Shown>,
     /// Versions of the file that were written over here: read from disk before that, and stale.
     superseded: HashSet<ContentVersion>,
@@ -151,8 +152,8 @@ pub struct ConflictViewer {
     /// What's to be done, one thing at a time: the text editing left, once it stops; the file as
     /// it was read again, and the conflicts the user resolved, in turn. Editing holds the rest
     /// until it stops.
-    edited: Option<(String, Arc<str>)>,
-    wanted: Option<(String, DiskFile)>,
+    edited: Option<(DiffFileKey, Arc<str>)>,
+    wanted: Option<(DiffFileKey, DiskFile)>,
     requests: VecDeque<Request>,
     running: bool,
     /// The work under way, which editing waits for.
@@ -215,13 +216,13 @@ impl ConflictViewer {
     /// read. Another key is another file, which starts at its top.
     pub fn set_disk(
         &mut self,
-        file_key: &str,
+        file_key: &DiffFileKey,
         path: &str,
         disk: Option<DiskFile>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let given = (file_key.to_owned(), disk);
+        let given = (file_key.clone(), disk);
         if self.given.as_ref() == Some(&given) {
             return;
         }
@@ -353,7 +354,7 @@ impl ConflictViewer {
     /// Shows the file as it was read from disk, if that's news.
     fn sync(
         &mut self,
-        file_key: String,
+        file_key: DiffFileKey,
         disk: DiskFile,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -388,14 +389,14 @@ impl ConflictViewer {
     /// its top; the same one changed elsewhere stays where it's scrolled to.
     fn show_text(
         &mut self,
-        file_key: String,
+        file_key: DiffFileKey,
         contents: Arc<str>,
         version: Option<ContentVersion>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<()> {
         // Named by what's in it: a file that's back to what it was is shown as it was then.
-        let cache_key = conflicts_cache_key(&file_key, &contents, version.as_deref());
+        let cache_key = conflicts_cache_key(&file_key, &contents, version.as_ref());
         let path = self.path.to_string();
         cx.spawn_in(window, async move |this, cx| {
             let text = Arc::clone(&contents);
@@ -787,6 +788,9 @@ impl ConflictViewer {
         let font_size = rems(FONT_REMS).to_pixels(rem);
         let row_height = rems(ROW_REMS).to_pixels(rem);
         let char_width = self.char_width(font_size, window, cx);
+        // Until the list is laid out (the first frame) the window's width stands in for its own,
+        // which puts what's aligned to the rows' right out of sight: drawn again once the list's
+        // width is known, or has changed (see `width_check`).
         let viewport_width = self
             .scroll
             .0
@@ -808,6 +812,7 @@ impl ConflictViewer {
             current: self.current,
             enabled: self.is_resolvable(),
             row_width,
+            viewport_width,
             gutter_width,
             row_height,
             font_size,
@@ -821,10 +826,10 @@ impl ConflictViewer {
 /// them, so they show at once (`prepareConflicts`). Nothing for one without conflicts, or whose
 /// markers can't be read.
 pub fn prepare_conflicts(
-    file_key: &str,
+    file_key: &DiffFileKey,
     path: &str,
     contents: String,
-    version: &str,
+    version: &ContentVersion,
     cx: &mut App,
 ) {
     let key = conflicts_cache_key(file_key, &contents, Some(version));
@@ -855,6 +860,8 @@ struct Frame {
     /// Whether the conflicts' buttons are on.
     enabled: bool,
     row_width: Pixels,
+    /// How wide the list was taken to be.
+    viewport_width: Pixels,
     gutter_width: Pixels,
     row_height: Pixels,
     font_size: Pixels,
@@ -948,6 +955,11 @@ impl Render for ConflictViewer {
                     .size_full(),
                 )
                 .child(Scrollbar::new(&self.scroll))
+                .child(width_check(
+                    &self.scroll,
+                    frame.viewport_width,
+                    cx.entity().downgrade(),
+                ))
             })
             // The focus ring, inside: the view fills its panel.
             .when(focused, |this| {
@@ -1295,7 +1307,7 @@ mod tests {
         Opened, conflicted, init, open, save, set_changes, set_conflict, text_conflict,
     };
     use super::*;
-    use crate::git::diff_source::DiffSource;
+    use gitto_ui::git::diff_source::DiffSource;
 
     const MARKERS: &str = "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> side\n";
 
@@ -1366,6 +1378,41 @@ mod tests {
         assert_eq!(top(cx), px(0.));
         opened.press("down", cx);
         assert!(top(cx) > px(0.) && top(cx) < page);
+    }
+
+    #[gpui_kit::test]
+    fn is_drawn_again_once_its_list_is_resized_and_only_then(cx: &mut TestAppContext) {
+        let _dir = init(cx);
+        let opened = open_conflict(&two_conflicts(), cx);
+        let viewer = viewer(&opened, cx);
+        let notified = Rc::new(std::cell::Cell::new(0));
+        let _observing = cx.update(|cx| {
+            let notified = Rc::clone(&notified);
+            cx.observe(&viewer, move |_, _| notified.set(notified.get() + 1))
+        });
+        let drawn = |cx: &mut TestAppContext| {
+            opened.has("conflicts", cx);
+            cx.run_until_parked();
+        };
+        drawn(cx);
+        let settled = notified.get();
+        drawn(cx);
+        assert_eq!(notified.get(), settled);
+
+        cx.simulate_window_resize(opened.window, gpui_kit::size(px(700.), px(800.)));
+        drawn(cx);
+        assert!(notified.get() > settled);
+        let width = cx.update(|cx| {
+            let viewer = viewer.read(cx);
+            let list = viewer
+                .scroll
+                .0
+                .borrow()
+                .last_item_size
+                .map(|size| size.item.width);
+            list.expect("laid out")
+        });
+        assert!(width < px(800.));
     }
 
     #[gpui_kit::test]

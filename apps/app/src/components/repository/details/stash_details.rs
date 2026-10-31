@@ -17,10 +17,10 @@ use super::details_sections::{DetailsError, DetailsList, FileTotals, RenderTop};
 use crate::components::ui::{Icon, IconName, LoadingState, Tone};
 use crate::data::diff::{ChangedFiles, FilesOf, ShownFiles, select_shown_files};
 use crate::data::{Opaque, Query};
-use crate::git::changes::LineCounts;
-use crate::git::diff_source::DiffSource;
 use crate::state::clock::{Clock, relative_time};
 use crate::theme::{PaletteExt as _, base_px};
+use gitto_ui::git::changes::LineCounts;
+use gitto_ui::git::diff_source::DiffSource;
 
 /// A stash selected in the history: what git named it, when it was made, and the files it
 /// changed, scrolled with the summary.

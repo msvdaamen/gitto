@@ -10,13 +10,13 @@ use gpui_kit::prelude::*;
 use gpui_kit::{App, FontWeight, SharedString, Window, div, linear_color_stop, linear_gradient};
 
 use super::columns::{
-    CELL_PADDING, COUNT_LINE, Column, LABEL_TEXT, MESSAGE_TEXT, SMALL_TEXT, mixed, tinted,
+    CELL_PADDING, COUNT_LINE, Column, LABEL_TEXT, MESSAGE_TEXT, SMALL_TEXT, tinted,
 };
 use super::commit_row::RowProps;
 use super::history_graph::{GraphNode, HistoryGraph};
 use super::history_option::{HistoryOption, RowKindBadge, RowLook};
 use crate::components::ui::{IconName, Tone};
-use crate::theme::{Palette, PaletteExt as _};
+use crate::theme::{Palette, PaletteExt as _, mixed};
 
 /// What the uncommitted changes' row says of them: how many files are staged, unstaged and
 /// conflicted, and the branch they're on.
@@ -154,7 +154,7 @@ impl RenderOnce for HistoryWipRow {
                 props.graph_width,
             ),
         )
-        .cell(Column::Graph.apply(
+        .graph_cell(Column::Graph.apply(
             div().h_full().overflow_hidden().children(graph),
             props.graph_width,
         ))

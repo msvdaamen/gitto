@@ -32,10 +32,10 @@ use crate::data::diff::{WorkingTreeLists, select_working_tree_lists};
 use crate::data::staging::{DiscardTarget, StagingTarget};
 use crate::data::status::{head_sha, select_summary, uncommitted_options};
 use crate::data::{Mutation, Opaque, Query, QueryError};
-use crate::git::changes::staging_paths;
-use crate::git::diff_source::DiffSource;
 use crate::state::delayed::{DELAY, Delayed};
 use crate::theme::{PaletteExt as _, base_px};
+use gitto_ui::git::changes::staging_paths;
+use gitto_ui::git::diff_source::DiffSource;
 
 type Staging = Entity<Mutation<(RepositoryId, StagingTarget)>>;
 

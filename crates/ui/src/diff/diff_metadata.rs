@@ -740,7 +740,7 @@ fn process_file(
             if parsed_additions >= hunk.addition_count
                 && parsed_deletions >= hunk.deletion_count
                 && !raw.starts_with('\\')
-                && !(is_hunk_body_line(raw) && !is_format_patch_separator(raw))
+                && (!is_hunk_body_line(raw) || is_format_patch_separator(raw))
             {
                 break;
             }

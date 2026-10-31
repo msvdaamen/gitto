@@ -16,6 +16,7 @@ use gpui_kit::{
 
 use crate::components::ui::{
     ContextMenuExt as _, FileStatusBadge, Icon, IconName, LineStats, PopupMenu, VirtualList,
+    menu_frame,
 };
 use crate::data::Opaque;
 use crate::theme::{PaletteExt as _, base_px};
@@ -330,7 +331,7 @@ impl ChangedFileList {
         match self.menu.clone() {
             Some(build) => {
                 let file = file.clone();
-                row.context_menu(move |menu, window, cx| build(menu, &file, window, cx))
+                row.context_menu(move |menu, window, cx| build(menu_frame(menu), &file, window, cx))
                     .into_any_element()
             }
             None => row.into_any_element(),

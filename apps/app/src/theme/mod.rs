@@ -22,7 +22,7 @@ use std::rc::Rc;
 
 use gpui_kit::component::highlighter::HighlightThemeStyle;
 use gpui_kit::component::{Colorize as _, Theme, ThemeConfig, ThemeConfigColors, ThemeMode};
-use gpui_kit::{App, Global, Hsla, Rems};
+use gpui_kit::{App, Global, Hsla, Rems, Rgba};
 
 pub use self::palette::Palette;
 use crate::services::LocalStorage;
@@ -32,6 +32,7 @@ pub const STORAGE_KEY: &str = "gitto-theme";
 
 /// The base font size: the rem every size is relative to (see the module's doc).
 pub const FONT_SIZE: f32 = 15.;
+
 pub const MONO_FONT_SIZE: f32 = 13.;
 
 /// `px` of `index.css`'s, in rems of the [`FONT_SIZE`] base: what a size with no step on the rem
@@ -341,9 +342,40 @@ fn highlight_style(theme: AppTheme) -> HighlightThemeStyle {
     }
 }
 
+/// `color-mix(in srgb, color share%, other)`: the two mixed channel by channel in sRGB, as TS's
+/// borders mixed a color into the border's.
+pub fn mixed(color: Hsla, share: f32, other: Hsla) -> Hsla {
+    let a = Rgba::from(color);
+    let b = Rgba::from(other);
+    let mix = |x: f32, y: f32| x * share + y * (1. - share);
+    Rgba {
+        r: mix(a.r, b.r),
+        g: mix(a.g, b.g),
+        b: mix(a.b, b.b),
+        a: mix(a.a, b.a),
+    }
+    .into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sizes_a_ts_pixel_measure_by_the_base_font() {
+        const ROW: Rems = base_px(30.);
+        assert_eq!(ROW, Rems(2.));
+        assert_eq!(base_px(FONT_SIZE), Rems(1.));
+    }
+
+    #[test]
+    fn mixes_colors_channel_by_channel() {
+        let red: Hsla = gpui_kit::rgb(0xff0000).into();
+        let blue: Hsla = gpui_kit::rgb(0x0000ff).into();
+        let half = Rgba::from(mixed(red, 0.5, blue));
+        assert!((half.r - 0.5).abs() < 0.01 && (half.b - 0.5).abs() < 0.01);
+        assert_eq!(mixed(red, 1., blue), red);
+    }
 
     // `theme.test.ts`, on what keeps the theme rather than the DOM.
 

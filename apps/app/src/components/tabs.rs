@@ -20,7 +20,8 @@ use crate::data::repositories::{
 };
 use crate::data::{Query, QueryError};
 use crate::state::router::{Route, Router};
-use crate::theme::PaletteExt as _;
+use crate::theme::breakpoints::{MEDIUM, SMALL};
+use crate::theme::{PaletteExt as _, base_px};
 
 actions!(
     tabs,
@@ -266,23 +267,32 @@ impl Tabs {
         cx.notify();
     }
 
-    fn render_home_tab(&self, selected: bool, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    /// The home tab: Gitto's icon and name, or below `MEDIUM` the icon alone.
+    fn render_home_tab(
+        &self,
+        selected: bool,
+        narrow: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let palette = *cx.palette();
         tab_frame("home-tab", selected, cx)
-            .w(rems(7.25))
+            .w(if narrow { base_px(53.) } else { base_px(116.) })
             .flex_none()
             .aria_label("Home")
-            .px_3p5()
+            .when(narrow, |this| this.justify_center())
+            .when(!narrow, |this| this.px_3p5())
             .gap_2()
             .on_click(|_, _, cx| Router::navigate(Route::Home, cx))
             .child(GittoIcon::new().w_6().h_5())
-            .child(
-                div()
-                    .text_lg()
-                    .font_weight(FontWeight::EXTRA_BOLD)
-                    .text_color(palette.text)
-                    .child("gitto"),
-            )
+            .when(!narrow, |this| {
+                this.child(
+                    div()
+                        .text_lg()
+                        .font_weight(FontWeight::EXTRA_BOLD)
+                        .text_color(palette.text)
+                        .child("gitto"),
+                )
+            })
             .test_support()
     }
 
@@ -290,6 +300,7 @@ impl Tabs {
         &mut self,
         repository: &Repository,
         selected: bool,
+        small: bool,
         shortcuts: SharedString,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
@@ -305,9 +316,12 @@ impl Tabs {
         };
         let (action, error) = error.unwrap_or(("Remove", None));
         let error = error.map(|error| SharedString::from(error.message()));
+        // Whether its remove button's shown, rather than only as the pointer's over it.
+        let shown = selected || error.is_some();
         let name: SharedString = repository.name.clone().into();
+        let group = SharedString::from(format!("tab-group-{id}"));
         tab_frame(SharedString::from(format!("tab-{id}")), selected, cx)
-            .min_w(rems(8.))
+            .min_w(if small { rems(7.) } else { rems(8.) })
             .max_w(rems(12.))
             .border_r_1()
             .border_color(palette.border_soft)
@@ -339,6 +353,7 @@ impl Tabs {
                 let id = id.clone();
                 move |tabs, drag: &TabDrag, _, cx| tabs.drop_on(&drag.id, &id, cx)
             }))
+            .group(group.clone())
             .pl_2p5()
             .gap_2()
             .child(
@@ -367,39 +382,47 @@ impl Tabs {
                     .child(name.clone()),
             )
             .child(
-                div().mr_2().ml_1().child(
-                    FailurePopover::new(
-                        SharedString::from(format!("tab-failure-{id}")),
-                        format!("{action} {name}"),
-                        error,
-                        Button::new(SharedString::from(format!("remove-{id}")))
-                            .ghost()
-                            .xsmall()
-                            .icon(Icon::new(IconName::X))
-                            .tooltip(format!("Remove {name}"))
-                            .accessibility_label(format!("Remove {name}"))
-                            .on_click(cx.listener({
-                                let repository = repository.clone();
-                                move |_, _, window, cx| {
-                                    let tabs = cx.entity();
-                                    let id = repository.id.clone();
-                                    open_remove_repository_dialog(
-                                        &repository,
-                                        move |_, cx| {
-                                            let id = id.clone();
-                                            tabs.update(cx, |tabs, cx| tabs.remove(id, cx));
-                                        },
-                                        window,
-                                        cx,
-                                    );
-                                }
-                            })),
-                    )
-                    .on_dismiss({
-                        let tabs = cx.entity();
-                        move |_, cx| tabs.update(cx, |tabs, cx| tabs.dismiss_errors(cx))
-                    }),
-                ),
+                // Shown on the selected tab, and on another while it's hovered: only the pointer
+                // finds it there, so it's no Tab stop while it's hidden, to land on unseen.
+                div()
+                    .mr_2()
+                    .ml_1()
+                    .when(!shown, |this| this.opacity(0.))
+                    .group_hover(group, |style| style.opacity(1.))
+                    .child(
+                        FailurePopover::new(
+                            SharedString::from(format!("tab-failure-{id}")),
+                            format!("{action} {name}"),
+                            error,
+                            Button::new(SharedString::from(format!("remove-{id}")))
+                                .ghost()
+                                .xsmall()
+                                .icon(Icon::new(IconName::X))
+                                .tooltip(format!("Remove {name}"))
+                                .accessibility_label(format!("Remove {name}"))
+                                .tab_stop(shown)
+                                .on_click(cx.listener({
+                                    let repository = repository.clone();
+                                    move |_, _, window, cx| {
+                                        let tabs = cx.entity();
+                                        let id = repository.id.clone();
+                                        open_remove_repository_dialog(
+                                            &repository,
+                                            move |_, cx| {
+                                                let id = id.clone();
+                                                tabs.update(cx, |tabs, cx| tabs.remove(id, cx));
+                                            },
+                                            window,
+                                            cx,
+                                        );
+                                    }
+                                })),
+                        )
+                        .on_dismiss({
+                            let tabs = cx.entity();
+                            move |_, cx| tabs.update(cx, |tabs, cx| tabs.dismiss_errors(cx))
+                        }),
+                    ),
             )
             .test_support()
     }
@@ -437,6 +460,7 @@ fn tab_frame(
 impl Render for Tabs {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let route = Router::current(cx);
+        let width = f32::from(window.viewport_size().width);
         let selected = |id: &RepositoryId| route.repository_id() == Some(id);
         let repositories = self.repositories.data().unwrap_or_default();
         let shortcuts = aria_keyshortcuts(window, &[&MoveTabLeft, &MoveTabRight], KEY_CONTEXT);
@@ -444,8 +468,14 @@ impl Render for Tabs {
         for id in self.ordered() {
             if let Some(repository) = repositories.iter().find(|repository| repository.id == id) {
                 tabs.push(
-                    self.render_repository_tab(repository, selected(&id), shortcuts.clone(), cx)
-                        .into_any_element(),
+                    self.render_repository_tab(
+                        repository,
+                        selected(&id),
+                        width < SMALL,
+                        shortcuts.clone(),
+                        cx,
+                    )
+                    .into_any_element(),
                 );
             }
         }
@@ -459,7 +489,7 @@ impl Render for Tabs {
             .h_full()
             .items_stretch()
             .min_w_0()
-            .child(self.render_home_tab(route == Route::Home, cx))
+            .child(self.render_home_tab(route == Route::Home, width < MEDIUM, cx))
             .children(tabs)
             .child(
                 div().ml_1().flex().items_center().child(
@@ -622,6 +652,24 @@ mod ui_tests {
             window.press("alt-shift-right", cx);
         })
         .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn tabs_past_the_remove_button_of_a_tab_that_hides_it(cx: &mut TestAppContext) {
+        let (_dir, _saved, ids, window, host) = render_tabs(cx);
+        // None's selected: their remove buttons only show as the pointer's over them.
+        let next = |from: &RepositoryId, cx: &mut TestAppContext| {
+            cx.update_window(window, |_, window, cx| {
+                window.render_frame(cx);
+                let focus = host.read(cx).tabs.read(cx).focus.clone();
+                window.focus(&focus[from], cx);
+                window.focus_next(cx);
+                ids.iter().find(|id| focus[*id].is_focused(window)).cloned()
+            })
+            .unwrap()
+        };
+        assert_eq!(next(&ids[0], cx).as_ref(), Some(&ids[1]));
+        assert_eq!(next(&ids[1], cx).as_ref(), Some(&ids[2]));
     }
 
     #[gpui_kit::test]

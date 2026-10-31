@@ -5,7 +5,7 @@ use gitto_git::input::RepositoryId;
 use gitto_ui::git::message::{CommitMessage, edit_message, join_message, split_message};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{Context, Entity, FontWeight, SharedString, Subscription, Window, div, rems};
 
@@ -336,7 +336,10 @@ impl Render for CommitForm {
             .child(
                 div().mb_2p5().child(
                     Checkbox::new("amend")
+                        .small()
                         .label("Amend last commit")
+                        .text_xs()
+                        .text_color(palette.muted)
                         .checked(amend)
                         .disabled(self.last_commit.is_none() || pending)
                         .on_click(cx.listener(|this, checked: &bool, _, cx| {
@@ -446,12 +449,18 @@ mod tests {
             cx.update_window(self.window, |_, window, cx| {
                 summary.update(cx, |input, cx| input.focus(window, cx));
                 window.render_frame(cx);
-                window.press(if replace { "ctrl-a" } else { "end" }, cx);
+                window.press(if replace { "secondary-a" } else { "end" }, cx);
                 window.input(text, cx);
             })
             .unwrap();
             cx.run_until_parked();
         }
+
+        /// Moves to the end of a multi-line input: there's no key for it every platform shares.
+        #[cfg(target_os = "macos")]
+        const TO_END: &str = "cmd-down";
+        #[cfg(not(target_os = "macos"))]
+        const TO_END: &str = "ctrl-end";
 
         fn type_description(&self, text: &str, cx: &mut TestAppContext) {
             let description = self
@@ -460,7 +469,7 @@ mod tests {
             cx.update_window(self.window, |_, window, cx| {
                 description.update(cx, |input, cx| input.focus(window, cx));
                 window.render_frame(cx);
-                window.press("ctrl-end", cx);
+                window.press(Self::TO_END, cx);
                 window.input(text, cx);
             })
             .unwrap();

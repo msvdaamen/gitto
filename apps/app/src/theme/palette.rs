@@ -86,16 +86,6 @@ pub struct Palette {
     pub avatar: Hsla,
 }
 
-/// The avatar colors (`AVATAR_COLORS` in `lib/format.ts`), one picked by an author's email.
-pub const AVATAR_COLORS: [&str; 6] = [
-    "#7c5ce7", "#38bda9", "#a978dd", "#e2a646", "#5b9be6", "#e0707a",
-];
-
-/// An avatar color from [`AVATAR_COLORS`], by its index.
-pub fn avatar_color(index: usize) -> Hsla {
-    hex(AVATAR_COLORS[index % AVATAR_COLORS.len()])
-}
-
 /// Code's colors, by the theme's highlight names: the TS diff viewer's themes' (@pierre/theme's
 /// `pierre-dark` and `pierre-light`), which the code in diffs and conflicts was drawn with.
 pub fn syntax_colors(theme: AppTheme) -> [(&'static str, &'static str); 26] {
@@ -277,9 +267,6 @@ mod tests {
             let palette = Palette::of(theme);
             assert_ne!(palette.bg, Hsla::default());
             assert!(palette.primary_soft.a < 0.2);
-        }
-        for index in 0..AVATAR_COLORS.len() {
-            avatar_color(index);
         }
     }
 

@@ -7,14 +7,14 @@ use gpui_kit::component::h_flex;
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, Background, Context, ElementId, FontWeight, Hsla, Role, SharedString,
+    AnyElement, App, Background, Context, Div, ElementId, FontWeight, Hsla, Role, SharedString,
     TestSupportExt as _, Window, div, px,
 };
 
-use super::columns::{LABEL_ICON, LABEL_LINE, LABEL_TEXT, ROW_HEIGHT, mixed};
-use crate::components::ui::{Icon, IconName, LineStats, Tone};
-use crate::git::changes::LineCounts;
-use crate::theme::{PaletteExt as _, base_px};
+use super::columns::{LABEL_ICON, LABEL_LINE, LABEL_TEXT, ROW_HEIGHT};
+use crate::components::ui::{Icon, IconName, LineStats, Tone, menu_frame};
+use crate::theme::{PaletteExt as _, base_px, mixed};
+use gitto_ui::git::changes::LineCounts;
 
 /// A row's place in the list. Only the rows in view are rendered, so assistive tech needs to be
 /// told how long the list is.
@@ -29,8 +29,8 @@ pub type OnSelect = Rc<dyn Fn(&mut Window, &mut App)>;
 /// Builds a row's menu, as `.context_menu(…)` does.
 pub type MenuBuilder = Rc<dyn Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu>;
 
-/// How a row looks: its background, at rest and hovered, its bottom border, and the accent on
-/// its leading edge, if any.
+/// How a row looks: its background, at rest and hovered, its cells' bottom border, and the accent
+/// on its leading edge, if any.
 #[derive(Clone)]
 pub struct RowLook {
     pub background: Option<Background>,
@@ -43,8 +43,9 @@ pub struct RowLook {
 }
 
 /// A row of the history table as a selectable option, laid out in the table's columns (each
-/// cell sized with `Column::apply`). Not focused itself: the list has the focus, and moves the
-/// selection with the keyboard. The selected one is outlined while the keyboard does
+/// cell sized with `Column::apply`). Its cells, but the graph's, are underlined: the graph's lines
+/// run on from row to row, so it reads as one graph. Not focused itself: the list has the focus,
+/// and moves the selection with the keyboard. The selected one is outlined while the keyboard does
 /// (`outlined`). Its accessible name (`label`) is what it says, e.g. for a commit its message and
 /// author: the author is otherwise only in the graph's tooltip.
 #[derive(IntoElement)]
@@ -92,7 +93,19 @@ impl HistoryOption {
         self
     }
 
-    pub fn cell(mut self, cell: impl IntoElement) -> Self {
+    /// A cell, underlined as the row's look has it.
+    pub fn cell(mut self, cell: Div) -> Self {
+        let look = &self.look;
+        let cell = cell
+            .border_b_1()
+            .border_color(look.border)
+            .when(look.dashed, |this| this.border_dashed());
+        self.cells.push(cell.into_any_element());
+        self
+    }
+
+    /// The graph's cell, which isn't underlined (see the type's doc).
+    pub fn graph_cell(mut self, cell: Div) -> Self {
         self.cells.push(cell.into_any_element());
         self
     }
@@ -125,9 +138,6 @@ impl RenderOnce for HistoryOption {
             .w_full()
             .h(ROW_HEIGHT)
             .items_stretch()
-            .border_b_1()
-            .border_color(look.border)
-            .when(look.dashed, |this| this.border_dashed())
             .text_color(look.text)
             .when_some(look.background, |this, background| this.bg(background))
             .when_some(look.hover, |this, hover| {
@@ -158,7 +168,7 @@ impl RenderOnce for HistoryOption {
             });
         match self.menu {
             Some(menu) => row
-                .context_menu(move |popup, window, cx| menu(popup, window, cx))
+                .context_menu(move |popup, window, cx| menu(menu_frame(popup), window, cx))
                 .into_any_element(),
             None => row.into_any_element(),
         }

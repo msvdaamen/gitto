@@ -9,6 +9,7 @@ use gpui_kit::{
 };
 
 use crate::assets::AppAssets;
+use crate::identity;
 use crate::services::{AppPaths, Services, logger};
 use crate::state::router::{Route, Router};
 use crate::views::root::AppShell;
@@ -44,6 +45,7 @@ pub fn run() {
     });
     application.run(|cx: &mut App| {
         gpui_kit::init(cx);
+        identity::init(cx);
         let services = match start_services() {
             Ok(services) => services,
             Err(error) => {
@@ -103,10 +105,11 @@ pub fn open_main_window(cx: &mut App) {
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(TitlebarOptions {
-            title: Some("Gitto".into()),
+            title: Some(identity::APP_NAME.into()),
             ..TitlebarOptions::default()
         }),
-        app_id: Some("gitto".to_owned()),
+        app_id: Some(identity::APP_ID.to_owned()),
+        icon: identity::window_icon(),
         // Where the history still has room beside the sidebar's rail.
         window_min_size: Some(size(px(MIN_WIDTH), px(MIN_HEIGHT))),
         ..WindowOptions::default()

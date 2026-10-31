@@ -14,8 +14,8 @@ use gpui_kit::{
 use super::changed_file_list::{ChangedFileList, ROW_PITCH};
 use crate::components::ui::{Icon, IconName, LineStats, SectionHeader};
 use crate::data::{Opaque, QueryError};
-use crate::git::changes::LineCounts;
 use crate::theme::{PaletteExt as _, base_px};
+use gitto_ui::git::changes::LineCounts;
 
 /// Why some of the details couldn't be loaded, e.g. "Couldn't load the commit", above the rest;
 /// nothing without an error.

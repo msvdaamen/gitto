@@ -179,6 +179,20 @@ fn write_atomically(file: &Path, text: &str) -> io::Result<()> {
     std::fs::rename(&partial, file)
 }
 
+/// What gitto-ui's hooks (`gitto_ui::hooks`) save what they keep in: this, as the TS hooks did
+/// `localStorage`.
+impl gitto_ui::hooks::Storage for &LocalStorage {
+    fn get(&self, key: &str) -> Option<String> {
+        self.get_item(key)
+    }
+
+    /// The value applies at once, and is saved off the UI thread, which logs it if it can't be.
+    fn set(&mut self, key: &str, value: &str) -> io::Result<()> {
+        self.set_item(key, value);
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

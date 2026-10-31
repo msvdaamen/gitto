@@ -15,8 +15,8 @@ use super::summaries::RepositorySummary;
 use crate::components::ui::{FailurePopover, Icon, IconName};
 use crate::data::QueryError;
 use crate::state::clock::relative_time;
-use crate::theme::PaletteExt as _;
 use crate::theme::breakpoints::MEDIUM;
+use crate::theme::{AppTheme, PaletteExt as _, base_px};
 
 type Handler = Rc<dyn Fn(&mut Window, &mut App) + 'static>;
 
@@ -205,21 +205,26 @@ impl RenderOnce for HeroDecoration {
         div()
             .absolute()
             .inset_0()
+            // Turned, smiling, and in the theme's primary color: the SVG has it all drawn in, its
+            // box the turned blob's, so it's placed that much further out.
             .child(
-                img("brand/mascot.svg")
-                    .object_fit(ObjectFit::Contain)
-                    .absolute()
-                    .top(rems(-2.9))
-                    .map(|this| {
-                        if self.narrow {
-                            this.right_2()
-                        } else {
-                            this.right(rems(7.3))
-                        }
-                    })
-                    .w(rems(12.))
-                    .h(rems(10.2))
-                    .opacity(0.3),
+                img(match cx.app_theme() {
+                    AppTheme::Dark => "brand/hero-mascot-dark.svg",
+                    AppTheme::Light => "brand/hero-mascot-light.svg",
+                })
+                .object_fit(ObjectFit::Contain)
+                .absolute()
+                .top(base_px(-60.05))
+                .map(|this| {
+                    if self.narrow {
+                        this.right(base_px(-3.85))
+                    } else {
+                        this.right(base_px(96.15))
+                    }
+                })
+                .w(base_px(207.7))
+                .h(base_px(186.1))
+                .opacity(0.3),
             )
             .child(
                 div()

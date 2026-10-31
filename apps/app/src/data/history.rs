@@ -3,7 +3,8 @@
 //!
 //! The history table's rows are laid out from what [`History`] loads with `git/rows.ts`'s
 //! `withStashes`, `historyGraph` and `toHistoryRows`, and `ref-labels.ts`'s `checkouts`: pure
-//! logic, which the `gitto-ui` crate ports, so the table lays them out (see `crate::git`).
+//! logic, which the `gitto-ui` crate ports, so the table lays them out (see
+//! `gitto_ui::git::rows`).
 
 use std::cell::Cell;
 use std::collections::HashSet;
@@ -30,7 +31,7 @@ use super::remote::remotes_query;
 use super::stash::stashes_query;
 use super::status::{head_sha, status_query};
 use super::worktree::worktrees_query;
-use crate::git::status::has_uncommitted_changes;
+use gitto_ui::git::status::has_uncommitted_changes;
 
 /// How many commits the history loads first: a few screenfuls, so it shows quickly.
 pub const FIRST_PAGE: u32 = 200;
@@ -279,7 +280,10 @@ impl History {
     /// the stashes, this and HEAD; not on the rest of the status, which reloads whenever a file
     /// changes.
     pub fn has_changes(&self) -> bool {
-        has_uncommitted_changes(self.status.data().as_ref())
+        self.status
+            .data()
+            .as_ref()
+            .is_some_and(has_uncommitted_changes)
     }
 
     /// The commit HEAD points at; `None` before the first commit, or until the status loads.

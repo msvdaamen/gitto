@@ -33,15 +33,16 @@ use super::viewer_editing::{PatchEditor, PatchEditorEvent};
 use super::viewer_runtime::{LoadFile, LoadedFile, prepare_patch};
 use crate::components::ui::{
     EmptyState, FileStatusBadge, Icon, IconButton, IconName, LineStats, LoadingState, Notice,
+    action_button,
 };
 use crate::data::QueryClient;
 use crate::data::conflicts::conflict_options;
 use crate::data::diff::fetch_blob;
 use crate::data::file_diff::{FilePatch, fetch_file_patch};
 use crate::data::staging::StageAction;
-use crate::git::diff_source::DiffSource;
 use crate::state::diff_style::{DiffStyle, DiffStyleSetting};
 use crate::theme::PaletteExt as _;
+use gitto_ui::git::diff_source::{DiffFileKey, DiffSource};
 
 /// What a file's changes ask of the page.
 #[derive(Debug, Clone, PartialEq)]
@@ -77,7 +78,7 @@ pub fn prefetch_file_diff(
         // Its conflicts, highlighted as the viewer names them, so they show at once.
         let options = conflict_options(repository_id, &file.path, cx);
         let fetching = QueryClient::fetch_query(options, cx);
-        let file_key = source.file_key(&file.path);
+        let file_key = DiffFileKey::new(source, &file.path);
         let path = file.path.clone();
         cx.spawn(async move |cx| {
             // Only ahead of time: opening it says what went wrong.
@@ -160,7 +161,7 @@ pub struct FileDiffView {
     /// The patch last given to the viewer, which it says is on show.
     viewer_patch: Option<PreparedPatch>,
     /// Why a file's patch couldn't be shown, and its key: another file is tried afresh.
-    viewer_error: Option<(String, String)>,
+    viewer_error: Option<(DiffFileKey, String)>,
     /// Editing the file by hand, in its diff or its conflicts.
     pub(super) editing: FileEditing,
     /// The file being edited in the diff's place, while it is.
@@ -170,7 +171,7 @@ pub struct FileDiffView {
     /// Resolving a conflicted file: its conflicts, while it's the file on show.
     pub(super) resolution: Entity<ConflictResolutionView>,
     /// The file on show whose neighbours were loaded ahead.
-    prefetched_for: Option<String>,
+    prefetched_for: Option<DiffFileKey>,
     /// What had the focus when the changes opened, to give it back once they close.
     opener: Option<FocusHandle>,
     pub(super) window: AnyWindowHandle,
@@ -729,9 +730,11 @@ impl FileDiffView {
                                     .text_color(palette.faint)
                                     .child(folder.to_owned()),
                             )
+                            // Cut short too, rather than run into the label, in a narrow pane.
                             .child(
                                 div()
-                                    .flex_none()
+                                    .min_w_0()
+                                    .truncate()
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child(name.to_owned()),
                             ),
@@ -776,8 +779,7 @@ impl FileDiffView {
                             StageAction::Unstage => (IconName::Minus, "Unstage file"),
                         };
                         this.child(
-                            Button::new("stage-file")
-                                .small()
+                            action_button("stage-file")
                                 .icon(Icon::new(icon))
                                 .label(label)
                                 .disabled(staging_disabled)
@@ -995,6 +997,7 @@ mod tests {
     use gpui_kit::{AppContext as _, TestAppContext};
 
     use super::super::line_picker::LineStaging;
+    use super::super::shown_file::cache_name;
     use super::super::viewer_runtime::ViewerRuntime;
     use super::*;
     use crate::data::diff::ChangedFiles;
@@ -1050,7 +1053,7 @@ mod tests {
         QueryClient::set_data(
             &file_patch_key(&id(), source, &file.path),
             FilePatch {
-                key: source.file_key(&file.path),
+                key: DiffFileKey::new(source, &file.path),
                 file: file.clone(),
                 patch: patch.into(),
             },
@@ -1380,7 +1383,7 @@ mod tests {
         assert_eq!(opened.header(cx), "a.txt");
 
         next.send(FilePatch {
-            key: commit().file_key("b.txt"),
+            key: DiffFileKey::new(&commit(), "b.txt"),
             file: counted("b.txt"),
             patch: changed_line("b.txt", "later").into(),
         })
@@ -1399,7 +1402,7 @@ mod tests {
         // Parsed and highlighted, named as they'll be when they're opened.
         cx.update(|cx| {
             for path in ["a.txt", "c.txt"] {
-                let key = format!("{}:0", commit().file_key(path));
+                let key = format!("{}:0", cache_name(&DiffFileKey::new(&commit(), path)));
                 assert!(ViewerRuntime::has_highlights(&key, cx), "{path}");
             }
         });
@@ -1741,7 +1744,7 @@ mod tests {
                 let patch = changed_line(path, &format!("new {path}"));
                 format!(
                     "{}:{}:0",
-                    DiffSource::Unstaged.file_key(path),
+                    cache_name(&DiffFileKey::new(&DiffSource::Unstaged, path)),
                     PatchVersion::of(&patch)
                 )
             };
@@ -1793,6 +1796,57 @@ mod tests {
         assert_eq!(calls[0].version, PatchVersion::of(&from));
         assert_eq!(calls[0].lines, lines());
         assert_eq!(opened.shown(cx), Some(changed_line("a.txt", "left")));
+    }
+
+    /// The view in a pane narrower than its window, as the page has it between the sidebar and
+    /// the details.
+    struct Narrow(Entity<FileDiffView>);
+
+    impl Render for Narrow {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .child(div().w(gpui_kit::px(500.)).h_full().child(self.0.clone()))
+        }
+    }
+
+    #[gpui_kit::test]
+    fn shows_the_hunks_buttons_in_a_pane_narrower_than_the_window_once_opened(
+        cx: &mut TestAppContext,
+    ) {
+        let _dir = init(cx);
+        set_changes(vec![], vec![counted("a.txt")], false, cx);
+        patches(&DiffSource::Unstaged, &[counted("a.txt")], "new", cx);
+        let (window, _) = crate::test_support::open(cx, |window, cx| {
+            let lines = Mutation::new(
+                |_: LinesToStage, _: &mut App| Task::ready(Ok(String::new())),
+                cx,
+            );
+            let whole = Mutation::new(|_: FileToStage, _: &mut App| Task::ready(Ok(())), cx);
+            let source = DiffSource::Unstaged;
+            Narrow(cx.new(|cx| {
+                FileDiffView::with_mutations(
+                    id(),
+                    source,
+                    counted("a.txt"),
+                    lines,
+                    whole,
+                    window,
+                    cx,
+                )
+            }))
+        });
+        cx.run_until_parked();
+
+        let right = cx
+            .update_window(window, |_, window, _| {
+                window.find(("stage-hunk", 0_usize)).bounds().right()
+            })
+            .unwrap();
+        assert!(
+            right <= gpui_kit::px(500.),
+            "the button's right edge is at {right:?}"
+        );
     }
 
     #[gpui_kit::test]

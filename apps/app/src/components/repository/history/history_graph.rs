@@ -19,7 +19,8 @@ use crate::theme::{FONT_SIZE, Palette, PaletteExt as _, base_px};
 /// Width of a lane, and the space left and right of the lanes.
 const LANE: f32 = 20.;
 const PADDING: f32 = 6.;
-/// Height of a row's graph: the row, without its bottom border.
+/// Height of a row's graph: the row, without the bottom border its other cells have, so a node
+/// is in line with their text.
 const HEIGHT: f32 = ROW_PX - 1.;
 const MIDDLE: f32 = HEIGHT / 2.;
 const NODE_RADIUS: f32 = 8.;
@@ -104,7 +105,8 @@ fn top_path(edge: &GraphEdge) -> Vec<PathStep> {
 fn bottom_path(edge: &GraphEdge) -> Vec<PathStep> {
     let from = x(edge.from);
     let to = x(edge.to);
-    // One past the row, over its bottom border, so the line meets the next row's.
+    // One past the row's other cells, to the row's bottom, as its cell has no bottom border: the
+    // line meets the next row's.
     let bottom = HEIGHT + 1.;
     if from == to {
         return vec![
@@ -392,6 +394,7 @@ fn commit_node(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theme::base_px;
 
     /// A path as the TS's SVG `d` attribute spelled it.
     fn svg(path: &[PathStep]) -> String {

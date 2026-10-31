@@ -15,9 +15,9 @@ use super::history_option::{
     HistoryOption, MenuBuilder, OnSelect, RowLook, RowPosition, RowTotals,
 };
 use super::ref_labels::{HistoryRefLabels, LabelActions, MoreLabels};
-use crate::git::changes::LineCounts;
 use crate::state::clock::relative_time;
 use crate::theme::{Palette, PaletteExt as _, base_px};
+use gitto_ui::git::changes::LineCounts;
 
 /// What every row gets from the table.
 #[derive(Clone)]
@@ -171,7 +171,7 @@ impl RenderOnce for HistoryCommitRow {
             div().flex().items_center().px(CELL_PADDING).child(labels),
             props.graph_width,
         ))
-        .cell(Column::Graph.apply(
+        .graph_cell(Column::Graph.apply(
             div().h_full().overflow_hidden().children(graph),
             props.graph_width,
         ))
@@ -186,15 +186,16 @@ impl RenderOnce for HistoryCommitRow {
 
 #[cfg(test)]
 mod tests {
-    use gitto_ui::format::AVATAR_COLORS;
-
     use super::*;
-    use crate::theme::palette;
+    use crate::util::format::avatar_color;
 
     #[test]
-    fn colours_authors_with_the_avatars_colours() {
-        for (index, color) in AVATAR_COLORS.into_iter().enumerate() {
-            assert_eq!(author_color(color), palette::avatar_color(index));
+    fn colours_authors_as_their_avatars_are() {
+        for key in ["ada@example.com", "grace@example.com", "linus@example.com"] {
+            assert_eq!(
+                author_color(gitto_ui::format::avatar_color(key)),
+                avatar_color(key)
+            );
         }
     }
 }

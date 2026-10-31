@@ -13,10 +13,10 @@ use gpui_kit::{
     Window, anchored, deferred, div, px,
 };
 
-use super::columns::{LABEL_ICON, LABEL_LINE, LABEL_TEXT, mixed, part, tinted};
+use super::columns::{LABEL_ICON, LABEL_LINE, LABEL_TEXT, part, tinted};
 use crate::components::repository::branch_menu::BranchMenuProvider;
-use crate::components::ui::{Icon, IconName};
-use crate::theme::{Palette, PaletteExt as _, base_px};
+use crate::components::ui::{Icon, IconName, menu_frame};
+use crate::theme::{Palette, PaletteExt as _, base_px, mixed};
 
 /// Switches to a branch, by its full ref name; or opens a worktree, by its path.
 pub type OnRef = Rc<dyn Fn(String, &mut Window, &mut App)>;
@@ -212,6 +212,7 @@ fn ref_pill(
     let title: SharedString = label_title(&label).into();
     let name: SharedString = label.name().to_owned().into();
     let key = label_key(&label);
+    let menu_key = format!("{key}/menu");
     let icon = |name: IconName| Icon::new(name).size(LABEL_ICON).flex_none();
     let target = label_target(&label);
     let actions = actions.clone();
@@ -264,13 +265,24 @@ fn ref_pill(
                 })
         });
     match branch {
+        // The menu's around the pill, not in it: the menu would take its text's size, line height
+        // and weight (a checked-out branch's is bold), and look unlike the app's other menus.
         Some(branch) => {
             let reference: SharedString = branch.full_name.into();
             let provider = actions.branch_menu.clone();
-            pill.context_menu(move |menu, _, cx| {
-                BranchMenuProvider::build_menu(&provider, reference.clone(), menu, cx)
-            })
-            .into_any_element()
+            h_flex()
+                .id(part(row, menu_key))
+                .min_w_0()
+                .child(pill)
+                .context_menu(move |menu, _, cx| {
+                    BranchMenuProvider::build_menu(
+                        &provider,
+                        reference.clone(),
+                        menu_frame(menu),
+                        cx,
+                    )
+                })
+                .into_any_element()
         }
         None => pill.into_any_element(),
     }

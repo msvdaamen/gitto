@@ -448,7 +448,7 @@ impl RefList {
     fn collapsed_of(id: &RepositoryId, cx: &App) -> Collapsed {
         let storage = Rc::clone(Services::global(cx).storage());
         Collapsed::new(
-            id.to_string(),
+            id,
             [(Section::Tags.key(), true), (Section::Stashes.key(), true)],
             storage,
         )
@@ -1588,8 +1588,6 @@ mod tests {
             .borrow_mut()
             .extend([repository(&id, "/w/repo"), repository(&other, "/w/other")]);
         let dir = setup_with(cx, repositories);
-        // Dialogs and menus in place at once, where they're clicked.
-        cx.update(|cx| cx.set_reduce_motion(true));
         seed(&id, cx);
         seed(&other, cx);
         prepare(&id, cx);
