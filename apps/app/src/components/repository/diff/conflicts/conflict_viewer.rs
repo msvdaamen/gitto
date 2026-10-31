@@ -11,7 +11,7 @@ use std::sync::Arc;
 use futures::FutureExt as _;
 use futures::future::Shared;
 use gitto_git::ContentVersion;
-use gitto_ui_logic::diff::diff_metadata::Side;
+use gitto_ui_logic::diff::diff_metadata::{Lines, Side};
 use gitto_ui_logic::diff::patch_files::Expanded;
 use gitto_ui_logic::diff::viewer_rows::{ExpandDirection, SeparatorButtons, expand};
 use gitto_ui_logic::git::diff_source::DiffFileKey;
@@ -21,15 +21,16 @@ use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_fl
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, HighlightStyle, Hsla,
-    ListHorizontalSizingBehavior, MouseButton, Pixels, ScrollStrategy, SharedString, StyledText,
-    Task, UniformListScrollHandle, WeakEntity, Window, div, px, rems, uniform_list,
+    ListHorizontalSizingBehavior, MouseButton, Pixels, ScrollStrategy, SharedString, Task,
+    TestSupportExt as _, UniformListScrollHandle, WeakEntity, Window, div, px, rems, uniform_list,
 };
 
 use super::super::file_editing::EditSession;
+use super::super::viewer::code_selection::{CodeRange, CodeSelection, CodeTexts};
 use super::super::viewer::highlight::DiffHighlights;
 use super::super::viewer::patch_viewer::{
-    DrawnLine, FONT_REMS, ROW_REMS, Scroll, code_char_width, scroll_list, scroll_list_to,
-    widest_line, width_check,
+    DrawnLine, FONT_REMS, ROW_REMS, Scroll, code_char_width, drawn_columns, scroll_list,
+    scroll_list_to, show_whole_line, widest_line, width_check,
 };
 use super::super::viewer::viewer_actions::{
     CONFLICT_VIEWER, ScrollDown, ScrollLeft, ScrollPageDown, ScrollPageUp, ScrollRight,
@@ -48,6 +49,7 @@ use super::conflict_whole_file::WholeFile;
 use gitto_app_data::data::DataError;
 use gitto_app_kit::theme::{Palette, PaletteExt as _};
 use gitto_app_kit::ui::{Icon, IconName};
+use gpui_kit::base::input::Copy;
 
 /// Why a conflict couldn't be resolved as asked: what it left didn't read as the other conflicts.
 const UNRESOLVABLE: &str = "This conflict can't be resolved here: its file's other markers would be misread. Edit the file by hand.";
@@ -108,6 +110,8 @@ struct Shown {
     problem: Option<String>,
     /// The widest line, in columns as drawn.
     widest: usize,
+    /// The lines too long to draw whole that are, as asked (see `DrawnLine::whole`).
+    whole_lines: Rc<HashSet<(Side, usize)>>,
 }
 
 /// A file's text as `show_text` read it, to put on show: its conflicts, or why they can't be read.
@@ -140,8 +144,12 @@ struct Request {
 /// the whole file is, markers and all, in place, and what's read from disk is held until editing
 /// stops. The header's commands are its methods: [`next`](Self::next),
 /// [`previous`](Self::previous) and [`resolve`](Self::resolve).
+///
+/// Its lines' text can be selected, and copied as it is in the file (see `code_selection`).
 pub struct ConflictViewer {
     focus: FocusHandle,
+    /// What's selected of the lines' text (see `code_selection`).
+    selection: CodeSelection,
     scroll: UniformListScrollHandle,
     save: SaveResolved,
     path: SharedString,
@@ -189,9 +197,17 @@ impl ConflictViewer {
     pub fn new(save: SaveResolved, cx: &mut Context<Self>) -> Self {
         cx.on_release(|this: &mut Self, cx| this.highlights.drop_long(cx))
             .detach();
+        // Focusable, to scroll it with the keyboard, and step through the conflicts with it.
+        let focus = cx.focus_handle().tab_stop(true);
+        let selection = CodeSelection::new(
+            &focus,
+            |viewer: &ConflictViewer| &viewer.selection,
+            ConflictViewer::copied,
+            cx,
+        );
         ConflictViewer {
-            // Focusable, to scroll it with the keyboard, and step through the conflicts with it.
-            focus: cx.focus_handle().tab_stop(true),
+            focus,
+            selection,
             scroll: UniformListScrollHandle::new(),
             save,
             path: SharedString::default(),
@@ -487,8 +503,9 @@ impl ConflictViewer {
             state,
             problem: read.problem,
             widest,
+            whole_lines: Rc::default(),
         });
-        self.relayout();
+        self.relayout(cx);
         self.report(cx);
         // Only the file as it was read from disk: not edits whose version isn't known yet.
         if has_version {
@@ -510,7 +527,10 @@ impl ConflictViewer {
         }));
     }
 
-    fn relayout(&mut self) {
+    /// Lays the conflicts out in rows again. What's selected of their text is let go of: it's of
+    /// the rows as they were.
+    fn relayout(&mut self, cx: &mut App) {
+        self.selection.clear(cx);
         self.rows = Rc::new(match self.state() {
             Some(state) => conflict_rows(state, &self.expanded),
             None => Vec::new(),
@@ -602,11 +622,12 @@ impl ConflictViewer {
                             shown.version = Some(version);
                             shown.state = Some(Arc::clone(&resolved));
                             shown.widest = widest;
+                            shown.whole_lines = Rc::default();
                         }
                         // In the last one's place, the lines shown around the conflicts kept.
                         this.highlights.forget(&from_state.diff, cx);
                         this.watch_highlights(&resolved, cx);
-                        this.relayout();
+                        this.relayout(cx);
                         // On to the next one, or the one before if it was the last.
                         let left = conflicts_left(Some(&resolved));
                         this.current = left
@@ -767,7 +788,7 @@ impl ConflictViewer {
         cx: &mut Context<Self>,
     ) {
         expand(&mut self.expanded, gap, direction, range);
-        self.relayout();
+        self.relayout(cx);
         cx.notify();
     }
 
@@ -776,6 +797,42 @@ impl ConflictViewer {
         let row_height = rems(ROW_REMS).to_pixels(window.rem_size());
         let char_width = self.char_width.map(|(_, width)| width);
         scroll_list(&self.scroll, self.rows.len(), how, row_height, char_width);
+        cx.notify();
+    }
+
+    /// The text of `range` of the rows, as their lines are in the file (see `code_selection`).
+    fn copied(&self, range: CodeRange) -> String {
+        let Some(state) = self.state() else {
+            return String::new();
+        };
+        range.text(|row| match self.rows.get(row)? {
+            ConflictRow::Line { side, index, .. } => side_lines(state, *side).get(*index),
+            _ => None,
+        })
+    }
+
+    /// Copies the text selected, if any is; leaves the keys to the view around otherwise.
+    fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.selection.copy(self, ConflictViewer::copied, cx) {
+            cx.propagate();
+        }
+    }
+
+    /// Draws the line `index` of `side` whole, though it's too long to be drawn whole
+    /// otherwise (see `DrawnLine`): widening the rows to it.
+    fn show_whole_line(&mut self, side: Side, index: usize, cx: &mut Context<Self>) {
+        let Some(shown) = &mut self.shown else {
+            return;
+        };
+        let Some(line) = shown
+            .state
+            .as_ref()
+            .and_then(|state| side_lines(state, side).get(index))
+        else {
+            return;
+        };
+        shown.widest = shown.widest.max(drawn_columns(line, usize::MAX));
+        Rc::make_mut(&mut shown.whole_lines).insert((side, index));
         cx.notify();
     }
 
@@ -796,6 +853,7 @@ impl ConflictViewer {
         let shown = self.shown.as_ref()?;
         let state = Arc::clone(shown.state.as_ref()?);
         let widest = shown.widest;
+        let whole_lines = Rc::clone(&shown.whole_lines);
         let rem = window.rem_size();
         let font_size = rems(FONT_REMS).to_pixels(rem);
         let row_height = rems(ROW_REMS).to_pixels(rem);
@@ -821,6 +879,8 @@ impl ConflictViewer {
                 .as_ref()
                 .and_then(|highlights| highlights.peek().cloned()),
             state,
+            whole_lines,
+            texts: self.selection.texts(cx),
             current: self.current,
             enabled: self.is_resolvable(),
             row_width,
@@ -867,6 +927,10 @@ struct Frame {
     entity: WeakEntity<ConflictViewer>,
     rows: Rc<Vec<ConflictRow>>,
     state: Arc<ConflictState>,
+    /// The lines drawn whole, though they're long (see `Shown::whole_lines`).
+    whole_lines: Rc<HashSet<(Side, usize)>>,
+    /// What the lines' text is drawn with, and what's selected of it.
+    texts: CodeTexts,
     highlights: Option<Arc<DiffHighlights>>,
     current: Option<usize>,
     /// Whether the conflicts' buttons are on.
@@ -944,6 +1008,7 @@ impl Render for ConflictViewer {
             .on_action(cx.listener(|this, _: &ScrollToBottom, window, cx| {
                 this.scroll(Scroll::Bottom, window, cx)
             }))
+            .on_action(cx.listener(Self::copy))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
@@ -956,22 +1021,21 @@ impl Render for ConflictViewer {
             .when_some(frame, |this, frame| {
                 let count = frame.rows.len();
                 let rows = Rc::clone(&frame);
-                this.child(
-                    uniform_list("conflict-rows", count, move |range, _, cx| {
-                        range
-                            .map(|ix| render_row(&rows, ix, cx))
-                            .collect::<Vec<_>>()
-                    })
-                    .track_scroll(&self.scroll)
-                    .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
-                    .size_full(),
-                )
-                .child(Scrollbar::new(&self.scroll))
-                .child(width_check(
-                    &self.scroll,
-                    frame.viewport_width,
-                    cx.entity().downgrade(),
-                ))
+                let list = uniform_list("conflict-rows", count, move |range, _, cx| {
+                    range
+                        .map(|ix| render_row(&rows, ix, cx))
+                        .collect::<Vec<_>>()
+                })
+                .track_scroll(&self.scroll)
+                .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
+                .size_full();
+                this.child(self.selection.area(list.into_any_element(), &self.scroll))
+                    .child(Scrollbar::new(&self.scroll))
+                    .child(width_check(
+                        &self.scroll,
+                        frame.viewport_width,
+                        cx.entity().downgrade(),
+                    ))
             })
             // The focus ring, inside: the view fills its panel.
             .when(focused, |this| {
@@ -1003,7 +1067,7 @@ fn render_row(frame: &Rc<Frame>, ix: usize, cx: &App) -> AnyElement {
             number,
             ..
         } => base
-            .child(line_cell(frame, role, side, index, number, cx))
+            .child(line_cell(frame, ix, role, side, index, number, cx))
             .into_any_element(),
         ConflictRow::Actions { conflict } => {
             base.child(actions(frame, conflict)).into_any_element()
@@ -1022,9 +1086,10 @@ fn render_row(frame: &Rc<Frame>, ix: usize, cx: &App) -> AnyElement {
     }
 }
 
-/// A line: its number, in the gutter, and its text, highlighted.
+/// A line, in the row `ix`: its number, in the gutter, and its text, highlighted.
 fn line_cell(
     frame: &Rc<Frame>,
+    ix: usize,
     role: LineRole,
     side: Side,
     index: usize,
@@ -1033,8 +1098,18 @@ fn line_cell(
 ) -> AnyElement {
     let palette = &frame.palette;
     let tint = frame.tint(role);
-    let (text, highlights) = line_text(frame, side, index, cx);
+    let (drawn, highlights) = line_text(frame, side, index, cx);
+    let whole = drawn.is_cut().then(|| {
+        let entity = frame.entity.clone();
+        show_whole_line(("whole-line", ix), move |cx| {
+            let _ = entity.update(cx, |this, cx| this.show_whole_line(side, index, cx));
+        })
+    });
+    let text = frame
+        .texts
+        .text(0, ix, drawn, highlights, cx.theme().selection);
     h_flex()
+        .id(("line", ix))
         .w_full()
         .h_full()
         .when_some(tint, |this, tint| this.bg(tint.opacity(0.12)))
@@ -1063,8 +1138,10 @@ fn line_cell(
                 .whitespace_nowrap()
                 .font_family(frame.mono.clone())
                 .text_size(frame.font_size)
-                .child(StyledText::new(text).with_highlights(highlights)),
+                .child(text)
+                .children(whole),
         )
+        .test_support()
         .into_any_element()
 }
 
@@ -1289,31 +1366,41 @@ fn separator(
         .into_any_element()
 }
 
-/// The text of line `ix` of `side` as it's drawn (see `DrawnLine`), and its syntax.
+/// The lines of `side` of `state`: ours, or theirs.
+fn side_lines(state: &ConflictState, side: Side) -> &Lines {
+    match side {
+        Side::Deletions => state.ours(),
+        Side::Additions => state.theirs(),
+    }
+}
+
+/// The text of line `ix` of `side` as it's drawn (see `DrawnLine`), whole if it's to be, and its
+/// syntax.
 fn line_text(
     frame: &Frame,
     side: Side,
     ix: usize,
     cx: &App,
-) -> (SharedString, Vec<(Range<usize>, HighlightStyle)>) {
-    let lines = match side {
-        Side::Deletions => frame.state.ours(),
-        Side::Additions => frame.state.theirs(),
+) -> (Rc<DrawnLine>, Vec<(Range<usize>, HighlightStyle)>) {
+    let Some(line) = side_lines(&frame.state, side).get(ix) else {
+        return (Rc::new(DrawnLine::new("")), Vec::new());
     };
-    let Some(line) = lines.get(ix) else {
-        return (SharedString::default(), Vec::new());
-    };
-    let drawn = DrawnLine::new(line);
+    let drawn = Rc::new(if frame.whole_lines.contains(&(side, ix)) {
+        DrawnLine::whole(line)
+    } else {
+        DrawnLine::new(line)
+    });
     let syntax = match &frame.highlights {
         Some(highlights) => drawn.syntax(highlights, side, ix, cx).collect(),
         None => Vec::new(),
     };
-    (drawn.text.into(), syntax)
+    (drawn, syntax)
 }
 
 #[cfg(test)]
 mod tests {
     use gpui_kit::TestAppContext;
+    use gpui_kit::test::TestWindowExt as _;
 
     use super::super::super::test_views::{
         Opened, conflicted, init, open, save, set_changes, set_conflict, text_conflict,
@@ -1509,6 +1596,91 @@ mod tests {
             view.resolution.read(cx).error().map(str::to_owned)
         });
         assert_eq!(error.as_deref(), Some(UNRESOLVABLE));
+    }
+
+    /// Where the text of the line `index` of `side` starts and ends, as it's drawn: from the left
+    /// of its first character to past its last.
+    fn line_ends(
+        opened: &Opened,
+        viewer: &gpui_kit::Entity<ConflictViewer>,
+        side: Side,
+        index: usize,
+        cx: &mut TestAppContext,
+    ) -> (gpui_kit::Point<Pixels>, gpui_kit::Point<Pixels>) {
+        cx.update_window(opened.window, |_, window, cx| {
+            window.render_frame(cx);
+            let (row, gutter) = viewer.update(cx, |viewer, cx| {
+                let row = viewer.rows.iter().position(|row| {
+                    matches!(row, ConflictRow::Line { side: at, index: ix, .. } if *at == side && *ix == index)
+                });
+                let gutter = viewer.frame(window, cx).expect("on show").gutter_width;
+                (row.expect("a row"), gutter)
+            });
+            let bounds = window.find(("line", row)).bounds();
+            let left = bounds.left() + gutter + rems(0.6).to_pixels(window.rem_size());
+            let middle = bounds.center().y;
+            (
+                gpui_kit::point(left + px(1.), middle),
+                gpui_kit::point(bounds.right() - px(2.), middle),
+            )
+        })
+        .unwrap()
+    }
+
+    /// Copies, as Cmd or Ctrl-C does, and what's on the clipboard then.
+    fn copy(opened: &Opened, cx: &mut TestAppContext) -> Option<String> {
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("before".into()));
+        cx.update_window(opened.window, |_, window, cx| {
+            window.dispatch_action(Box::new(Copy), cx)
+        })
+        .unwrap();
+        cx.read_from_clipboard().and_then(|item| item.text())
+    }
+
+    #[gpui_kit::test]
+    fn copies_the_lines_selected_as_they_are_in_the_file(cx: &mut TestAppContext) {
+        let _dir = init(cx);
+        let opened = open_conflict(
+            "one\n<<<<<<< HEAD\n\tours\n=======\ntheirs\n>>>>>>> side\n",
+            cx,
+        );
+        let viewer = viewer(&opened, cx);
+        let (from, _) = line_ends(&opened, &viewer, Side::Deletions, 1, cx);
+        let (_, to) = line_ends(&opened, &viewer, Side::Additions, 1, cx);
+        cx.update_window(opened.window, |_, window, cx| window.drag(from, to, cx))
+            .unwrap();
+        cx.run_until_parked();
+        // The tab as it is; the sides' lines, not the markers between them.
+        assert_eq!(copy(&opened, cx).as_deref(), Some("\tours\ntheirs"));
+    }
+
+    #[gpui_kit::test]
+    fn copies_a_long_line_whole_and_draws_it_whole_once_asked(cx: &mut TestAppContext) {
+        let _dir = init(cx);
+        let long = format!("{}end", "x".repeat(5000));
+        let opened = open_conflict(&format!("{long}\n{MARKERS}"), cx);
+        let viewer = viewer(&opened, cx);
+        let (from, past) = line_ends(&opened, &viewer, Side::Additions, 0, cx);
+        // From its start to its end, past what's drawn of it.
+        cx.update_window(opened.window, |_, window, cx| {
+            window.drag(from, gpui_kit::point(from.x + px(4.), from.y), cx);
+            window.drag(from, past, cx)
+        })
+        .unwrap();
+        cx.run_until_parked();
+        let copied = copy(&opened, cx).unwrap_or_default();
+        assert!(copied.ends_with("end"), "{} bytes", copied.len());
+
+        let widest = |cx: &mut TestAppContext| {
+            cx.update(|cx| viewer.read(cx).shown.as_ref().map(|shown| shown.widest))
+        };
+        assert_eq!(widest(cx), Some(4000 + 1 + 20));
+        let cut = widest(cx);
+        // At its end, where it's cut.
+        cx.update(|cx| scroll_list_to(&viewer.read(cx).scroll, px(1_000_000.), px(0.)));
+        opened.click(("whole-line", 0usize), cx);
+        assert_eq!(widest(cx), Some(5003));
+        assert!(cut < widest(cx));
     }
 
     #[gpui_kit::test]
