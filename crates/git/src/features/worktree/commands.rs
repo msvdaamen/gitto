@@ -45,7 +45,9 @@ pub async fn add_worktree(
     let target = branch_target(branch)?;
     let path = resolve(repo.path(), folder);
     // One write, so nothing else changes the branches halfway.
-    repo.exclusive(|run| async move {
+    let (branch, new_branch) = (branch.to_owned(), new_branch.map(str::to_owned));
+    repo.exclusive(move |run| async move {
+        let (branch, new_branch) = (branch.as_str(), new_branch.as_deref());
         // That ref itself, rather than git reading `branch` as a revision, like
         // `refs/heads/main~3`.
         if !is_ref(&run, branch).await? {
@@ -108,7 +110,9 @@ pub async fn add_worktree(
 pub async fn remove_worktree(repo: &Repo, path: &str) -> Result<()> {
     let root = repo.path().to_owned();
     // One write, so no other change of the worktrees can move it between finding and removing it.
-    repo.exclusive(|run| async move {
+    let path = path.to_owned();
+    repo.exclusive(move |run| async move {
+        let path = path.as_str();
         let Some(worktree) = find_worktree(&root, &run, path).await? else {
             return Err(Error::RepositoryChanged(
                 "The worktree is gone: the worktrees changed before it could be removed."
