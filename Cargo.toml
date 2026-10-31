@@ -50,6 +50,9 @@ rusqlite = { version = "0.40.2", features = ["bundled"] }
 
 # apps/app: the GPUI app.
 anyhow = "1.0.104"
+# The socket a second launch tells the Gitto running through, on Windows: Unix domain sockets,
+# which std only has on Unix (see `apps/app/src/single_instance.rs`).
+uds_windows = "1.2.1"
 
 # apps/app's diffs: syntax highlighting as gpui-kit's `syntect` feature does it (the same syntect
 # and syntax set), and the words that changed between a removed line and the line added for it
