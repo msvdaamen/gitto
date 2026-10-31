@@ -689,6 +689,9 @@ async fn run(cwd: PathBuf, args: Vec<OsString>, options: RunOptions) -> Result<V
             // rest then fails with EPIPE. Its exit code and stderr already say why, so that's not
             // reported.
             let _ = pipe.write_all(input).await;
+            // On Windows the pipe buffers what's written (see `blocking::Unblock`), and only closing
+            // it hands that to git: dropped, git would read nothing.
+            let _ = pipe.close().await;
         }
         drop(stdin.take());
     };
