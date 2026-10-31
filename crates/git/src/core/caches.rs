@@ -123,14 +123,16 @@ impl IndexRefreshes {
             async_io::Timer::after(REFRESH_INDEX_AFTER).await;
             {
                 let mut timers = lock(&this.timers);
-                if timers
+                if !timers
                     .get(&key)
                     .is_some_and(|(scheduled, _)| *scheduled == number)
                 {
-                    // Itself: left to run to its end, rather than cancelled by being dropped.
-                    if let Some((_, task)) = timers.remove(&key) {
-                        task.detach();
-                    }
+                    // Scheduled again since, which cancels this one as soon as it can.
+                    return;
+                }
+                // Itself: left to run to its end, rather than cancelled by being dropped.
+                if let Some((_, task)) = timers.remove(&key) {
+                    task.detach();
                 }
             }
             // `-q` and `--unmerged`: files that did change, and conflicts, aren't errors.
