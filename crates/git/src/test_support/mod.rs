@@ -165,9 +165,6 @@ fn hermetic_env() {
                 "GIT_COMMITTER_NAME",
                 "GIT_COMMITTER_EMAIL",
                 "GIT_COMMITTER_DATE",
-                "GIT_CONFIG",
-                "GIT_CONFIG_COUNT",
-                "GIT_CONFIG_PARAMETERS",
             ]
             .iter()
             .chain(REPOSITORY_ENV)

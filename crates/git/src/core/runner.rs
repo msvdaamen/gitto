@@ -130,19 +130,48 @@ pub(crate) const ENV: &[(&str, &str)] = &[
     ("GIT_PAGER", "cat"),
 ];
 
-/// The variables that tell git which repository to use, or where its index or objects are, rather
-/// than the folder it runs in: left out of the environment git runs with, as Gitto may have been
-/// started from a shell that sets them (a hook's, or `git rebase -x`'s), which would point every
-/// command, in every repository, at that one.
+/// The variables that tell git which repository to use, where its index or objects are, or how
+/// it's configured for it, rather than the folder it runs in: left out of the environment git runs
+/// with, as Gitto may have been started from a shell that sets them (a hook's, or
+/// `git rebase -x`'s), which would point every command, in every repository, at that one. They're
+/// what `git rev-parse --local-env-vars` lists, git's own list of them, and the namespace; with
+/// `GIT_CONFIG_COUNT`, its `GIT_CONFIG_KEY_<n>` and `GIT_CONFIG_VALUE_<n>` go too (see
+/// `config_env`).
+///
+/// Then the pathspec settings, which say how paths are taken, as `ENV` and
+/// `RunOptions::glob_pathspecs` do: git refuses globs or ignoring case along with
+/// GIT_LITERAL_PATHSPECS, so with one of those exported every command given a path would fail.
 pub(crate) const REPOSITORY_ENV: &[&str] = &[
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_COUNT",
+    "GIT_OBJECT_DIRECTORY",
     "GIT_DIR",
     "GIT_WORK_TREE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_GRAFT_FILE",
     "GIT_INDEX_FILE",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_PREFIX",
+    "GIT_SHALLOW_FILE",
     "GIT_COMMON_DIR",
     "GIT_NAMESPACE",
+    "GIT_GLOB_PATHSPECS",
+    "GIT_NOGLOB_PATHSPECS",
+    "GIT_ICASE_PATHSPECS",
 ];
+
+/// The settings in `vars` (the process's environment) that `GIT_CONFIG_COUNT` numbers:
+/// `GIT_CONFIG_KEY_<n>` and `GIT_CONFIG_VALUE_<n>`, left out with it (see `REPOSITORY_ENV`).
+fn config_env(vars: impl IntoIterator<Item = OsString>) -> impl Iterator<Item = OsString> {
+    vars.into_iter().filter(|key| {
+        key.to_str().is_some_and(|key| {
+            key.starts_with("GIT_CONFIG_KEY_") || key.starts_with("GIT_CONFIG_VALUE_")
+        })
+    })
+}
 
 /// Locks `mutex`, whether or not a thread panicked holding it: what's kept behind these stays
 /// consistent between statements.
@@ -343,6 +372,9 @@ fn git_command(
         command.env("PATH", path);
     }
     for key in REPOSITORY_ENV {
+        command.env_remove(key);
+    }
+    for key in config_env(std::env::vars_os().map(|(key, _)| key)) {
         command.env_remove(key);
     }
     command.envs(ENV.iter().copied());
@@ -574,6 +606,45 @@ mod tests {
             } else {
                 assert_eq!(value, Some(None), "{key:?}");
             }
+        }
+    }
+
+    #[test]
+    fn leaves_out_the_settings_git_config_count_numbers() {
+        let vars = [
+            "PATH",
+            "GIT_CONFIG_KEY_0",
+            "GIT_CONFIG_VALUE_0",
+            "GIT_CONFIG_KEY_12",
+            "GIT_EDITOR",
+        ];
+        let left_out: Vec<_> = config_env(vars.map(OsString::from)).collect();
+        assert_eq!(
+            left_out,
+            [
+                "GIT_CONFIG_KEY_0",
+                "GIT_CONFIG_VALUE_0",
+                "GIT_CONFIG_KEY_12"
+            ]
+        );
+    }
+
+    #[test]
+    fn leaves_out_the_pathspec_settings_git_refuses_with_literal_pathspecs() {
+        let fx = Fixture::new();
+        let path = fx.create_repo("pathspecs");
+        for key in ["GIT_GLOB_PATHSPECS", "GIT_ICASE_PATHSPECS"] {
+            assert!(REPOSITORY_ENV.contains(&key), "{key}");
+            // Set for the command itself, as one inherited would be if it weren't left out.
+            let options = RunOptions::default().env(key, "1");
+            let error =
+                smol::block_on(run_git(&path, ["ls-files", "--", "a.txt"], options)).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("incompatible with all other global pathspec"),
+                "{error}"
+            );
         }
     }
 
