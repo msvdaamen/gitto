@@ -17,6 +17,7 @@
 
 pub mod breakpoints;
 pub mod palette;
+pub mod zoom;
 
 use std::rc::Rc;
 

@@ -115,8 +115,8 @@ pub fn come_forward(cx: &mut App) {
 }
 
 /// Sets up what every window needs, on `services`, starting on `route`: the services, the theme
-/// the user picked, the data layer, the app's state, the router and the key bindings. Call after
-/// `gpui_kit::init`.
+/// and zoom the user picked, the data layer, the app's state, the router, the key bindings and
+/// the menu bar. Call after `gpui_kit::init`.
 pub fn init(services: Services, route: Route, cx: &mut App) {
     let storage = services.storage().clone();
     cx.set_global(services);
@@ -126,6 +126,12 @@ pub fn init(services: Services, route: Route, cx: &mut App) {
         move |picked| storage.set_item(theme::STORAGE_KEY, picked.as_str())
     });
     theme::init(saved.as_deref(), Some(save), cx);
+    let saved_zoom = storage.get_item(theme::zoom::STORAGE_KEY);
+    let save_zoom: theme::zoom::SaveZoom = Box::new({
+        let storage = storage.clone();
+        move |zoom| storage.set_item(theme::zoom::STORAGE_KEY, zoom)
+    });
+    theme::zoom::init(saved_zoom.as_deref(), Some(save_zoom), cx);
     gitto_app_data::data::init(cx);
     gitto_app_data::state::init(cx);
     Router::init(route, cx);
@@ -136,6 +142,7 @@ pub fn init(services: Services, route: Route, cx: &mut App) {
     crate::components::tabs::bind_keys(cx);
     gitto_app_kit::ui::resize_handle::bind_keys(cx);
     cx.on_action(|_: &Quit, cx| cx.quit());
+    crate::menus::init(cx);
     // What the UI remembers is saved off the UI thread: what's still being saved is, before
     // Gitto goes.
     cx.on_app_quit(move |_| {
