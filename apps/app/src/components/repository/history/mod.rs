@@ -6,6 +6,7 @@ pub mod columns;
 pub mod commit_menu;
 pub mod commit_row;
 pub mod history_graph;
+pub mod history_layout;
 pub mod history_option;
 pub mod history_table;
 pub mod ref_labels;

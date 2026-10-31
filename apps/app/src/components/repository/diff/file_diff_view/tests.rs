@@ -597,6 +597,43 @@ fn are_updated_in_place_when_they_change_on_disk(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn prepares_a_patch_loaded_again_off_the_main_thread_keeping_the_last_meanwhile(
+    cx: &mut TestAppContext,
+) {
+    let _dir = init(cx);
+    set_changes(vec![], vec![counted("a.txt")], false, cx);
+    patches(&DiffSource::Unstaged, &[counted("a.txt")], "new", cx);
+    let opened = open(DiffSource::Unstaged, counted("a.txt"), cx);
+    let prepared = |cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            opened
+                .view
+                .read(cx)
+                .view
+                .patch()
+                .map(|prepared| (prepared.data.patch.to_string(), prepared.cache_key.clone()))
+        })
+    };
+    let (_, before) = prepared(cx).expect("prepared");
+
+    set_patch(
+        &DiffSource::Unstaged,
+        &counted("a.txt"),
+        &changed_line("a.txt", "saved"),
+        cx,
+    );
+    // Summed up and named (by a hash of all of it) in the background: not yet.
+    assert_eq!(
+        prepared(cx),
+        Some((changed_line("a.txt", "new a.txt"), before.clone()))
+    );
+    cx.run_until_parked();
+    let (patch, after) = prepared(cx).expect("prepared");
+    assert_eq!(patch, changed_line("a.txt", "saved"));
+    assert_ne!(after, before);
+}
+
+#[gpui_kit::test]
 fn says_when_the_file_has_no_unstaged_changes_left_with_a_way_to_its_staged_ones(
     cx: &mut TestAppContext,
 ) {

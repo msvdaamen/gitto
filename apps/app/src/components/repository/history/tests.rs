@@ -829,7 +829,9 @@ fn reloads_all_it_has_loaded_at_once_keeping_its_place(cx: &mut TestAppContext) 
 }
 
 #[gpui_kit::test]
-fn starts_over_from_the_first_page_when_its_reloaded_past_10000_commits(cx: &mut TestAppContext) {
+fn reloads_all_it_has_loaded_past_10000_commits_keeping_the_selection_and_its_place(
+    cx: &mut TestAppContext,
+) {
     let history = paged(12_000, cx);
     let mut loaded = 200;
     while loaded <= 10_000 {
@@ -837,13 +839,27 @@ fn starts_over_from_the_first_page_when_its_reloaded_past_10000_commits(cx: &mut
         assert_eq!(history.rows(cx), loaded + 1000);
         loaded += 1000;
     }
+    history.table.update(cx, |table, cx| {
+        table.set_selection(Some(commit_id("c9500")), None, cx)
+    });
+    history.scroll_to(9400, cx);
+    let loaded = history.rows(cx);
+    let told = history.selections(cx).len();
 
-    history.scroll_to(0, cx);
     let id = history.id.clone();
     reload_log(&id, cx);
     cx.run_until_parked();
-    assert_eq!(history.pages().last(), Some(&(0, 200)));
-    assert_eq!(history.rows(cx), 200);
+    // A page of up to 10,000 at a time, the most git hands over at once.
+    let pages = history.pages();
+    assert_eq!(
+        pages[pages.len() - 2..],
+        [(0, 10_000), (10_000, loaded as u32 - 10_000)]
+    );
+    assert_eq!(history.rows(cx), loaded);
+    assert_eq!(history.selected(cx), Some(commit_id("c9500")));
+    assert_eq!(history.selections(cx).len(), told);
+    history.render_frame(cx);
+    assert_eq!(history.top_row(cx), 9400);
 }
 
 #[gpui_kit::test]
@@ -1011,7 +1027,9 @@ fn keeps_the_rewritten_commit_selected_rather_than_the_uncommitted_changes(
     let history = render(cx, two_commits(1));
     // The history has a row for the changes, above the commit.
     assert_eq!(
-        history.table.read_with(cx, |table, _| table.rows()[0].id()),
+        history
+            .table
+            .read_with(cx, |table, _| table.rows().get(0).unwrap().id()),
         RowId::Wip
     );
     set_message(
@@ -1431,6 +1449,24 @@ fn keeps_the_rest_of_a_rows_labels_listed_while_the_pointer_moves_from_the_count
 }
 
 #[gpui_kit::test]
+fn closes_the_rest_of_a_rows_labels_once_its_scrolled_out_of_view(cx: &mut TestAppContext) {
+    let mut start = branches(vec![]);
+    start.log.extend(numbered(150));
+    let history = render(cx, start);
+    let sha = "e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5";
+    history.hover_more(sha, cx);
+    assert!(history.more_listed(sha, cx));
+
+    // Scrolled away from under the pointer, the row never hears it left.
+    history.scroll_to(120, cx);
+    history.render_frame(cx);
+    history.scroll_to(0, cx);
+    cx.executor().advance_clock(Duration::from_millis(300));
+    cx.run_until_parked();
+    assert!(!history.more_listed(sha, cx));
+}
+
+#[gpui_kit::test]
 fn closes_the_rest_of_a_rows_labels_once_the_menu_opened_from_them_closes(cx: &mut TestAppContext) {
     let history = render(cx, branches(vec![]));
     history.hover_more("e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5", cx);
@@ -1564,7 +1600,7 @@ fn marks_a_branch_checked_out_in_another_worktree_and_names_one_detached_at_the_
     assert!(history.shows("repo-check", cx));
     let labels = history
         .table
-        .read_with(cx, |table, _| match &table.rows()[0] {
+        .read_with(cx, |table, _| match table.rows().get(0).unwrap() {
             gitto_ui_logic::git::rows::HistoryRow::Commit(commit) => commit.labels.clone(),
             _ => vec![],
         });

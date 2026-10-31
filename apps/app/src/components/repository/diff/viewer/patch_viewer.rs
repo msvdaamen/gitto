@@ -4,6 +4,7 @@
 //! lines costs as much as a screenful, and its highlighting is worked out off the main thread (see
 //! `viewer_runtime`).
 
+use std::collections::HashSet;
 use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -22,13 +23,15 @@ use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, HighlightStyle, Hsla,
-    ListHorizontalSizingBehavior, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels,
-    ScrollStrategy, SharedString, Size, StyledText, Subscription, Task, TextRun,
+    AnyElement, App, Context, ElementId, EventEmitter, FocusHandle, Focusable, HighlightStyle,
+    Hsla, ListHorizontalSizingBehavior, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels,
+    ScrollStrategy, SharedString, Size, Subscription, Task, TestSupportExt as _, TextRun,
     UniformListScrollHandle, WeakEntity, Window, canvas, combine_highlights, div, font, point, px,
     rems, uniform_list,
 };
+use unicode_width::{UnicodeWidthChar as _, UnicodeWidthStr as _};
 
+use super::code_selection::{CodeRange, CodeSelection, CodeTexts};
 use super::highlight::{DiffHighlights, highlight_name};
 use super::line_picker::{KeyOutcome, LinePicker, LineStaging, PickerKey, StagedAt, Viewport};
 use super::viewer_actions::{
@@ -43,6 +46,7 @@ use gitto_app_data::data::staging::StageAction;
 use gitto_app_data::state::diff_style::DiffStyle;
 use gitto_app_kit::theme::{Palette, PaletteExt as _};
 use gitto_app_kit::ui::{Icon, IconName};
+use gpui_kit::base::input::Copy;
 
 /// The changes' font size and line height, as the TS viewer had them (12px on 20px lines, at the
 /// app's 15px base).
@@ -50,52 +54,119 @@ pub(in crate::components::repository::diff) const FONT_REMS: f32 = 0.8;
 pub(in crate::components::repository::diff) const ROW_REMS: f32 = 4. / 3.;
 
 /// Bytes of a line that are drawn: a longer one (a minified file's) is cut there, as shaping it
-/// whole would hold up every frame it's in view.
+/// whole would hold up every frame it's in view; it's drawn whole when asked (see
+/// [`DrawnLine::whole`]), and copied whole.
 const MAX_DRAWN_LINE: usize = 4000;
 
-/// The spaces a tab is drawn as.
+/// The columns between tab stops: a tab is drawn as the spaces to the next one, as editors and a
+/// browser's `tab-size` do.
 const TAB_WIDTH: usize = 4;
 
 /// A line of code as it's drawn, here and in the conflicts' viewer: its line end left off, tabs
-/// as spaces, a long one cut (with an ellipsis).
+/// as spaces to the next tab stop, a long one cut (with an ellipsis).
 pub(in crate::components::repository::diff) struct DrawnLine {
-    pub text: String,
-    /// The bytes of the line that are drawn.
+    pub text: SharedString,
+    /// The bytes of the line, without its line end, and those of them that are drawn.
+    len: usize,
     cut: usize,
-    /// Where its tabs are in the line.
-    tabs: Vec<usize>,
+    /// Where its tabs are in the line, and how many bytes more the text drawn has by the end of
+    /// each, as each is drawn as up to `TAB_WIDTH` spaces.
+    tabs: Vec<(usize, usize)>,
 }
 
 impl DrawnLine {
     pub fn new(line: &str) -> Self {
+        DrawnLine::cut_at(line, MAX_DRAWN_LINE)
+    }
+
+    /// `line` drawn whole, however long: once asked.
+    pub fn whole(line: &str) -> Self {
+        DrawnLine::cut_at(line, usize::MAX)
+    }
+
+    fn cut_at(line: &str, max: usize) -> Self {
         let content = line.trim_end_matches(['\n', '\r']);
-        let cut = &content[..content.floor_char_boundary(MAX_DRAWN_LINE)];
+        let cut = &content[..content.floor_char_boundary(max)];
         let ellipsis = cut.len() < content.len();
-        let tabs: Vec<usize> = cut
-            .bytes()
-            .enumerate()
-            .filter(|(_, byte)| *byte == b'\t')
-            .map(|(offset, _)| offset)
-            .collect();
-        let mut text = if tabs.is_empty() {
-            cut.to_owned()
+        let mut tabs = Vec::new();
+        let mut text = if cut.contains('\t') {
+            let mut text = String::with_capacity(cut.len() + TAB_WIDTH);
+            let mut column = 0;
+            for (offset, character) in cut.char_indices() {
+                if character == '\t' {
+                    let spaces = TAB_WIDTH - column % TAB_WIDTH;
+                    text.extend(std::iter::repeat_n(' ', spaces));
+                    column += spaces;
+                    let extra = tabs.last().map_or(0, |(_, extra)| *extra) + spaces - 1;
+                    tabs.push((offset, extra));
+                } else {
+                    text.push(character);
+                    column += character.width().unwrap_or(0);
+                }
+            }
+            text
         } else {
-            cut.replace('\t', &" ".repeat(TAB_WIDTH))
+            cut.to_owned()
         };
         if ellipsis {
             text.push('…');
         }
         DrawnLine {
-            text,
+            text: text.into(),
+            len: content.len(),
             cut: cut.len(),
             tabs,
         }
     }
 
+    /// How long the line is, without its line end.
+    pub fn line_len(&self) -> usize {
+        self.len
+    }
+
+    /// Whether only some of the line is drawn.
+    pub fn is_cut(&self) -> bool {
+        self.cut < self.len
+    }
+
     /// Where a byte offset in the line is in the text drawn.
     pub fn offset(&self, offset: usize) -> usize {
         let offset = offset.min(self.cut);
-        offset + self.tabs.partition_point(|tab| *tab < offset) * (TAB_WIDTH - 1)
+        let tabs = self.tabs.partition_point(|(tab, _)| *tab < offset);
+        offset + tabs.checked_sub(1).map_or(0, |tab| self.tabs[tab].1)
+    }
+
+    /// Where the end of a range of the line, `offset`, is in the text drawn: past the ellipsis if
+    /// it's past what's drawn.
+    pub fn drawn_end(&self, offset: usize) -> usize {
+        if offset > self.cut {
+            self.text.len()
+        } else {
+            self.offset(offset)
+        }
+    }
+
+    /// Which byte of the line a place in the text drawn, `drawn`, is at: a tab's spaces are the
+    /// tab, before it or after it as they're nearer; the ellipsis, the end of the whole line.
+    pub fn source_offset(&self, drawn: usize) -> usize {
+        let mut extra = 0;
+        for &(tab, extra_after) in &self.tabs {
+            let start = tab + extra;
+            if drawn <= start {
+                break;
+            }
+            let spaces = extra_after - extra + 1;
+            if drawn < start + spaces {
+                return if (drawn - start) * 2 < spaces {
+                    tab
+                } else {
+                    tab + 1
+                };
+            }
+            extra = extra_after;
+        }
+        let offset = drawn.saturating_sub(extra);
+        if offset > self.cut { self.len } else { offset }
     }
 
     /// The line's syntax, as `highlights` have it for line `ix` of `side`, where it's drawn.
@@ -118,22 +189,42 @@ impl DrawnLine {
     }
 }
 
-/// The widest of `lines`, in characters as drawn (see [`DrawnLine`]).
+/// The widest of `lines`, in columns as drawn (see [`DrawnLine`]): a wide character, such as a
+/// CJK one, takes two, as it does in a monospaced font.
 pub(in crate::components::repository::diff) fn widest_line<'a>(
     lines: impl IntoIterator<Item = &'a str>,
 ) -> usize {
     lines
         .into_iter()
-        .map(|line| {
-            // As `DrawnLine` draws it: cut, with an ellipsis, and its tabs as spaces.
-            let line = line.trim_end_matches(['\n', '\r']);
-            let cut = &line[..line.floor_char_boundary(MAX_DRAWN_LINE)];
-            let tabs = cut.bytes().filter(|byte| *byte == b'\t').count();
-            cut.chars().count() + usize::from(cut.len() < line.len()) + tabs * (TAB_WIDTH - 1)
-        })
+        .map(|line| drawn_columns(line, MAX_DRAWN_LINE))
         .max()
         .unwrap_or(0)
 }
+
+/// The columns `line` takes as it's drawn, cut at `max` bytes (see [`DrawnLine`]): cut, with
+/// room for the button after it that draws it whole (see [`show_whole_line`]).
+pub(in crate::components::repository::diff) fn drawn_columns(line: &str, max: usize) -> usize {
+    // As `DrawnLine` draws it: cut, with an ellipsis, and its tabs as spaces.
+    let line = line.trim_end_matches(['\n', '\r']);
+    let cut = &line[..line.floor_char_boundary(max)];
+    let columns = if cut.contains('\t') {
+        cut.chars().fold(0, |column, character| match character {
+            '\t' => column + TAB_WIDTH - column % TAB_WIDTH,
+            _ => column + character.width().unwrap_or(0),
+        })
+    } else {
+        cut.width()
+    };
+    if cut.len() < line.len() {
+        columns + 1 + WHOLE_LINE_BUTTON
+    } else {
+        columns
+    }
+}
+
+/// The columns of the code's font the button that draws a line whole takes (see
+/// [`show_whole_line`]), and the space before it.
+const WHOLE_LINE_BUTTON: usize = 20;
 
 /// The width of a character of the code's font, at `font_size`.
 pub(in crate::components::repository::diff) fn code_char_width(
@@ -305,11 +396,14 @@ struct NextPatch {
     cache_key: String,
 }
 
+/// The same patch: of the same file, named the same in the highlighting cache, which names what's
+/// in it (see `PatchProps::cache_key`), and as long, rather than compared whole, which can be
+/// megabytes, on the main thread, whenever an uncommitted file's is loaded again.
 impl PartialEq for NextPatch {
     fn eq(&self, other: &Self) -> bool {
         self.file_key == other.file_key
             && self.cache_key == other.cache_key
-            && (Arc::ptr_eq(&self.patch, &other.patch) || self.patch == other.patch)
+            && self.patch.len() == other.patch.len()
     }
 }
 
@@ -318,9 +412,11 @@ struct Shown {
     diff: Arc<FileDiff>,
     patch: NextPatch,
     highlights: SharedHighlights,
-    /// The widest line, in characters as drawn, and the highest line number.
+    /// The widest line, in columns as drawn, and the highest line number.
     widest: usize,
     highest: usize,
+    /// The lines too long to draw whole that are, as asked (see [`DrawnLine::whole`]).
+    whole_lines: Rc<HashSet<(Side, usize)>>,
 }
 
 /// One file's patch, as git gave it, with only the rows in view drawn. Only the changes and the
@@ -340,8 +436,11 @@ struct Shown {
 /// a hunk at a time, with its button or `[` and `]`. The button in the gutter, by the changed line
 /// the pointer is on or the last one selected, or Space stages them; Esc clears the selection.
 /// Once the keyboard staged some, the selection moves to the change that's in their place.
+///
+/// Its lines' text can be selected, and copied as it is in the file (see `code_selection`).
 pub struct PatchViewer {
     focus: FocusHandle,
+    selection: CodeSelection,
     scroll: UniformListScrollHandle,
     load_file: LoadFile,
     next: Option<NextPatch>,
@@ -384,9 +483,17 @@ impl Focusable for PatchViewer {
 impl PatchViewer {
     pub fn new(load_file: LoadFile, cx: &mut Context<Self>) -> Self {
         let release = cx.on_release(|this: &mut Self, cx| this.highlights.drop_long(cx));
+        // Focusable, to scroll it with the keyboard, and pick lines to stage with it.
+        let focus = cx.focus_handle().tab_stop(true);
+        let selection = CodeSelection::new(
+            &focus,
+            |viewer: &PatchViewer| &viewer.selection,
+            PatchViewer::copied,
+            cx,
+        );
         PatchViewer {
-            // Focusable, to scroll it with the keyboard, and pick lines to stage with it.
-            focus: cx.focus_handle().tab_stop(true),
+            focus,
+            selection,
             scroll: UniformListScrollHandle::new(),
             load_file,
             next: None,
@@ -453,7 +560,7 @@ impl PatchViewer {
             cx.notify();
         }
         if relayout {
-            self.relayout();
+            self.relayout(cx);
             cx.notify();
         }
         match &mut self.next {
@@ -588,6 +695,7 @@ impl PatchViewer {
             highlights,
             widest,
             highest,
+            whole_lines: Rc::default(),
         });
         // The lines shown around the last one's changes are by hunk, which another's don't match.
         self.expanded = expanded;
@@ -596,7 +704,7 @@ impl PatchViewer {
         self.failures
             .retain(|(failed, _)| Arc::ptr_eq(failed, &diff));
         self.dragging = false;
-        self.relayout();
+        self.relayout(cx);
         let pickable = self.is_pickable();
         if let Some(line) = self.picker.shown(same_file, pickable, &self.layout) {
             self.reveal(&line);
@@ -625,8 +733,10 @@ impl PatchViewer {
         }));
     }
 
-    /// Lays the diff on show out again, with what may have changed.
-    fn relayout(&mut self) {
+    /// Lays the diff on show out again, with what may have changed. What's selected of its text
+    /// is let go of: it's of the rows as they were.
+    fn relayout(&mut self, cx: &mut App) {
+        self.selection.clear(cx);
         let Some(shown) = &self.shown else {
             self.layout = Rc::default();
             return;
@@ -690,7 +800,7 @@ impl PatchViewer {
         let diff = Arc::clone(&shown.diff);
         if !diff.is_partial {
             expand(&mut self.expanded, index, direction, gap_size(&diff, index));
-            self.relayout();
+            self.relayout(cx);
             cx.notify();
             return;
         }
@@ -731,6 +841,8 @@ impl PatchViewer {
                             if let Some(shown) = &mut this.shown {
                                 shown.diff = Arc::clone(&loaded.hydrated);
                                 shown.highlights = highlights;
+                                // By their places in the lines, which the whole file's aren't.
+                                shown.whole_lines = Rc::default();
                                 if let Some((widest, highest)) = measured {
                                     shown.widest = widest;
                                     shown.highest = highest;
@@ -738,13 +850,13 @@ impl PatchViewer {
                             }
                             let range = gap_size(&loaded.hydrated, index);
                             expand(&mut this.expanded, index, direction, range);
-                            this.relayout();
+                            this.relayout(cx);
                             this.watch_highlights(cx);
                         }
                     }
                     Err(error) => {
                         this.failures.push((Arc::clone(&diff), error.to_string()));
-                        this.relayout();
+                        this.relayout(cx);
                     }
                 }
                 this.report(cx);
@@ -958,6 +1070,39 @@ impl PatchViewer {
         }
     }
 
+    /// The text of `range` of the rows, as their lines are in the file (see `code_selection`).
+    fn copied(&self, range: CodeRange) -> String {
+        let Some(shown) = &self.shown else {
+            return String::new();
+        };
+        let split = self.style == DiffStyle::Split;
+        range.text(|row| {
+            let (side, line) = line_in(*self.layout.rows.get(row)?, split, range.column)?;
+            shown.diff.lines(side).get(line.index)
+        })
+    }
+
+    /// Copies the text selected, if any is; leaves the keys to the view around otherwise.
+    fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.selection.copy(self, PatchViewer::copied, cx) {
+            cx.propagate();
+        }
+    }
+
+    /// Draws the line `index` of `side` whole, though it's too long to be drawn whole
+    /// otherwise (see [`DrawnLine`]): widening the rows to it.
+    fn show_whole_line(&mut self, side: Side, index: usize, cx: &mut Context<Self>) {
+        let Some(shown) = &mut self.shown else {
+            return;
+        };
+        let Some(line) = shown.diff.lines(side).get(index) else {
+            return;
+        };
+        shown.widest = shown.widest.max(drawn_columns(line, usize::MAX));
+        Rc::make_mut(&mut shown.whole_lines).insert((side, index));
+        cx.notify();
+    }
+
     /// The width of a character of the code's font, at `font_size`.
     fn char_width(&mut self, font_size: Pixels, window: &mut Window, cx: &App) -> Pixels {
         if let Some((size, width)) = self.char_width
@@ -976,6 +1121,7 @@ impl PatchViewer {
         let diff = Arc::clone(&shown.diff);
         let highlights = shown.highlights.peek().cloned();
         let (widest, highest) = (shown.widest, shown.highest);
+        let whole_lines = Rc::clone(&shown.whole_lines);
         let rem = window.rem_size();
         let font_size = rems(FONT_REMS).to_pixels(rem);
         let row_height = rems(ROW_REMS).to_pixels(rem);
@@ -1021,6 +1167,8 @@ impl PatchViewer {
             entity: cx.entity().downgrade(),
             layout,
             diff,
+            whole_lines,
+            texts: self.selection.texts(cx),
             highlights,
             split,
             row_width,
@@ -1042,7 +1190,7 @@ impl PatchViewer {
     }
 }
 
-/// The widest line of `diff`, in characters as drawn, and its highest line number.
+/// The widest line of `diff`, in columns as drawn, and its highest line number.
 fn measure(diff: &FileDiff) -> (usize, usize) {
     let widest = widest_line(diff.deletion_lines.iter().chain(diff.addition_lines.iter()));
     let mut highest = diff.deletion_lines.len().max(diff.addition_lines.len());
@@ -1059,6 +1207,10 @@ struct Frame {
     entity: WeakEntity<PatchViewer>,
     layout: Rc<Layout>,
     diff: Arc<FileDiff>,
+    /// The lines drawn whole, though they're long (see `Shown::whole_lines`).
+    whole_lines: Rc<HashSet<(Side, usize)>>,
+    /// What the lines' text is drawn with, and what's selected of it.
+    texts: CodeTexts,
     highlights: Option<Arc<DiffHighlights>>,
     split: bool,
     row_width: Pixels,
@@ -1167,6 +1319,7 @@ impl Render for PatchViewer {
             .on_action(cx.listener(|this, _: &ScrollToBottom, window, cx| {
                 this.scroll(Scroll::Bottom, window, cx)
             }))
+            .on_action(cx.listener(Self::copy))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseDownEvent, window, cx| {
@@ -1184,22 +1337,21 @@ impl Render for PatchViewer {
             .when_some(frame, |this, frame| {
                 let count = frame.layout.rows.len();
                 let rows = Rc::clone(&frame);
-                this.child(
-                    uniform_list("patch-rows", count, move |range, window, cx| {
-                        range
-                            .map(|ix| render_row(&rows, ix, window, cx))
-                            .collect::<Vec<_>>()
-                    })
-                    .track_scroll(&self.scroll)
-                    .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
-                    .size_full(),
-                )
-                .child(Scrollbar::new(&self.scroll))
-                .child(width_check(
-                    &self.scroll,
-                    frame.viewport_width,
-                    cx.entity().downgrade(),
-                ))
+                let list = uniform_list("patch-rows", count, move |range, window, cx| {
+                    range
+                        .map(|ix| render_row(&rows, ix, window, cx))
+                        .collect::<Vec<_>>()
+                })
+                .track_scroll(&self.scroll)
+                .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
+                .size_full();
+                this.child(self.selection.area(list.into_any_element(), &self.scroll))
+                    .child(Scrollbar::new(&self.scroll))
+                    .child(width_check(
+                        &self.scroll,
+                        frame.viewport_width,
+                        cx.entity().downgrade(),
+                    ))
             })
             // The focus ring, inside: the view fills its panel.
             .when(focused, |this| {
@@ -1262,13 +1414,8 @@ fn render_row(frame: &Rc<Frame>, ix: usize, _: &mut Window, cx: &mut App) -> Any
                     .child(split_cell(frame, ix, Side::Additions, kind, addition, cx))
                     .into_any_element()
             } else {
-                let (side, line) = match (addition, deletion) {
-                    (Some(line), _) if kind != LineKind::Change || deletion.is_none() => {
-                        (Side::Additions, line)
-                    }
-                    (_, Some(line)) => (Side::Deletions, line),
-                    (Some(line), None) => (Side::Additions, line),
-                    (None, None) => return base.into_any_element(),
+                let Some((side, line)) = line_in(row, false, 0) else {
+                    return base.into_any_element();
                 };
                 base.child(line_cell(frame, ix, side, kind, line, frame.row_width, cx))
                     .into_any_element()
@@ -1320,6 +1467,35 @@ fn render_row(frame: &Rc<Frame>, ix: usize, _: &mut Window, cx: &mut App) -> Any
     }
 }
 
+/// The line in the column `column` of `row`, if it has one there, and its side: side by side, the
+/// deletions' line in the first column and the additions' in the second; in one column, the
+/// additions' but for a changed line that's the deletions' too.
+fn line_in(row: Row, split: bool, column: usize) -> Option<(Side, LineAt)> {
+    let Row::Line {
+        kind,
+        deletion,
+        addition,
+        ..
+    } = row
+    else {
+        return None;
+    };
+    if split {
+        return match column {
+            0 => deletion.map(|line| (Side::Deletions, line)),
+            _ => addition.map(|line| (Side::Additions, line)),
+        };
+    }
+    match (addition, deletion) {
+        (Some(line), _) if kind != LineKind::Change || deletion.is_none() => {
+            Some((Side::Additions, line))
+        }
+        (_, Some(line)) => Some((Side::Deletions, line)),
+        (Some(line), None) => Some((Side::Additions, line)),
+        (None, None) => None,
+    }
+}
+
 /// One side of a row, side by side: its line, or an empty cell where the other side has a line
 /// it doesn't.
 fn split_cell(
@@ -1365,7 +1541,14 @@ fn line_cell(
     let selected = frame.is_selected(ix);
     let number = line.number;
     let stage_here = frame.stage_button == Some((ix, side));
-    let (text, highlights) = line_text(frame, side, line.index, changed, cx);
+    let (drawn, highlights) = line_text(frame, side, line.index, changed, cx);
+    let column = usize::from(frame.split && side == Side::Additions);
+    let whole = drawn
+        .is_cut()
+        .then(|| whole_line_button(frame, ix, side, line.index));
+    let text = frame
+        .texts
+        .text(column, ix, drawn, highlights, cx.theme().selection);
     let entity = frame.entity.clone();
     let hover = frame.entity.clone();
     let drag = frame.entity.clone();
@@ -1406,6 +1589,8 @@ fn line_cell(
         .on_mouse_down(
             MouseButton::Left,
             move |event: &MouseDownEvent, window, cx| {
+                // Picks lines, rather than selecting their text.
+                CodeSelection::hold_off(cx);
                 let _ = entity.update(cx, |this, cx| {
                     this.press_line(number, side, event.modifiers.shift, window, cx)
                 });
@@ -1440,9 +1625,41 @@ fn line_cell(
                 .whitespace_nowrap()
                 .font_family(frame.mono.clone())
                 .text_size(frame.font_size)
-                .child(StyledText::new(text).with_highlights(highlights)),
+                .child(text)
+                .children(whole),
+        )
+        .test_support()
+        .into_any_element()
+}
+
+/// The button after a line too long to be drawn whole that draws it whole.
+pub(in crate::components::repository::diff) fn show_whole_line(
+    id: impl Into<ElementId>,
+    on_click: impl Fn(&mut App) + 'static,
+) -> AnyElement {
+    div()
+        .ml_2()
+        // Not a press on the line's text, which would select it.
+        .on_mouse_down(MouseButton::Left, |_, _, cx| CodeSelection::hold_off(cx))
+        .child(
+            Button::new(id)
+                .ghost()
+                .xsmall()
+                .label("Show whole line")
+                .on_click(move |_, _, cx| on_click(cx)),
         )
         .into_any_element()
+}
+
+/// [`show_whole_line`] for the line `index` of `side`, in the row `ix`.
+fn whole_line_button(frame: &Frame, ix: usize, side: Side, index: usize) -> AnyElement {
+    let entity = frame.entity.clone();
+    show_whole_line(
+        ("whole-line", ix * 2 + usize::from(side == Side::Additions)),
+        move |cx| {
+            let _ = entity.update(cx, |this, cx| this.show_whole_line(side, index, cx));
+        },
+    )
 }
 
 /// The square button in the gutter that stages the lines selected, or the line the pointer is on.
@@ -1605,20 +1822,24 @@ fn separator(
 }
 
 /// The text of line `ix` of `side` as it's drawn, and its highlights: tabs as spaces, a long
-/// line cut, its syntax, and the words that changed.
+/// line cut unless it's to be drawn whole, its syntax, and the words that changed.
 fn line_text(
     frame: &Frame,
     side: Side,
     ix: usize,
     changed: bool,
     cx: &App,
-) -> (SharedString, Vec<(Range<usize>, HighlightStyle)>) {
+) -> (Rc<DrawnLine>, Vec<(Range<usize>, HighlightStyle)>) {
     let Some(line) = frame.diff.lines(side).get(ix) else {
-        return (SharedString::default(), Vec::new());
+        return (Rc::new(DrawnLine::new("")), Vec::new());
     };
-    let drawn = DrawnLine::new(line);
+    let drawn = Rc::new(if frame.whole_lines.contains(&(side, ix)) {
+        DrawnLine::whole(line)
+    } else {
+        DrawnLine::new(line)
+    });
     let Some(highlights) = &frame.highlights else {
-        return (drawn.text.into(), Vec::new());
+        return (drawn, Vec::new());
     };
     let syntax = drawn.syntax(highlights, side, ix, cx);
     let words = if changed {
@@ -1639,7 +1860,7 @@ fn line_text(
         })
     });
     let combined: Vec<_> = combine_highlights(syntax, words).collect();
-    (drawn.text.into(), combined)
+    (drawn, combined)
 }
 
 #[cfg(test)]
@@ -1690,8 +1911,181 @@ mod tests {
         .unwrap()
     }
 
+    /// A viewer showing `patch` of `f.txt`, unstaged, with `staging`.
+    fn showing(
+        patch: &str,
+        staging: Option<LineStaging>,
+        cx: &mut TestAppContext,
+    ) -> (gpui_kit::AnyWindowHandle, gpui_kit::Entity<PatchViewer>) {
+        let load_file: LoadFile =
+            Rc::new(|_, _, _| Task::ready(Err(DataError::msg("Not read in tests."))));
+        let (window, viewer) =
+            crate::test_support::open(cx, |_, cx| PatchViewer::new(load_file, cx));
+        let patch: Arc<str> = patch.into();
+        cx.update(|cx| {
+            viewer.update(cx, |viewer, cx| {
+                viewer.set_props(
+                    PatchProps {
+                        patch,
+                        file_key: DiffFileKey::new(&DiffSource::Unstaged, "f.txt"),
+                        cache_key: "test:selection".into(),
+                        style: DiffStyle::Unified,
+                        staging,
+                    },
+                    cx,
+                )
+            })
+        });
+        cx.run_until_parked();
+        (window, viewer)
+    }
+
+    /// Where the text of the line `number` of `side` starts and ends, as it's drawn: from the
+    /// left of its first character to past its last.
+    fn line_ends(
+        window: gpui_kit::AnyWindowHandle,
+        viewer: &gpui_kit::Entity<PatchViewer>,
+        number: usize,
+        side: Side,
+        cx: &mut TestAppContext,
+    ) -> (gpui_kit::Point<Pixels>, gpui_kit::Point<Pixels>) {
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            let (row, gutter) = viewer.update(cx, |viewer, cx| {
+                let row = viewer.layout.row_of(number, side).expect("a row");
+                (row, viewer.frame(window, cx).expect("on show").gutter_width)
+            });
+            let bounds = window
+                .find(("line", row * 2 + usize::from(side == Side::Additions)))
+                .bounds();
+            let left = bounds.left() + gutter + rems(0.6).to_pixels(window.rem_size());
+            let middle = bounds.center().y;
+            (
+                gpui_kit::point(left + px(1.), middle),
+                gpui_kit::point(bounds.right() - px(2.), middle),
+            )
+        })
+        .unwrap()
+    }
+
+    /// Copies, as Cmd or Ctrl-C does, and what's on the clipboard then.
+    fn copy(window: gpui_kit::AnyWindowHandle, cx: &mut TestAppContext) -> Option<String> {
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("before".into()));
+        cx.update_window(window, |_, window, cx| {
+            window.dispatch_action(Box::new(Copy), cx)
+        })
+        .unwrap();
+        cx.read_from_clipboard().and_then(|item| item.text())
+    }
+
+    #[gpui_kit::test]
+    fn copies_the_lines_selected_as_they_are_in_the_file(cx: &mut TestAppContext) {
+        let _dir = crate::test_support::init(cx, |services| services);
+        let patch = "diff --git a/f.txt b/f.txt\nindex 1111111..2222222 100644\n--- a/f.txt\n+++ b/f.txt\n@@ -1,2 +1,2 @@\n \tone\n-two\n+TWO\n";
+        let (window, viewer) = showing(patch, None, cx);
+        let (from, _) = line_ends(window, &viewer, 1, Side::Additions, cx);
+        let (_, to) = line_ends(window, &viewer, 2, Side::Additions, cx);
+        cx.update_window(window, |_, window, cx| window.drag(from, to, cx))
+            .unwrap();
+        cx.run_until_parked();
+        // The tab as it is, not the spaces it's drawn as; the lines in the order they're shown.
+        assert_eq!(copy(window, cx).as_deref(), Some("\tone\ntwo\nTWO"));
+    }
+
+    #[gpui_kit::test]
+    fn picks_lines_to_stage_by_their_numbers_rather_than_selecting_text(cx: &mut TestAppContext) {
+        let _dir = crate::test_support::init(cx, |services| services);
+        let staging = LineStaging {
+            action: StageAction::Stage,
+            busy: false,
+        };
+        let (window, viewer) = showing(PATCH, Some(staging), cx);
+        let (on_one, _) = line_ends(window, &viewer, 1, Side::Additions, cx);
+        let (on_two, _) = line_ends(window, &viewer, 2, Side::Additions, cx);
+        // From the number of the first line, in the gutter left of its text, down into the next
+        // one's text.
+        let number = gpui_kit::point(on_one.x - px(12.), on_one.y);
+        let text = gpui_kit::point(on_two.x + px(15.), on_two.y);
+        cx.update_window(window, |_, window, cx| window.drag(number, text, cx))
+            .unwrap();
+        cx.run_until_parked();
+        let picked = viewer.read_with(cx, |viewer, _| viewer.picker.selection().copied());
+        assert_eq!(
+            picked,
+            Some(SelectedRange {
+                end: 2,
+                end_side: Side::Additions,
+                ..SelectedRange::new(1, Side::Additions, 1)
+            })
+        );
+        // Nothing to copy: Cmd or Ctrl-C is left to the window.
+        assert_eq!(copy(window, cx).as_deref(), Some("before"));
+    }
+
+    #[gpui_kit::test]
+    fn copies_a_long_line_whole_and_draws_it_whole_once_asked(cx: &mut TestAppContext) {
+        let _dir = crate::test_support::init(cx, |services| services);
+        let long = format!("{}end", "x".repeat(MAX_DRAWN_LINE + 1000));
+        let patch = format!(
+            "diff --git a/f.txt b/f.txt\nindex 1111111..2222222 100644\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-a\n+{long}\n"
+        );
+        let (window, viewer) = showing(&patch, None, cx);
+        let row_width = |cx: &mut TestAppContext| {
+            cx.update_window(window, |_, window, cx| {
+                viewer.update(cx, |viewer, cx| viewer.frame(window, cx).unwrap().row_width)
+            })
+            .unwrap()
+        };
+        let cut_width = row_width(cx);
+        let (from, _) = line_ends(window, &viewer, 1, Side::Additions, cx);
+        // Selected from its start to past what's drawn of it: the whole of it is copied.
+        cx.update_window(window, |_, window, cx| {
+            window.drag(from, gpui_kit::point(px(1190.), from.y), cx);
+            window.drag(from, gpui_kit::point(from.x + cut_width, from.y), cx)
+        })
+        .unwrap();
+        cx.run_until_parked();
+        let copied = copy(window, cx).unwrap_or_default();
+        assert!(copied.ends_with("end"), "{} bytes", copied.len());
+
+        let row = viewer.read_with(cx, |viewer, _| {
+            viewer.layout.row_of(1, Side::Additions).unwrap()
+        });
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            viewer.update(cx, |viewer, cx| {
+                viewer.show_whole_line(Side::Additions, 0, cx)
+            });
+            window.render_frame(cx);
+        })
+        .unwrap();
+        assert!(row_width(cx) > cut_width);
+        let drawn = viewer.read_with(cx, |viewer, _| {
+            viewer
+                .shown
+                .as_ref()
+                .unwrap()
+                .whole_lines
+                .contains(&(Side::Additions, 0))
+        });
+        assert!(drawn, "row {row}");
+    }
+
     #[test]
-    fn measures_lines_in_characters_as_drawn() {
+    fn tells_patches_apart_by_their_names_rather_than_their_whole_text() {
+        let next = |patch: &str, cache_key: &str| NextPatch {
+            patch: patch.into(),
+            file_key: DiffFileKey::new(&DiffSource::Unstaged, "f.txt"),
+            cache_key: cache_key.into(),
+        };
+        // Loaded again: the same text, shared anew.
+        assert!(next(PATCH, "unstaged::f.txt:80:1a") == next(PATCH, "unstaged::f.txt:80:1a"));
+        // Changed: named by what's in it.
+        assert!(next(PATCH, "unstaged::f.txt:80:1a") != next(PATCH, "unstaged::f.txt:80:2b"));
+    }
+
+    #[test]
+    fn measures_lines_in_columns_as_drawn() {
         let patch = "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-\u{e9}\u{e9}\u{e9}\n+\ta\n";
         let diff = gitto_ui_logic::diff::diff_metadata::parse_patch_files(patch, None).remove(0);
         // Three characters of two bytes each, and a tab drawn as four spaces before a letter.
@@ -1701,8 +2095,43 @@ mod tests {
             "\u{e9}".repeat(MAX_DRAWN_LINE)
         );
         let diff = gitto_ui_logic::diff::diff_metadata::parse_patch_files(&long, None).remove(0);
-        // Cut at as many bytes, with an ellipsis.
-        assert_eq!(measure(&diff).0, MAX_DRAWN_LINE / 2 + 1);
+        // Cut at as many bytes, with an ellipsis, and the button that draws it whole.
+        assert_eq!(measure(&diff).0, MAX_DRAWN_LINE / 2 + 1 + WHOLE_LINE_BUTTON);
+    }
+
+    #[test]
+    fn measures_wide_characters_as_two_columns() {
+        assert_eq!(widest_line(["中文字", "abcde"]), 6);
+        assert_eq!(widest_line(["😀😀\n"]), 4);
+        // Up to the tab stop after the wide character's two columns.
+        assert_eq!(widest_line(["中\tx"]), TAB_WIDTH + 1);
+    }
+
+    #[test]
+    fn draws_a_tab_as_the_spaces_to_the_next_tab_stop() {
+        assert_eq!(DrawnLine::new("\tx\n").text, "    x");
+        assert_eq!(DrawnLine::new("a\tb").text, "a   b");
+        assert_eq!(DrawnLine::new("abcd\tx").text, "abcd    x");
+        assert_eq!(
+            DrawnLine::new("int x;\t// a\t\tb").text,
+            "int x;  // a        b"
+        );
+        assert_eq!(widest_line(["int x;\t// a\t\tb"]), 21);
+    }
+
+    #[test]
+    fn finds_where_a_byte_of_the_line_is_drawn_past_tabs_and_wide_characters() {
+        // `é` is two bytes and a column, so the tab after it is three spaces.
+        let line = DrawnLine::new("\u{e9}\tb\tc");
+        assert_eq!(line.text, "\u{e9}   b   c");
+        assert_eq!(&line.text[line.offset(3)..line.offset(4)], "b");
+        assert_eq!(&line.text[line.offset(5)..], "c");
+        // `中` is three bytes and two columns: the tab after it is two spaces.
+        let line = DrawnLine::new("\u{4e2d}\tx");
+        assert_eq!(line.text, "\u{4e2d}  x");
+        assert_eq!(&line.text[line.offset(4)..], "x");
+        // A tab's spaces are all the tab's.
+        assert_eq!(line.offset(3)..line.offset(4), 3..5);
     }
 
     #[gpui_kit::test]

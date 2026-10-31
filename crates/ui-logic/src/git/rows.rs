@@ -202,25 +202,37 @@ fn history_graph(
     let mut commits: Vec<GraphCommit<'_>> =
         Vec::with_capacity(entries.len() + usize::from(has_changes));
     if has_changes {
-        commits.push(GraphCommit {
-            dashed: true,
-            ..GraphCommit::new(WIP_NODE, &head_parent)
-        });
+        commits.push(wip_node(&head_parent));
     }
     commits.extend(entries.iter().map(|entry| match entry {
         HistoryEntry::Commit(commit) => GraphCommit::new(&commit.sha, &commit.parents),
-        HistoryEntry::Stash(stash) => GraphCommit {
-            sha: &stash.sha,
-            parents: if shas.contains(stash.base.as_str()) {
-                std::slice::from_ref(&stash.base)
-            } else {
-                &[]
-            },
-            dashed: true,
-            aside: true,
-        },
+        HistoryEntry::Stash(stash) => stash_node(stash, shas.contains(stash.base.as_str())),
     }));
     compute_graph(&commits)
+}
+
+/// The uncommitted changes' node in the history graph: a dashed line to `head_parent`, the commit
+/// they're based on if it's in the history (else none).
+pub fn wip_node(head_parent: &[String]) -> GraphCommit<'_> {
+    GraphCommit {
+        dashed: true,
+        ..GraphCommit::new(WIP_NODE, head_parent)
+    }
+}
+
+/// A stash's node in the history graph: set aside, with a dashed line to the commit it was made
+/// on if that's in the history (`based`).
+pub fn stash_node(stash: &Stash, based: bool) -> GraphCommit<'_> {
+    GraphCommit {
+        sha: &stash.sha,
+        parents: if based {
+            std::slice::from_ref(&stash.base)
+        } else {
+            &[]
+        },
+        dashed: true,
+        aside: true,
+    }
 }
 
 /// Turns a repository's commits and stashes, plus the uncommitted changes if there are any, into
@@ -258,7 +270,12 @@ pub fn to_history_rows<S: AsRef<str>>(
     rows
 }
 
-fn to_stash_row(repository_id: &RepositoryId, stash: &Stash, graph: Option<GraphRow>) -> StashRow {
+/// A stash's row.
+pub fn to_stash_row(
+    repository_id: &RepositoryId,
+    stash: &Stash,
+    graph: Option<GraphRow>,
+) -> StashRow {
     StashRow {
         sha: stash.sha.clone(),
         repository_id: repository_id.clone(),

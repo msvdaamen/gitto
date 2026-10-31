@@ -212,6 +212,7 @@ dependencies = [
  "thiserror 2.0.21",
  "two-face",
  "uds_windows",
+ "unicode-width",
  "uuid",
  "winresource",
 ]

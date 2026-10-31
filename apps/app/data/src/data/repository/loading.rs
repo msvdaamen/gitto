@@ -7,10 +7,10 @@ use futures::channel::oneshot;
 use gitto_git::features::status::schema::StatusReply;
 use gpui_kit::{AppContext as _, Context};
 
-use super::{Changed, Field, Part, PatchKey, Reloading, Repository, log_commits, log_page};
+use super::{Changed, Field, Part, PatchKey, Reloading, Repository, log_commits};
 use crate::data::error::DataError;
 use crate::data::git::GitTask;
-use crate::data::history::{NEXT_PAGE, followed_by, reload_limit};
+use crate::data::history::{NEXT_PAGE, followed_by, reload_log};
 use crate::data::loaded::{LoadState, Loaded};
 use crate::data::opaque::Opaque;
 use gitto_ui_logic::git::diff_source::is_uncommitted;
@@ -90,7 +90,7 @@ impl Repository {
                     if repo.more.task.take().is_some() || repo.more.error.take().is_some() {
                         cx.emit(Changed(Part::More));
                     }
-                    log_page(&*repo.git, &repo.id, 0, reload_limit(loaded))
+                    reload_log(&*repo.git, &repo.id, loaded)
                 },
                 cx,
             ),

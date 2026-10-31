@@ -6,17 +6,20 @@
 //! logic, which the `gitto-ui-logic` crate ports, so the table lays them out (see
 //! `gitto_ui_logic::git::rows`).
 
-use std::collections::HashSet;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::fmt;
+use std::sync::{Arc, Mutex, PoisonError};
 
+use futures::FutureExt as _;
 use gitto_git::features::history::schema::Commit;
 use gitto_git::features::stash::schema::Stash;
 use gitto_git::features::status::schema::StatusSummary;
 use gitto_git::features::worktree::schema::Worktree;
 use gitto_git::input::RepositoryId;
 
+use super::git::{GitTask, RepositoryGit};
 use super::loaded::Loaded;
-use super::repository::{Part, Repository};
+use super::repository::{Part, Repository, log_commits};
 use super::status::head_sha;
 use gitto_ui_logic::git::status::has_uncommitted_changes;
 
@@ -26,11 +29,9 @@ pub const FIRST_PAGE: u32 = 200;
 /// How many more it loads at a time as the end of what's loaded comes into view.
 pub const NEXT_PAGE: u32 = 1000;
 
-/// The most commits the history reloads as the repository changes, which is the most the log
-/// hands over at once (see `history::commands::MAX_PAGE`). Past that, it starts over from the
-/// first page: the graph has to be laid out again, and the commits sent over, for every one of
-/// them.
-pub const RELOAD_LIMIT: usize = 10_000;
+/// The most commits the log hands over at once (see `history::commands::MAX_PAGE`): what the
+/// history reloads at a time.
+const MAX_PAGE: u32 = 10_000;
 
 /// A repository's log, as `Repository::log` has it: its newest commits, and those loaded after
 /// them. Shared: a reload equal to what was there keeps it, so one that brings nothing new (the
@@ -40,37 +41,175 @@ pub const RELOAD_LIMIT: usize = 10_000;
 pub struct Log {
     /// The repository it's of, so every row knows where its commit lives.
     pub repository_id: RepositoryId,
-    pub commits: Arc<[Commit]>,
+    pub commits: LogCommits,
     /// Whether that's all of the history: the last page loaded was short of its limit.
     pub complete: bool,
 }
 
-/// How many commits a reload of the log asks for, when `loaded` are: as many as were loaded, so
-/// the history keeps its place, but at least the first page, and only that past `RELOAD_LIMIT`.
-/// Git walks the whole history to sort it anyway, so that takes little longer than the first page
-/// (220ms for 6,200 commits of vscode, against 150ms for 200).
-pub fn reload_limit(loaded: usize) -> u32 {
-    if loaded > RELOAD_LIMIT {
-        FIRST_PAGE
-    } else {
-        FIRST_PAGE.max(loaded as u32)
+/// A log's commits, newest first, in the pages they were loaded in: loading more adds a page to
+/// those before it, rather than copying them into one list with it, so the history lays out only
+/// the page added.
+#[derive(Clone, Default)]
+pub struct LogCommits {
+    pages: Vec<Arc<[Commit]>>,
+    len: usize,
+    /// The commits' SHAs, shared with the logs this one is followed by (see [`Listed`]).
+    listed: Arc<Mutex<Listed>>,
+}
+
+/// The SHAs of a log's commits, for adding a page without listing them all again: by where each
+/// is, among the first `of` commits. Shared by a log and those it's followed by, each a page longer
+/// than the last, so each finds its own commits among the first of them.
+#[derive(Default)]
+struct Listed {
+    at: HashMap<String, usize>,
+    of: usize,
+}
+
+impl LogCommits {
+    pub fn len(&self) -> usize {
+        self.len
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &Commit> {
+        self.pages.iter().flat_map(|page| page.iter())
+    }
+
+    /// The pages, in the order they were loaded.
+    pub fn pages(&self) -> &[Arc<[Commit]>] {
+        &self.pages
+    }
+
+    /// Whether these are `other`'s pages, not only the same commits: telling them apart doesn't
+    /// compare the commits.
+    pub fn is(&self, other: &LogCommits) -> bool {
+        self.len == other.len
+            && self.pages.len() == other.pages.len()
+            && self
+                .pages
+                .iter()
+                .zip(&other.pages)
+                .all(|(a, b)| Arc::ptr_eq(a, b))
+    }
+
+    /// These, then `commits`, but those of them that are listed already: the history may have
+    /// moved since these were loaded, until the reload that follows the move.
+    pub fn followed_by(&self, commits: Vec<Commit>) -> LogCommits {
+        let mut listed = self.listed.lock().unwrap_or_else(PoisonError::into_inner);
+        if listed.of != self.len {
+            // Listed for a log this one was followed by already: listed again, for this one.
+            *listed = Listed::of(self);
+        }
+        let more: Vec<Commit> = commits
+            .into_iter()
+            .filter(|commit| !listed.at.contains_key(&commit.sha))
+            .collect();
+        let mut followed = self.clone();
+        if more.is_empty() {
+            return followed;
+        }
+        for (ix, commit) in more.iter().enumerate() {
+            listed.at.entry(commit.sha.clone()).or_insert(self.len + ix);
+        }
+        listed.of += more.len();
+        followed.len += more.len();
+        followed.pages.push(more.into());
+        followed
+    }
+}
+
+impl Listed {
+    fn of(commits: &LogCommits) -> Listed {
+        let mut at = HashMap::with_capacity(commits.len);
+        for (ix, commit) in commits.iter().enumerate() {
+            at.entry(commit.sha.clone()).or_insert(ix);
+        }
+        Listed {
+            at,
+            of: commits.len,
+        }
+    }
+}
+
+impl From<Vec<Commit>> for LogCommits {
+    fn from(commits: Vec<Commit>) -> Self {
+        LogCommits {
+            len: commits.len(),
+            pages: if commits.is_empty() {
+                Vec::new()
+            } else {
+                vec![commits.into()]
+            },
+            listed: Arc::default(),
+        }
+    }
+}
+
+/// The same commits, however they were paged.
+impl PartialEq for LogCommits {
+    fn eq(&self, other: &Self) -> bool {
+        self.is(other) || (self.len == other.len && self.iter().eq(other.iter()))
+    }
+}
+
+impl fmt::Debug for LogCommits {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
+    }
+}
+
+/// How many commits a reload of the log asks for, when `loaded` are: as many as were loaded, so
+/// the history keeps its place (the commit selected, and how far it's scrolled), but at least the
+/// first page. Git walks the whole history to sort it anyway, so that takes little longer than the
+/// first page (220ms for 6,200 commits of vscode, against 150ms for 200).
+pub fn reload_limit(loaded: usize) -> u32 {
+    FIRST_PAGE.max(u32::try_from(loaded).unwrap_or(u32::MAX))
+}
+
+/// Reads the log of the repository `id` again, as many commits as `loaded` (see
+/// [`reload_limit`]): a page of up to [`MAX_PAGE`] at a time.
+pub(crate) fn reload_log(
+    git: &dyn RepositoryGit,
+    id: &RepositoryId,
+    loaded: usize,
+) -> GitTask<Log> {
+    let limit = reload_limit(loaded);
+    let pages: Vec<(u32, GitTask<Vec<Commit>>)> = (0..limit)
+        .step_by(MAX_PAGE as usize)
+        .map(|skip| {
+            let page = (limit - skip).min(MAX_PAGE);
+            (page, log_commits(git, skip, page))
+        })
+        .collect();
+    let mut log = Log {
+        repository_id: id.clone(),
+        commits: LogCommits::default(),
+        complete: false,
+    };
+    async move {
+        for (limit, page) in pages {
+            let commits = page.await?;
+            let complete = commits.len() < limit as usize;
+            log = followed_by(&log, commits, complete);
+            if complete {
+                break;
+            }
+        }
+        Ok(log)
+    }
+    .boxed()
 }
 
 /// `log` with `commits` after it. Each commit only once: the history may have moved since the
 /// commits before were loaded, until the reload that follows the move.
 pub(crate) fn followed_by(log: &Log, commits: Vec<Commit>, complete: bool) -> Log {
-    let listed: HashSet<&str> = log
-        .commits
-        .iter()
-        .map(|commit| commit.sha.as_str())
-        .collect();
-    let more = commits
-        .into_iter()
-        .filter(|commit| !listed.contains(commit.sha.as_str()));
     Log {
         repository_id: log.repository_id.clone(),
-        commits: log.commits.iter().cloned().chain(more).collect(),
+        commits: log.commits.followed_by(commits),
         complete,
     }
 }
@@ -189,11 +328,77 @@ mod tests {
     }
 
     #[test]
-    fn reloads_as_many_as_were_loaded_up_to_the_limit() {
+    fn reloads_as_many_as_were_loaded() {
         assert_eq!(reload_limit(0), FIRST_PAGE);
         assert_eq!(reload_limit(150), FIRST_PAGE);
         assert_eq!(reload_limit(1200), 1200);
-        assert_eq!(reload_limit(RELOAD_LIMIT), RELOAD_LIMIT as u32);
-        assert_eq!(reload_limit(RELOAD_LIMIT + 1), FIRST_PAGE);
+        assert_eq!(reload_limit(25_000), 25_000);
+    }
+
+    fn commit(sha: &str) -> Commit {
+        Commit {
+            sha: sha.into(),
+            parents: vec![],
+            author_name: "Ada".into(),
+            author_email: "ada@example.com".into(),
+            authored_at: 0,
+            committed_at: 0,
+            refs: vec![],
+            subject: sha.into(),
+            body: String::new(),
+        }
+    }
+
+    fn shas(log: &Log) -> Vec<&str> {
+        log.commits
+            .iter()
+            .map(|commit| commit.sha.as_str())
+            .collect()
+    }
+
+    fn log(shas: &[&str]) -> Log {
+        Log {
+            repository_id: repository_id(),
+            commits: shas
+                .iter()
+                .map(|sha| commit(sha))
+                .collect::<Vec<_>>()
+                .into(),
+            complete: false,
+        }
+    }
+
+    #[test]
+    fn adds_a_page_after_the_commits_leaving_out_those_listed_already() {
+        let first = log(&["c", "b"]);
+        let second = followed_by(&first, vec![commit("b"), commit("a")], false);
+        assert_eq!(shas(&second), ["c", "b", "a"]);
+        // As a page of its own: the ones before it are shared, not copied.
+        assert_eq!(second.commits.pages().len(), 2);
+        assert!(Arc::ptr_eq(
+            &first.commits.pages()[0],
+            &second.commits.pages()[0]
+        ));
+        let third = followed_by(&second, vec![commit("a"), commit("z")], true);
+        assert_eq!(shas(&third), ["c", "b", "a", "z"]);
+        assert!(third.complete);
+        // The log before it still has only its own.
+        assert_eq!(shas(&first), ["c", "b"]);
+    }
+
+    #[test]
+    fn adds_to_a_log_that_was_added_to_already_as_to_any_other() {
+        let first = log(&["c", "b"]);
+        let _second = followed_by(&first, vec![commit("a")], false);
+        // `a` was listed for the other log, not this one.
+        let again = followed_by(&first, vec![commit("a"), commit("b")], false);
+        assert_eq!(shas(&again), ["c", "b", "a"]);
+    }
+
+    #[test]
+    fn is_the_same_log_however_its_paged() {
+        let paged = followed_by(&log(&["c", "b"]), vec![commit("a")], false);
+        assert_eq!(paged, log(&["c", "b", "a"]));
+        assert_ne!(paged, log(&["c", "a", "b"]));
     }
 }

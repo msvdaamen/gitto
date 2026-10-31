@@ -570,22 +570,8 @@ impl Repository {
     }
 }
 
-/// `limit` commits of the log after skipping `skip`, as a [`Log`] of the repository `id`.
-fn log_page(git: &dyn RepositoryGit, id: &RepositoryId, skip: u32, limit: u32) -> GitTask<Log> {
-    let commits = log_commits(git, skip, limit);
-    let repository_id = id.clone();
-    async move {
-        let commits = commits.await?;
-        Ok(Log {
-            repository_id,
-            complete: commits.len() < limit as usize,
-            commits: commits.into(),
-        })
-    }
-    .boxed()
-}
-
-fn log_commits(git: &dyn RepositoryGit, skip: u32, limit: u32) -> GitTask<Vec<Commit>> {
+/// `limit` commits of the log after skipping `skip`.
+pub(crate) fn log_commits(git: &dyn RepositoryGit, skip: u32, limit: u32) -> GitTask<Vec<Commit>> {
     match Page::new(limit, skip) {
         Ok(page) => git.log(page),
         Err(error) => failed(git.invalid(error)),

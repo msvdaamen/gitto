@@ -1,21 +1,17 @@
 //! The repository's history. Ported from `components/repository/history/history-table.tsx`.
 //!
 //! The rows are laid out once per change of what they're made of (the log, the stashes, whether
-//! there are changes, HEAD, the worktrees), not per frame, and only the rows in view are rendered
-//! (`VirtualList`), so a history of tens of thousands of commits scrolls as one of ten. More of it
-//! loads a page at a time as its end comes near.
+//! there are changes, HEAD, the worktrees), not per frame, off the main thread and only the parts
+//! that changed (see `history_layout`), and only the rows in view are rendered (`VirtualList`), so
+//! a history of tens of thousands of commits scrolls as one of ten. More of it loads a page at a
+//! time as its end comes near.
 
 use std::cell::Cell;
-use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
-use gitto_git::features::history::schema::Commit;
-use gitto_git::features::stash::schema::Stash;
-use gitto_git::features::worktree::schema::Worktree;
 use gitto_git::input::{BranchRef, RepositoryId};
-use gitto_ui_logic::git::ref_labels::checkouts;
-use gitto_ui_logic::git::rows::{HistoryRow, RowId, to_history_rows, with_stashes};
+use gitto_ui_logic::git::rows::{HistoryRow, RowId};
 use gitto_ui_logic::git::search::{matches_search, search_needle};
 use gitto_ui_logic::git::status::head_label;
 use gpui_kit::base::actions::{
@@ -36,6 +32,7 @@ use super::columns::{
 use super::commit_menu::CommitMenu;
 use super::commit_row::{HistoryCommitRow, RowProps};
 use super::history_graph::graph_width;
+use super::history_layout::{HistoryLayout, LayoutInputs};
 use super::history_option::{MenuBuilder, RowPosition};
 use super::ref_labels::{LabelActions, MoreLabels};
 use super::reword_dialog::RewordEvent;
@@ -57,6 +54,12 @@ use gitto_ui_logic::git::changes::LineCounts;
 /// How many rows from the end of the history loaded so far the rows in view come before more is
 /// loaded: a few screenfuls, so it's usually there before it's scrolled to.
 pub const LOAD_AHEAD: usize = 100;
+
+/// The most commits laid out on the main thread, at once, when there are no rows of the
+/// repository's on show: a repository loaded before has its rows as its page is made, which
+/// reads the one selected from them (see `RepositoryView::new`). More are laid out off it, the
+/// history loading meanwhile.
+const LAY_OUT_AT_ONCE: usize = 2000;
 
 /// How long the count of a row's other labels is hovered before they show, so moving across the
 /// history doesn't flash them; and how long they stay once the pointer leaves, so it can move
@@ -103,33 +106,23 @@ type SelectFiles = Box<dyn Fn(&ChangedFiles) -> ShownFiles>;
 
 /// The rows as laid out from what they're made of: laid out again only when that changes.
 struct Layout {
-    repository_id: RepositoryId,
-    commits: Option<Arc<[Commit]>>,
-    stashes: Arc<[Stash]>,
-    worktrees: Arc<[Worktree]>,
-    has_changes: bool,
-    head: Option<String>,
-    remotes: Vec<String>,
-    rows: Rc<[HistoryRow]>,
-    /// Each row's place among them, by its id.
-    places: HashMap<RowId, usize>,
-    /// The most lanes a row's graph uses, which the graph's column is sized to.
-    lanes: usize,
+    rows: Arc<HistoryLayout>,
+    /// Counts the layouts, to tell them apart.
+    revision: u64,
+    /// The layout under way, if what the rows are made of changed since: of what, and its task.
+    /// Its rows take the place of these once they're laid out, unless what they're made of
+    /// changed again meanwhile, and another takes its place.
+    pending: Option<(LayoutInputs, Task<()>)>,
     /// Whether more of the log was asked for since the rows were laid out (see
     /// `RowsContext::ask_for_more`).
     asked_for_more: Rc<Cell<bool>>,
 }
 
-/// Whether two shared lists are the same: the same list, or both empty (what's shown of one
-/// that hasn't loaded).
-fn same<T>(a: &Arc<[T]>, b: &Arc<[T]>) -> bool {
-    Arc::ptr_eq(a, b) || (a.is_empty() && b.is_empty())
-}
-
 /// The rows a search shows, by their place among all the rows.
 struct Filtered {
     needle: String,
-    rows: Rc<[HistoryRow]>,
+    /// The layout they're of (see `Layout::revision`).
+    revision: u64,
     /// Their places among the rows, in order; `None`: all of them.
     shown: Option<Rc<[usize]>>,
 }
@@ -231,19 +224,11 @@ impl HistoryTable {
             }),
         ];
         let layout = Layout {
-            repository_id: repository_id.clone(),
-            commits: None,
-            stashes: Arc::from(Vec::new()),
-            worktrees: Arc::from(Vec::new()),
-            has_changes: false,
-            head: None,
-            remotes: Vec::new(),
-            rows: Rc::from(Vec::new()),
-            places: HashMap::new(),
-            lanes: 1,
+            rows: Arc::new(HistoryLayout::empty(repository_id.clone())),
+            revision: 0,
+            pending: None,
             asked_for_more: Rc::default(),
         };
-        let rows = Rc::clone(&layout.rows);
         let mut table = HistoryTable {
             repository_id,
             repository,
@@ -255,7 +240,7 @@ impl HistoryTable {
             layout,
             filtered: Filtered {
                 needle: String::new(),
-                rows,
+                revision: 0,
                 shown: None,
             },
             totals: None,
@@ -352,7 +337,7 @@ impl HistoryTable {
     }
 
     /// The history's rows, all of them.
-    pub fn rows(&self) -> &Rc<[HistoryRow]> {
+    pub fn rows(&self) -> &HistoryLayout {
         &self.layout.rows
     }
 
@@ -360,7 +345,10 @@ impl HistoryTable {
     pub fn shown_rows(&self) -> Vec<&HistoryRow> {
         match &self.filtered.shown {
             None => self.layout.rows.iter().collect(),
-            Some(shown) => shown.iter().map(|&ix| &self.layout.rows[ix]).collect(),
+            Some(shown) => shown
+                .iter()
+                .filter_map(|&ix| self.layout.rows.get(ix))
+                .collect(),
         }
     }
 
@@ -374,21 +362,28 @@ impl HistoryTable {
     fn shown_row(&self, ix: usize) -> Option<&HistoryRow> {
         match &self.filtered.shown {
             None => self.layout.rows.get(ix),
-            Some(shown) => shown.get(ix).map(|&ix| &self.layout.rows[ix]),
+            Some(shown) => self.layout.rows.get(*shown.get(ix)?),
         }
     }
 
     /// The selected row: the one selected, or the first if it's not there.
     pub fn selected(&self) -> Option<&HistoryRow> {
-        self.selected_row_ix().map(|ix| &self.layout.rows[ix])
+        self.selected_row_ix()
+            .and_then(|ix| self.layout.rows.get(ix))
     }
 
     /// The selected row's place among all the rows (see [`selected`](Self::selected)).
     fn selected_row_ix(&self) -> Option<usize> {
         self.selected_id
             .as_ref()
-            .and_then(|id| self.layout.places.get(id).copied())
+            .and_then(|id| self.layout.rows.position(id))
             .or_else(|| (!self.layout.rows.is_empty()).then_some(0))
+    }
+
+    /// Whether the rows are laid out from what they're made of now, rather than from what they
+    /// were before it changed.
+    fn is_laid_out(&self) -> bool {
+        self.layout.pending.is_none()
     }
 
     /// The selected row's place among the rows on show; `None` when the search hides it.
@@ -432,13 +427,14 @@ impl HistoryTable {
     /// Brings what follows from the data and the selection up to date: the rows, those the search
     /// shows, falling back to the first row, the line totals' files, and what says the history
     /// is loading. The row it fell back to, if it did: nothing was selected yet, or the selected
-    /// row is gone.
+    /// row is gone. Not while the rows are being laid out again: it may be among them then.
     fn bring_up_to_date(&mut self, cx: &mut Context<Self>) -> Option<RowId> {
         self.lay_out(cx);
         self.filter();
 
         let fallback = self
             .selected()
+            .filter(|_| self.is_laid_out())
             .filter(|row| {
                 *row.repository_id() == self.repository_id
                     && !self.selected_id.as_ref().is_some_and(|id| row.is(id))
@@ -462,82 +458,84 @@ impl HistoryTable {
         fallback
     }
 
-    /// Lays the rows out again, if what they're made of changed.
-    fn lay_out(&mut self, cx: &App) {
+    /// Lays the rows out again, if what they're made of changed: off the main thread, and only
+    /// the parts of them that changed (see `history_layout`). Once they're laid out, they take
+    /// the place of those on show, unless what they're made of changed again meanwhile. The
+    /// first rows of a repository are laid out at once if there are few (see
+    /// [`LAY_OUT_AT_ONCE`]); until they're laid out, there are none, rather than another's.
+    fn lay_out(&mut self, cx: &mut Context<Self>) {
         let history = History(self.repository.read(cx));
-        let log = history.commits();
-        let commits = log.map(|log| Arc::clone(&log.commits));
-        let stashes = history.shown_stashes();
-        let worktrees = history.shown_worktrees();
-        let has_changes = history.has_changes();
-        let head = history.head();
-        let remotes = history.shown_remotes();
+        let inputs = LayoutInputs {
+            repository_id: self.repository_id.clone(),
+            commits: history.commits().map(|log| log.commits.clone()),
+            stashes: history.shown_stashes(),
+            worktrees: history.shown_worktrees(),
+            has_changes: history.has_changes(),
+            head: history.head(),
+            remotes: history.shown_remotes(),
+        };
         let layout = &self.layout;
-        let unchanged = layout.repository_id == self.repository_id
-            && match (&layout.commits, &commits) {
-                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-                (None, None) => true,
-                _ => false,
-            }
-            && same(&layout.stashes, &stashes)
-            && same(&layout.worktrees, &worktrees)
-            && layout.has_changes == has_changes
-            && layout.head == head
-            && layout.remotes == remotes;
-        if unchanged {
+        let laying_out = match &layout.pending {
+            Some((pending, _)) => pending,
+            None => layout.rows.inputs(),
+        };
+        if laying_out.is(&inputs) {
             return;
         }
-        let rows: Vec<HistoryRow> = match log {
-            Some(log) => {
-                let entries = with_stashes(&log.commits, &stashes);
-                let others = checkouts(&worktrees);
-                to_history_rows(
-                    &log.repository_id,
-                    &entries,
-                    has_changes,
-                    head.as_deref(),
-                    &others,
-                    &remotes,
-                )
+        let shown = layout.rows.inputs();
+        if shown.commits.is_none() || shown.repository_id != inputs.repository_id {
+            let empty = HistoryLayout::empty(inputs.repository_id.clone());
+            let few = inputs
+                .commits
+                .as_ref()
+                .is_none_or(|commits| commits.len() <= LAY_OUT_AT_ONCE);
+            if few {
+                self.layout.pending = None;
+                self.replace_layout(HistoryLayout::lay_out(&empty, inputs), cx);
+                return;
             }
-            None => Vec::new(),
-        };
-        let lanes = rows
-            .iter()
-            .map(|row| row.graph().map_or(1, |graph| graph.width))
-            .max()
-            .unwrap_or(1)
-            .max(1);
-        let places = rows
-            .iter()
-            .enumerate()
-            .map(|(ix, row)| (row.id(), ix))
-            .collect();
-        self.layout = Layout {
-            repository_id: self.repository_id.clone(),
-            commits,
-            stashes,
-            worktrees,
-            has_changes,
-            head,
-            remotes,
-            rows: rows.into(),
-            places,
-            lanes,
-            asked_for_more: Rc::default(),
-        };
+            if shown.repository_id != inputs.repository_id {
+                self.replace_layout(empty, cx);
+            }
+        }
+        let previous = Arc::clone(&self.layout.rows);
+        let of = inputs.clone();
+        let task = cx.spawn(async move |this, cx| {
+            let laid_out = cx
+                .background_spawn(async move { HistoryLayout::lay_out(&previous, of) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.layout.pending = None;
+                this.replace_layout(laid_out, cx);
+                this.sync(cx);
+            });
+        });
+        self.layout.pending = Some((inputs, task));
+    }
+
+    /// Shows the rows `laid_out` in place of those on show.
+    fn replace_layout(&mut self, laid_out: HistoryLayout, cx: &mut Context<Self>) {
+        let replaced = std::mem::replace(&mut self.layout.rows, Arc::new(laid_out));
+        self.layout.revision += 1;
+        self.layout.asked_for_more = Rc::default();
+        // The rows replaced are let go of off the main thread too: all of them, after the history
+        // reloaded.
+        if let Ok(replaced) = Arc::try_unwrap(replaced) {
+            cx.background_spawn(async move { drop(replaced) }).detach();
+        }
     }
 
     /// Picks the rows the search shows again, if the rows or the search changed.
     fn filter(&mut self) {
-        if self.filtered.needle == self.needle && Rc::ptr_eq(&self.filtered.rows, &self.layout.rows)
-        {
+        let revision = self.layout.revision;
+        if self.filtered.needle == self.needle && self.filtered.revision == revision {
             return;
         }
         let needle = self.needle.clone();
-        let rows = Rc::clone(&self.layout.rows);
         let shown = (!needle.is_empty()).then(|| {
-            rows.iter()
+            self.layout
+                .rows
+                .iter()
                 .enumerate()
                 .filter(|(_, row)| matches_search(row, &needle))
                 .map(|(ix, _)| ix)
@@ -545,7 +543,7 @@ impl HistoryTable {
         });
         self.filtered = Filtered {
             needle,
-            rows,
+            revision,
             shown,
         };
     }
@@ -738,6 +736,14 @@ impl HistoryTable {
         }
     }
 
+    /// Forgets that the commit `sha`'s other labels are hovered or listed: its row's out of view.
+    fn forget_more_labels(&mut self, sha: &str, cx: &mut Context<Self>) {
+        if self.more_labels.row.as_deref() == Some(sha) {
+            self.more_labels = MoreLabelsState::default();
+            cx.notify();
+        }
+    }
+
     /// Closes the list of a row's other labels after a moment, unless the pointer's back on it by
     /// then, or a branch's menu opened from it is open: the menu goes with its label.
     fn close_more_labels_soon(&mut self, cx: &mut Context<Self>) {
@@ -845,7 +851,7 @@ impl HistoryTable {
 
     fn render_rows(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let count = self.shown_count();
-        let graph = graph_width(self.layout.lanes);
+        let graph = graph_width(self.layout.rows.lanes());
         let selected = self.selected().map(HistoryRow::id);
         let focused = self.focus.is_focused(window);
         let table = cx.entity().downgrade();
@@ -878,7 +884,9 @@ impl HistoryTable {
         };
         let context = Rc::new(RowsContext {
             table: table.clone(),
-            rows: Rc::clone(&self.layout.rows),
+            // Not kept: the rows are let go of off the main thread once they're replaced (see
+            // `lay_out`), and they're only rendered in the frame they're on show in.
+            rows: Arc::downgrade(&self.layout.rows),
             shown: self.filtered.shown.clone(),
             selected,
             outlined: self.keyboard && focused,
@@ -894,15 +902,20 @@ impl HistoryTable {
                 .row
                 .clone()
                 .map(|row| (row, self.more_labels.open)),
+            more_active: self.more_labels.hovered > 0 || self.more_labels.open,
             searching: !self.needle.is_empty(),
             asked_for_more: Rc::clone(&self.layout.asked_for_more),
         });
         VirtualList::new("history-rows", count, ROW_HEIGHT, move |range, _, cx| {
+            let Some(rows) = context.rows.upgrade() else {
+                return Vec::new();
+            };
             if is_near_end(&range, count, LOAD_AHEAD) {
                 context.ask_for_more(cx);
             }
+            context.forget_more_labels_out_of(&rows, &range, cx);
             range
-                .filter_map(|ix| context.render_row(ix, count))
+                .filter_map(|ix| context.render_row(&rows, ix, count))
                 .collect()
         })
         .track_scroll(&self.scroll)
@@ -913,7 +926,7 @@ impl HistoryTable {
 /// What the rows in view are rendered from, shared by the list's frames.
 struct RowsContext {
     table: WeakEntity<HistoryTable>,
-    rows: Rc<[HistoryRow]>,
+    rows: Weak<HistoryLayout>,
     shown: Option<Rc<[usize]>>,
     selected: Option<RowId>,
     outlined: bool,
@@ -925,6 +938,8 @@ struct RowsContext {
     commit_menu: Entity<CommitMenu>,
     commit_menu_open: Option<SharedString>,
     more: Option<(String, bool)>,
+    /// Whether the pointer's on that row's count or list, or the list is open.
+    more_active: bool,
     searching: bool,
     /// Whether more of the log was asked for since the rows were laid out.
     asked_for_more: Rc<Cell<bool>>,
@@ -945,11 +960,40 @@ impl RowsContext {
         });
     }
 
-    fn render_row(&self, ix: usize, count: usize) -> Option<AnyElement> {
-        let row = match &self.shown {
-            None => self.rows.get(ix)?,
-            Some(shown) => &self.rows[*shown.get(ix)?],
+    /// The row on show `ix`.
+    fn row<'a>(&self, rows: &'a HistoryLayout, ix: usize) -> Option<&'a HistoryRow> {
+        match &self.shown {
+            None => rows.get(ix),
+            Some(shown) => rows.get(*shown.get(ix)?),
+        }
+    }
+
+    /// Forgets the row whose other labels are hovered or listed if it's not among those rendered,
+    /// `range`: scrolled out of view, it never hears the pointer left it, and its list would open
+    /// again once it's back.
+    fn forget_more_labels_out_of(
+        &self,
+        rows: &HistoryLayout,
+        range: &std::ops::Range<usize>,
+        cx: &mut App,
+    ) {
+        let Some((sha, _)) = self.more.as_ref().filter(|_| self.more_active) else {
+            return;
         };
+        let rendered = range.clone().any(|ix| {
+            matches!(self.row(rows, ix), Some(HistoryRow::Commit(commit)) if commit.id == *sha)
+        });
+        if !rendered {
+            let table = self.table.clone();
+            let sha = sha.clone();
+            cx.defer(move |cx| {
+                let _ = table.update(cx, |table, cx| table.forget_more_labels(&sha, cx));
+            });
+        }
+    }
+
+    fn render_row(&self, rows: &HistoryLayout, ix: usize, count: usize) -> Option<AnyElement> {
+        let row = self.row(rows, ix)?;
         let id = row.id();
         let selected = self.selected.as_ref() == Some(&id);
         let table = self.table.clone();
@@ -1018,13 +1062,14 @@ impl Render for HistoryTable {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = *cx.palette();
         let log = self.repository.read(cx).log();
-        let loading = log.is_pending();
+        // Or loaded, and its first rows on their way.
+        let loading = log.is_pending() || (!self.is_laid_out() && self.layout.rows.is_empty());
         let error = log
             .error()
             .filter(|_| log.data().is_none())
             .map(|error| error.to_string());
         // Before the history's loaded, the header's sized for one lane.
-        let graph = graph_width(if loading { 1 } else { self.layout.lanes });
+        let graph = graph_width(if loading { 1 } else { self.layout.rows.lanes() });
         let updating = self.updating.read(cx).is_on();
         let body: AnyElement = if loading {
             LoadingState::new("history-loading", "Loading history…")
