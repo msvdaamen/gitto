@@ -3,6 +3,40 @@ name = "app"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
+description = "Gitto's desktop app: the GPUI UI, which calls the Rust crates directly."
+publish = false
+
+# A library, so the UI can be tested, and a thin binary that runs it.
+[lib]
+name = "app"
+path = "src/lib.rs"
+
+[[bin]]
+name = "app"
+path = "src/main.rs"
 
 [dependencies]
-gpui-kit.workspace = true
+# The UI. `syntect` highlights the code in diffs and conflicts.
+gpui-kit = { workspace = true, features = ["syntect"] }
+
+# What the UI shows and changes, called directly (there's no RPC).
+gitto-db.workspace = true
+gitto-git.workspace = true
+gitto-repository.workspace = true
+# The UI's pure logic (TS's `apps/ui/src/git/*.ts` and the like), which another change adds in
+# `crates/ui`. Uncomment once it's in the tree, with its line in the root Cargo.toml:
+# gitto-ui.workspace = true
+
+anyhow.workspace = true
+async-fs.workspace = true
+futures.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+gitto-git = { workspace = true, features = ["test-support"] }
+gpui-kit = { workspace = true, features = ["syntect", "test-support"] }
+smol.workspace = true
+tempfile.workspace = true
+uuid.workspace = true

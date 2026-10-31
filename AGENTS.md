@@ -59,11 +59,11 @@ in the same file, named after the TS test (`it("rejects unknown repositories")` 
 `smol::block_on`. Async code doesn't use tokio: GPUI has its own executor.
 
 Dependencies go in the root `Cargo.toml`'s `[workspace.dependencies]`, used with
-`dep.workspace = true`. Check the crates before pushing (as CI does):
+`dep.workspace = true`. Check the workspace before pushing (as CI does):
 
 ```sh
 cargo fmt --all
-cargo clippy --workspace --exclude app --all-targets --locked -- -D warnings
-cargo clippy --workspace --exclude app --locked -- -D warnings
-cargo test --workspace --exclude app --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo clippy --workspace --locked -- -D warnings
+cargo test --workspace --locked
 ```
