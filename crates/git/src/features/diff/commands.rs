@@ -324,6 +324,7 @@ mod tests {
         matches!(error, Error::Git(git) if git.kind == GitErrorKind::Command)
     }
 
+    #[cfg(unix)]
     fn is_outside(error: &Error) -> bool {
         matches!(error, Error::OutsideRepository { .. })
     }
