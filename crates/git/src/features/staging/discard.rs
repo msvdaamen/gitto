@@ -510,13 +510,19 @@ mod tests {
             let repo = fx.create_history_repo("discard-untracked").await;
             let path = repo.path().to_path_buf();
             fs::remove_file(path.join("c.txt")).unwrap();
-            // Taken as a glob, its name would match the other untracked file too.
-            fs::write(path.join("*.txt"), "star\n").unwrap();
+            // Taken as a glob, its name would match the other untracked file too. Windows has no
+            // such file names.
+            let star = cfg!(unix).then_some("*.txt");
+            if let Some(star) = star {
+                fs::write(path.join(star), "star\n").unwrap();
+            }
 
             discard(&repo, &unstaged("c.txt", Deleted)).await.unwrap();
-            discard(&repo, &unstaged("*.txt", Untracked)).await.unwrap();
+            if let Some(star) = star {
+                discard(&repo, &unstaged(star, Untracked)).await.unwrap();
+                assert!(!path.join(star).exists());
+            }
             assert_eq!(read(&path.join("c.txt")), "b\n");
-            assert!(!path.join("*.txt").exists());
             assert_eq!(
                 status_entries(&repo).await,
                 [
