@@ -390,7 +390,10 @@ mod tests {
             .await;
             subscription.unsubscribe().await;
             assert!(
-                lock(&inner_seen).iter().all(|path| *path == inner_file),
+                // FSEvents tells of the folder whose files changed, too.
+                lock(&inner_seen)
+                    .iter()
+                    .all(|path| *path == inner_file || *path == inner_dir),
                 "{:?}",
                 lock(&inner_seen)
             );
@@ -443,6 +446,9 @@ mod tests {
         });
     }
 
+    // What inotify is asked to tell (see `linux`). FSEvents, on macOS, also tells of what changed
+    // just before the watch started, which this test would count.
+    #[cfg(target_os = "linux")]
     #[test]
     fn hears_nothing_while_git_reads_it() {
         let dir = tempfile::tempdir().unwrap();
