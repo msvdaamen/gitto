@@ -507,7 +507,7 @@ async fn run(cwd: PathBuf, args: Vec<OsString>, options: RunOptions) -> Result<V
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{Fixture, git, non_utf8_names};
+    use crate::test_support::{Fixture, git};
 
     #[test]
     fn writes_stdin() {
@@ -640,31 +640,32 @@ mod tests {
         assert_eq!(stopped, 1);
     }
 
+    // Such names are only made on Unix (see `non_utf8_names`).
+    #[cfg(unix)]
     #[test]
     fn reads_output_as_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+
+        use crate::test_support::non_utf8_names;
         if !non_utf8_names() {
             return;
         }
-        #[cfg(unix)]
-        {
-            use std::os::unix::ffi::OsStrExt;
-            let fx = Fixture::new();
-            let path = fx.create_repo("bytes");
-            let name = OsStr::from_bytes(b"caf\xe9.txt");
-            std::fs::write(path.join(name), "").unwrap();
-            git(&path, [OsStr::new("add"), OsStr::new("--"), name]);
-            smol::block_on(async {
-                let listed = run_git_bytes(&path, ["ls-files", "-z"], RunOptions::default());
-                assert_eq!(listed.await.unwrap(), b"caf\xe9.txt\0");
-                // Handed back to git as it gave it.
-                let args = [OsStr::new("ls-files"), OsStr::new("--error-unmatch"), name];
-                assert!(
-                    run_git_bytes(&path, args, RunOptions::default())
-                        .await
-                        .is_ok()
-                );
-            });
-        }
+        let fx = Fixture::new();
+        let path = fx.create_repo("bytes");
+        let name = OsStr::from_bytes(b"caf\xe9.txt");
+        std::fs::write(path.join(name), "").unwrap();
+        git(&path, [OsStr::new("add"), OsStr::new("--"), name]);
+        smol::block_on(async {
+            let listed = run_git_bytes(&path, ["ls-files", "-z"], RunOptions::default());
+            assert_eq!(listed.await.unwrap(), b"caf\xe9.txt\0");
+            // Handed back to git as it gave it.
+            let args = [OsStr::new("ls-files"), OsStr::new("--error-unmatch"), name];
+            assert!(
+                run_git_bytes(&path, args, RunOptions::default())
+                    .await
+                    .is_ok()
+            );
+        });
     }
 
     #[test]

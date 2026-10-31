@@ -257,6 +257,10 @@ pub async fn wait_for(timeout: Duration, mut done: impl FnMut() -> bool) {
 }
 
 /// Writes the executable script `file`, a hook, say.
+#[cfg_attr(
+    not(unix),
+    allow(dead_code, reason = "only Unix-only tests may use it")
+)]
 pub fn write_script(file: &Path, script: &str) {
     fs::write(file, script).unwrap();
     #[cfg(unix)]
