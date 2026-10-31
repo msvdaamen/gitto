@@ -741,7 +741,6 @@ mod tests {
     //! `components::repository::test_support`).
 
     use std::rc::Rc;
-    use std::sync::Arc;
     use std::time::Duration;
 
     use gitto_git::features::history::schema::Commit;
@@ -851,10 +850,11 @@ mod tests {
         );
         let log = Log {
             repository_id: id.clone(),
-            commits: Arc::from(vec![
+            commits: vec![
                 commit("b1", "Second", &["a1"], 2000),
                 commit("a1", "First", &[], 1000),
-            ]),
+            ]
+            .into(),
             complete: true,
         };
         set_log(&id, log, cx);

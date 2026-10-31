@@ -1010,7 +1010,9 @@ fn keeps_the_rewritten_commit_selected_rather_than_the_uncommitted_changes(
     let history = render(cx, two_commits(1));
     // The history has a row for the changes, above the commit.
     assert_eq!(
-        history.table.read_with(cx, |table, _| table.rows()[0].id()),
+        history
+            .table
+            .read_with(cx, |table, _| table.rows().get(0).unwrap().id()),
         RowId::Wip
     );
     set_message(
@@ -1554,7 +1556,7 @@ fn marks_a_branch_checked_out_in_another_worktree_and_names_one_detached_at_the_
     assert!(history.shows("repo-check", cx));
     let labels = history
         .table
-        .read_with(cx, |table, _| match &table.rows()[0] {
+        .read_with(cx, |table, _| match table.rows().get(0).unwrap() {
             gitto_ui_logic::git::rows::HistoryRow::Commit(commit) => commit.labels.clone(),
             _ => vec![],
         });
