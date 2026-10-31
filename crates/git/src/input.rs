@@ -413,8 +413,8 @@ mod tests {
         );
         // Kept as it's sent.
         assert_eq!(Message::parse(" Fix\n").unwrap().as_str(), " Fix\n");
-        // NEL is whitespace, as Unicode has it.
-        assert!(Message::parse("\u{85}").is_err());
+        // NEL isn't whitespace, as JS has it.
+        assert!(Message::parse("\u{85}").is_ok());
     }
 
     #[test]
