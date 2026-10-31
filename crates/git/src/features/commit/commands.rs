@@ -13,7 +13,8 @@ use crate::input::{FullSha, Sha};
 /// mistake. Nothing needs to be staged to only reword it: an amend may leave the commit empty, so
 /// an empty one can be reworded.
 ///
-/// Its place in the repository's writes is taken when it's first polled (see `Repo::exclusive`).
+/// Its place in the repository's writes is taken when it's first polled, and once it's started it
+/// runs to its end even if the future is dropped (see `Repo::exclusive`).
 pub async fn create_commit(repo: &Repo, message: &Message, amend: Option<&FullSha>) -> Result<()> {
     let message = message.as_str().to_owned();
     let amend = amend.map(|sha| sha.as_str().to_owned());
@@ -39,7 +40,8 @@ pub async fn create_commit(repo: &Repo, message: &Message, amend: Option<&FullSh
 /// git rewords a commit in a rebase.
 ///
 /// Its own function, rather than an option of `create_commit`, for that SHA, which committing
-/// doesn't look up. Its place in the repository's writes is taken when it's first polled.
+/// doesn't look up. Its place in the repository's writes is taken when it's first polled, and once
+/// it's started it runs to its end even if the future is dropped.
 pub async fn reword_commit(repo: &Repo, sha: &FullSha, message: &Message) -> Result<String> {
     let sha = sha.as_str().to_owned();
     let message = message.as_str().to_owned();
