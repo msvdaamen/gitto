@@ -14,8 +14,9 @@
 //!
 //! An error reaches the UI as an [`ApiError`], with the code, the message and whether it's a bug,
 //! as the renderer got it: each `GitRepo` method turns a failure into one, logged under the
-//! method's name, and reported if it's a bug. A method is cancelled by dropping its future, which
-//! isn't a failure, as an aborted request wasn't.
+//! method's name, and reported if it's a bug. A read or a fetch is cancelled by dropping its
+//! future, which isn't a failure, as an aborted request wasn't; a write that's started runs to its
+//! end all the same, as TS's did (see `Repo::write`).
 
 mod error;
 mod handlers;

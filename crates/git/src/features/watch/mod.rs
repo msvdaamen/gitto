@@ -5,6 +5,8 @@
 mod batches;
 pub(crate) mod commands;
 pub mod git_dirs;
+#[cfg(target_os = "linux")]
+mod linux;
 pub mod schema;
 mod stream;
 mod watcher;

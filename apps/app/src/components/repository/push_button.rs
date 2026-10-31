@@ -170,9 +170,15 @@ impl PushButton {
                     return dialog;
                 };
                 let cancel = this.clone();
+                let ok = this.clone();
                 dialog
                     .w(CONFIRM_WIDTH.to_pixels(window.rem_size()))
                     .close_button(false)
+                    // Kit's dialog takes Enter as OK: it cancels, as Escape does.
+                    .on_ok(move |_, _, cx| {
+                        let _ = ok.update(cx, |this, cx| this.cancel_rejected(cx));
+                        true
+                    })
                     .on_cancel(move |_, _, cx| {
                         let _ = cancel.update(cx, |this, cx| this.cancel_rejected(cx));
                         true
@@ -580,6 +586,24 @@ mod tests {
         // Nor shown as a failure.
         let shown = button.read_with(cx, |button, cx| button.button(cx));
         assert!(shown.shown_failure().is_none());
+    }
+
+    #[gpui_kit::test]
+    fn leaves_the_remote_alone_on_enter(cx: &mut TestAppContext) {
+        let calls = operations(|_, _| Err(rejected(true)));
+        let (_dir, window, button) = render(cx, target(), &calls);
+
+        click(window, "push", cx);
+        assert!(has_dialog(window, cx));
+        cx.update_window(window, |_, window, cx| window.press("enter", cx))
+            .unwrap();
+        cx.run_until_parked();
+
+        assert!(!has_dialog(window, cx));
+        assert_eq!(calls.pushes.borrow().len(), 1);
+        // Dismissed: it isn't asked about again.
+        assert!(button.read_with(cx, |button, cx| button.rejected(cx).is_none()));
+        assert!(!button.read_with(cx, |button, _| button.dialog_open));
     }
 
     #[gpui_kit::test]

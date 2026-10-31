@@ -292,10 +292,14 @@ impl Deref for Paths {
     }
 }
 
-/// Whether `value` has a character JS's `\S` matches: one that isn't whitespace, nor the byte
-/// order mark, which JS's `\s` also has and Unicode's whitespace doesn't.
+/// Whether `value` has a character JS's `\S` matches: one that isn't whitespace as JS's `\s` has
+/// it, which is Unicode's but for the next line control (U+0085), and has the byte order mark.
 fn has_non_space(value: &str) -> bool {
-    value.chars().any(|c| !c.is_whitespace() && c != '\u{feff}')
+    value.chars().any(|c| match c {
+        '\u{85}' => true,
+        '\u{feff}' => false,
+        c => !c.is_whitespace(),
+    })
 }
 
 fn is_lower_hex(value: &str) -> bool {
@@ -373,6 +377,14 @@ mod tests {
     }
 
     #[test]
+    fn messages_have_a_character_that_isnt_whitespace_as_js_has_it() {
+        assert!(Message::parse("Fix").is_ok());
+        assert!(Message::parse(" \t\n\r\u{a0}\u{2028}\u{3000}").is_err());
+        assert!(Message::parse("\u{feff}").is_err());
+        assert!(Message::parse("\u{85}").is_ok());
+    }
+
+    #[test]
     fn repository_ids_are_uuid_v7() {
         assert!(RepositoryId::parse("01890a5d-ac96-774b-bcce-b302099a8057").is_ok());
         assert!(RepositoryId::parse(uuid::Uuid::now_v7().to_string()).is_ok());
@@ -418,8 +430,8 @@ mod tests {
         );
         // Kept as it's sent.
         assert_eq!(Message::parse(" Fix\n").unwrap().as_str(), " Fix\n");
-        // NEL is whitespace, as Unicode has it.
-        assert!(Message::parse("\u{85}").is_err());
+        // NEL isn't whitespace, as JS has it.
+        assert!(Message::parse("\u{85}").is_ok());
     }
 
     #[test]
