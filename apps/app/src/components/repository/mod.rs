@@ -17,6 +17,7 @@ pub mod add_worktree_dialog;
 pub mod branch_button;
 pub mod branch_form;
 pub mod branch_menu;
+pub mod commit_message;
 pub mod create_branch_dialog;
 pub mod delete_branch_dialog;
 pub mod operation_bar;

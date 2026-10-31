@@ -26,6 +26,7 @@ use super::keys;
 use super::mutation::Mutation;
 use super::opaque::Opaque;
 use super::query::Query;
+use super::remote::remotes_query;
 use super::stash::stashes_query;
 use super::status::{head_sha, status_query};
 use super::worktree::worktrees_query;
@@ -50,7 +51,7 @@ pub const RELOAD_LIMIT: usize = 10_000;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Log {
     /// The repository it's of, so every row knows where its commit lives.
-    pub repository_id: String,
+    pub repository_id: RepositoryId,
     pub commits: Arc<[Commit]>,
     /// Whether that's all of the history: the last page loaded was short of its limit.
     pub complete: bool,
@@ -98,7 +99,7 @@ pub fn log_options(id: &RepositoryId, get: GetLog) -> QueryOptions<Log> {
         let loaded = previous.map_or(0, |log| log.commits.len());
         let limit = reload_limit(loaded);
         let page = get(repository.clone(), 0, limit);
-        let repository_id = repository.to_string();
+        let repository_id = repository.clone();
         async move {
             let commits = page.await?;
             Ok(Log {
@@ -222,22 +223,29 @@ impl LogQuery {
 
 /// What the history table shows (`useHistory`): the log, and what's shown among it. The rows are
 /// laid out from these (see the module's doc): the log's commits with the stashes among them, a
-/// row of the uncommitted changes if there are any, and the other worktrees' checkouts on their
-/// labels.
+/// row of the uncommitted changes if there are any, and on their labels the other worktrees'
+/// checkouts and the remotes their remote branches are on.
 pub struct History {
     log: LogQuery,
     status: Query<Opaque<Uncommitted>, StatusSummary>,
     stashes: Query<Arc<[Stash]>>,
     worktrees: Query<Arc<[Worktree]>>,
+    remotes: Query<Vec<String>>,
 }
 
 impl History {
     pub fn new<V: 'static>(id: &RepositoryId, cx: &mut Context<V>) -> Self {
+        History::with_get(id, git_log(cx), cx)
+    }
+
+    /// With the log read by `get`: e.g. a test's, which pages it itself.
+    pub fn with_get<V: 'static>(id: &RepositoryId, get: GetLog, cx: &mut Context<V>) -> Self {
         History {
-            log: LogQuery::new(id, cx),
+            log: LogQuery::with_get(id, get, cx),
             status: status_query(id, cx),
             stashes: stashes_query(id, cx),
             worktrees: worktrees_query(id, cx),
+            remotes: remotes_query(id, cx),
         }
     }
 
@@ -260,6 +268,11 @@ impl History {
 
     pub fn worktrees(&self) -> &Query<Arc<[Worktree]>> {
         &self.worktrees
+    }
+
+    /// The remotes, which the labels' remote branches are on.
+    pub fn remotes(&self) -> &Query<Vec<String>> {
+        &self.remotes
     }
 
     /// Whether there are uncommitted changes, for their row. The layout only depends on the log,
@@ -286,6 +299,16 @@ impl History {
     /// couldn't be, as with the stashes.
     pub fn shown_worktrees(&self) -> Arc<[Worktree]> {
         loaded(&self.worktrees)
+    }
+
+    /// The remotes the labels' remote branches are put on: none until they've loaded, and none
+    /// if they couldn't be, a remote branch then being taken to be on the part of its name before
+    /// its first slash.
+    pub fn shown_remotes(&self) -> Vec<String> {
+        match self.remotes.data() {
+            Some(remotes) if self.remotes.is_success() => remotes,
+            _ => Vec::new(),
+        }
     }
 
     /// Whether there's more of the log to load, once it's loaded.
@@ -518,7 +541,7 @@ mod tests {
         let id = repository_id();
         let sha = format!("{:040x}", 1);
         let log = Log {
-            repository_id: id.to_string(),
+            repository_id: id.clone(),
             commits: commits(0..3).into(),
             complete: true,
         };
