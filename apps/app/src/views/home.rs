@@ -1,14 +1,16 @@
 //! The home page. Ported from `routes/(main)/index.tsx`.
 
+use std::rc::Rc;
+
 use gitto_repository::Repository;
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::v_flex;
 use gpui_kit::prelude::*;
 use gpui_kit::{App, Context, Entity, SharedString, Subscription, Window, div, px, rems};
 
-use crate::components::home::recent_activity::RecentActivity;
+use crate::components::home::recent_activity::{RecentActivity, RecentEntries, recent_entries};
 use crate::components::home::repository_list::RepositoryList;
-use crate::components::home::summaries::RepositorySummaries;
+use crate::components::home::summaries::{RepositorySummaries, RepositorySummary};
 use crate::components::home::welcome_hero::WelcomeHero;
 use gitto_app_data::data::repositories::{OpenRepository, Opened};
 use gitto_app_data::data::{AppChanged, AppData, AppPart};
@@ -29,6 +31,8 @@ pub const ASIDE_WIDTH_NARROW: f32 = 18.67;
 pub struct HomeView {
     data: Entity<AppData>,
     summaries: RepositorySummaries,
+    /// The latest things done, and the summaries they're of: sorted again once those change.
+    recent: Option<(Rc<[RepositorySummary]>, RecentEntries)>,
     open_repository: Entity<OpenRepository>,
     /// The repository list's search.
     search: Entity<InputState>,
@@ -68,6 +72,7 @@ impl HomeView {
         let mut home = HomeView {
             data,
             summaries: RepositorySummaries::new(),
+            recent: None,
             open_repository,
             search,
             _subscriptions: subscriptions,
@@ -89,6 +94,18 @@ impl HomeView {
         let data = self.data.read(cx);
         data.repositories().data().cloned().unwrap_or_default()
     }
+
+    /// The latest things done in `summaries`, as last sorted while they're the same.
+    fn recent(&mut self, summaries: &Rc<[RepositorySummary]>) -> RecentEntries {
+        match &self.recent {
+            Some((of, recent)) if Rc::ptr_eq(of, summaries) => Rc::clone(recent),
+            _ => {
+                let recent = recent_entries(summaries);
+                self.recent = Some((Rc::clone(summaries), Rc::clone(&recent)));
+                recent
+            }
+        }
+    }
 }
 
 impl Render for HomeView {
@@ -103,6 +120,7 @@ impl Render for HomeView {
             ASIDE_WIDTH
         };
         let summaries = self.summaries.summaries(cx);
+        let recent = self.recent(&summaries);
         let data = self.data.read(cx);
         let loaded = data.repositories().data().is_some();
         let user_name = data.user_name().data().cloned();
@@ -156,7 +174,7 @@ impl Render for HomeView {
                                 v_flex()
                                     .when(!medium, |this| this.w(rems(aside_width)).flex_none())
                                     .gap_3()
-                                    .child(RecentActivity::new(summaries)),
+                                    .child(RecentActivity::new(recent)),
                             ),
                     ),
             )
