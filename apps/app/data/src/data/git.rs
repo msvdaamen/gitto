@@ -1,7 +1,8 @@
 //! What a [`Repository`](super::repository::Repository) asks git: [`RepositoryGit`], a method
 //! for each thing, which the app answers with gitto-git's [`GitRepo`](gitto_git::GitRepo) and a
 //! test with what it makes up. GPUI tests can't run git (see `crate::data`), so this is where they
-//! step in: a test's implements what its view asks for, and the rest fail.
+//! step in: a test's implements what its view asks for, and asking it for the rest panics, so a
+//! test can't pass with a part of its view failing to load unnoticed.
 
 use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -36,8 +37,8 @@ use super::error::DataError;
 pub type GitTask<T> = BoxFuture<'static, Result<T, DataError>>;
 
 /// Writes [`RepositoryGit`], with a method for each of `GitRepo`'s, as gitto-git lists them
-/// (`for_each_repo_method!`, whose bodies are gitto-git's own): which [`GitRepository`] runs, and
-/// which fails by default, for tests.
+/// (`for_each_repo_method!`, whose bodies are gitto-git's own): which [`GitRepository`] runs, which
+/// [`Removed`] fails, and which panics by default, for tests.
 macro_rules! repository_git {
     ($(
         $(#[$attr:meta])*
@@ -49,7 +50,7 @@ macro_rules! repository_git {
                 $(#[$attr])*
                 fn $name(&self $(, $arg: $ty)*) -> GitTask<$out> {
                     $(let _ = $arg;)*
-                    not_in_this_test(stringify!($name))
+                    panic!("Not in this test: {}.", stringify!($name))
                 }
             )*
 
@@ -80,14 +81,22 @@ macro_rules! repository_git {
                 self.api.fail("input", error).into()
             }
         }
+
+        impl RepositoryGit for Removed {
+            $(
+                fn $name(&self $(, $arg: $ty)*) -> GitTask<$out> {
+                    $(let _ = $arg;)*
+                    let error = super::repository::removed();
+                    async move { Err(error) }.boxed()
+                }
+            )*
+        }
     };
 }
 
-/// What a test's [`RepositoryGit`] does with what it doesn't implement.
-fn not_in_this_test<T>(name: &str) -> GitTask<T> {
-    let error = DataError::msg(format!("Not in this test: {name}."));
-    async move { Err(error) }.boxed()
-}
+/// The git of a repository that was removed from Gitto: everything fails, saying so. What a view
+/// that's about to go with it asks it for (see `Repositories::open`).
+pub struct Removed;
 
 /// The repository `id`, as gitto-git runs it: opened once (see `GitApi::repo`), and again after
 /// a method failed, in case that's why. Cheap to clone; the clones share what's opened.
@@ -149,7 +158,8 @@ pub fn file_input(file: &ChangedFile) -> gitto_git::Result<FileInput> {
     })
 }
 
-/// A test's git that does nothing: every method fails.
+/// A test's git that does nothing: asking it anything panics, for a view whose repository is given
+/// everything it shows.
 pub struct NoGit;
 
 impl RepositoryGit for NoGit {}
@@ -182,6 +192,12 @@ mod tests {
         });
         let id = RepositoryId::parse("01890a5d-ac96-774b-bcce-b302099a8057").unwrap();
         (dir, GitRepository::new(api, id), lookups)
+    }
+
+    #[test]
+    #[should_panic(expected = "Not in this test: refs.")]
+    fn panics_when_a_test_asks_its_git_what_it_doesnt_answer() {
+        drop(NoGit.refs());
     }
 
     #[test]

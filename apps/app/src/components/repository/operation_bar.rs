@@ -471,9 +471,9 @@ mod tests {
     fn render(cx: &mut TestAppContext, operation: Option<Operation>, status: Uncommitted) -> Bar {
         let dir = setup(cx);
         let id = repository_id();
-        set_operation(&id, operation, cx);
-        set_status(&id, status, cx);
+        // Loaded from git, which answers them again as the repository reloads after a change.
         let calls = Rc::new(Calls::default());
+        *calls.now.borrow_mut() = Some((operation, status));
         fake_git(&id, calls.clone(), cx);
         let saved = Rc::new(Cell::new(true));
         let resolved = Rc::new(RefCell::new(Vec::new()));

@@ -136,7 +136,13 @@ impl OpenRepository {
         self.error.as_ref()
     }
 
+    /// Asks for a folder and adds the repository in it, unless it's doing so: a second picker, as
+    /// the one on Linux doesn't keep the window from being clicked, would cancel the first's add
+    /// halfway.
     pub fn open(&mut self, cx: &mut Context<Self>) {
+        if self.task.is_some() {
+            return;
+        }
         let adding = add_repository(cx);
         self.task = Some(cx.spawn(async move |this, cx| {
             let result = adding.await;
@@ -160,5 +166,72 @@ impl OpenRepository {
         if self.error.take().is_some() {
             cx.notify();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use gpui_kit::TestAppContext;
+
+    use super::*;
+
+    /// A list of repositories that adds the repository in any folder, with the id `id`.
+    struct Adds(RepositoryId);
+
+    impl RepositorySource for Adds {
+        fn list(&self) -> BoxFuture<'static, Result<Vec<Repository>, DataError>> {
+            async { Ok(vec![]) }.boxed()
+        }
+
+        fn add(&self, path: PathBuf) -> BoxFuture<'static, Result<Repository, DataError>> {
+            let repository = Repository {
+                id: self.0.clone(),
+                name: "gitto".into(),
+                path: path.display().to_string(),
+            };
+            async move { Ok(repository) }.boxed()
+        }
+
+        fn remove(&self, _: RepositoryId) -> BoxFuture<'static, Result<(), DataError>> {
+            unimplemented!()
+        }
+
+        fn reorder(&self, _: Vec<RepositoryId>) -> BoxFuture<'static, Result<(), DataError>> {
+            unimplemented!()
+        }
+    }
+
+    #[gpui_kit::test]
+    fn opens_one_repository_at_a_time(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let id = RepositoryId::parse("01890a5d-ac96-774b-bcce-b302099a8057").unwrap();
+        let services = Services::in_memory(dir.path())
+            .unwrap()
+            .with_repository_source(Rc::new(Adds(id.clone())));
+        cx.update(|cx| {
+            cx.set_global(services);
+            AppData::init(cx);
+        });
+        let open = cx.update(OpenRepository::new);
+        let opened = Rc::new(RefCell::new(Vec::new()));
+        let _subscription = cx.update(|cx| {
+            let opened = Rc::clone(&opened);
+            cx.subscribe(&open, move |_, Opened(id), _| {
+                opened.borrow_mut().push(id.clone())
+            })
+        });
+        open.update(cx, |open, cx| open.open(cx));
+        cx.run_until_parked();
+        // Clicked again, with the picker open.
+        open.update(cx, |open, cx| open.open(cx));
+        cx.run_until_parked();
+
+        cx.simulate_path_prompt_response(|_| Some(vec![PathBuf::from("/work/gitto")]));
+        cx.run_until_parked();
+        assert!(!cx.did_prompt_for_paths());
+        assert_eq!(*opened.borrow(), [id]);
     }
 }

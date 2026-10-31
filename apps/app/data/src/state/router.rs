@@ -78,9 +78,26 @@ impl Router {
         &self.route
     }
 
-    /// Goes to `route`, once the page's blocker, if any, lets it.
+    /// Goes to `route`, once the page's blocker, if any, lets it. The blocker's asked with the
+    /// router free, so it may read where the window is, or navigate.
     pub fn navigate(route: Route, cx: &mut App) {
-        Router::global(cx).update(cx, |router, cx| router.go(route, cx));
+        let router = Router::global(cx);
+        let Some(blocker) = router.update(cx, |router, cx| router.go(&route, cx)) else {
+            return;
+        };
+        let may_leave = blocker(cx);
+        let going = cx.spawn({
+            let router = router.downgrade();
+            async move |cx| {
+                if may_leave.await {
+                    let _ = router.update(cx, |router, cx| {
+                        router.route = route;
+                        cx.notify();
+                    });
+                }
+            }
+        });
+        router.update(cx, |router, _| router.pending = Some(going));
     }
 
     /// Has leaving the page wait for `blocker`, for as long as its owner, the page, keeps it:
@@ -91,27 +108,19 @@ impl Router {
         Router::global(cx).update(cx, |router, _| router.blocker = Some(blocker));
     }
 
-    fn go(&mut self, route: Route, cx: &mut Context<Self>) {
-        if route == self.route {
-            // Staying: a navigation still waiting on the blocker is called off.
-            self.pending = None;
-            return;
+    /// Goes to `route` at once, unless the page's blocker is to be asked first: that, then.
+    fn go(&mut self, route: &Route, cx: &mut Context<Self>) -> Option<Blocker> {
+        // Staying, or going: a navigation still waiting on the blocker is called off.
+        self.pending = None;
+        if *route == self.route {
+            return None;
         }
         let Some(blocker) = self.blocker.as_ref().and_then(Weak::upgrade) else {
-            self.route = route;
-            self.pending = None;
+            self.route = route.clone();
             cx.notify();
-            return;
+            return None;
         };
-        let may_leave = blocker(cx);
-        self.pending = Some(cx.spawn(async move |this, cx| {
-            if may_leave.await {
-                let _ = this.update(cx, |router, cx| {
-                    router.route = route;
-                    cx.notify();
-                });
-            }
-        }));
+        Some(blocker)
     }
 }
 
@@ -170,6 +179,19 @@ mod tests {
         drop(blocker);
 
         cx.update(|cx| Router::navigate(Route::Settings, cx));
+        assert_eq!(cx.update(|cx| Router::current(cx)), Route::Settings);
+    }
+
+    #[gpui_kit::test]
+    fn lets_the_blocker_read_where_the_window_is(cx: &mut TestAppContext) {
+        cx.update(|cx| Router::init(Route::Home, cx));
+        let blocker: Blocker = Rc::new(|cx| {
+            let leaving_home = Router::current(cx) == Route::Home;
+            cx.background_spawn(async move { leaving_home })
+        });
+        cx.update(|cx| Router::set_blocker(&blocker, cx));
+        cx.update(|cx| Router::navigate(Route::Settings, cx));
+        cx.run_until_parked();
         assert_eq!(cx.update(|cx| Router::current(cx)), Route::Settings);
     }
 

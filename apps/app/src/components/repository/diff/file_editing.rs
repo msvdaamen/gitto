@@ -95,8 +95,12 @@ impl FileIo {
                     cx,
                 )
             }),
+            // After a save, by when the repository may have been removed.
             reload: Rc::new(|id, reload, cx| {
-                Repositories::open(id, cx).update(cx, |repository, cx| match reload {
+                let Some(repository) = Repositories::get(id, cx) else {
+                    return;
+                };
+                repository.update(cx, |repository, cx| match reload {
                     Reload::Uncommitted => drop(repository.reload_uncommitted(cx)),
                     Reload::Conflict(path) => drop(repository.reload_conflict(&path, cx)),
                 })

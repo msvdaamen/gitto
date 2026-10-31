@@ -9,7 +9,7 @@
 //! the entity never notifies, which would render again every view that read it, whatever it
 //! read of it. It asks for what it shows with [`Repository::show`] (and `hold_*` for what's
 //! loaded by key), which loads it unless it's loaded. Git runs on the background executor, through
-//! [`RepositoryGit`]; loading something again drops the load under way, which cancels it.
+//! [`RepositoryGit`]; loading something again as it loads loads it once more once that's done.
 //!
 //! What's loaded is kept up to date by `super::watch::RepositoryWatcher`, which reloads it when the
 //! repository changes on disk (see [`Repository::reload_all`]), and nothing else does: not focus,
@@ -25,6 +25,7 @@ use futures::channel::oneshot;
 use futures::future::{BoxFuture, join_all};
 use gitto_git::Page;
 use gitto_git::features::conflicts::schema::Conflict;
+use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::features::history::schema::Commit;
 use gitto_git::features::operation::schema::Operation;
 use gitto_git::features::overview::schema::Overview;
@@ -204,7 +205,9 @@ pub struct Repository {
     push_target: Loaded<PushTarget>,
     overview: Loaded<Overview>,
     pushed_to: Keyed<String, Option<String>>,
-    patches: Keyed<PatchKey, FilePatch>,
+    /// Each with the file it's of, as the view last asked for it: its status and the path it was
+    /// renamed from say how git reads it.
+    patches: Keyed<PatchKey, FilePatch, ChangedFile>,
     conflicts: Keyed<String, Conflict>,
     /// Files' contents at a version, by their object id, which never change. Only a few are kept:
     /// one can be megabytes, it's only read to fill in a patch, which keeps what it needs of it,
@@ -215,6 +218,9 @@ pub struct Repository {
     messages: Keyed<String, String>,
     more: LoadingMore,
     changes: HashMap<Change, ChangeState>,
+    /// What a test gave it (see [`is_seeded`](Self::is_seeded)).
+    #[cfg(any(test, feature = "test-support"))]
+    seeded: std::collections::HashSet<Part>,
 }
 
 /// Loading more of the log: whether it's under way, and why it last failed, both of the log as it
@@ -251,6 +257,8 @@ impl Repository {
             messages: Keyed::new(KEPT_COMMITS),
             more: LoadingMore::default(),
             changes: HashMap::new(),
+            #[cfg(any(test, feature = "test-support"))]
+            seeded: Default::default(),
         }
     }
 
@@ -311,75 +319,96 @@ impl Repository {
     pub fn set_status(&mut self, status: Uncommitted, cx: &mut Context<Self>) {
         self.status.cancel();
         self.status.set(Opaque::new(status));
-        self.changed(Part::Status, cx);
+        self.seed(Part::Status, cx);
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_operation(&mut self, operation: Option<Operation>, cx: &mut Context<Self>) {
         self.operation.cancel();
         self.operation.set(operation);
-        self.changed(Part::Operation, cx);
+        self.seed(Part::Operation, cx);
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_log(&mut self, log: Log, cx: &mut Context<Self>) {
         self.log.cancel();
         self.log.set(log);
-        self.changed(Part::Log, cx);
+        self.seed(Part::Log, cx);
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_refs(&mut self, refs: Vec<Ref>, cx: &mut Context<Self>) {
         self.refs.cancel();
         self.refs.set(refs.into());
-        self.changed(Part::Refs, cx);
+        self.seed(Part::Refs, cx);
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_remotes(&mut self, remotes: Vec<String>, cx: &mut Context<Self>) {
         self.remotes.cancel();
         self.remotes.set(remotes);
-        self.changed(Part::Remotes, cx);
+        self.seed(Part::Remotes, cx);
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_stashes(&mut self, stashes: Vec<Stash>, cx: &mut Context<Self>) {
         self.stashes.cancel();
         self.stashes.set(stashes.into());
-        self.changed(Part::Stashes, cx);
+        self.seed(Part::Stashes, cx);
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_worktrees(&mut self, worktrees: Vec<Worktree>, cx: &mut Context<Self>) {
         self.worktrees.cancel();
         self.worktrees.set(worktrees.into());
-        self.changed(Part::Worktrees, cx);
+        self.seed(Part::Worktrees, cx);
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_push_target(&mut self, target: PushTarget, cx: &mut Context<Self>) {
         self.push_target.cancel();
         self.push_target.set(target);
-        self.changed(Part::PushTarget, cx);
+        self.seed(Part::PushTarget, cx);
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_pushed_to(&mut self, sha: &str, remote: Option<String>, cx: &mut Context<Self>) {
         self.pushed_to.set(sha.to_owned(), remote);
-        self.changed(Part::PushedTo, cx);
+        self.seed(Part::PushedTo, cx);
+    }
+
+    /// The version of the patch of the file at `path` in `source`, if it's there (see
+    /// [`replace_patch`](Self::replace_patch)).
+    pub(crate) fn patch_version(&self, source: &DiffSource, path: &str) -> Option<(u64, u64)> {
+        let loaded = self.patches.get(&DiffFileKey::new(source, path))?;
+        Some(loaded.version())
     }
 
     /// Puts `patch` in place of the patch of the file at `path` in `source`, and of a load of it
-    /// under way, keeping what it says of the file; whether there was one to replace.
-    pub(crate) fn replace_patch(&mut self, source: &DiffSource, path: &str, patch: &str) -> bool {
-        let Some(loaded) = self.patches.get_mut(&DiffFileKey::new(source, path)) else {
+    /// under way, as of the file as it was last asked for; whether there was one to replace. Not if
+    /// that went out of date, or started loading, since it was at `version` (see
+    /// `Loaded::version`): what loads then may be newer than `patch`.
+    pub(crate) fn replace_patch(
+        &mut self,
+        source: &DiffSource,
+        path: &str,
+        patch: &str,
+        version: Option<(u64, u64)>,
+    ) -> bool {
+        let key = DiffFileKey::new(source, path);
+        let file = self.patches.asked(&key).cloned();
+        let Some(loaded) = self.patches.get_mut(&key) else {
             return false;
         };
         let Some(last) = loaded.data().cloned() else {
             return false;
         };
+        if version != Some(loaded.version()) {
+            return false;
+        }
         loaded.cancel();
         loaded.set(FilePatch {
+            file: file.unwrap_or(last.file),
             patch: Arc::from(patch),
             ..last
         });
@@ -388,8 +417,9 @@ impl Repository {
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_patch(&mut self, source: &DiffSource, patch: FilePatch, cx: &mut Context<Self>) {
-        self.patches
-            .set(DiffFileKey::new(source, &patch.file.path), patch);
+        let key = DiffFileKey::new(source, &patch.file.path);
+        self.patches.ask(key.clone(), patch.file.clone());
+        self.patches.set(key, patch);
         self.changed(Part::Patches, cx);
     }
 
@@ -414,6 +444,27 @@ impl Repository {
     /// Says `part` changed (see the module's doc).
     fn changed(&mut self, part: Part, cx: &mut Context<Self>) {
         cx.emit(Changed(part));
+    }
+
+    /// Says `part` changed, as a test gave it: what it gave stays, as git isn't asked for it again
+    /// (see [`is_seeded`](Self::is_seeded)).
+    #[cfg(any(test, feature = "test-support"))]
+    fn seed(&mut self, part: Part, cx: &mut Context<Self>) {
+        self.seeded.insert(part);
+        self.changed(part, cx);
+    }
+
+    /// Whether a test gave it `part`, a field or where commits were pushed (`set_*`): that's
+    /// reloaded as it is, without asking git, so a test's git only answers what the test is about,
+    /// and a change the test makes reloads what it gave as git would, unchanged.
+    fn is_seeded(&self, part: Part) -> bool {
+        #[cfg(any(test, feature = "test-support"))]
+        return self.seeded.contains(&part);
+        #[cfg(not(any(test, feature = "test-support")))]
+        {
+            let _ = part;
+            false
+        }
     }
 
     // Changes: their state.
@@ -564,6 +615,8 @@ fn loaded_result<T: Clone>(loaded: Option<&Loaded<T>>) -> Result<T, DataError> {
 mod tests {
     use std::cell::{Cell, RefCell};
 
+    use gitto_git::PatchVersion;
+    use gitto_git::features::staging::schema::LineSelection;
     use gitto_git::features::status::schema::{
         Head, StatusCounts, StatusReply, StatusSummary, Unchanged, WorkingTreeFiles,
     };
@@ -573,6 +626,7 @@ mod tests {
     use super::*;
     use crate::data::changes::{Scope, Then};
     use crate::data::history::NEXT_PAGE;
+    use crate::data::staging::StageAction;
 
     fn repository_id() -> RepositoryId {
         RepositoryId::parse("01890a5d-ac96-774b-bcce-b302099a8057").unwrap()
@@ -813,13 +867,116 @@ mod tests {
         });
         repository.update(cx, |repository, cx| {
             drop(repository.reload(Field::Refs, cx));
-            // Loading again, in place of the load under way, isn't a change.
+            // Loading again as it loads, once it's done, isn't a change yet.
+            drop(repository.reload(Field::Refs, cx));
             drop(repository.reload(Field::Refs, cx));
         });
+        assert_eq!(*said.borrow(), [Part::Refs]);
         cx.run_until_parked();
-        // As it started loading, and as it was done.
-        assert_eq!(*said.borrow(), [Part::Refs, Part::Refs]);
+        // As it started loading, as that was done and it loaded again, and as that was done.
+        assert_eq!(*said.borrow(), [Part::Refs, Part::Refs, Part::Refs]);
+        assert_eq!(git.refs.get(), 2);
         assert_eq!(notified.get(), 0);
+    }
+
+    /// A repository's git that answers each status asked for when the test says, and stages all
+    /// at once.
+    #[derive(Default)]
+    struct Statuses(RefCell<Vec<oneshot::Sender<StatusReply>>>);
+
+    impl RepositoryGit for Statuses {
+        fn status(&self, _: Option<gitto_git::ContentVersion>) -> GitTask<StatusReply> {
+            let (answer, answered) = oneshot::channel();
+            self.0.borrow_mut().push(answer);
+            async move { answered.await.map_err(|_| DataError::msg("Not answered.")) }.boxed()
+        }
+
+        fn stage_all(&self) -> GitTask<()> {
+            async { Ok(()) }.boxed()
+        }
+    }
+
+    impl Statuses {
+        /// How many statuses are waiting for an answer.
+        fn waiting(&self) -> usize {
+            self.0.borrow().len()
+        }
+
+        /// Answers the first status asked for that's waiting, at `version`.
+        fn answer(&self, version: &str) {
+            let mut status = uncommitted();
+            status.version = version.into();
+            let reply = StatusReply::Status(Box::new(status));
+            assert!(self.0.borrow_mut().remove(0).send(reply).is_ok());
+        }
+    }
+
+    fn version(repository: &Entity<Repository>, cx: &mut TestAppContext) -> Option<String> {
+        repository.read_with(cx, |repository, _| {
+            let status = repository.status().data()?;
+            Some(status.version.to_string())
+        })
+    }
+
+    #[gpui_kit::test]
+    fn loads_once_more_after_the_load_under_way_rather_than_cancelling_it(cx: &mut TestAppContext) {
+        let git = Rc::new(Statuses::default());
+        let shared: Rc<dyn RepositoryGit> = git.clone();
+        let repository = cx.new(|_| Repository::new(repository_id(), shared));
+        repository.update(cx, |repository, cx| repository.show(Field::Status, cx));
+        cx.run_until_parked();
+        // Files keep changing as git reads the status, as a build's can.
+        for _ in 0..3 {
+            repository.update(cx, |repository, cx| drop(repository.reload_uncommitted(cx)));
+            cx.run_until_parked();
+        }
+        assert_eq!(git.waiting(), 1);
+
+        git.answer("v1");
+        cx.run_until_parked();
+        // What it read is shown, and read again, as it may be out of date.
+        assert_eq!(version(&repository, cx).as_deref(), Some("v1"));
+        assert_eq!(git.waiting(), 1);
+        git.answer("v2");
+        cx.run_until_parked();
+        assert_eq!(version(&repository, cx).as_deref(), Some("v2"));
+        assert_eq!(git.waiting(), 0);
+        repository.read_with(cx, |repository, _| {
+            assert!(!repository.status().is_fetching() && !repository.status().is_stale());
+        });
+    }
+
+    #[gpui_kit::test]
+    fn a_change_that_waits_for_its_reload_waits_for_the_load_after_the_one_under_way(
+        cx: &mut TestAppContext,
+    ) {
+        let git = Rc::new(Statuses::default());
+        let shared: Rc<dyn RepositoryGit> = git.clone();
+        let repository = cx.new(|_| Repository::new(repository_id(), shared));
+        repository.update(cx, |repository, cx| repository.show(Field::Status, cx));
+        cx.run_until_parked();
+
+        let done = Rc::new(Cell::new(false));
+        let staging = repository.update(cx, |repository, cx| {
+            repository.stage(crate::data::staging::StagingTarget::All, cx)
+        });
+        cx.update(|cx| {
+            let done = Rc::clone(&done);
+            cx.spawn(async move |_| {
+                staging.await.unwrap();
+                done.set(true);
+            })
+            .detach();
+        });
+        cx.run_until_parked();
+        // The status read before staging, then the one read after it.
+        git.answer("before");
+        cx.run_until_parked();
+        assert!(!done.get());
+        git.answer("after");
+        cx.run_until_parked();
+        assert!(done.get());
+        assert_eq!(version(&repository, cx).as_deref(), Some("after"));
     }
 
     #[gpui_kit::test]
@@ -858,6 +1015,177 @@ mod tests {
         cx.run_until_parked();
         let patch = opened.now_or_never().unwrap().unwrap();
         assert_eq!(&*patch.patch, "after");
+    }
+
+    #[gpui_kit::test]
+    fn loads_a_held_patch_as_git_reads_the_file_now_once_its_status_changed(
+        cx: &mut TestAppContext,
+    ) {
+        /// Answers each unstaged patch at once, and stages lines; says whether it was asked for
+        /// each as of an untracked file.
+        #[derive(Default)]
+        struct Patches(RefCell<Vec<bool>>);
+
+        impl RepositoryGit for Patches {
+            fn unstaged_file_patch(&self, _: FileInput, untracked: bool) -> GitTask<String> {
+                self.0.borrow_mut().push(untracked);
+                async { Ok("diff\n@@ -1 +1 @@\n-a\n+b\n".to_owned()) }.boxed()
+            }
+
+            fn stage_lines(
+                &self,
+                _: FileInput,
+                untracked: bool,
+                _: PatchVersion,
+                _: LineSelection,
+            ) -> GitTask<String> {
+                self.0.borrow_mut().push(untracked);
+                async { Ok("diff\n@@ -1 +1 @@\n-a\n+c\n".to_owned()) }.boxed()
+            }
+        }
+
+        let git = Rc::new(Patches::default());
+        let shared: Rc<dyn RepositoryGit> = git.clone();
+        let repository = cx.new(|_| Repository::new(repository_id(), shared));
+        let file = |status: &str| -> ChangedFile {
+            serde_json::from_value(serde_json::json!({
+                "path": "a.txt",
+                "status": status,
+                "origPath": null,
+                "additions": 1,
+                "deletions": 0,
+            }))
+            .unwrap()
+        };
+        let _untracked = repository.update(cx, |repository, cx| {
+            repository.hold_patch(&DiffSource::Unstaged, &file("untracked"), cx)
+        });
+        cx.run_until_parked();
+        // Some of its lines were staged: it's in the index, and its list says it's modified.
+        let _modified = repository.update(cx, |repository, cx| {
+            repository.hold_patch(&DiffSource::Unstaged, &file("modified"), cx)
+        });
+        cx.run_until_parked();
+        repository.update(cx, |repository, cx| drop(repository.reload_uncommitted(cx)));
+        cx.run_until_parked();
+        assert_eq!(*git.0.borrow(), [true, false, false]);
+
+        let staged = repository.update(cx, |repository, cx| {
+            let patch = repository.patch(&DiffSource::Unstaged, "a.txt").unwrap();
+            let version = PatchVersion::of(&patch.data().unwrap().patch);
+            let lines = LineSelection {
+                deletions: vec![],
+                additions: vec![],
+            };
+            repository.stage_lines(StageAction::Stage, file("modified"), version, lines, cx)
+        });
+        cx.run_until_parked();
+        assert!(staged.now_or_never().unwrap().is_ok());
+        assert_eq!(*git.0.borrow(), [true, false, false, false]);
+        let shown = repository.read_with(cx, |repository, _| {
+            let patch = repository.patch(&DiffSource::Unstaged, "a.txt").unwrap();
+            patch.data().cloned().unwrap()
+        });
+        assert!(shown.patch.ends_with("+c\n"));
+        assert_eq!(shown.file, file("modified"));
+    }
+
+    #[gpui_kit::test]
+    fn keeps_a_patch_loaded_as_lines_were_staged_rather_than_what_they_left(
+        cx: &mut TestAppContext,
+    ) {
+        /// Answers each patch, and the staging of lines, when the test says.
+        #[derive(Default)]
+        struct Gated {
+            patches: RefCell<Vec<oneshot::Sender<String>>>,
+            staging: RefCell<Option<oneshot::Sender<String>>>,
+        }
+
+        impl RepositoryGit for Gated {
+            fn unstaged_file_patch(&self, _: FileInput, _: bool) -> GitTask<String> {
+                let (answer, answered) = oneshot::channel();
+                self.patches.borrow_mut().push(answer);
+                async move { answered.await.map_err(|_| DataError::msg("Cancelled.")) }.boxed()
+            }
+
+            fn stage_lines(
+                &self,
+                _: FileInput,
+                _: bool,
+                _: PatchVersion,
+                _: LineSelection,
+            ) -> GitTask<String> {
+                let (answer, answered) = oneshot::channel();
+                *self.staging.borrow_mut() = Some(answer);
+                async move { answered.await.map_err(|_| DataError::msg("Cancelled.")) }.boxed()
+            }
+        }
+
+        impl Gated {
+            fn answer(&self, patch: &str) {
+                let answer = self.patches.borrow_mut().remove(0);
+                assert!(answer.send(format!("diff\n@@ -1 +1 @@\n{patch}\n")).is_ok());
+            }
+        }
+
+        let git = Rc::new(Gated::default());
+        let shared: Rc<dyn RepositoryGit> = git.clone();
+        let repository = cx.new(|_| Repository::new(repository_id(), shared));
+        let file = uncommitted().changes.unstaged[0].clone();
+        let _hold = repository.update(cx, |repository, cx| {
+            repository.hold_patch(&DiffSource::Unstaged, &file, cx)
+        });
+        cx.run_until_parked();
+        git.answer("+picked");
+        cx.run_until_parked();
+
+        let lines = LineSelection {
+            deletions: vec![],
+            additions: vec![],
+        };
+        let staged = repository.update(cx, |repository, cx| {
+            let version = PatchVersion::of("picked");
+            repository.stage_lines(StageAction::Stage, file.clone(), version, lines, cx)
+        });
+        cx.run_until_parked();
+        // An editor saves the file as the lines are staged.
+        repository.update(cx, |repository, cx| drop(repository.reload_uncommitted(cx)));
+        cx.run_until_parked();
+        let staging = git.staging.borrow_mut().take().unwrap();
+        staging.send("diff\n@@ -1 +1 @@\n+left\n".into()).unwrap();
+        cx.run_until_parked();
+        assert!(staged.now_or_never().unwrap().is_ok());
+        // The load after the save goes on, and is loaded again after, as staging changed it too.
+        git.answer("+saved");
+        cx.run_until_parked();
+        git.answer("+saved and staged");
+        cx.run_until_parked();
+        let shown = repository.read_with(cx, |repository, _| {
+            let patch = repository.patch(&DiffSource::Unstaged, &file.path).unwrap();
+            patch.data().unwrap().patch.clone()
+        });
+        assert!(shown.ends_with("+saved and staged\n"), "{shown}");
+    }
+
+    #[gpui_kit::test]
+    fn says_patches_changed_only_when_one_on_show_did(cx: &mut TestAppContext) {
+        let git = Rc::new(Statuses::default());
+        let shared: Rc<dyn RepositoryGit> = git.clone();
+        let repository = cx.new(|_| Repository::new(repository_id(), shared));
+        repository.update(cx, |repository, cx| repository.show(Field::Status, cx));
+        git.answer("v1");
+        cx.run_until_parked();
+        let said = Rc::new(RefCell::new(Vec::new()));
+        let _subscription = cx.update(|cx| {
+            let said = Rc::clone(&said);
+            cx.subscribe(&repository, move |_, Changed(part), _| {
+                said.borrow_mut().push(*part)
+            })
+        });
+        repository.update(cx, |repository, cx| drop(repository.reload_uncommitted(cx)));
+        git.answer("v2");
+        cx.run_until_parked();
+        assert_eq!(*said.borrow(), [Part::Status, Part::Status]);
     }
 
     // `git/queries/history.test.ts`.
@@ -978,6 +1306,63 @@ mod tests {
         });
     }
 
+    /// A repository's git that can't read commits until the test says it can; counts what it's
+    /// asked.
+    #[derive(Default)]
+    struct Unreachable {
+        works: Cell<bool>,
+        commits: Cell<usize>,
+    }
+
+    impl RepositoryGit for Unreachable {
+        fn commit(&self, sha: gitto_git::input::Sha) -> GitTask<Commit> {
+            self.commits.set(self.commits.get() + 1);
+            let result = if self.works.get() {
+                Ok(commit(sha.as_str()))
+            } else {
+                Err(DataError::msg("The share is unreachable."))
+            };
+            async move { result }.boxed()
+        }
+    }
+
+    #[gpui_kit::test]
+    fn loads_a_commit_again_once_its_shown_again_after_failing(cx: &mut TestAppContext) {
+        let git = Rc::new(Unreachable::default());
+        let shared: Rc<dyn RepositoryGit> = git.clone();
+        let repository = cx.new(|_| Repository::new(repository_id(), shared));
+        let sha = format!("{:040x}", 1);
+        let hold = repository.update(cx, |repository, cx| repository.hold_commit(&sha, cx));
+        cx.run_until_parked();
+        assert!(repository.read_with(cx, |repository, _| repository.commit_error(&sha).is_some()));
+        drop(hold);
+
+        git.works.set(true);
+        let _hold = repository.update(cx, |repository, cx| repository.hold_commit(&sha, cx));
+        cx.run_until_parked();
+        assert_eq!(git.commits.get(), 2);
+        repository.read_with(cx, |repository, _| {
+            assert_eq!(repository.commit(&sha).unwrap().sha, sha);
+            assert!(repository.commit_error(&sha).is_none());
+        });
+    }
+
+    #[gpui_kit::test]
+    fn loads_again_what_failed_of_every_repository_once_git_works_again(cx: &mut TestAppContext) {
+        let git = Rc::new(Unreachable::default());
+        let shared: Rc<dyn RepositoryGit> = git.clone();
+        let repository = cx.update(|cx| Repositories::insert(&repository_id(), shared, cx));
+        let sha = format!("{:040x}", 1);
+        let _hold = repository.update(cx, |repository, cx| repository.hold_commit(&sha, cx));
+        cx.run_until_parked();
+
+        git.works.set(true);
+        cx.update(Repositories::reload_all);
+        cx.run_until_parked();
+        assert_eq!(git.commits.get(), 2);
+        assert!(repository.read_with(cx, |repository, _| repository.commit_error(&sha).is_none()));
+    }
+
     // `git/queries/operation.test.ts`.
 
     #[gpui_kit::test]
@@ -1073,5 +1458,106 @@ mod tests {
             cx.update(|cx| Repositories::get(&repository_id(), cx))
                 .is_none()
         );
+    }
+
+    #[gpui_kit::test]
+    fn doesnt_open_again_a_repository_removed_from_gitto(cx: &mut TestAppContext) {
+        let git: Rc<dyn RepositoryGit> = Rc::new(Git::default());
+        cx.update(|cx| Repositories::insert(&repository_id(), git, cx));
+        cx.update(|cx| Repositories::close(&repository_id(), cx));
+        // A view about to go with it, say, or a save done after it was removed.
+        let repository = cx.update(|cx| Repositories::open(&repository_id(), cx));
+        assert!(
+            cx.update(|cx| Repositories::get(&repository_id(), cx))
+                .is_none()
+        );
+        repository.update(cx, |repository, cx| repository.show(Field::Refs, cx));
+        cx.run_until_parked();
+        let error = repository.read_with(cx, |repository, _| repository.refs().error().cloned());
+        assert_eq!(
+            error.unwrap().to_string(),
+            "The repository was removed from Gitto."
+        );
+    }
+
+    #[gpui_kit::test]
+    fn settles_a_load_of_a_repository_removed_as_it_loaded(cx: &mut TestAppContext) {
+        let git = Rc::new(Statuses::default());
+        let shared: Rc<dyn RepositoryGit> = git.clone();
+        let repository = cx.update(|cx| Repositories::insert(&repository_id(), shared, cx));
+        repository.update(cx, |repository, cx| repository.show(Field::Status, cx));
+        cx.run_until_parked();
+        cx.update(|cx| Repositories::close(&repository_id(), cx));
+        git.answer("v1");
+        cx.run_until_parked();
+        // What still shows it has it, and it isn't opened again.
+        assert_eq!(version(&repository, cx).as_deref(), Some("v1"));
+        assert!(
+            cx.update(|cx| Repositories::get(&repository_id(), cx))
+                .is_none()
+        );
+    }
+
+    #[gpui_kit::test]
+    fn forgets_what_only_their_page_shows_of_repositories_off_show_long_ago(
+        cx: &mut TestAppContext,
+    ) {
+        let ids: Vec<RepositoryId> = (0..5).map(|_| RepositoryId::generate()).collect();
+        for id in &ids {
+            let git: Rc<dyn RepositoryGit> = Rc::new(Git::default());
+            let repository = cx.update(|cx| Repositories::insert(id, git, cx));
+            repository.update(cx, |repository, cx| {
+                repository.set_status(uncommitted(), cx);
+                repository.set_refs(vec![], cx);
+            });
+        }
+        let kept = |id: &RepositoryId, cx: &mut TestAppContext| {
+            let repository = cx.update(|cx| Repositories::get(id, cx).unwrap());
+            repository.read_with(cx, |repository, _| {
+                assert!(repository.status().data().is_some());
+                repository.refs().data().is_some()
+            })
+        };
+        // Shown in turn, the last one again.
+        for id in &ids[..4] {
+            cx.update(|cx| {
+                Repositories::came_on_show(id, cx);
+                Repositories::went_off_show(id, cx);
+            });
+        }
+        cx.update(|cx| Repositories::came_on_show(&ids[1], cx));
+        cx.update(|cx| Repositories::went_off_show(&ids[1], cx));
+        let kept: Vec<bool> = ids.iter().map(|id| kept(id, cx)).collect();
+        assert_eq!(kept, [false, true, true, true, true]);
+    }
+
+    #[gpui_kit::test]
+    async fn loads_a_real_repository_with_git_off_the_main_thread(cx: &mut TestAppContext) {
+        // Git runs as a process, which wakes the test from another thread.
+        cx.executor().allow_parking();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("repo");
+        std::fs::create_dir(&path).unwrap();
+        let init = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&path)
+            .output()
+            .expect("git runs");
+        assert!(init.status.success(), "{init:?}");
+        std::fs::write(path.join("a.txt"), "a\n").unwrap();
+        let api = gitto_git::GitApi::new(move |_: &RepositoryId| Some(path.clone()));
+        let services = crate::services::Services::in_memory(dir.path())
+            .unwrap()
+            .with_git(api);
+        cx.update(|cx| cx.set_global(services));
+
+        let repository = cx.update(|cx| Repositories::open(&repository_id(), cx));
+        let reloading =
+            repository.update(cx, |repository, cx| repository.reload(Field::Status, cx));
+        reloading.await;
+        let status = repository.read_with(cx, |repository, _| repository.status().data().cloned());
+        let unstaged = status.unwrap().changes.unstaged.clone();
+        assert_eq!(unstaged.len(), 1);
+        assert_eq!(unstaged[0].path, "a.txt");
     }
 }
