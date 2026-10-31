@@ -97,7 +97,7 @@ pub async fn get_log(repo: &Repo, page: Page) -> Result<Vec<Commit>> {
     };
     let read = |sorted: bool| {
         let output = log(LOG_FORMAT, sorted, page.limit, page.skip);
-        async move { parse_log(&output.await?) }
+        async move { Ok(parse_log(&output.await?)) }
     };
 
     // To sort them with children first, git walks back to the oldest commit a ref points at first:
@@ -166,7 +166,7 @@ pub async fn get_commit(repo: &Repo, sha: &Sha) -> Result<Commit> {
         sha.as_str(),
         "--",
     ];
-    let commit = parse_log(&repo.read(args).await?)?.into_iter().next();
+    let commit = parse_log(&repo.read(args).await?).into_iter().next();
     // `sha` names a tree or blob, say, rather than a commit.
     commit.ok_or_else(|| {
         Error::Git(GitError::new(

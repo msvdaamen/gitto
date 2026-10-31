@@ -156,7 +156,9 @@ async fn stashed_file_patch(repo: &Repo, sha: &str, file: &FileInput) -> Result<
 /// left to resolve, and the stash kept, as git does.
 pub async fn pop_stash(repo: &Repo, sha: &str) -> Result<()> {
     // One write, so no other stash of Gitto's can move it between finding and popping it.
-    repo.exclusive(|run| async move {
+    let sha = sha.to_owned();
+    repo.exclusive(move |run| async move {
+        let sha = sha.as_str();
         let stash = stash_ref(&run, sha, "popped").await?;
         pop_ref(&run, &stash, Some(sha)).await
     })
@@ -177,7 +179,9 @@ static DROPPED: LazyLock<Regex> =
 /// have been dropped instead, as git outside Gitto pushed or dropped one meanwhile, it's put back.
 pub async fn drop_stash(repo: &Repo, sha: &str) -> Result<()> {
     // One write, so no other stash of Gitto's can move it between finding and dropping it.
-    repo.exclusive(|run| async move {
+    let sha = sha.to_owned();
+    repo.exclusive(move |run| async move {
+        let sha = sha.as_str();
         let stash = stash_ref(&run, sha, "deleted").await?;
         // Not `--quiet`: git names the stash it dropped, as "Dropped stash@{1} (<sha>)".
         let output = run.run_with(["stash", "drop", &stash], stash_env()).await?;

@@ -6,7 +6,10 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::hash::Hash;
 use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, ready};
 use std::time::{Duration, Instant};
 
 use event_listener::Event;
@@ -19,19 +22,25 @@ use super::trace::TARGET;
 /// write takes, so it's likely one that never comes (see `WriteQueue`).
 const WAITED_LONG: Duration = Duration::from_secs(10);
 
-/// Runs tasks for a key (a repository's path, say) one at a time, in the order they're first
-/// polled: each waits until the ones before it are done, whether they succeeded or not. Its place
-/// in line is taken when its future is first polled, not when it's made, so futures can be made
-/// ahead and awaited in any order without one waiting on another that isn't being polled; to run
-/// tasks in a given order, poll them in it (start each before the next, say). A task that's
-/// dropped, before its turn or during it, gives its place up.
+/// Runs tasks for a key (a repository's path, say) one at a time: each waits until the ones before
+/// it are done, whether they succeeded or not. A task that's dropped before its turn gives its
+/// place up. There are two ways in:
+///
+/// - [`run`](Self::run) takes the task's place in line when it's called, and runs the task on
+///   smol's global executor: tasks run in the order they were asked for, whichever threads poll
+///   them, and none waits on one before it that isn't being polled. Once its turn has come, the
+///   task runs to its end, even if its future is dropped. The repositories' writes go through it
+///   (see `Repo::write`), which mustn't stop partway.
+/// - [`turn`](Self::turn) takes a place when it's first polled, and holds it until it's dropped,
+///   for a task the caller runs itself, which stops if it's dropped: to run such tasks in a given
+///   order, poll them in it. The repositories' fetches go through it (see `Repo::fetch`).
 ///
 /// A task that waits on a later one with the same key never gets its turn, nor does any after it:
 /// a write inside `Repo::exclusive`, say. One that's waited over `WAITED_LONG` is logged as a
 /// warning, naming the key.
 ///
-/// The repositories' writes go through one (see `Repo::write`). Reads don't: with
-/// GIT_OPTIONAL_LOCKS=0 they take no locks, so they can run alongside anything.
+/// Reads don't go through one: with GIT_OPTIONAL_LOCKS=0 they take no locks, so they can run
+/// alongside anything.
 pub(crate) struct WriteQueue<K = PathBuf> {
     /// Each key's line, while it has a task in it (see `Turn::drop`).
     lines: Arc<Mutex<HashMap<K, Arc<Line>>>>,
@@ -53,15 +62,33 @@ impl<K: Eq + Hash + Clone + Debug + Send + Sync + 'static> WriteQueue<K> {
     }
 
     /// Runs `task` once the tasks before it with `key` are done; resolves to its output. Its place
-    /// in line is taken when it's first polled.
-    pub fn run<T, F>(&self, key: K, task: F) -> impl Future<Output = T> + use<K, T, F>
+    /// in line is taken now, and `task` runs whether or not the future is polled meanwhile, to its
+    /// end once it's started; dropped before its turn, it doesn't run at all (see `WriteQueue`).
+    pub fn run<T, F>(&self, key: K, task: F) -> Queued<T>
     where
-        F: Future<Output = T>,
+        F: Future<Output = T> + Send + 'static,
+        T: Send + 'static,
     {
-        let turn = self.turn(key);
-        async move {
-            let _turn = turn.await;
-            task.await
+        let place = Turn::take(Arc::clone(&self.lines), key);
+        let waited_long = self.waited_long;
+        let stage = Arc::new(AtomicU8::new(WAITING));
+        let started = Arc::clone(&stage);
+        let task = smol::spawn(async move {
+            place.wait(waited_long).await;
+            // Unless its future was dropped meanwhile; once started, it runs to its end.
+            if started
+                .compare_exchange(WAITING, STARTED, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+            {
+                return None;
+            }
+            let output = task.await;
+            drop(place);
+            Some(output)
+        });
+        Queued {
+            task: Some(task),
+            stage,
         }
     }
 
@@ -81,6 +108,51 @@ impl<K: Eq + Hash + Clone + Debug + Send + Sync + 'static> WriteQueue<K> {
     #[cfg(test)]
     fn keys(&self) -> Vec<K> {
         lock(&self.lines).keys().cloned().collect()
+    }
+}
+
+/// Where a task from `WriteQueue::run` is (its `Queued::stage`): waiting for its turn, and then
+/// either started or given up, by its future being dropped first.
+const WAITING: u8 = 0;
+/// See `WAITING`.
+const STARTED: u8 = 1;
+/// See `WAITING`.
+const GIVEN_UP: u8 = 2;
+
+/// A task in a `WriteQueue`'s line, from [`WriteQueue::run`]: resolves to its output.
+pub(crate) struct Queued<T> {
+    /// `None` once it's resolved.
+    task: Option<smol::Task<Option<T>>>,
+    stage: Arc<AtomicU8>,
+}
+
+impl<T> Future for Queued<T> {
+    type Output = T;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<T> {
+        let task = self.task.as_mut().expect("a task polled after it resolved");
+        let output = ready!(Pin::new(task).poll(cx));
+        self.task = None;
+        // Only dropping this gives the task's place up.
+        Poll::Ready(output.unwrap_or_else(|| unreachable!("a task given up while it's awaited")))
+    }
+}
+
+impl<T> Drop for Queued<T> {
+    fn drop(&mut self) {
+        let Some(task) = self.task.take() else {
+            return;
+        };
+        let given_up = self
+            .stage
+            .compare_exchange(WAITING, GIVEN_UP, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok();
+        if given_up {
+            // Cancelled, which drops its place in line.
+            drop(task);
+        } else {
+            task.detach();
+        }
     }
 }
 
@@ -211,40 +283,92 @@ mod tests {
     use super::*;
 
     #[test]
-    fn runs_tasks_in_the_order_theyre_first_polled() {
+    fn runs_tasks_in_the_order_theyre_asked_for_however_theyre_polled() {
         smol::block_on(async {
             let queue = WriteQueue::<&str>::new();
-            let order = Mutex::new(Vec::new());
-            let first = queue.run("repo", async {
-                async_io::Timer::after(Duration::from_millis(50)).await;
-                lock(&order).push(1);
+            let order = Arc::new(Mutex::new(Vec::new()));
+            let push = |number| {
+                let order = Arc::clone(&order);
+                async move { lock(&order).push(number) }
+            };
+            let first = queue.run("repo", {
+                let push = push(1);
+                async move {
+                    async_io::Timer::after(Duration::from_millis(50)).await;
+                    push.await;
+                }
             });
-            let second = queue.run("repo", async { lock(&order).push(2) });
-            let other = queue.run("other", async { lock(&order).push(3) });
-            // Polled in the opposite order to the one they were made in.
+            let second = queue.run("repo", push(2));
+            let other = queue.run("other", push(3));
+            // Polled in the opposite order to the one they were asked for in.
             futures::join!(other, second, first);
-            assert_eq!(*lock(&order), [3, 2, 1]);
-
-            let order = Mutex::new(Vec::new());
-            let first = queue.run("repo", async {
-                async_io::Timer::after(Duration::from_millis(50)).await;
-                lock(&order).push(1);
-            });
-            let second = queue.run("repo", async { lock(&order).push(2) });
-            futures::join!(first, second);
-            assert_eq!(*lock(&order), [1, 2]);
+            assert_eq!(*lock(&order), [3, 1, 2]);
         });
     }
 
     #[test]
-    fn doesnt_hold_a_task_up_for_one_made_before_it_that_isnt_polled() {
+    fn runs_a_task_whose_future_isnt_polled_so_none_after_it_waits_for_that() {
         smol::block_on(async {
             let queue = WriteQueue::<&str>::new();
-            let first = queue.run("repo", async { 1 });
+            let ran = Arc::new(Mutex::new(Vec::new()));
+            let first = queue.run("repo", {
+                let ran = Arc::clone(&ran);
+                async move { lock(&ran).push(1) }
+            });
             let second = queue.run("repo", async { 2 });
-            // Awaited before the one made before it, which waits meanwhile.
+            // Awaited before the one asked for before it, which runs all the same.
             assert_eq!(second.await, 2);
-            assert_eq!(first.await, 1);
+            assert_eq!(*lock(&ran), [1]);
+            first.await;
+        });
+    }
+
+    #[test]
+    fn runs_a_task_thats_dropped_during_its_turn_to_its_end() {
+        smol::block_on(async {
+            let queue = WriteQueue::<&str>::new();
+            let (started, has_started) = async_channel::bounded(1);
+            let (finished, has_finished) = async_channel::bounded(1);
+            let task = queue.run("repo", async move {
+                started.send(()).await.unwrap();
+                async_io::Timer::after(Duration::from_millis(50)).await;
+                finished.send(()).await.unwrap();
+            });
+            has_started.recv().await.unwrap();
+            drop(task);
+            has_finished.recv().await.unwrap();
+            // And its turn ends with it.
+            queue.run("repo", async {}).await;
+        });
+    }
+
+    #[test]
+    fn doesnt_run_a_task_dropped_before_its_turn() {
+        smol::block_on(async {
+            let queue = WriteQueue::<&str>::new();
+            let first = queue.turn("repo").await;
+            let ran = Arc::new(Mutex::new(false));
+            let dropped = queue.run("repo", {
+                let ran = Arc::clone(&ran);
+                async move { *lock(&ran) = true }
+            });
+            let third = queue.run("repo", async { 3 });
+            drop(dropped);
+            drop(first);
+            assert_eq!(third.await, 3);
+            assert!(!*lock(&ran));
+        });
+    }
+
+    #[test]
+    fn turns_are_taken_in_the_order_theyre_first_polled() {
+        smol::block_on(async {
+            let queue = WriteQueue::<&str>::new();
+            let first = queue.turn("repo");
+            let second = queue.turn("repo");
+            // Awaited before the one made before it, which waits meanwhile.
+            drop(second.await);
+            drop(first.await);
         });
     }
 
@@ -306,7 +430,11 @@ mod tests {
             };
             futures::join!(second, release);
         });
-        let warnings = logged();
+        // Only this test's: the others log warnings too, as the api's failures.
+        let warnings: Vec<String> = logged()
+            .into_iter()
+            .filter(|warning| warning.contains("\"waited-long\""))
+            .collect();
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(
             warnings[0].starts_with("a write to \"waited-long\" has waited 0.05s for its turn"),
