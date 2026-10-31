@@ -13,6 +13,7 @@ async-fs.workspace = true
 futures.workspace = true
 gitto-db.workspace = true
 gitto-git.workspace = true
+log.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

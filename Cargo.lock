@@ -2026,6 +2026,7 @@ dependencies = [
  "futures",
  "gitto-db",
  "gitto-git",
+ "log",
  "smol",
  "tempfile",
  "thiserror 2.0.21",

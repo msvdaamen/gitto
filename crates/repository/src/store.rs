@@ -31,7 +31,8 @@ impl RepositoryStore {
         RepositoryStore { db }
     }
 
-    /// Every repository, in the order of their tabs.
+    /// Every repository, in the order of their tabs. A row that's no repository, with an id that
+    /// isn't a repository id say, is left out with a warning, rather than failing the list.
     pub async fn get_all(&self) -> rusqlite::Result<Vec<Repository>> {
         self.db.run(|conn| get_all(conn)).await
     }
@@ -81,11 +82,25 @@ fn repository(row: &Row<'_>) -> rusqlite::Result<Repository> {
 }
 
 fn get_all(conn: &Connection) -> rusqlite::Result<Vec<Repository>> {
-    conn.prepare(&format!(
-        r#"select {COLUMNS} from "repositories" order by "repositories"."position" asc"#
-    ))?
-    .query_map([], repository)?
-    .collect()
+    let mut repositories = Vec::new();
+    for row in conn
+        .prepare(&format!(
+            r#"select {COLUMNS} from "repositories" order by "repositories"."position" asc"#
+        ))?
+        .query_map([], repository)?
+    {
+        match row {
+            Ok(repository) => repositories.push(repository),
+            Err(
+                error @ (rusqlite::Error::FromSqlConversionFailure(..)
+                | rusqlite::Error::InvalidColumnType(..)),
+            ) => {
+                log::warn!("the list of repositories left out a row that's no repository: {error}")
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(repositories)
 }
 
 /// The repository where `condition` holds for `value` ([`ID_IS`] or [`PATH_IS`]), if there's one.
@@ -294,6 +309,15 @@ mod tests {
 
         smol::block_on(store.delete(&b)).unwrap();
         assert_eq!(ids(&store), ["a"]);
+    }
+
+    #[test]
+    fn leaves_out_rows_that_arent_repositories() {
+        let store = store_with(&["a"]);
+        insert(&store, "('b', 'b', '/repos/b', 1)");
+        insert(&store, "(NULL, 'c', '/repos/c', 2)");
+        smol::block_on(store.create(&repository("d"))).unwrap();
+        assert_eq!(ids(&store), ["a", "d"]);
     }
 
     #[test]
