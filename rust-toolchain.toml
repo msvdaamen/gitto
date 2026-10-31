@@ -1,0 +1,5 @@
+# The Rust that builds Gitto, here and in CI (see .github/workflows/ci.yml), so clippy says the same
+# in both. Updated with `rust-version` in Cargo.toml.
+[toolchain]
+channel = "1.97.0"
+components = ["rustfmt", "clippy"]
