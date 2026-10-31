@@ -320,15 +320,23 @@ pub fn theme_config(theme: AppTheme, inter: bool) -> ThemeConfig {
     }
 }
 
-/// The colors of code, by the theme's highlight names (see `palette::syntax_colors`).
+/// The colors of code, by the theme's highlight names (see `palette::syntax_colors`), and of the
+/// code editor.
 fn highlight_style(theme: AppTheme) -> HighlightThemeStyle {
     let syntax: serde_json::Map<String, serde_json::Value> = palette::syntax_colors(theme)
         .into_iter()
         .map(|(name, color)| (name.to_owned(), serde_json::json!({ "color": color })))
         .collect();
+    let p = Palette::of(theme);
     HighlightThemeStyle {
         syntax: serde_json::from_value(syntax.into())
             .expect("Gitto's syntax colors are GPUI Kit's highlight names"),
+        // The code editor (editing a file in its diff) on the diff's background, its line numbers
+        // as the diff's.
+        editor_background: Some(p.bg),
+        editor_gutter_background: Some(p.bg),
+        editor_line_number: Some(p.faint),
+        editor_active_line_number: Some(p.text_soft),
         ..HighlightThemeStyle::default()
     }
 }
@@ -397,6 +405,18 @@ mod tests {
             for (name, _) in palette::syntax_colors(theme) {
                 assert!(!syntax[name].is_null(), "{name}");
             }
+        }
+    }
+
+    #[test]
+    fn draws_the_code_editor_on_the_diffs_colors() {
+        for theme in [AppTheme::Dark, AppTheme::Light] {
+            let p = Palette::of(theme);
+            let highlight = theme_config(theme, false).highlight.unwrap();
+            assert_eq!(highlight.editor_background, Some(p.bg));
+            assert_eq!(highlight.editor_gutter_background, Some(p.bg));
+            assert_eq!(highlight.editor_line_number, Some(p.faint));
+            assert_eq!(highlight.editor_active_line_number, Some(p.text_soft));
         }
     }
 }

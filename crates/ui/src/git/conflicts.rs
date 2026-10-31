@@ -1,7 +1,9 @@
 //! Ported from `git/conflicts.ts`: what a conflicted file is, and what's under way in the
 //! repository, in the user's words.
 
-use gitto_git::features::conflicts::schema::{Conflict, ConflictSide, ConflictSides, Side};
+use gitto_git::features::conflicts::schema::{
+    Conflict, ConflictFile, ConflictSide, ConflictSides, Side,
+};
 use gitto_git::features::operation::schema::{CommitName, Operation};
 use gitto_git::{ContentVersion, FileMode};
 
@@ -25,18 +27,19 @@ pub fn side_kind(side: &ConflictSide) -> SideKind {
 
 /// How a conflicted file is resolved: in its text, conflict by conflict, when both sides changed it
 /// as a text file; or by keeping one side whole otherwise, e.g. when one deleted it, or it's binary;
-/// or not at all, once it isn't conflicted any more.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConflictKind {
+/// or not at all, once it isn't conflicted any more. Its text is the conflict's, borrowed: a file
+/// can be megabytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConflictKind<'a> {
     Text {
-        contents: String,
-        version: ContentVersion,
+        contents: &'a str,
+        version: &'a ContentVersion,
     },
     Sides,
     Resolved,
 }
 
-pub fn conflict_kind(conflict: &Conflict) -> ConflictKind {
+pub fn conflict_kind(conflict: &Conflict) -> ConflictKind<'_> {
     let ConflictSides { base, ours, theirs } = &conflict.sides;
     if base.is_none() && ours.is_none() && theirs.is_none() {
         return ConflictKind::Resolved;
@@ -46,8 +49,8 @@ pub fn conflict_kind(conflict: &Conflict) -> ConflictKind {
             if side_kind(ours) == SideKind::File && side_kind(theirs) == SideKind::File =>
         {
             ConflictKind::Text {
-                contents: text.contents.clone(),
-                version: text.version.clone(),
+                contents: &text.contents,
+                version: &text.version,
             }
         }
         _ => ConflictKind::Sides,
@@ -78,6 +81,19 @@ pub fn describe_side(side: Option<&ConflictSide>) -> String {
         SideKind::Submodule => format!("A submodule at {}", short_sha(&side.oid)),
         SideKind::File if side.mode == FileMode::Executable => "An executable file".to_owned(),
         SideKind::File => "A file".to_owned(),
+    }
+}
+
+/// Why what's in the working tree at a conflicted file's path, `path`, isn't shown as text, in the
+/// user's words; `None` if it is, or if there's nothing more to say: it's gone, or a link, which
+/// the sides already say.
+pub fn unreadable_reason(file: &ConflictFile, path: &str) -> Option<String> {
+    match file {
+        ConflictFile::TooLarge { .. } => Some("This file is too large to show.".to_owned()),
+        ConflictFile::Binary { .. } => Some("This file is binary.".to_owned()),
+        ConflictFile::NotUtf8 { .. } => Some("This file isn't UTF-8 text.".to_owned()),
+        ConflictFile::Outside => Some(format!("{path} isn't a file in this repository.")),
+        ConflictFile::Text(_) | ConflictFile::Missing | ConflictFile::Link => None,
     }
 }
 
@@ -149,7 +165,7 @@ pub fn operation_name(operation: &Operation) -> String {
 
 #[cfg(test)]
 mod tests {
-    use gitto_git::features::conflicts::schema::{ConflictFile, ConflictText};
+    use gitto_git::features::conflicts::schema::ConflictText;
     use gitto_git::features::operation::schema::Steps;
 
     use super::*;
@@ -191,8 +207,8 @@ mod tests {
             assert_eq!(
                 conflict_kind(&conflict()),
                 ConflictKind::Text {
-                    contents: "text".into(),
-                    version: "v1".into()
+                    contents: "text",
+                    version: &ContentVersion::from("v1")
                 }
             );
             let added = Conflict {
@@ -231,6 +247,36 @@ mod tests {
             };
             assert_eq!(conflict_kind(&resolved), ConflictKind::Resolved);
         }
+    }
+
+    #[test]
+    fn says_why_a_file_isnt_shown_as_text() {
+        let reason = |file: ConflictFile| unreadable_reason(&file, "a/b.txt");
+        assert_eq!(
+            reason(ConflictFile::TooLarge { stamp: "s".into() }).as_deref(),
+            Some("This file is too large to show.")
+        );
+        assert_eq!(
+            reason(ConflictFile::Binary {
+                version: "v1".into()
+            })
+            .as_deref(),
+            Some("This file is binary.")
+        );
+        assert_eq!(
+            reason(ConflictFile::NotUtf8 {
+                version: "v1".into()
+            })
+            .as_deref(),
+            Some("This file isn't UTF-8 text.")
+        );
+        assert_eq!(
+            reason(ConflictFile::Outside).as_deref(),
+            Some("a/b.txt isn't a file in this repository.")
+        );
+        assert_eq!(reason(conflict().file), None);
+        assert_eq!(reason(ConflictFile::Missing), None);
+        assert_eq!(reason(ConflictFile::Link), None);
     }
 
     mod what_each_side_did {

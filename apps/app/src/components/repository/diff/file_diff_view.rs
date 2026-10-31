@@ -14,15 +14,22 @@ use gpui_kit::component::{Disableable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     Animation, AnimationExt as _, AnyElement, AnyWindowHandle, App, Context, ElementId, Entity,
-    EventEmitter, FocusHandle, Focusable, FontWeight, SharedString, Subscription, Task,
+    EventEmitter, FocusHandle, Focusable, FontWeight, KeyContext, SharedString, Subscription, Task,
     Transformation, Window, div, percentage, px, rems,
 };
 
-use super::conflict_viewer::{ConflictViewer, SaveFile};
+use super::conflict_diff::Resolution::{Both, Ours, Theirs};
+use super::conflict_resolution::{ConflictResolutionView, ResolutionFile};
+use super::conflict_viewer::prepare_conflicts;
+use super::file_editing::FileEditing;
 use super::file_staging::{FileStaging, StageFileMutation, StageLinesMutation};
 use super::patch_viewer::{PatchProps, PatchViewer, PatchViewerEvent};
 use super::shown_file::{PreparedPatch, ShownFile, patch_cache_key};
-use super::viewer_actions::{CloseFileDiff, FILE_DIFF_VIEW};
+use super::viewer_actions::{
+    CloseFileDiff, FILE_DIFF_VIEW, KeepBoth, KeepOurs, KeepTheirs, MarkResolved, NextConflict,
+    OpenNextConflicted, PreviousConflict, RESOLVING,
+};
+use super::viewer_editing::{PatchEditor, PatchEditorEvent};
 use super::viewer_runtime::{LoadFile, LoadedFile, prepare_patch};
 use crate::components::ui::{
     EmptyState, FileStatusBadge, Icon, IconButton, IconName, LineStats, LoadingState, Notice,
@@ -30,9 +37,7 @@ use crate::components::ui::{
 use crate::data::QueryClient;
 use crate::data::conflicts::conflict_options;
 use crate::data::diff::fetch_blob;
-use crate::data::file_diff::{
-    FilePatch, fetch_file_patch, fetch_working_tree_file, save_working_tree_file,
-};
+use crate::data::file_diff::{FilePatch, fetch_file_patch};
 use crate::data::staging::StageAction;
 use crate::git::diff_source::DiffSource;
 use crate::state::diff_style::{DiffStyle, DiffStyleSetting};
@@ -69,8 +74,22 @@ pub fn prefetch_file_diff(
     cx: &mut App,
 ) {
     if file.status == FileStatus::Conflicted && *source == DiffSource::Unstaged {
+        // Its conflicts, highlighted as the viewer names them, so they show at once.
         let options = conflict_options(repository_id, &file.path, cx);
-        QueryClient::fetch_query(options, cx).detach();
+        let fetching = QueryClient::fetch_query(options, cx);
+        let file_key = source.file_key(&file.path);
+        let path = file.path.clone();
+        cx.spawn(async move |cx| {
+            // Only ahead of time: opening it says what went wrong.
+            if let Ok(conflict) = fetching.await
+                && let Some(text) = conflict.file.text()
+            {
+                cx.update(|cx| {
+                    prepare_conflicts(&file_key, &path, text.contents.clone(), &text.version, cx)
+                });
+            }
+        })
+        .detach();
         return;
     }
     let Some(counts) = counts_of(file) else {
@@ -119,9 +138,9 @@ enum Body {
 /// once the file has none left on its side, that's said instead.
 ///
 /// An uncommitted file can be staged, or unstaged, whole, or its lines a hunk or a selection at a
-/// time (see `file_staging`), one at a time. Once that leaves it without changes on its side, the
-/// next file in its list opens. A conflicted one shows its conflicts instead, to resolve (see
-/// `conflict_viewer`).
+/// time (see `file_staging`), one at a time; an unstaged one can be edited (see `file_editing`).
+/// Once that leaves it without changes on its side, the next file in its list opens. A conflicted
+/// one shows its conflicts instead, to resolve (see `conflict_resolution`).
 ///
 /// An entity the page keeps while a file's changes are open, telling it which
 /// ([`set_file`](Self::set_file)): going to another file, the last one stays on show, header and
@@ -142,12 +161,19 @@ pub struct FileDiffView {
     viewer_patch: Option<PreparedPatch>,
     /// Why a file's patch couldn't be shown, and its key: another file is tried afresh.
     viewer_error: Option<(String, String)>,
-    conflict: Option<Entity<ConflictViewer>>,
+    /// Editing the file by hand, in its diff or its conflicts.
+    pub(super) editing: FileEditing,
+    /// The file being edited in the diff's place, while it is.
+    pub(super) patch_editor: Option<Entity<PatchEditor>>,
+    /// What the editor tells the view, for as long as it's kept (see `close_patch_editor`).
+    pub(super) patch_editor_events: Option<Subscription>,
+    /// Resolving a conflicted file: its conflicts, while it's the file on show.
+    pub(super) resolution: Entity<ConflictResolutionView>,
     /// The file on show whose neighbours were loaded ahead.
     prefetched_for: Option<String>,
     /// What had the focus when the changes opened, to give it back once they close.
     opener: Option<FocusHandle>,
-    window: AnyWindowHandle,
+    pub(super) window: AnyWindowHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -194,6 +220,20 @@ impl FileDiffView {
         cx: &mut Context<Self>,
     ) -> Self {
         let view = ShownFile::new(repository_id, source, file, cx);
+        let editing = FileEditing::new(cx);
+        let resolution = {
+            let file = ResolutionFile {
+                repository_id: view.repository_id().clone(),
+                file: view.file(),
+                file_key: view.file_key(),
+                active: *view.source() == DiffSource::Unstaged && view.conflicted(),
+                shown: false,
+                editing: false,
+                next: None,
+            };
+            let io = editing.shared_io();
+            cx.new(|cx| ConflictResolutionView::new(file, io, window, cx))
+        };
         let focus = cx.focus_handle();
         // The changes have the keyboard, so Esc goes back to the history; the focus goes back to
         // what opened them once they close with it inside: it would be lost to the page
@@ -204,6 +244,10 @@ impl FileDiffView {
         let subscriptions = vec![
             cx.observe_global::<DiffStyleSetting>(|_, cx| cx.notify()),
             cx.observe(view.busy(), |_, _, cx| cx.notify()),
+            cx.observe(&resolution, |_, _, cx| cx.notify()),
+            cx.subscribe(&resolution, |this, _, event, cx| {
+                this.on_resolution(event, cx)
+            }),
             cx.on_release(|this: &mut Self, cx| this.give_focus_back(cx)),
             // Notified, what it shows may have changed: it's synced before it renders again.
             cx.observe_in(&this, window, |this, _, window, cx| this.sync(window, cx)),
@@ -216,7 +260,10 @@ impl FileDiffView {
             viewer_events: None,
             viewer_patch: None,
             viewer_error: None,
-            conflict: None,
+            editing,
+            patch_editor: None,
+            patch_editor_events: None,
+            resolution,
             prefetched_for: None,
             opener,
             window: window.window_handle(),
@@ -251,11 +298,11 @@ impl FileDiffView {
         cx.notify();
     }
 
-    /// Resolves to whether the file may be closed, or another opened, once its edits are saved
-    /// (TS's `onGuard`). Editing a file is the file editing's, which isn't here yet: nothing to
-    /// wait for.
-    pub fn may_leave(&mut self, _: &mut Context<Self>) -> Task<bool> {
-        Task::ready(true)
+    /// Resolves to whether the file may be closed, or another opened, once its edits are saved,
+    /// or the user says what to do with them (TS's `onGuard`, see `FileDiffView::leave`).
+    pub fn may_leave(&mut self, cx: &mut Context<Self>) -> Task<bool> {
+        let leaving = self.leave(cx);
+        cx.spawn(async move |_, _| leaving.await)
     }
 
     /// The viewer showing the patch, while one is.
@@ -339,13 +386,12 @@ impl FileDiffView {
         } else if self.viewer.take().is_some() {
             self.viewer_events = None;
             self.viewer_patch = None;
+            // No reload to finish: the file has no changes left to show, say.
+            self.cancel_reload();
             self.view.patch_left(cx);
         }
-        if body == Body::Conflict {
-            self.show_conflict(window, cx);
-        } else {
-            self.conflict = None;
-        }
+        self.sync_patch_editor(body == Body::Patch, window, cx);
+        self.sync_resolution(body == Body::Conflict, cx);
         // The files a step away are loaded ahead once another one's on show, so stepping to them
         // shows them at once. Not again when the same one's patch is reloaded, as an uncommitted
         // file's is whenever the working tree changes.
@@ -394,14 +440,69 @@ impl FileDiffView {
         });
     }
 
+    /// Edits the file in the diff's place while it's edited: from the patch on show, read whole.
+    fn sync_patch_editor(
+        &mut self,
+        shows_patch: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let editing = self.editing.is_editing() && shows_patch && !self.view.conflicted();
+        if !editing {
+            let Some(editor) = self.close_patch_editor() else {
+                return;
+            };
+            // The keyboard stays with the view, for Escape to close it, say.
+            let focused = editor
+                .read(cx)
+                .editor()
+                .is_some_and(|editor| editor.focus_handle(cx).is_focused(window));
+            if focused {
+                window.focus(&self.focus, cx);
+            }
+            if self.editing.is_editing() && editor.read(cx).editor().is_some() {
+                // Taken off the page while it's edited: that's over, and what's left is saved.
+                self.on_editing(None, cx);
+            }
+            return;
+        }
+        if self.patch_editor.is_some() {
+            return;
+        }
+        let shown = self
+            .viewer
+            .as_ref()
+            .and_then(|viewer| viewer.read(cx).shown_diff().cloned());
+        let (Some(diff), Some(prepared)) = (shown, self.viewer_patch.as_ref()) else {
+            self.on_edit_failed("This file can't be edited.".to_owned(), cx);
+            return;
+        };
+        let load_file = self.load_file(&prepared.data);
+        let path = prepared.data.file.path.clone();
+        let editor = cx.new(|cx| PatchEditor::new(diff, path, load_file, window, cx));
+        self.patch_editor_events = Some(cx.subscribe(&editor, |this, _, event, cx| match event {
+            PatchEditorEvent::Editing(session) => this.on_editing(session.clone(), cx),
+            PatchEditorEvent::Edit => this.on_edit(cx),
+            PatchEditorEvent::EditFailed(message) => this.on_edit_failed(message.clone(), cx),
+        }));
+        self.patch_editor = Some(editor);
+    }
+
+    /// Takes the patch's editor off the page, and what it tells the view with it.
+    pub(super) fn close_patch_editor(&mut self) -> Option<Entity<PatchEditor>> {
+        self.patch_editor_events = None;
+        self.patch_editor.take()
+    }
+
     /// Reads one side of the file `data` is of in full: an unstaged file's new side is on disk.
     fn load_file(&self, data: &FilePatch) -> LoadFile {
         let id = self.view.repository_id().clone();
         let path = data.file.path.clone();
         let unstaged = *self.view.source() == DiffSource::Unstaged;
+        let read = self.editing.io().read;
         Rc::new(move |side, oid, cx| {
             if unstaged && side == Side::Additions {
-                let reading = fetch_working_tree_file(&id, &path, cx);
+                let reading = read(&id, &path, cx);
                 cx.background_spawn(async move {
                     reading.await.map(|file| LoadedFile::WorkingTree {
                         contents: file.contents,
@@ -422,6 +523,7 @@ impl FileDiffView {
                     && prepared.data.key == *file_key
                 {
                     self.view.patch_shown(&prepared, cx);
+                    self.on_shown_for_editing(cx);
                 }
             }
             PatchViewerEvent::LoadingFiles(loading) => self.view.set_loading_files(*loading, cx),
@@ -446,23 +548,43 @@ impl FileDiffView {
         cx.notify();
     }
 
-    /// Shows the conflicted file's conflicts, in the conflicts' viewer.
-    fn show_conflict(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let key = self.view.file_key();
-        if self
-            .conflict
-            .as_ref()
-            .is_some_and(|conflict| *conflict.read(cx).file_key() == key)
-        {
+    /// The view's key context: its conflicts' keys are bound only while they're its own (see
+    /// `ConflictResolutionView::takes_keys`), so they're typed in an editor otherwise.
+    fn key_context(&self, cx: &App) -> KeyContext {
+        let mut context = KeyContext::default();
+        context.add(FILE_DIFF_VIEW);
+        if self.resolution.read(cx).takes_keys() {
+            context.add(RESOLVING);
+        }
+        context
+    }
+
+    /// One of the conflicts' keys, `act` on the resolution: whether it took it. If it didn't, the
+    /// key goes on, to be typed, say.
+    fn on_conflict_key(
+        &mut self,
+        act: impl FnOnce(
+            &mut ConflictResolutionView,
+            &mut Window,
+            &mut Context<ConflictResolutionView>,
+        ) -> bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let resolution = self.resolution.clone();
+        let taken = resolution.read(cx).takes_keys()
+            && resolution.update(cx, |resolution, cx| act(resolution, window, cx));
+        if !taken {
+            cx.propagate();
+        }
+    }
+
+    /// Goes back to the history, or out of edit mode first, while the file's edited.
+    fn close(&mut self, cx: &mut Context<Self>) {
+        if self.escape_editing(cx) {
             return;
         }
-        let id = self.view.repository_id().clone();
-        let path = self.view.file().path;
-        let saved_path = path.clone();
-        let save: SaveFile = Rc::new(move |contents, version, cx| {
-            save_working_tree_file(&id, &saved_path, contents, version, false, cx)
-        });
-        self.conflict = Some(cx.new(|cx| ConflictViewer::new(key, path, save, window, cx)));
+        cx.emit(FileDiffEvent::Close);
     }
 
     fn open(&mut self, source: DiffSource, file: ChangedFile, cx: &mut Context<Self>) {
@@ -478,16 +600,54 @@ impl Render for FileDiffView {
         let files_error = self.view.files_error().map(SharedString::from);
         v_flex()
             .id("file-diff-view")
-            .key_context(FILE_DIFF_VIEW)
+            .key_context(self.key_context(cx))
             .track_focus(&self.focus)
             .size_full()
             .min_h_0()
             .min_w_0()
             .bg(palette.bg)
-            .on_action(cx.listener(|_, _: &CloseFileDiff, _, cx| cx.emit(FileDiffEvent::Close)))
+            .on_action(cx.listener(|this, _: &CloseFileDiff, _, cx| this.close(cx)))
+            .on_action(cx.listener(|this, _: &KeepOurs, window, cx| {
+                this.on_conflict_key(
+                    |it, window, cx| it.keep_current(Ours, window, cx),
+                    window,
+                    cx,
+                )
+            }))
+            .on_action(cx.listener(|this, _: &KeepTheirs, window, cx| {
+                this.on_conflict_key(
+                    |it, window, cx| it.keep_current(Theirs, window, cx),
+                    window,
+                    cx,
+                )
+            }))
+            .on_action(cx.listener(|this, _: &KeepBoth, window, cx| {
+                this.on_conflict_key(
+                    |it, window, cx| it.keep_current(Both, window, cx),
+                    window,
+                    cx,
+                )
+            }))
+            .on_action(cx.listener(|this, _: &NextConflict, window, cx| {
+                this.on_conflict_key(|it, _, cx| it.step(true, cx), window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &PreviousConflict, window, cx| {
+                this.on_conflict_key(|it, _, cx| it.step(false, cx), window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &OpenNextConflicted, window, cx| {
+                this.on_conflict_key(|it, _, cx| it.open_next(cx), window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &MarkResolved, window, cx| {
+                this.on_conflict_key(|it, window, cx| it.mark_resolved(window, cx), window, cx)
+            }))
             .child(self.render_header(window, cx))
+            .children(self.render_editing_banner(cx))
             .when_some(staging_error, |this, message| {
                 this.child(Notice::new(message).alert().icon(IconName::TriangleAlert))
+            })
+            .when(self.view.conflicted(), |this| {
+                let resolution = self.resolution.clone();
+                this.children(resolution.read(cx).render_banners(&resolution))
             })
             .when_some(files_error, |this, message| {
                 this.child(Notice::new(message))
@@ -517,8 +677,13 @@ impl FileDiffView {
         let source = self.view.source().clone();
         let label = source_label(&source);
         let busy = self.view.busy().read(cx).is_on();
-        let conflict = self.view.conflicted() && self.conflict.is_some();
+        let conflict = self.view.conflicted();
         let whole_file = if conflict { None } else { self.whole_file() };
+        let resolution = self.resolution.read(cx);
+        let conflict_controls = conflict.then(|| resolution.render_controls(&self.resolution, cx));
+        let editable = self.view.editable_patch() || resolution.is_editable();
+        let editing_controls =
+            (source == DiffSource::Unstaged).then(|| self.render_editing_controls(editable, cx));
         let staging_disabled = self.staging_disabled(cx);
         let previous = self.view.previous();
         let next = self.view.next();
@@ -620,6 +785,12 @@ impl FileDiffView {
                         )
                         .child(divider())
                     })
+                    .when_some(conflict_controls, |this, controls| {
+                        this.children(controls).child(divider())
+                    })
+                    .when_some(editing_controls, |this, controls| {
+                        this.children(controls).child(divider())
+                    })
                     .child({
                         let previous = previous.clone();
                         let source = source.clone();
@@ -664,12 +835,7 @@ impl FileDiffView {
         let view = &self.view;
         match self.body() {
             Body::NoLongerChanged => self.render_no_longer_changed(cx),
-            Body::Conflict => match &self.conflict {
-                Some(conflict) => conflict.clone().into_any_element(),
-                None => LoadingState::new("conflict-loading", "Loading changes…")
-                    .fill()
-                    .into_any_element(),
-            },
+            Body::Conflict => self.resolution.clone().into_any_element(),
             Body::Nested => EmptyState::new("nested", IconName::FolderGit2, "Another repository")
                 .message(
                     "This folder is a git repository of its own, so its files aren't listed here.",
@@ -716,6 +882,15 @@ impl FileDiffView {
             Body::Loading => LoadingState::new("diff-loading", "Loading changes…")
                 .fill()
                 .into_any_element(),
+            // The file being edited, in the diff's place, once it's read.
+            Body::Patch
+                if let Some(editor) = self
+                    .patch_editor
+                    .as_ref()
+                    .filter(|editor| editor.read(cx).editor().is_some()) =>
+            {
+                editor.clone().into_any_element()
+            }
             Body::Patch => match &self.viewer {
                 Some(viewer) => viewer.clone().into_any_element(),
                 None => LoadingState::new("diff-loading", "Loading changes…")

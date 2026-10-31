@@ -94,6 +94,10 @@ pub struct HeaderFile {
 /// with the patch of its changes, and what's on show meanwhile. Going to another file, the last
 /// one stays on show, header and all, until the new one's patch is loaded and highlighted.
 ///
+/// While the file's edited ([`set_editing`](Self::set_editing)), it and its patch stay as they
+/// were when that started: saving the edits changes it, and could take it from its list, or leave
+/// it without changes, which isn't shown in the editor.
+///
 /// Kept by the view, which [`sync`](Self::sync)s it with what's loaded before it reads it.
 pub struct ShownFile {
     repository_id: RepositoryId,
@@ -122,6 +126,8 @@ pub struct ShownFile {
     files_error: Option<String>,
     /// Whether changes are being loaded, for long enough to say so.
     busy: Entity<Delayed>,
+    /// While the file's edited: the file, and its patch, as they were when that started.
+    editing: Option<(ChangedFile, Option<PreparedPatch>)>,
 }
 
 impl ShownFile {
@@ -149,6 +155,7 @@ impl ShownFile {
             loading_files: false,
             files_error: None,
             busy,
+            editing: None,
         };
         shown.sync(cx);
         shown
@@ -186,7 +193,9 @@ impl ShownFile {
         // Not loaded once the file's gone from its list, nor for a binary one, or a large one
         // until it's asked for.
         let file = self.file();
-        let enabled = !self.gone() && self.fetches();
+        // Not reloaded while it's edited, as each save would: the view keeps the patch editing
+        // started from, and gets the last one once editing stops.
+        let enabled = self.editing.is_none() && !self.gone() && self.fetches();
         let same = file.path == self.patch_file.path
             && file.orig_path == self.patch_file.orig_path
             && file.status == self.patch_file.status;
@@ -197,6 +206,13 @@ impl ShownFile {
             self.patch_file = file;
             self.patch_enabled = enabled;
         }
+        self.prepare_loaded();
+        let busy = self.shows_other() || self.loading_files;
+        self.busy.update(cx, |delayed, cx| delayed.set(busy, cx));
+    }
+
+    /// Prepares the patch loaded last, unless it is already.
+    fn prepare_loaded(&mut self) {
         let loaded = self.patch_query.data();
         let prepared = self.patch.as_ref();
         if loaded
@@ -206,8 +222,6 @@ impl ShownFile {
         {
             self.patch = loaded.map(|data| PreparedPatch::new(&self.source, data));
         }
-        let busy = self.shows_other() || self.loading_files;
-        self.busy.update(cx, |delayed, cx| delayed.set(busy, cx));
     }
 
     pub fn repository_id(&self) -> &RepositoryId {
@@ -282,14 +296,37 @@ impl ShownFile {
         self.file.clone()
     }
 
-    /// The file on show.
+    /// The file on show: as it was when editing started, while it's edited.
     pub fn file(&self) -> ChangedFile {
-        self.live_file()
+        match &self.editing {
+            Some((file, _)) => file.clone(),
+            None => self.live_file(),
+        }
     }
 
-    /// Whether the file has gone from its list: it's been staged in full, say.
+    /// Whether the file has gone from its list: it's been staged in full, say. Not while it's
+    /// edited.
     pub fn gone(&self) -> bool {
-        self.source.is_uncommitted() && self.lists.loaded() && self.found().is_none()
+        self.editing.is_none()
+            && self.source.is_uncommitted()
+            && self.lists.loaded()
+            && self.found().is_none()
+    }
+
+    /// Whether the file's being edited by hand (see `file_editing`).
+    pub fn is_editing(&self) -> bool {
+        self.editing.is_some()
+    }
+
+    /// The file's being edited by hand, or no longer: it, and its patch, stay as they are until
+    /// editing stops.
+    pub fn set_editing<V: 'static>(&mut self, editing: bool, cx: &mut Context<V>) {
+        if editing == self.editing.is_some() {
+            return;
+        }
+        self.prepare_loaded();
+        self.editing = editing.then(|| (self.live_file(), self.patch.clone()));
+        self.sync(cx);
     }
 
     /// Whether its patch is loaded: one that has one, not too large or asked for anyway.
@@ -307,13 +344,21 @@ impl ShownFile {
         }
     }
 
-    /// The patch loaded last: this file's, or the last one's while this one's loads.
+    /// The patch loaded last: this file's, or the last one's while this one's loads; the one
+    /// editing started from, while the file's edited.
     pub fn patch(&self) -> Option<&PreparedPatch> {
-        self.patch.as_ref()
+        match &self.editing {
+            Some((_, patch)) => patch.as_ref(),
+            None => self.patch.as_ref(),
+        }
     }
 
-    /// Why the patch couldn't be loaded.
+    /// Why the patch couldn't be loaded; nothing while the file's edited, as the patch on show is
+    /// the one editing started from.
     pub fn patch_error(&self) -> Option<QueryError> {
+        if self.editing.is_some() {
+            return None;
+        }
         self.patch_query.error()
     }
 
