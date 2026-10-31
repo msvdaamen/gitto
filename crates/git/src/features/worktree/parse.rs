@@ -99,13 +99,13 @@ mod tests {
             }
         );
         let feature = &worktrees[1];
-        assert_eq!(feature.path, "/repo-feature");
+        assert_eq!(feature.path, native("/repo-feature"));
         assert_eq!(feature.name, "repo-feature");
         assert_eq!(feature.head.as_deref(), Some("bbb"));
         assert_eq!(feature.branch.as_deref(), Some("refs/heads/feature"));
         assert!(!feature.main);
         let check = &worktrees[2];
-        assert_eq!(check.path, "/tmp/repo-check");
+        assert_eq!(check.path, native("/tmp/repo-check"));
         assert_eq!(check.head.as_deref(), Some("ccc"));
         assert_eq!(check.branch, None);
         assert!(!check.main);
@@ -149,7 +149,7 @@ mod tests {
         let worktrees =
             parse_worktree_list(&output(&[&["worktree /a\nb", "HEAD aaa", "detached"]]));
         assert_eq!(worktrees.len(), 1);
-        assert_eq!(worktrees[0].path, "/a\nb");
+        assert_eq!(worktrees[0].path, native("/a\nb"));
         assert_eq!(worktrees[0].name, "a\nb");
     }
 
