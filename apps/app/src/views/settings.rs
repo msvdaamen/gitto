@@ -2,7 +2,7 @@
 
 use gpui_kit::component::v_flex;
 use gpui_kit::prelude::*;
-use gpui_kit::{Context, Entity, FontWeight, Window, div, rems};
+use gpui_kit::{Context, Entity, Window, div, rems};
 
 use crate::components::settings::settings_section::SettingsSection;
 use crate::components::settings::telemetry_setting::TelemetrySetting;
@@ -44,13 +44,7 @@ impl Render for SettingsView {
                     .gap_4()
                     .child(
                         v_flex()
-                            .child(
-                                div()
-                                    .text_2xl()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(palette.text)
-                                    .child("Settings"),
-                            )
+                            .child(div().text_2xl().text_color(palette.text).child("Settings"))
                             .child(
                                 div()
                                     .mt_1()

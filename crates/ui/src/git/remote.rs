@@ -2,13 +2,42 @@
 
 use url::Url;
 
-/// Hosts known by the name of their service.
-const PROVIDERS: [(&str, &str); 5] = [
-    ("github.com", "GitHub"),
-    ("gitlab.com", "GitLab"),
-    ("bitbucket.org", "Bitbucket"),
-    ("codeberg.org", "Codeberg"),
-    ("dev.azure.com", "Azure DevOps"),
+/// Where a remote is hosted: a service known by name, another host, or this machine. Shown as
+/// its name ("GitHub", "git.example.com", "Local").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Provider {
+    GitHub,
+    GitLab,
+    Bitbucket,
+    Codeberg,
+    AzureDevOps,
+    /// A host that isn't a known service's, e.g. `git.example.com`.
+    Other(String),
+    /// A remote on this machine.
+    Local,
+}
+
+impl std::fmt::Display for Provider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Provider::GitHub => "GitHub",
+            Provider::GitLab => "GitLab",
+            Provider::Bitbucket => "Bitbucket",
+            Provider::Codeberg => "Codeberg",
+            Provider::AzureDevOps => "Azure DevOps",
+            Provider::Other(host) => host,
+            Provider::Local => "Local",
+        })
+    }
+}
+
+/// Hosts known by their service.
+const PROVIDERS: [(&str, Provider); 5] = [
+    ("github.com", Provider::GitHub),
+    ("gitlab.com", Provider::GitLab),
+    ("bitbucket.org", Provider::Bitbucket),
+    ("codeberg.org", Provider::Codeberg),
+    ("dev.azure.com", Provider::AzureDevOps),
 ];
 
 /// Whether `url` starts with a scheme and `//`: `^[a-z][a-z\d+.-]*:\/\/`, case-insensitively.
@@ -54,10 +83,10 @@ fn scp_host(url: &str) -> Option<&str> {
     user.and_then(|at| host_at(at + 1)).or_else(|| host_at(0))
 }
 
-/// What to call where a remote is hosted: "GitHub", or its host if it isn't a known one.
-pub fn remote_provider(url: &str) -> String {
+/// Where a remote is hosted, by its URL: a known service, or its host if it isn't one.
+pub fn remote_provider(url: &str) -> Provider {
     let Some(host) = remote_host(url) else {
-        return "Local".to_owned();
+        return Provider::Local;
     };
     let known = host
         .strip_prefix("www.")
@@ -66,7 +95,10 @@ pub fn remote_provider(url: &str) -> String {
     PROVIDERS
         .iter()
         .find(|(provider_host, _)| *provider_host == known)
-        .map_or(host.clone(), |(_, name)| (*name).to_owned())
+        .map_or_else(
+            || Provider::Other(host.clone()),
+            |(_, provider)| provider.clone(),
+        )
 }
 
 #[cfg(test)]
@@ -114,21 +146,31 @@ mod tests {
 
         #[test]
         fn names_known_hosts_by_their_service() {
-            assert_eq!(remote_provider("git@github.com:owner/repo.git"), "GitHub");
+            assert_eq!(
+                remote_provider("git@github.com:owner/repo.git"),
+                Provider::GitHub
+            );
             assert_eq!(
                 remote_provider("ssh://git@ssh.github.com:443/owner/repo.git"),
-                "GitHub"
+                Provider::GitHub
             );
-            assert_eq!(remote_provider("https://gitlab.com/owner/repo"), "GitLab");
+            assert_eq!(
+                remote_provider("https://gitlab.com/owner/repo"),
+                Provider::GitLab
+            );
+            assert_eq!(
+                remote_provider("https://dev.azure.com/org/project/_git/repo").to_string(),
+                "Azure DevOps"
+            );
         }
 
         #[test]
         fn names_others_by_their_host() {
-            assert_eq!(
-                remote_provider("https://git.example.com/repo.git"),
-                "git.example.com"
-            );
-            assert_eq!(remote_provider("/Users/ada/upstream"), "Local");
+            let other = remote_provider("https://git.example.com/repo.git");
+            assert_eq!(other, Provider::Other("git.example.com".into()));
+            assert_eq!(other.to_string(), "git.example.com");
+            assert_eq!(remote_provider("/Users/ada/upstream"), Provider::Local);
+            assert_eq!(Provider::Local.to_string(), "Local");
         }
     }
 
