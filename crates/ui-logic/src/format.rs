@@ -1,5 +1,13 @@
 //! Ported from `lib/format.ts`.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use fixed_decimal::Decimal;
+use icu_experimental::relativetime::options::Numeric;
+use icu_experimental::relativetime::{RelativeTimeFormatter, RelativeTimeFormatterOptions};
+use icu_locale_core::{Locale, locale};
+
 /// Up to two letters for an avatar: `AL` for "Ada Lovelace", `AD` for "ada".
 pub fn initials(name: &str) -> String {
     let mut words = name
@@ -55,30 +63,85 @@ enum TimeUnit {
 }
 
 impl TimeUnit {
-    fn name(self) -> &'static str {
-        match self {
-            TimeUnit::Year => "year",
-            TimeUnit::Month => "month",
-            TimeUnit::Week => "week",
-            TimeUnit::Day => "day",
-            TimeUnit::Hour => "hour",
-            TimeUnit::Minute => "minute",
-        }
+    /// ICU4X's formatter for the unit in `locale`, as `Intl.RelativeTimeFormat` words it with
+    /// `numeric: "auto"`: "yesterday", "last week", "in 2 hours".
+    fn formatter(self, locale: &Locale) -> Option<RelativeTimeFormatter> {
+        let prefs = locale.into();
+        let options = RelativeTimeFormatterOptions::default().with_numeric(Numeric::Auto);
+        let formatter = match self {
+            TimeUnit::Year => RelativeTimeFormatter::try_new_long_year(prefs, options),
+            TimeUnit::Month => RelativeTimeFormatter::try_new_long_month(prefs, options),
+            TimeUnit::Week => RelativeTimeFormatter::try_new_long_week(prefs, options),
+            TimeUnit::Day => RelativeTimeFormatter::try_new_long_day(prefs, options),
+            TimeUnit::Hour => RelativeTimeFormatter::try_new_long_hour(prefs, options),
+            TimeUnit::Minute => RelativeTimeFormatter::try_new_long_minute(prefs, options),
+        };
+        formatter.ok()
     }
 }
 
-/// `timestamp` (milliseconds since the epoch) relative to `now`, e.g. "3 days ago".
-///
-/// Worded as `Intl.RelativeTimeFormat` words it in English with `numeric: "auto"`: "yesterday",
-/// "last week", "in 2 hours". (The Electron app used the system's language.)
-pub fn relative_time(timestamp: i64, now: i64) -> String {
-    let diff = timestamp - now;
-    for (unit, size) in TIME_UNITS {
-        if diff.abs() >= size {
-            return format_relative(round_half_up(diff as f64 / size as f64), unit);
-        }
+/// Relative times told in a language, as `Intl.RelativeTimeFormat` tells them: the number in it
+/// too, with its thousands grouped as it groups them ("1,500 years ago", "1.500 jaar geleden").
+pub struct RelativeTimes {
+    /// By [`TIME_UNITS`]' order.
+    formatters: [RelativeTimeFormatter; TIME_UNITS.len()],
+}
+
+impl RelativeTimes {
+    /// Times told in `language`, a BCP 47 tag like `nl-NL`; in English if it isn't one, or there's
+    /// no wording for it.
+    pub fn new(language: &str) -> Self {
+        let locale = Locale::try_from_str(language).unwrap_or(locale!("en"));
+        let formatters = |locale: &Locale| {
+            let [year, month, week, day, hour, minute] =
+                TIME_UNITS.map(|(unit, _)| unit.formatter(locale));
+            Some([year?, month?, week?, day?, hour?, minute?])
+        };
+        let formatters = formatters(&locale)
+            .or_else(|| formatters(&locale!("en")))
+            .expect("ICU4X's compiled data words relative times in English");
+        RelativeTimes { formatters }
     }
-    "Just now".to_owned()
+
+    /// In the system's language, as the Electron app's renderer told them.
+    pub fn system() -> Self {
+        RelativeTimes::new(&sys_locale::get_locale().unwrap_or_default())
+    }
+
+    /// `timestamp` (milliseconds since the epoch) relative to `now`, e.g. "3 days ago".
+    pub fn format(&self, timestamp: i64, now: i64) -> String {
+        let diff = timestamp - now;
+        for ((_, size), formatter) in TIME_UNITS.iter().zip(&self.formatters) {
+            if diff.abs() >= *size {
+                let value = round_half_up(diff as f64 / *size as f64);
+                return formatter.format(Decimal::from(value)).to_string();
+            }
+        }
+        // As TS had it, whatever the language.
+        "Just now".to_owned()
+    }
+}
+
+thread_local! {
+    /// What [`relative_time`] tells times with: made on first use, on the thread that uses it
+    /// (the UI's), as they aren't `Send`.
+    static RELATIVE_TIMES: RefCell<Option<Rc<RelativeTimes>>> = const { RefCell::new(None) };
+}
+
+/// `timestamp` (milliseconds since the epoch) relative to `now`, e.g. "3 days ago", in the system's
+/// language (see [`RelativeTimes`]), or the one [`tell_relative_times_in`] set.
+pub fn relative_time(timestamp: i64, now: i64) -> String {
+    let times = RELATIVE_TIMES.with_borrow_mut(|times| {
+        Rc::clone(times.get_or_insert_with(|| Rc::new(RelativeTimes::system())))
+    });
+    times.format(timestamp, now)
+}
+
+/// Has [`relative_time`] tell times in `language` (see [`RelativeTimes::new`]) on this thread,
+/// rather than the system's: e.g. in a test, in English whatever the system's is.
+pub fn tell_relative_times_in(language: &str) {
+    let times = Rc::new(RelativeTimes::new(language));
+    RELATIVE_TIMES.with_borrow_mut(|current| *current = Some(times));
 }
 
 /// `x` rounded as JS's `Math.round` rounds it: halves up, so -1.5 is -1 (`f64::round` makes it
@@ -90,40 +153,6 @@ fn round_half_up(x: f64) -> i64 {
     } else {
         floor as i64
     }
-}
-
-/// `Intl.RelativeTimeFormat("en", { numeric: "auto" }).format(value, unit)`, for a `value` that
-/// isn't 0.
-fn format_relative(value: i64, unit: TimeUnit) -> String {
-    match (value, unit) {
-        (-1, TimeUnit::Day) => "yesterday".to_owned(),
-        (1, TimeUnit::Day) => "tomorrow".to_owned(),
-        (-1, TimeUnit::Week | TimeUnit::Month | TimeUnit::Year) => format!("last {}", unit.name()),
-        (1, TimeUnit::Week | TimeUnit::Month | TimeUnit::Year) => format!("next {}", unit.name()),
-        _ => {
-            let count = value.unsigned_abs();
-            let plural = if count == 1 { "" } else { "s" };
-            let amount = format!("{} {}{plural}", group_thousands(count), unit.name());
-            if value < 0 {
-                format!("{amount} ago")
-            } else {
-                format!("in {amount}")
-            }
-        }
-    }
-}
-
-/// `count` with its thousands grouped, as English writes it: `12,345`.
-fn group_thousands(count: u64) -> String {
-    let digits = count.to_string();
-    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
-    for (index, digit) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index).is_multiple_of(3) {
-            grouped.push(',');
-        }
-        grouped.push(digit);
-    }
-    grouped
 }
 
 /// A count short enough for a badge: `1.2k` for 1234.
@@ -176,39 +205,77 @@ mod tests {
         /// `Date.UTC(2026, 0, 31)`.
         const NOW: i64 = 1_769_817_600_000;
 
+        fn english(timestamp: i64) -> String {
+            RelativeTimes::new("en").format(timestamp, NOW)
+        }
+
         #[test]
         fn uses_the_largest_unit_that_fits() {
-            assert_eq!(
-                relative_time(NOW - 3 * 24 * 60 * 60 * 1000, NOW),
-                "3 days ago"
-            );
-            assert_eq!(relative_time(NOW - 2 * 60 * 60 * 1000, NOW), "2 hours ago");
+            assert_eq!(english(NOW - 3 * 24 * 60 * 60 * 1000), "3 days ago");
+            assert_eq!(english(NOW - 2 * 60 * 60 * 1000), "2 hours ago");
         }
 
         #[test]
         fn says_just_now_for_less_than_a_minute() {
-            assert_eq!(relative_time(NOW - 30_000, NOW), "Just now");
+            assert_eq!(english(NOW - 30_000), "Just now");
+            assert_eq!(
+                RelativeTimes::new("nl").format(NOW - 30_000, NOW),
+                "Just now"
+            );
         }
 
         #[test]
         fn words_it_as_intl_does_in_english() {
-            assert_eq!(relative_time(NOW - DAY, NOW), "yesterday");
-            assert_eq!(relative_time(NOW - 8 * DAY, NOW), "last week");
-            assert_eq!(relative_time(NOW + 2 * HOUR, NOW), "in 2 hours");
-            assert_eq!(relative_time(NOW - MINUTE, NOW), "1 minute ago");
-            assert_eq!(
-                relative_time(NOW - 1500 * 365 * DAY, NOW),
-                "1,500 years ago"
-            );
+            assert_eq!(english(NOW - DAY), "yesterday");
+            assert_eq!(english(NOW + DAY), "tomorrow");
+            assert_eq!(english(NOW - 8 * DAY), "last week");
+            assert_eq!(english(NOW - 45 * DAY), "last month");
+            assert_eq!(english(NOW + 2 * HOUR), "in 2 hours");
+            assert_eq!(english(NOW - MINUTE), "1 minute ago");
+            assert_eq!(english(NOW - 1500 * 365 * DAY), "1,500 years ago");
         }
 
         #[test]
         fn rounds_halves_up_as_math_round_does() {
             // What TS told these times as.
-            assert_eq!(relative_time(NOW - 3 * MINUTE / 2, NOW), "1 minute ago");
-            assert_eq!(relative_time(NOW + 3 * MINUTE / 2, NOW), "in 2 minutes");
-            assert_eq!(relative_time(NOW - 36 * HOUR, NOW), "yesterday");
-            assert_eq!(relative_time(NOW - 5 * HOUR / 2, NOW), "2 hours ago");
+            assert_eq!(english(NOW - 3 * MINUTE / 2), "1 minute ago");
+            assert_eq!(english(NOW + 3 * MINUTE / 2), "in 2 minutes");
+            assert_eq!(english(NOW - 36 * HOUR), "yesterday");
+            assert_eq!(english(NOW - 5 * HOUR / 2), "2 hours ago");
+        }
+
+        #[test]
+        fn words_it_as_intl_does_in_other_languages() {
+            // What `Intl.RelativeTimeFormat("nl" or "de", { numeric: "auto" })` says.
+            let dutch = RelativeTimes::new("nl-NL");
+            assert_eq!(dutch.format(NOW - 3 * DAY, NOW), "3 dagen geleden");
+            assert_eq!(dutch.format(NOW - DAY, NOW), "gisteren");
+            assert_eq!(dutch.format(NOW + 2 * HOUR, NOW), "over 2 uur");
+            assert_eq!(
+                dutch.format(NOW - 1500 * 365 * DAY, NOW),
+                "1.500 jaar geleden"
+            );
+            let german = RelativeTimes::new("de");
+            assert_eq!(german.format(NOW - 8 * DAY, NOW), "letzte Woche");
+            assert_eq!(german.format(NOW - 3 * MINUTE / 2, NOW), "vor 1 Minute");
+            assert_eq!(
+                german.format(NOW - 1500 * 365 * DAY, NOW),
+                "vor 1.500 Jahren"
+            );
+        }
+
+        #[test]
+        fn words_it_in_english_for_what_isnt_a_language() {
+            assert_eq!(RelativeTimes::new("C").format(NOW - DAY, NOW), "yesterday");
+            assert_eq!(RelativeTimes::new("").format(NOW - DAY, NOW), "yesterday");
+        }
+
+        #[test]
+        fn tells_times_in_the_language_set() {
+            tell_relative_times_in("nl");
+            assert_eq!(relative_time(NOW - DAY, NOW), "gisteren");
+            tell_relative_times_in("en");
+            assert_eq!(relative_time(NOW - DAY, NOW), "yesterday");
         }
     }
 

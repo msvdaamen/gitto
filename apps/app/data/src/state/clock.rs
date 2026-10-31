@@ -89,6 +89,7 @@ mod tests {
 
     #[test]
     fn tells_a_time_again_as_time_passes() {
+        format::tell_relative_times_in("en");
         let mut now = now_ms();
         let made = now - 20_000;
         assert_eq!(format::relative_time(made, now), "Just now");

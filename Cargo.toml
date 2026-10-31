@@ -71,6 +71,12 @@ two-face = { version = "0.4.5", default-features = false, features = [
 # crates/ui-logic: what the UI works out for itself, e.g. the order of the sidebar's folders.
 indexmap = "2.14.2"
 url = "2.5.8"
+# Relative times in the system's language, as `Intl.RelativeTimeFormat` told them: ICU4X's
+# formatter, with its data compiled in, and the language the system's set to.
+fixed_decimal = { version = "0.7.3", default-features = false }
+icu_experimental = { version = "0.7.0", default-features = false, features = ["compiled_data"] }
+icu_locale_core = { version = "2.4.0", default-features = false }
+sys-locale = "0.3.2"
 
 gitto-db = { path = "crates/db" }
 gitto-git = { path = "crates/git" }
