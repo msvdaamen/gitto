@@ -1,9 +1,11 @@
 //! Deleting a branch, local or remote, with the local branches tracking a remote one. Ported from
 //! `delete.ts`.
 
-use super::commands::{branch_target, tracking_locals};
+use std::collections::HashMap;
+
+use super::commands::{TrackingLocal, branch_target, tracking_locals};
 use super::in_use::branches_in_use;
-use crate::core::errors::{BranchDeletionBlocker, Error, Result};
+use crate::core::errors::{BranchDeletionBlocker, Error, InUse, Result};
 use crate::core::repo::{GitCommand, Repo};
 use crate::features::refs::schema::RefKind;
 use crate::features::remote::commands::list_remotes;
@@ -17,8 +19,9 @@ use crate::features::remote::remote_name::remote_of;
 /// map it to `ref`, then the local branches that track it are; or, if the remote's gone, only what's
 /// left of it here. Nothing is deleted if git wouldn't delete one of those local branches
 /// (`Error::BranchDeletionBlocked`), nor if the remote's settings don't fetch `ref` from a branch
-/// there. Should a local branch still fail to be deleted after the remote one was, checked out in a
-/// terminal meanwhile say, that's returned, saying the remote one is gone.
+/// there. Should a local branch still fail to be deleted after the remote one was, checked out
+/// while the remote answered say, that's returned, saying the remote one is gone. Other writes
+/// aren't held up while the remote answers.
 ///
 /// Fails with `Error::InvalidInput` if `ref` isn't a branch, as the UI's input is checked.
 pub async fn delete_branch(repo: &Repo, reference: &str) -> Result<()> {
@@ -29,81 +32,107 @@ pub async fn delete_branch(repo: &Repo, reference: &str) -> Result<()> {
         return Ok(());
     }
 
-    let reference = reference.to_owned();
-    let fetcher = repo.clone();
-    // One write, from finding the local branches tracking it to deleting them, so no other write
-    // (a switch, say) can check one out in between, once the remote one is gone. That holds up the
-    // other writes while the remote answers, which a deletion, asked for and waited on, can afford.
-    repo.exclusive(move |run| async move {
-        let (tracking, in_use, fetched, remotes) = futures::try_join!(
-            tracking_locals(&run, &reference),
-            branches_in_use(&run),
-            fetched_from(&run, &reference),
-            list_remotes(&run),
-        )?;
-        for local in &tracking {
-            if let Some(using) = in_use.get(&format!("refs/heads/{}", local.name)) {
-                return Err(Error::BranchDeletionBlocked(BranchDeletionBlocker::InUse {
-                    local: local.name.clone(),
-                    branch: target.name.clone(),
-                    in_use: using.clone(),
-                }));
-            }
-        }
+    // Checked before the write turn, so it isn't held up while the remote answers; and again in
+    // it, so no other write (a switch, say) checks a tracking branch out before it's deleted.
+    let run = repo.git();
+    let (tracking, in_use, fetched, remotes) = futures::try_join!(
+        tracking_locals(&run, reference),
+        branches_in_use(&run),
+        fetched_from(&run, reference),
+        list_remotes(&run),
+    )?;
+    check_not_in_use(&tracking, &in_use, &target.name)?;
 
-        if let Some(fetched) = &fetched {
-            // As a full ref name, which the remote deletes even if it's gone there already: a short
-            // one that's no longer there fails. Pushing also drops the remote-tracking branch here.
-            // In turn with the fetches too, which change the remote-tracking branches as well, and
-            // stopped if Gitto exits, as they are. The pre-push hook runs, as for any push: it's
-            // the user's say what may be pushed.
-            fetcher
-                .fetch([
-                    "push",
-                    "--quiet",
+    let reference = reference.to_owned();
+    let Some(fetched) = fetched else {
+        if let Some(remote) = remote_of(&remotes, &target.name) {
+            return Err(Error::BranchDeletionBlocked(
+                BranchDeletionBlocker::NotFetched {
+                    remote: remote.to_owned(),
+                    branch: target.name.clone(),
+                },
+            ));
+        }
+        return repo
+            .exclusive(move |run| async move {
+                let (tracking, in_use) =
+                    futures::try_join!(tracking_locals(&run, &reference), branches_in_use(&run))?;
+                check_not_in_use(&tracking, &in_use, &target.name)?;
+                run.run([
+                    "branch",
                     "--delete",
+                    "--remotes",
+                    "--force",
                     "--",
-                    fetched.remote.as_str(),
-                    fetched.branch.as_str(),
+                    target.name.as_str(),
                 ])
-                .await
-                .map_err(Error::without_hints)?;
-        } else {
-            if let Some(remote) = remote_of(&remotes, &target.name) {
-                return Err(Error::BranchDeletionBlocked(
-                    BranchDeletionBlocker::NotFetched {
-                        remote: remote.to_owned(),
-                        branch: target.name.clone(),
-                    },
-                ));
-            }
-            run.run([
-                "branch",
-                "--delete",
-                "--remotes",
-                "--force",
-                "--",
-                target.name.as_str(),
-            ])
-            .await?;
-        }
-        if tracking.is_empty() {
-            return Ok(());
-        }
-        let mut args = vec!["branch", "--delete", "--force", "--"];
-        args.extend(tracking.iter().map(|local| local.name.as_str()));
-        match (run.run(args).await, &fetched) {
-            (Ok(_), _) => Ok(()),
-            (Err(Error::Git(error)), Some(fetched)) => {
-                Err(Error::Git(error.with_message(format!(
-                    "{} was deleted on {}, but not every local branch tracking it was. {}",
-                    target.name, fetched.remote, error.message
-                ))))
-            }
-            (Err(error), _) => Err(error),
+                .await?;
+                delete_locals(&run, &tracking).await
+            })
+            .await;
+    };
+
+    // As a full ref name, which the remote deletes even if it's gone there already: a short one
+    // that's no longer there fails. Pushing also drops the remote-tracking branch here. In turn
+    // with the fetches, which change the remote-tracking branches as well, and stopped if Gitto
+    // exits, as they are. The pre-push hook runs, as for any push: it's the user's say what may be
+    // pushed.
+    repo.fetch([
+        "push",
+        "--quiet",
+        "--delete",
+        "--",
+        fetched.remote.as_str(),
+        fetched.branch.as_str(),
+    ])
+    .await
+    .map_err(Error::without_hints)?;
+    repo.exclusive(move |run| async move {
+        // Still tracking it, its upstream gone. One checked out meanwhile, git refuses to delete,
+        // checking again as `check_not_in_use` did: the remote one's gone already, so that's said.
+        let deleted = async {
+            let tracking = tracking_locals(&run, &reference).await?;
+            delete_locals(&run, &tracking).await
+        };
+        match deleted.await {
+            Err(Error::Git(error)) => Err(Error::Git(error.with_message(format!(
+                "{} was deleted on {}, but not every local branch tracking it was. {}",
+                target.name, fetched.remote, error.message
+            )))),
+            deleted => deleted,
         }
     })
     .await
+}
+
+/// Fails with `Error::BranchDeletionBlocked` if one of the local branches `tracking` the remote
+/// branch `branch` is in use.
+fn check_not_in_use(
+    tracking: &[TrackingLocal],
+    in_use: &HashMap<String, InUse>,
+    branch: &str,
+) -> Result<()> {
+    for local in tracking {
+        if let Some(using) = in_use.get(&format!("refs/heads/{}", local.name)) {
+            return Err(Error::BranchDeletionBlocked(BranchDeletionBlocker::InUse {
+                local: local.name.clone(),
+                branch: branch.to_owned(),
+                in_use: using.clone(),
+            }));
+        }
+    }
+    Ok(())
+}
+
+/// Deletes the local branches `tracking` a remote branch, if there are any.
+async fn delete_locals(run: &GitCommand, tracking: &[TrackingLocal]) -> Result<()> {
+    if tracking.is_empty() {
+        return Ok(());
+    }
+    let mut args = vec!["branch", "--delete", "--force", "--"];
+    args.extend(tracking.iter().map(|local| local.name.as_str()));
+    run.run(args).await?;
+    Ok(())
 }
 
 /// A remote, and the branch on it that fetching updates a remote-tracking branch from (see
@@ -179,11 +208,12 @@ pub fn fetched_into(spec: &str, reference: &str) -> Option<String> {
 mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::time::Duration;
 
     use regex::Regex;
 
     use super::*;
-    use crate::test_support::{Fixture, git};
+    use crate::test_support::{Fixture, git, wait_for, write_script};
 
     /// The full names of the refs under `prefix` in the repository at `path`.
     fn refs(path: &Path, prefix: &str) -> Vec<String> {
@@ -441,23 +471,40 @@ mod tests {
     }
 
     #[test]
-    fn holds_up_the_other_writes_until_its_done_so_none_checks_out_a_tracking_branch_meanwhile() {
+    fn lets_the_other_writes_run_while_the_remote_answers() {
         let fx = Fixture::new();
-        let (origin, path) = create_tracking_clone(&fx, "delete-in-turn");
-        smol::block_on(async {
-            let repo = fx.repos.open("delete-in-turn").await.unwrap();
+        let (origin, path) = create_tracking_clone(&fx, "delete-not-in-turn");
+        // Pushes once the switch below has run, which would wait for the deletion if it held the
+        // write turn meanwhile; it gives up after 10s. The switch checks out the tracking branch,
+        // which then isn't deleted.
+        write_script(
+            &path.join(".git").join("hooks").join("pre-push"),
+            "#!/bin/sh\ntouch .git/pushing\ni=0\nwhile [ ! -e .git/switched ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done\n[ -e .git/switched ]\n",
+        );
 
+        smol::block_on(async {
+            let repo = fx.repos.open("delete-not-in-turn").await.unwrap();
             let deleting = delete_branch(&repo, "refs/remotes/origin/other");
-            let switching = repo.write(["switch", "other"]);
-            deleting.await.unwrap();
-            let error = switching.await.unwrap_err();
+            let switching = async {
+                let git_dir = path.join(".git");
+                wait_for(Duration::from_secs(10), || git_dir.join("pushing").exists()).await;
+                repo.write(["switch", "-q", "other"]).await.unwrap();
+                fs::write(git_dir.join("switched"), "").unwrap();
+            };
+            let (error, ()) = futures::join!(deleting, switching);
+            let error = error.unwrap_err();
             assert!(
-                error.to_string().contains("invalid reference: other"),
+                error.to_string().starts_with(
+                    "origin/other was deleted on origin, but not every local branch tracking it was. "
+                ),
                 "{error}"
             );
         });
         assert_eq!(refs(&origin, "refs/heads/"), strs(&["refs/heads/main"]));
-        assert_eq!(refs(&path, "refs/heads/"), strs(&["refs/heads/main"]));
+        assert_eq!(
+            refs(&path, "refs/heads/"),
+            strs(&["refs/heads/main", "refs/heads/other"])
+        );
     }
 
     #[test]

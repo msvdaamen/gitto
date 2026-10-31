@@ -1980,6 +1980,7 @@ dependencies = [
  "event-listener",
  "futures",
  "futures-lite",
+ "inotify",
  "libc",
  "log",
  "memchr",
@@ -1992,6 +1993,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

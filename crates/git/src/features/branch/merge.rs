@@ -31,7 +31,9 @@ pub async fn merge_branch(repo: &Repo, reference: &str, into: &str) -> Result<Me
     let target = preflight::target(reference, into)?;
     let git_dir = git_dirs(repo).await?.git_dir;
     // One write, so nothing else changes the branch, or starts another operation, halfway.
-    repo.exclusive(|run| async move {
+    let (reference, into) = (reference.to_owned(), into.to_owned());
+    repo.exclusive(move |run| async move {
+        let (reference, into) = (reference.as_str(), into.as_str());
         let Checked { sha, head: before } =
             preflight(&run, &git_dir, reference, &target, into, Integration::Merge).await?;
         // None for a branch without commits yet, which just moves to it: nor can git word one.
