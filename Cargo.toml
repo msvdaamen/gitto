@@ -48,8 +48,9 @@ uuid = { version = "1.28.0", features = ["v4", "v7"] }
 dirs = "6.0.0"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 
-# apps/app: the GPUI app.
+# apps/app: the GPUI app, and the times its log's lines are written at.
 anyhow = "1.0.104"
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 
 # apps/app's diffs: syntax highlighting as gpui-kit's `syntect` feature does it (the same syntect
 # and syntax set), and the words that changed between a removed line and the line added for it

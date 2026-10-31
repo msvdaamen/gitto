@@ -64,6 +64,11 @@ impl AppPaths {
     pub fn local_storage(&self) -> PathBuf {
         self.user_data.join("ui-storage.json")
     }
+
+    /// The Rust app's log, `gitto.log` (see `crate::services::logger`).
+    pub fn log_file(&self) -> PathBuf {
+        self.user_data.join("gitto.log")
+    }
 }
 
 #[cfg(test)]
@@ -83,5 +88,6 @@ mod tests {
             paths.local_storage(),
             Path::new("/data/Gitto/ui-storage.json")
         );
+        assert_eq!(paths.log_file(), Path::new("/data/Gitto/gitto.log"));
     }
 }
