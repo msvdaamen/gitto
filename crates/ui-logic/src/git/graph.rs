@@ -53,110 +53,132 @@ impl<'a> GraphCommit<'a> {
 
 /// A lane: the commit it's heading towards (`None` for a free one), and whether it's drawn dashed,
 /// from a `dashed` commit down to its parent, or comes from an `aside` one.
-#[derive(Debug, Clone, Copy, Default)]
-struct Lane<'a> {
-    target: Option<&'a str>,
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Lane {
+    target: Option<String>,
     dashed: bool,
     aside: bool,
 }
+
+/// Where the lanes stand between two rows of the graph: the commit each is heading towards. The
+/// graph is laid out a row at a time from them, so one laid out in parts (a page of the history
+/// at a time) goes on from where the part before it left them, as if it were laid out whole.
+#[derive(Debug, Clone, Default)]
+pub struct GraphLanes {
+    lanes: Vec<Lane>,
+    /// The lanes leading into the row being laid out, kept to save making them for every row.
+    incoming: Vec<usize>,
+}
+
+/// Lanes are the same if they're heading to the same commits the same way: a graph goes on from
+/// them the same.
+impl PartialEq for GraphLanes {
+    fn eq(&self, other: &Self) -> bool {
+        self.lanes == other.lanes
+    }
+}
+
+impl Eq for GraphLanes {}
 
 /// Lays commits (newest first; children always before their parents) out in lanes, the way
 /// GitKraken does: a branch keeps its lane from its tip down to where it forked off, merges curve
 /// in from the merged branch's lane, and forks curve out of the commit they started at.
 pub fn compute_graph(commits: &[GraphCommit<'_>]) -> Vec<GraphRow> {
-    let mut lanes: Vec<Lane<'_>> = Vec::new();
-    let mut incoming: Vec<usize> = Vec::new();
+    let mut lanes = GraphLanes::default();
+    commits.iter().map(|commit| lanes.lay_out(commit)).collect()
+}
 
-    commits
-        .iter()
-        .map(|commit| {
-            let sha = commit.sha;
-            incoming.clear();
-            incoming.extend(
-                lanes
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, lane)| lane.target == Some(sha))
-                    .map(|(i, _)| i),
-            );
-            // A branch tip nothing leads to yet starts in the first free lane.
-            let column = incoming
-                .iter()
-                .copied()
-                .find(|&lane| !lanes[lane].aside)
-                .or_else(|| incoming.first().copied())
-                .unwrap_or_else(|| free_lane(&lanes, &[]));
-            let through: Vec<GraphEdge> = lanes
+impl GraphLanes {
+    /// Lays out `commit`'s row, the next one down (see [`compute_graph`]), and moves the lanes on
+    /// past it.
+    pub fn lay_out(&mut self, commit: &GraphCommit<'_>) -> GraphRow {
+        let GraphLanes { lanes, incoming } = self;
+        let sha = commit.sha;
+        incoming.clear();
+        incoming.extend(
+            lanes
                 .iter()
                 .enumerate()
-                .filter(|(_, lane)| lane.target.is_some_and(|target| target != sha))
-                .map(|(i, lane)| edge(i, i, lane.dashed))
-                .collect();
-            let top: Vec<GraphEdge> = incoming
-                .iter()
-                .map(|&lane| edge(lane, column, lanes[lane].dashed))
-                .collect();
+                .filter(|(_, lane)| lane.target.as_deref() == Some(sha))
+                .map(|(i, _)| i),
+        );
+        // A branch tip nothing leads to yet starts in the first free lane.
+        let column = incoming
+            .iter()
+            .copied()
+            .find(|&lane| !lanes[lane].aside)
+            .or_else(|| incoming.first().copied())
+            .unwrap_or_else(|| free_lane(lanes, &[]));
+        let through: Vec<GraphEdge> = lanes
+            .iter()
+            .enumerate()
+            .filter(|(_, lane)| lane.target.as_deref().is_some_and(|target| target != sha))
+            .map(|(i, lane)| edge(i, i, lane.dashed))
+            .collect();
+        let top: Vec<GraphEdge> = incoming
+            .iter()
+            .map(|&lane| edge(lane, column, lanes[lane].dashed))
+            .collect();
 
-            // Branches forked from this commit end here. Their lanes free up only after this row,
-            // so a merged parent below doesn't reuse a lane that is still drawn above the node.
-            for &lane in &incoming {
-                lanes[lane] = Lane::default();
-            }
-            let mut bottom = Vec::with_capacity(commit.parents.len());
-            let mut parents = commit.parents.iter();
-            if let Some(first) = parents.next() {
+        // Branches forked from this commit end here. Their lanes free up only after this row,
+        // so a merged parent below doesn't reuse a lane that is still drawn above the node.
+        for &lane in incoming.iter() {
+            lanes[lane] = Lane::default();
+        }
+        let mut bottom = Vec::with_capacity(commit.parents.len());
+        let mut parents = commit.parents.iter();
+        if let Some(first) = parents.next() {
+            set_lane(
+                lanes,
+                column,
+                Lane {
+                    target: Some(first.clone()),
+                    dashed: commit.dashed,
+                    aside: commit.aside,
+                },
+            );
+            bottom.push(edge(column, column, commit.dashed));
+        }
+        for parent in parents {
+            // Join a lane already heading to the parent, but not a dashed one from the
+            // uncommitted changes or a stash: a merge drawn into it would look like part of
+            // them.
+            let joined = lanes
+                .iter()
+                .position(|lane| lane.target.as_deref() == Some(parent.as_str()) && !lane.dashed);
+            let lane = joined.unwrap_or_else(|| {
+                let lane = free_lane(lanes, incoming);
                 set_lane(
-                    &mut lanes,
-                    column,
+                    lanes,
+                    lane,
                     Lane {
-                        target: Some(first.as_str()),
-                        dashed: commit.dashed,
-                        aside: commit.aside,
+                        target: Some(parent.clone()),
+                        ..Lane::default()
                     },
                 );
-                bottom.push(edge(column, column, commit.dashed));
-            }
-            for parent in parents {
-                // Join a lane already heading to the parent, but not a dashed one from the
-                // uncommitted changes or a stash: a merge drawn into it would look like part of
-                // them.
-                let joined = lanes
-                    .iter()
-                    .position(|lane| lane.target == Some(parent.as_str()) && !lane.dashed);
-                let lane = joined.unwrap_or_else(|| {
-                    let lane = free_lane(&lanes, &incoming);
-                    set_lane(
-                        &mut lanes,
-                        lane,
-                        Lane {
-                            target: Some(parent.as_str()),
-                            ..Lane::default()
-                        },
-                    );
-                    lane
-                });
-                bottom.push(edge(column, lane, false));
-            }
-            while lanes.last().is_some_and(|lane| lane.target.is_none()) {
-                lanes.pop();
-            }
+                lane
+            });
+            bottom.push(edge(column, lane, false));
+        }
+        while lanes.last().is_some_and(|lane| lane.target.is_none()) {
+            lanes.pop();
+        }
 
-            let width = through
-                .iter()
-                .chain(&bottom)
-                .map(|line| line.to)
-                .chain(incoming.iter().copied())
-                .fold(column, usize::max)
-                + 1;
-            GraphRow {
-                column,
-                through,
-                top,
-                bottom,
-                width,
-            }
-        })
-        .collect()
+        let width = through
+            .iter()
+            .chain(&bottom)
+            .map(|line| line.to)
+            .chain(incoming.iter().copied())
+            .fold(column, usize::max)
+            + 1;
+        GraphRow {
+            column,
+            through,
+            top,
+            bottom,
+            width,
+        }
+    }
 }
 
 fn edge(from: usize, to: usize, dashed: bool) -> GraphEdge {
@@ -164,7 +186,7 @@ fn edge(from: usize, to: usize, dashed: bool) -> GraphEdge {
 }
 
 /// Points lane `index` at `lane`, adding lanes up to it if there aren't as many.
-fn set_lane<'a>(lanes: &mut Vec<Lane<'a>>, index: usize, lane: Lane<'a>) {
+fn set_lane(lanes: &mut Vec<Lane>, index: usize, lane: Lane) {
     if index >= lanes.len() {
         lanes.resize(index + 1, Lane::default());
     }
@@ -172,7 +194,7 @@ fn set_lane<'a>(lanes: &mut Vec<Lane<'a>>, index: usize, lane: Lane<'a>) {
 }
 
 /// The first free lane, other than `reserved`; a new one past the others if none is.
-fn free_lane(lanes: &[Lane<'_>], reserved: &[usize]) -> usize {
+fn free_lane(lanes: &[Lane], reserved: &[usize]) -> usize {
     lanes
         .iter()
         .enumerate()
@@ -418,5 +440,37 @@ mod tests {
         let rows = graph(&commits);
         assert_eq!(rows.len(), 20_000);
         assert!(rows.iter().all(|row| row.width <= 2));
+    }
+
+    #[test]
+    fn lays_out_in_parts_as_it_does_whole() {
+        let commits = [
+            commit("m", &["a", "s"]),
+            dashed("w", &["s"]),
+            commit("a", &["b"]),
+            commit("s", &["b", "t"]),
+            commit("b", &["c"]),
+            commit("t", &["c"]),
+            commit("c", &[]),
+        ];
+        let whole = graph(&commits);
+        for split in 0..=commits.len() {
+            let mut lanes = GraphLanes::default();
+            let mut rows = Vec::new();
+            for part in [&commits[..split], &commits[split..]] {
+                // Picked up again from a copy, as a part laid out elsewhere is.
+                let mut resumed = lanes.clone();
+                rows.extend(part.iter().map(|commit| {
+                    resumed.lay_out(&GraphCommit {
+                        sha: &commit.sha,
+                        parents: &commit.parents,
+                        dashed: commit.dashed,
+                        aside: commit.aside,
+                    })
+                }));
+                lanes = resumed;
+            }
+            assert_eq!(rows, whole, "split at {split}");
+        }
     }
 }
