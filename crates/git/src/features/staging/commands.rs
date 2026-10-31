@@ -289,8 +289,10 @@ mod tests {
     use crate::features::status::schema::StatusFile;
     use crate::features::status::schema::WorkingTreeFiles;
     use crate::schema::FileStatus::{self, *};
+    #[cfg(unix)]
+    use crate::test_support::non_utf8_names;
     use crate::test_support::status::status_entries;
-    use crate::test_support::{Fixture, git, non_utf8_names};
+    use crate::test_support::{Fixture, git};
 
     fn strings(paths: &[&str]) -> Vec<String> {
         paths.iter().map(|path| (*path).to_owned()).collect()
@@ -621,42 +623,40 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn unstages_a_file_whose_name_isnt_utf_8() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
         if !non_utf8_names() {
             return;
         }
-        #[cfg(unix)]
-        {
-            use std::ffi::OsStr;
-            use std::os::unix::ffi::OsStrExt;
+        let fx = Fixture::new();
+        let path = fx.create_repo("all-latin1");
+        // "café.txt" in Latin-1: read as UTF-8, its é doesn't come back as the byte it was.
+        let file = path.join(OsStr::from_bytes(b"caf\xe9.txt"));
+        fs::write(&file, "a\n").unwrap();
+        git(&path, ["add", "."]);
+        git(&path, ["commit", "-q", "-m", "First"]);
+        fs::write(&file, "changed\n").unwrap();
+        git(&path, ["add", "."]);
+        smol::block_on(async {
+            let repo = fx.repos.open("all-latin1").await.unwrap();
 
-            let fx = Fixture::new();
-            let path = fx.create_repo("all-latin1");
-            // "café.txt" in Latin-1: read as UTF-8, its é doesn't come back as the byte it was.
-            let file = path.join(OsStr::from_bytes(b"caf\xe9.txt"));
-            fs::write(&file, "a\n").unwrap();
-            git(&path, ["add", "."]);
-            git(&path, ["commit", "-q", "-m", "First"]);
-            fs::write(&file, "changed\n").unwrap();
-            git(&path, ["add", "."]);
-            smol::block_on(async {
-                let repo = fx.repos.open("all-latin1").await.unwrap();
-
-                unstage_all(&repo).await.unwrap();
-                // Nothing staged, and no entry under another name.
-                assert_eq!(git(&path, ["diff", "--cached", "--name-only"]), "");
-                assert_eq!(
-                    git(&path, ["ls-files", "-z"])
-                        .split('\0')
-                        .filter(|name| !name.is_empty())
-                        .count(),
-                    1
-                );
-                // The change is still there, unstaged.
-                assert_ne!(git(&path, ["diff", "--name-only"]), "");
-            });
-        }
+            unstage_all(&repo).await.unwrap();
+            // Nothing staged, and no entry under another name.
+            assert_eq!(git(&path, ["diff", "--cached", "--name-only"]), "");
+            assert_eq!(
+                git(&path, ["ls-files", "-z"])
+                    .split('\0')
+                    .filter(|name| !name.is_empty())
+                    .count(),
+                1
+            );
+            // The change is still there, unstaged.
+            assert_ne!(git(&path, ["diff", "--name-only"]), "");
+        });
     }
 
     #[test]
