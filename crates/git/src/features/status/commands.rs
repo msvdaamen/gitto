@@ -471,15 +471,12 @@ mod tests {
         let fx = Fixture::new();
         let path = fx.create_repo("changes");
         // `:colon.txt` would be pathspec magic, if git didn't take paths literally
-        // (GIT_LITERAL_PATHSPECS).
-        for name in [
-            "keep.txt",
-            "edit.txt",
-            "both.txt",
-            "gone.txt",
-            "move.txt",
-            ":colon.txt",
-        ] {
+        // (GIT_LITERAL_PATHSPECS). Windows has no such file names.
+        let colon = cfg!(unix).then_some(":colon.txt");
+        for name in ["keep.txt", "edit.txt", "both.txt", "gone.txt", "move.txt"]
+            .into_iter()
+            .chain(colon)
+        {
             fs::write(path.join(name), format!("{name}\n")).unwrap();
         }
         fs::write(path.join("bin.dat"), [0u8, 1, 2]).unwrap();
@@ -487,7 +484,9 @@ mod tests {
         git(&path, ["commit", "-q", "-m", "first"]);
 
         fs::write(path.join("edit.txt"), "changed\n").unwrap();
-        fs::write(path.join(":colon.txt"), "changed\n").unwrap();
+        if let Some(colon) = colon {
+            fs::write(path.join(colon), "changed\n").unwrap();
+        }
         fs::write(path.join("both.txt"), "staged\n").unwrap();
         git(&path, ["add", "both.txt"]);
         fs::write(path.join("both.txt"), "staged, then changed again\n").unwrap();
@@ -501,14 +500,10 @@ mod tests {
             let changes = get_status(&repo).await.unwrap().changes;
             assert_eq!(changes, full_diffs(&repo).await);
             let unstaged = paths(&changes.unstaged);
-            for name in [
-                "edit.txt",
-                ":colon.txt",
-                "both.txt",
-                "gone.txt",
-                "bin.dat",
-                "new.txt",
-            ] {
+            for name in ["edit.txt", "both.txt", "gone.txt", "bin.dat", "new.txt"]
+                .into_iter()
+                .chain(colon)
+            {
                 assert!(unstaged.contains(&name), "{name} in {unstaged:?}");
             }
         });
