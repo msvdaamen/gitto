@@ -1,9 +1,10 @@
 //! A draggable line on the edge of a panel that resizes it. Ported from
 //! `components/ui/resize-handle.tsx`.
 //!
-//! The band is GPUI Kit's `resize_handle`: its hit area, cursor, hover and drag. What the drag
-//! resizes is its owner's: the element the panel's edge is in (TS's handle's parent) follows the
-//! drag with `.on_drag_move::<PanelDrag<P>>`, where `P` names the owner's panels, and asks
+//! The band is GPUI Kit's `resize_handle`: its hit area, cursor, hover and drag; focused from the
+//! keyboard, it draws a line of its own. What the drag resizes is its owner's: the element the
+//! panel's edge is in (TS's handle's parent) follows the drag with
+//! `.on_drag_move::<PanelDrag<P>>`, where `P` names the owner's panels, and asks
 //! [`dragged_width`] for the width at the pointer, setting it without saving; the handle saves
 //! the width it's let go at (its `on_resize`, with `save`):
 //!
@@ -21,11 +22,14 @@
 use std::ops::RangeInclusive;
 use std::rc::Rc;
 
+use gpui_kit::base::ResizeHandleRenderer;
 use gpui_kit::prelude::*;
 use gpui_kit::{
     App, Axis, DragMoveEvent, ElementId, Empty, Entity, FocusHandle, KeyBinding, KeyContext,
-    MouseButton, Role, SharedString, Window, actions,
+    MouseButton, Role, SharedString, TestSupportExt as _, Window, actions, div, px,
 };
+
+use crate::theme::PaletteExt as _;
 
 /// How far an arrow key moves the edge, in pixels.
 pub const KEYBOARD_STEP: f32 = 16.;
@@ -168,6 +172,8 @@ impl<P: Copy + 'static> RenderOnce for ResizeHandle<P> {
             })
             .read(cx)
             .clone();
+        // Focused from the keyboard, as CSS's `:focus-visible`: not when it's been clicked.
+        let focus_visible = focus.is_focused(window) && window.last_input_was_keyboard();
         // Whether the band's being dragged: its width is saved once it's let go of.
         let dragging = window.use_keyed_state((self.id.clone(), "dragging"), cx, |_, _| false);
         let panel = self.panel;
@@ -193,6 +199,7 @@ impl<P: Copy + 'static> RenderOnce for ResizeHandle<P> {
         let min = resize_to(*range.start());
         let max = resize_to(*range.end());
         gpui_kit::component::resize_handle::<PanelDrag<P>, PanelDrag<P>>(self.id, Axis::Horizontal)
+            .with_appearance(appearance(focus_visible))
             .on_drag(PanelDrag { panel }, {
                 let dragging = dragging.clone();
                 move |drag, _, _, cx| {
@@ -227,6 +234,28 @@ impl<P: Copy + 'static> RenderOnce for ResizeHandle<P> {
                 }
             })
     }
+}
+
+/// What's drawn on the edge: GPUI Kit's line, and the pill that follows the pointer; with focus
+/// from the keyboard, unless it's being dragged, a line in the primary colour the length of the
+/// edge, as TS had for hover and focus alike.
+fn appearance(focus_visible: bool) -> ResizeHandleRenderer {
+    let kits = gpui_kit::component::resize_handle_appearance();
+    Rc::new(move |handle, window, cx| {
+        if !focus_visible || handle.is_active() {
+            return kits(handle, window, cx);
+        }
+        let line = div()
+            .id("focus-line")
+            .test_support()
+            .flex_none()
+            .h_full()
+            // Over the 1px line, on its middle.
+            .w(px(2.))
+            .ml(px(-0.5))
+            .bg(cx.palette().primary);
+        Some(line.into_any_element())
+    })
 }
 
 /// Saves `width`, the width last rendered, if the band was being dragged: once it's let go of.
@@ -364,6 +393,24 @@ mod tests {
         assert_eq!(width(&host, cx), 480.);
         press(window, "home", cx);
         assert_eq!(width(&host, cx), 160.);
+    }
+
+    #[gpui_kit::test]
+    fn shows_its_focus_from_the_keyboard_ui(cx: &mut TestAppContext) {
+        let (window, _) = render_handle(HandleSide::Start, cx);
+        let focus_line = |cx: &mut TestAppContext| {
+            cx.update_window(window, |_, window, cx| {
+                window.render_frame(cx);
+                window.try_find("focus-line").is_some()
+            })
+            .unwrap()
+        };
+        assert!(!focus_line(cx));
+        cx.update_window(window, |_, window, cx| window.click("resize-test", cx))
+            .unwrap();
+        assert!(!focus_line(cx), "not when it's clicked");
+        press(window, "right", cx);
+        assert!(focus_line(cx));
     }
 
     #[gpui_kit::test]
