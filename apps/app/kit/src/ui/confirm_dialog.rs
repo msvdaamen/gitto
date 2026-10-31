@@ -2,13 +2,12 @@
 
 use std::rc::Rc;
 
-use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::prelude::*;
-use gpui_kit::{App, SharedString, Window, div};
+use gpui_kit::{App, FocusHandle, SharedString, Window, div};
 
-use super::dialog::{CONFIRM_WIDTH, DialogHeading};
+use super::dialog::{CONFIRM_WIDTH, DialogHeading, DialogId};
 use super::icons::IconName;
 use super::tone::Tone;
 
@@ -16,8 +15,9 @@ type Action = Rc<dyn Fn(&mut Window, &mut App) + 'static>;
 
 /// Asks before going on with something, like deleting a stash: what it's about, with an icon in
 /// its tone (amber for something to think twice about, coral for something that's lost), and the
-/// buttons to answer with, Cancel first. Escape, Enter, or clicking outside, cancels: as in TS,
-/// where Cancel has the focus when it opens, Enter doesn't go on with something unasked.
+/// buttons to answer with, Cancel first. Escape, or clicking outside, cancels; so does Enter, but
+/// on a button, which it presses: as in TS, where Cancel has the focus when it opens, Enter
+/// doesn't go on with something unasked.
 ///
 /// ```ignore
 /// ConfirmDialog::new(IconName::X, Tone::Amber, format!("Remove {name}?"))
@@ -63,23 +63,26 @@ impl ConfirmDialog {
         self
     }
 
-    /// Told when it's cancelled: Cancel, Escape, Enter, or a click outside.
+    /// Told when it's cancelled: Cancel, Escape, Enter (but on another button), or a click
+    /// outside.
     pub fn on_cancel(mut self, run: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         self.on_cancel = Some(Rc::new(run));
         self
     }
 
     /// Opens it over the window.
-    pub fn open(self, window: &mut Window, cx: &mut App) {
+    pub fn open(self, window: &mut Window, cx: &mut App) -> DialogId {
+        // Around each action's button, to tell whether Enter is on it.
+        let focus: Rc<[FocusHandle]> = self.actions.iter().map(|_| cx.focus_handle()).collect();
         let this = Rc::new(self);
-        window.open_dialog(cx, move |dialog, window, _| {
+        DialogId::open(window, cx, move |id, dialog, window, _| {
             let this = Rc::clone(&this);
             let on_cancel = this.on_cancel.clone();
             let mut footer = DialogFooter::new().gap_2().child(
                 Button::new("cancel").ghost().label("Cancel").on_click({
                     let on_cancel = on_cancel.clone();
                     move |_, window, cx| {
-                        window.close_dialog(cx);
+                        id.close(window, cx);
                         if let Some(on_cancel) = &on_cancel {
                             on_cancel(window, cx);
                         }
@@ -89,13 +92,15 @@ impl ConfirmDialog {
             for (ix, (label, variant, run)) in this.actions.iter().enumerate() {
                 let run = Rc::clone(run);
                 footer = footer.child(
-                    Button::new(("action", ix))
-                        .with_variant(*variant)
-                        .label(label.clone())
-                        .on_click(move |_, window, cx| {
-                            window.close_dialog(cx);
-                            run(window, cx);
-                        }),
+                    div().track_focus(&focus[ix]).child(
+                        Button::new(("action", ix))
+                            .with_variant(*variant)
+                            .label(label.clone())
+                            .on_click(move |_, window, cx| {
+                                id.close(window, cx);
+                                run(window, cx);
+                            }),
+                    ),
                 );
             }
             let heading = DialogHeading::new(this.icon, this.tone, this.title.clone())
@@ -105,14 +110,25 @@ impl ConfirmDialog {
             dialog
                 .w(CONFIRM_WIDTH.to_pixels(window.rem_size()))
                 .close_button(false)
-                // Kit's dialog takes Enter as OK, closing it without a word otherwise.
+                // Kit's dialog takes Enter as OK, even on a button, closing it without a word
+                // otherwise: it's the button's, or Cancel's.
                 .on_ok({
-                    let on_cancel = on_cancel.clone();
+                    let this = Rc::clone(&this);
+                    let focus = Rc::clone(&focus);
                     move |_, window, cx| {
-                        if let Some(on_cancel) = &on_cancel {
-                            on_cancel(window, cx);
+                        let chosen = focus
+                            .iter()
+                            .position(|focus| focus.contains_focused(window, cx));
+                        id.close(window, cx);
+                        match chosen {
+                            Some(ix) => (this.actions[ix].2)(window, cx),
+                            None => {
+                                if let Some(on_cancel) = &this.on_cancel {
+                                    on_cancel(window, cx);
+                                }
+                            }
                         }
-                        true
+                        false
                     }
                 })
                 .on_cancel(move |_, window, cx| {
@@ -123,7 +139,7 @@ impl ConfirmDialog {
                 })
                 .child(heading)
                 .footer(footer)
-        });
+        })
     }
 }
 
@@ -183,6 +199,34 @@ mod tests {
         assert!(has_dialog(window, cx));
         cx.update_window(window, |_, window, cx| window.press("enter", cx))
             .unwrap();
+        cx.run_until_parked();
+        assert!(!has_dialog(window, cx));
+        assert_eq!((counts.removed.get(), counts.cancelled.get()), (0, 1));
+    }
+
+    #[gpui_kit::test]
+    fn presses_the_button_enter_is_on(cx: &mut TestAppContext) {
+        let (window, counts) = open(cx);
+        // Past Cancel.
+        cx.update_window(window, |_, window, cx| {
+            window.press("tab", cx);
+            window.press("tab", cx);
+            window.press("enter", cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert!(!has_dialog(window, cx));
+        assert_eq!((counts.removed.get(), counts.cancelled.get()), (1, 0));
+    }
+
+    #[gpui_kit::test]
+    fn cancels_on_enter_on_cancel(cx: &mut TestAppContext) {
+        let (window, counts) = open(cx);
+        cx.update_window(window, |_, window, cx| {
+            window.press("tab", cx);
+            window.press("enter", cx);
+        })
+        .unwrap();
         cx.run_until_parked();
         assert!(!has_dialog(window, cx));
         assert_eq!((counts.removed.get(), counts.cancelled.get()), (0, 1));

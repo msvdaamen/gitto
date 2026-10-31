@@ -3,7 +3,6 @@
 
 use gitto_git::input::RepositoryId;
 use gitto_ui_logic::git::status::{branch_name, has_uncommitted_changes, is_checked_out};
-use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::prelude::*;
 use gpui_kit::{App, Context, Entity, Focusable as _, Subscription, Window, rems};
@@ -13,6 +12,7 @@ use gitto_app_data::data::Change;
 use gitto_app_data::data::branch::NewBranchFrom;
 use gitto_app_data::data::{Part, Repository, Shown};
 use gitto_app_data::state::lingering::Lingering;
+use gitto_app_kit::ui::DialogId;
 
 /// How wide the dialog is (`max-w-[320px]`), in rems of the 15px base.
 const WIDTH: f32 = 21.33;
@@ -28,7 +28,8 @@ pub struct CreateBranchDialog {
     name: Entity<InputState>,
     /// The branch it's made from, by its full ref name: still named while the dialog closes.
     from: Lingering<String>,
-    open: bool,
+    /// The dialog, while it's open.
+    dialog: Option<DialogId>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -47,7 +48,7 @@ impl CreateBranchDialog {
             repository: Shown::new(&repository_id, &[Part::Status, Part::Changes], cx),
             name,
             from: Lingering::default(),
-            open: false,
+            dialog: None,
             _subscriptions: subscriptions,
         }
     }
@@ -68,7 +69,7 @@ impl CreateBranchDialog {
     }
 
     pub fn is_open(&self) -> bool {
-        self.open
+        self.dialog.is_some()
     }
 
     pub fn name(&self) -> &Entity<InputState> {
@@ -81,14 +82,13 @@ impl CreateBranchDialog {
         self.repository
             .update(cx, |repository, cx| repository.dismiss(Change::Switch, cx));
         self.from.update(Some(from));
-        if self.open {
+        if self.dialog.is_some() {
             cx.notify();
             return;
         }
-        self.open = true;
         let this = cx.entity().downgrade();
         let focus = self.name.focus_handle(cx);
-        window.open_dialog(cx, move |dialog, window, cx| {
+        let dialog = DialogId::open(window, cx, move |_, dialog, window, cx| {
             let Some(shown) = this.upgrade() else {
                 return dialog;
             };
@@ -114,7 +114,7 @@ impl CreateBranchDialog {
                 })
                 .on_cancel(move |_, _, cx| {
                     let _ = cancel.update(cx, |this, cx| {
-                        this.open = false;
+                        this.dialog = None;
                         cx.notify();
                     });
                     true
@@ -128,14 +128,14 @@ impl CreateBranchDialog {
                         }),
                 )
         });
+        self.dialog = Some(dialog);
         focus.focus(window, cx);
         cx.notify();
     }
 
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.open {
-            self.open = false;
-            window.close_dialog(cx);
+        if let Some(dialog) = self.dialog.take() {
+            dialog.close(window, cx);
             cx.notify();
         }
     }
@@ -172,7 +172,7 @@ impl CreateBranchDialog {
         else {
             return;
         };
-        if !self.open || self.repository.read(cx).branches_changing() {
+        if self.dialog.is_none() || self.repository.read(cx).branches_changing() {
             return;
         }
         self.close(window, cx);

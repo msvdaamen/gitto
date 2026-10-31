@@ -4,7 +4,6 @@
 use gitto_git::input::RepositoryId;
 use gitto_ui_logic::git::message::{CommitMessage, edit_message, split_message};
 use gpui_kit::component::Disableable as _;
-use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::*;
@@ -21,7 +20,7 @@ use gitto_app_data::data::commit::{Reword, reword_commit_mutation};
 use gitto_app_data::data::keyed::Hold;
 use gitto_app_data::data::{Changed, DataError, Loaded, Mutation, Part, Repositories, Repository};
 use gitto_app_kit::theme::{PaletteExt as _, base_px};
-use gitto_app_kit::ui::{Icon, IconName};
+use gitto_app_kit::ui::{DialogId, Icon, IconName};
 
 /// How wide the dialog is (`max-w-[440px]`), in rems of the 15px base.
 const WIDTH: Rems = base_px(440.);
@@ -48,6 +47,8 @@ pub struct RewordDialog {
     sha: Option<String>,
     /// Holds the commit's message and where it was pushed, while it's open.
     holds: Option<(Hold, Hold)>,
+    /// The dialog, while it's open.
+    dialog: Option<DialogId>,
     reword: Entity<RewordMutation>,
     editor: Entity<CommitMessageEditor>,
     /// The message the fields were filled with once it loaded: until then they're locked, so no
@@ -82,6 +83,7 @@ impl RewordDialog {
             repository_id,
             sha: None,
             holds: None,
+            dialog: None,
             reword,
             editor,
             loaded: None,
@@ -139,7 +141,7 @@ impl RewordDialog {
         self.fill(window, cx);
         if !was_open {
             let this = cx.entity();
-            window.open_dialog(cx, move |dialog, window, _| {
+            self.dialog = Some(DialogId::open(window, cx, move |_, dialog, window, _| {
                 let cancel = this.clone();
                 dialog
                     .w(WIDTH.to_pixels(window.rem_size()))
@@ -152,7 +154,7 @@ impl RewordDialog {
                         true
                     })
                     .child(this.clone())
-            });
+            }));
         }
         self.editor
             .update(cx, |editor, cx| editor.focus(window, cx));
@@ -161,8 +163,8 @@ impl RewordDialog {
 
     /// Closes it, if it's open.
     pub fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.sha.is_some() {
-            window.close_dialog(cx);
+        if let Some(dialog) = self.dialog.take() {
+            dialog.close(window, cx);
             self.closed(window, cx);
         }
     }
@@ -170,6 +172,7 @@ impl RewordDialog {
     /// It's closed: it no longer loads the message.
     fn closed(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         self.sha = None;
+        self.dialog = None;
         self.holds = None;
         self._loading = None;
         cx.notify();

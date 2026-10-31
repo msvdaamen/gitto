@@ -9,7 +9,6 @@ use gitto_git::input::RepositoryId;
 use gitto_ui_logic::git::changes::is_nested_repository;
 use gitto_ui_logic::git::conflicts::operation_name;
 use gitto_ui_logic::git::status::head_label;
-use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -32,7 +31,8 @@ use gitto_app_data::data::{Changed, DataError, Mutation, Opaque, Part, Shown};
 use gitto_app_kit::delayed::{DELAY, Delayed};
 use gitto_app_kit::theme::{PaletteExt as _, base_px};
 use gitto_app_kit::ui::{
-    Badge, IconButton, IconName, LinkButton, Mascot, SectionHeader, Tone, UpdatingIndicator,
+    Badge, DialogId, IconButton, IconName, LinkButton, Mascot, SectionHeader, Tone,
+    UpdatingIndicator,
 };
 use gitto_ui_logic::git::changes::staging_paths;
 use gitto_ui_logic::git::diff_source::DiffSource;
@@ -92,6 +92,8 @@ pub struct WorkingTreeDetails {
     discard: Entity<Mutation<(RepositoryId, DiscardTarget)>>,
     /// The changes being asked about discarding, as they were when that was asked.
     discarding: Option<DiscardTarget>,
+    /// The dialog asking about them, while it's open.
+    discard_dialog: Option<DialogId>,
     form: Entity<CommitForm>,
     /// The status is reloaded whenever a file changes, which takes a while in a big repository.
     updating: Entity<Delayed>,
@@ -134,6 +136,7 @@ impl WorkingTreeDetails {
             unstage,
             discard,
             discarding: None,
+            discard_dialog: None,
             form,
             updating,
             menu_for: [None, None],
@@ -185,7 +188,9 @@ impl WorkingTreeDetails {
         // Gone, it isn't asked about again, should it come back.
         if self.discarding.is_some() && self.discard_prompt(cx).is_none() {
             self.discarding = None;
-            window.close_dialog(cx);
+            if let Some(dialog) = self.discard_dialog.take() {
+                dialog.close(window, cx);
+            }
         }
         cx.notify();
     }
@@ -296,23 +301,25 @@ impl WorkingTreeDetails {
         let this = cx.entity().downgrade();
         let cancel = this.clone();
         let discard = this.clone();
-        open_discard_dialog(
+        self.discard_dialog = Some(open_discard_dialog(
             move |cx| this.upgrade()?.read(cx).discard_prompt(cx),
             move |_, cx| {
                 let _ = cancel.update(cx, |this, cx| {
                     this.discarding = None;
+                    this.discard_dialog = None;
                     cx.notify();
                 });
             },
             move |prompt, _, cx| {
                 let _ = discard.update(cx, |this, cx| {
                     this.discarding = None;
+                    this.discard_dialog = None;
                     this.discard_changes(prompt.target(), cx);
                 });
             },
             window,
             cx,
-        );
+        ));
     }
 
     /// The error to show, if any: why the changes couldn't be loaded, or why the latest change to

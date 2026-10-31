@@ -5,11 +5,12 @@ use gitto_git::features::remote::schema::PushTarget;
 use gitto_git::input::RepositoryId;
 use gitto_ui_logic::git::push::push_title;
 use gitto_ui_logic::git::status::head_pull_blocker;
-use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::prelude::*;
-use gpui_kit::{App, Context, Entity, SharedString, Subscription, WeakEntity, Window, div};
+use gpui_kit::{
+    App, Context, Entity, FocusHandle, SharedString, Subscription, WeakEntity, Window, div,
+};
 
 use super::toolbar_button::ToolbarButton;
 use gitto_app_data::data::Change;
@@ -17,7 +18,7 @@ use gitto_app_data::data::remote::{PushRejection, push_rejection};
 use gitto_app_data::data::{Changed, Part, Repository, Shown};
 use gitto_app_data::state::lingering::Lingering;
 use gitto_app_kit::ui::dialog::CONFIRM_WIDTH;
-use gitto_app_kit::ui::{DialogHeading, IconName, Tone};
+use gitto_app_kit::ui::{DialogHeading, DialogId, IconName, Tone};
 
 /// Why the remote branch turned a push down, and how git put it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,7 +81,11 @@ pub struct PushButton {
     repository: Shown,
     /// What the dialog shows: the rejection, still, while the dialog closes.
     shown: Lingering<Rejection>,
-    dialog_open: bool,
+    /// The dialog, while it's open.
+    dialog: Option<DialogId>,
+    /// Around Pull and Force push, to tell whether Enter is on one.
+    pull_focus: FocusHandle,
+    force_focus: FocusHandle,
     /// Opens and closes the dialog as the repository's push is turned down, and that's dismissed;
     /// closes it as the button goes.
     _subscriptions: Vec<Subscription>,
@@ -97,8 +102,8 @@ impl PushButton {
             Self::follow_push(repository.entity(), window, cx),
             // The dialog is the button's: it goes with it.
             cx.on_release_in(window, |this, window, cx| {
-                if this.dialog_open {
-                    window.close_dialog(cx);
+                if let Some(dialog) = this.dialog.take() {
+                    dialog.close(window, cx);
                 }
             }),
         ];
@@ -106,7 +111,9 @@ impl PushButton {
             _subscriptions: subscriptions,
             repository,
             shown: Lingering::default(),
-            dialog_open: false,
+            dialog: None,
+            pull_focus: cx.focus_handle(),
+            force_focus: cx.focus_handle(),
         };
         button.sync_dialog(window, cx);
         button
@@ -158,10 +165,10 @@ impl PushButton {
         let rejected = self.rejected(cx);
         let wanted = rejected.is_some();
         self.shown.update(rejected);
-        if wanted && !self.dialog_open {
-            self.dialog_open = true;
+        if wanted && self.dialog.is_none() {
             let this = cx.entity().downgrade();
-            window.open_dialog(cx, move |dialog, window, cx| {
+            let (pull_focus, force_focus) = (self.pull_focus.clone(), self.force_focus.clone());
+            self.dialog = Some(DialogId::open(window, cx, move |id, dialog, window, cx| {
                 // Gone with the button (it closes the dialog as it goes, see `new`).
                 let Some(copy) = this
                     .upgrade()
@@ -174,10 +181,22 @@ impl PushButton {
                 dialog
                     .w(CONFIRM_WIDTH.to_pixels(window.rem_size()))
                     .close_button(false)
-                    // Kit's dialog takes Enter as OK: it cancels, as Escape does.
-                    .on_ok(move |_, _, cx| {
-                        let _ = ok.update(cx, |this, cx| this.cancel_rejected(cx));
-                        true
+                    // Kit's dialog takes Enter as OK, even on a button: it's the button's, or
+                    // Cancel's.
+                    .on_ok(move |_, window, cx| {
+                        let _ = ok.update(cx, |this, cx| {
+                            let pull = this.pull_focus.contains_focused(window, cx);
+                            let force = this.force_focus.contains_focused(window, cx);
+                            id.close(window, cx);
+                            if pull {
+                                this.pull_instead(cx);
+                            } else if force {
+                                this.force_push(cx);
+                            } else {
+                                this.cancel_rejected(cx);
+                            }
+                        });
+                        false
                     })
                     .on_cancel(move |_, _, cx| {
                         let _ = cancel.update(cx, |this, cx| this.cancel_rejected(cx));
@@ -187,11 +206,16 @@ impl PushButton {
                         DialogHeading::new(IconName::TriangleAlert, Tone::Amber, "Push rejected")
                             .description(div().child(copy.description.clone())),
                     )
-                    .footer(Self::rejected_footer(&this, &copy))
-            });
-        } else if !wanted && self.dialog_open {
-            self.dialog_open = false;
-            window.close_dialog(cx);
+                    .footer(Self::rejected_footer(
+                        &this,
+                        id,
+                        &copy,
+                        &pull_focus,
+                        &force_focus,
+                    ))
+            }));
+        } else if !wanted && let Some(dialog) = self.dialog.take() {
+            dialog.close(window, cx);
         }
     }
 
@@ -202,39 +226,49 @@ impl PushButton {
         Some(RejectedCopy::of(&rejection, self.can_pull(cx)))
     }
 
-    fn rejected_footer(this: &WeakEntity<Self>, copy: &RejectedCopy) -> DialogFooter {
+    fn rejected_footer(
+        this: &WeakEntity<Self>,
+        dialog: DialogId,
+        copy: &RejectedCopy,
+        pull_focus: &FocusHandle,
+        force_focus: &FocusHandle,
+    ) -> DialogFooter {
         let cancel = this.clone();
         let mut footer = DialogFooter::new().gap_2().child(
             Button::new("cancel")
                 .ghost()
                 .label(copy.cancel)
                 .on_click(move |_, window, cx| {
-                    window.close_dialog(cx);
+                    dialog.close(window, cx);
                     let _ = cancel.update(cx, |this, cx| this.cancel_rejected(cx));
                 }),
         );
         if let Some(variant) = copy.pull {
             let pull = this.clone();
             footer = footer.child(
-                Button::new("pull-instead")
-                    .with_variant(variant)
-                    .label("Pull")
-                    .on_click(move |_, window, cx| {
-                        window.close_dialog(cx);
-                        let _ = pull.update(cx, |this, cx| this.pull_instead(cx));
-                    }),
+                div().track_focus(pull_focus).child(
+                    Button::new("pull-instead")
+                        .with_variant(variant)
+                        .label("Pull")
+                        .on_click(move |_, window, cx| {
+                            dialog.close(window, cx);
+                            let _ = pull.update(cx, |this, cx| this.pull_instead(cx));
+                        }),
+                ),
             );
         }
         if copy.force_push {
             let force = this.clone();
             footer = footer.child(
-                Button::new("force-push")
-                    .danger()
-                    .label("Force push")
-                    .on_click(move |_, window, cx| {
-                        window.close_dialog(cx);
-                        let _ = force.update(cx, |this, cx| this.force_push(cx));
-                    }),
+                div().track_focus(force_focus).child(
+                    Button::new("force-push")
+                        .danger()
+                        .label("Force push")
+                        .on_click(move |_, window, cx| {
+                            dialog.close(window, cx);
+                            let _ = force.update(cx, |this, cx| this.force_push(cx));
+                        }),
+                ),
             );
         }
         footer
@@ -242,14 +276,14 @@ impl PushButton {
 
     /// Leaves the remote alone.
     fn cancel_rejected(&mut self, cx: &mut Context<Self>) {
-        self.dialog_open = false;
+        self.dialog = None;
         self.repository
             .update(cx, |repository, cx| repository.dismiss(Change::Push, cx));
     }
 
     /// Pulls the remote branch's commits instead.
     fn pull_instead(&mut self, cx: &mut Context<Self>) {
-        self.dialog_open = false;
+        self.dialog = None;
         self.repository.update(cx, |repository, cx| {
             repository.dismiss(Change::Push, cx);
             drop(repository.pull(cx));
@@ -258,7 +292,7 @@ impl PushButton {
 
     /// Replaces the remote branch's commits.
     fn force_push(&mut self, cx: &mut Context<Self>) {
-        self.dialog_open = false;
+        self.dialog = None;
         self.repository
             .update(cx, |repository, cx| drop(repository.push(true, cx)));
     }
@@ -603,7 +637,26 @@ mod tests {
         assert_eq!(calls.pushes.borrow().len(), 1);
         // Dismissed: it isn't asked about again.
         assert!(button.read_with(cx, |button, cx| button.rejected(cx).is_none()));
-        assert!(!button.read_with(cx, |button, _| button.dialog_open));
+        assert!(button.read_with(cx, |button, _| button.dialog.is_none()));
+    }
+
+    #[gpui_kit::test]
+    fn presses_the_button_enter_is_on(cx: &mut TestAppContext) {
+        let calls = operations(|_, _| Err(rejected(true)));
+        let (_dir, window, button) = render(cx, target(), &calls);
+
+        click(window, "push", cx);
+        assert_eq!(copy(&button, cx).pull, Some(ButtonVariant::Secondary));
+        // Past Cancel and Pull, to Force push.
+        cx.update_window(window, |_, window, cx| {
+            for key in ["tab", "tab", "tab", "enter"] {
+                window.press(key, cx);
+            }
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert_eq!(*calls.pushes.borrow(), [false, true]);
+        assert_eq!(*calls.pulls.borrow(), 0);
     }
 
     #[gpui_kit::test]

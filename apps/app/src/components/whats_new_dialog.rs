@@ -1,6 +1,5 @@
 //! What changed in Gitto. Ported from `components/whats-new-dialog.tsx`.
 
-use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::dialog::{Dialog, DialogFooter};
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
@@ -12,7 +11,7 @@ use gitto_app_data::services::system::{Change, ChangeType, UpdateChannel, Versio
 use gitto_app_data::state::whats_new::WhatsNew;
 use gitto_app_kit::theme::PaletteExt as _;
 use gitto_app_kit::ui::dialog::LIST_WIDTH;
-use gitto_app_kit::ui::{Badge, DialogHeading, IconName, Tone};
+use gitto_app_kit::ui::{Badge, DialogHeading, DialogId, IconName, Tone};
 
 /// How a change is marked, in the order changes are listed: breaking ones first, whatever their
 /// type, then what's new, fixed and faster.
@@ -69,7 +68,8 @@ pub fn sorted_changes(version: &VersionChanges) -> Vec<Change> {
 /// while `WhatsNew` has something to show.
 pub struct WhatsNewDialog {
     whats_new: Entity<WhatsNew>,
-    open: bool,
+    /// The dialog, while it's open.
+    dialog: Option<DialogId>,
     _subscription: Subscription,
 }
 
@@ -82,22 +82,20 @@ impl WhatsNewDialog {
         whats_new.update(cx, |whats_new, cx| whats_new.show_unseen(cx));
         WhatsNewDialog {
             whats_new,
-            open: false,
+            dialog: None,
             _subscription: subscription,
         }
     }
 
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let shown = self.whats_new.read(cx).shown().is_some();
-        if shown && !self.open {
-            self.open = true;
+        if shown && self.dialog.is_none() {
             let whats_new = self.whats_new.clone();
-            window.open_dialog(cx, move |dialog, window, cx| {
+            self.dialog = Some(DialogId::open(window, cx, move |_, dialog, window, cx| {
                 render_dialog(&whats_new, dialog, window, cx)
-            });
-        } else if !shown && self.open {
-            self.open = false;
-            window.close_dialog(cx);
+            }));
+        } else if !shown && let Some(dialog) = self.dialog.take() {
+            dialog.close(window, cx);
         }
         window.refresh();
     }
@@ -267,6 +265,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use futures::future::BoxFuture;
+    use gpui_kit::component::WindowExt as _;
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{AnyWindowHandle, AppContext as _, IntoElement, Render, TestAppContext};
 

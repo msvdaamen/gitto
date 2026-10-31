@@ -3,7 +3,6 @@
 
 use gitto_git::GitInstall;
 use gpui_kit::component::Disableable as _;
-use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::prelude::*;
@@ -15,7 +14,7 @@ use gpui_kit::{
 use gitto_app_data::data::{AppChanged, AppData, AppPart, Repositories};
 use gitto_app_kit::theme::PaletteExt as _;
 use gitto_app_kit::ui::dialog::CONFIRM_WIDTH;
-use gitto_app_kit::ui::{DialogHeading, Icon, IconName, Tone};
+use gitto_app_kit::ui::{DialogHeading, DialogId, Icon, IconName, Tone};
 
 pub const GIT_DOWNLOAD_URL: &str = "https://git-scm.com/downloads";
 
@@ -28,7 +27,8 @@ pub struct GitVersionDialog {
     /// Whether a check the user asked for found the same git as before.
     unchanged: bool,
     checking: bool,
-    open: bool,
+    /// The dialog, while it's open.
+    dialog: Option<DialogId>,
     was_supported: Option<bool>,
     _subscription: Subscription,
 }
@@ -47,7 +47,7 @@ impl GitVersionDialog {
             data,
             unchanged: false,
             checking: false,
-            open: false,
+            dialog: None,
             was_supported: None,
             _subscription: subscription,
         }
@@ -59,7 +59,7 @@ impl GitVersionDialog {
 
     /// Whether it's showing.
     pub fn is_open(&self) -> bool {
-        self.open
+        self.dialog.is_some()
     }
 
     /// Opens or closes the dialog as the installed git says, and loads again what failed once
@@ -74,15 +74,13 @@ impl GitVersionDialog {
             self.was_supported = supported;
         }
         let needed = supported == Some(false);
-        if needed && !self.open {
-            self.open = true;
+        if needed && self.dialog.is_none() {
             let this = cx.entity();
-            window.open_dialog(cx, move |dialog, window, cx| {
+            self.dialog = Some(DialogId::open(window, cx, move |_, dialog, window, cx| {
                 render_dialog(&this, dialog, window, cx)
-            });
-        } else if !needed && self.open {
-            self.open = false;
-            window.close_dialog(cx);
+            }));
+        } else if !needed && let Some(dialog) = self.dialog.take() {
+            dialog.close(window, cx);
         }
         window.refresh();
         cx.notify();
@@ -381,6 +379,36 @@ mod tests {
         // What failed meanwhile is loaded again: what an open repository shows of itself.
         assert_eq!(statuses.0.get(), 2);
         assert!(!repository.read_with(cx, |repository, _| repository.status().is_fetching()));
+    }
+
+    #[gpui_kit::test]
+    fn closes_its_own_dialog_not_the_one_over_it_once_git_is_updated(cx: &mut TestAppContext) {
+        let (_dir, installed, window, host) = open(Some("2.39.3"), cx);
+        // What's new, say.
+        let over = cx
+            .update_window(window, |_, window, cx| {
+                DialogId::open(window, cx, |_, dialog, _, _| dialog)
+            })
+            .unwrap();
+
+        *installed.lock().unwrap() = Some("git version 2.51.0\n".into());
+        let dialog = host.read_with(cx, |host, _| host.dialog.clone());
+        cx.update_window(window, |_, window, cx| {
+            dialog.update(cx, |dialog, cx| dialog.check_again(window, cx))
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert!(!dialog.read_with(cx, |dialog, _| dialog.is_open()));
+        assert!(
+            cx.update_window(window, |_, window, cx| over.is_open(window, cx))
+                .unwrap()
+        );
+
+        // Its own goes once the one over it does.
+        cx.update_window(window, |_, window, cx| window.press("escape", cx))
+            .unwrap();
+        cx.run_until_parked();
+        assert!(!has_dialog(window, cx));
     }
 
     #[test]

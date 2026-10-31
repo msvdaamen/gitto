@@ -35,7 +35,7 @@ pub use self::button::{IconButton, LinkButton, action_button};
 pub use self::card::Card;
 pub use self::confirm_dialog::ConfirmDialog;
 pub use self::context_menu::{ContextMenuExt, PopupMenu, context_menu_item, menu_frame};
-pub use self::dialog::DialogHeading;
+pub use self::dialog::{DialogHeading, DialogId};
 pub use self::divider::Divider;
 pub use self::empty_state::{EmptyState, LoadingState};
 pub use self::failure_popover::FailurePopover;

@@ -45,7 +45,7 @@ use gitto_app_data::data::Change;
 use gitto_app_data::data::branch::{Merge, Rebase};
 use gitto_app_data::data::status::{first_to_resolve, select_conflicted};
 use gitto_app_data::data::{Done, Part, Repository, Shown};
-use gitto_app_kit::ui::{IconName, context_menu_item};
+use gitto_app_kit::ui::{DialogId, IconName, context_menu_item};
 
 /// What the branch menus ask of the page.
 #[derive(Debug, Clone, PartialEq)]
@@ -70,8 +70,8 @@ pub struct BranchMenuProvider {
     add_worktree: Entity<AddWorktreeDialog>,
     before_change: Option<BeforeChange>,
     menu: RowMenu,
-    /// Whether the dialog asking before deleting a branch is open: it's of this repository.
-    asking_delete: Rc<Cell<bool>>,
+    /// The dialog asking before deleting a branch, while it's open: it's of this repository.
+    asking_delete: Rc<Cell<Option<DialogId>>>,
 }
 
 impl EventEmitter<BranchMenuEvent> for BranchMenuProvider {}
@@ -117,9 +117,8 @@ impl BranchMenuProvider {
             return;
         }
         self.menu.close(cx);
-        if self.asking_delete.replace(false) {
-            use gpui_kit::component::WindowExt as _;
-            window.close_dialog(cx);
+        if let Some(dialog) = self.asking_delete.take() {
+            dialog.close(window, cx);
         }
         self.create.update(cx, |dialog, cx| {
             dialog.set_repository(repository_id.clone(), window, cx)
@@ -197,25 +196,25 @@ impl BranchMenuProvider {
     /// Begins deleting a branch, asking first. The toolbar shows it running, and why it failed.
     pub fn delete_branch(&mut self, deletion: BranchDeletion, window: &mut Window, cx: &mut App) {
         let delete = self.repository.entity().clone();
-        self.asking_delete.set(true);
         let (deleting, cancelled) = (
             Rc::clone(&self.asking_delete),
             Rc::clone(&self.asking_delete),
         );
-        open_delete_branch_dialog(
+        let dialog = open_delete_branch_dialog(
             deletion,
             move |deletion, _, cx| {
-                deleting.set(false);
+                deleting.set(None);
                 let reference = BranchRef::parse(deletion.reference());
                 delete.update(cx, |repository, cx| {
                     let delete = Repository::delete_branch;
                     drop(repository.parsing(Change::DeleteBranch, reference, delete, cx))
                 });
             },
-            move |_, _| cancelled.set(false),
+            move |_, _| cancelled.set(None),
             window,
             cx,
         );
+        self.asking_delete.set(Some(dialog));
     }
 
     /// Pulls a local branch, by its full ref name: the checked-out one as the Pull button does,
