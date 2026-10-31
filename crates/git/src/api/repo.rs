@@ -59,7 +59,12 @@ use crate::schema::ContentVersion;
 /// A repository the UI opened with [`GitApi::repo`]: each method runs a feature with it, off the
 /// caller (its future is `Send + 'static`, to spawn on a background executor), and fails as the UI
 /// shows it, with an [`ApiError`] that's logged under the method's name and reported if it's a
-/// bug. Cheap to clone. Dropping a method's future cancels it, which isn't a failure.
+/// bug. Cheap to clone. Dropping a read's or a fetch's future cancels it, which isn't a failure;
+/// a write that's started runs to its end all the same (see `Repo::write`).
+///
+/// A method's writes take their place in line as its future gets to them, once it's polled, not
+/// when it's called: of two methods called, the first doesn't always write first. To keep their
+/// order, await the one before calling the next.
 #[derive(Clone)]
 pub struct GitRepo {
     repo: Repo,
