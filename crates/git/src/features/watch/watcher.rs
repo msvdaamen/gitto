@@ -187,6 +187,7 @@ mod with_notify {
     use std::sync::{Arc, Mutex};
 
     use futures::future::BoxFuture;
+    use notify::event::ModifyKind;
     use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
     use super::{Events, Ignored, OnEvents, Root, Roots, Subscription, tell_all};
@@ -273,12 +274,16 @@ mod with_notify {
         if matches!(event.kind, EventKind::Access(_) | EventKind::Other) {
             return;
         }
+        // A folder is told modified when what's in it changes, which is told of on its own, ignored
+        // or not: `.git` when git writes its index, say. Renamed, it counts.
+        let modified =
+            matches!(event.kind, EventKind::Modify(kind) if !matches!(kind, ModifyKind::Name(_)));
         let mut changed: Vec<Vec<_>> = vec![Vec::new(); roots.ignored.len()];
         for path in event.paths {
             let Some(root) = roots.of(&path) else {
                 continue;
             };
-            if roots.ignored[root].contains(&path) {
+            if roots.ignored[root].contains(&path) || modified && path.is_dir() {
                 continue;
             }
             changed[root].push(path);
