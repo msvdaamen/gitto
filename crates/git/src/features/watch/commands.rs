@@ -15,7 +15,7 @@ use super::git_dirs::{classify, inside};
 use super::schema::GitDirChange;
 use super::stream::{Watched, watch_stream};
 use super::watcher::{self, Events, LeaveOut, OnEvents, Root, Subscribe, Subscription};
-use crate::core::errors::Result;
+use crate::core::errors::{Error, Result};
 use crate::core::git_dirs::{git_dirs, real_path};
 use crate::core::repo::Repo;
 use crate::core::runner::{RunOptions, lock};
@@ -334,7 +334,24 @@ impl WorkingTree {
         // Started before the one it replaces is stopped, so nothing goes unwatched while it walks
         // the tree. Meanwhile both report what changes in what they both watch, which only adds
         // to the same batch.
-        let next = (self.subscribe)(self.roots(&now_ignored, &left_out)).await?;
+        let next = match (self.subscribe)(self.roots(&now_ignored, &left_out)).await {
+            Ok(next) => next,
+            // Not enough watches for both, as when the tree takes more than half of them: the one it
+            // replaces is stopped first, and what changed meanwhile is told as unreported.
+            Err(Error::WatchLimitReached) if self.subscription.is_some() => {
+                trace(format_args!(
+                    "out of watches to start over in {} alongside, so stopping first",
+                    self.root.display()
+                ));
+                if let Some(previous) = self.subscription.take() {
+                    previous.unsubscribe().await;
+                }
+                let next = (self.subscribe)(self.roots(&now_ignored, &left_out)).await?;
+                self.changes.add(TreeChange::Rescan);
+                next
+            }
+            Err(error) => return Err(error),
+        };
         trace(format_args!(
             "watching {} ({} ignored paths, set up in {:.0}ms)",
             self.root.display(),
@@ -549,7 +566,7 @@ mod tests {
     use std::fs;
     use std::path::Path;
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::{Duration, SystemTime};
 
     use async_io::Timer;
@@ -622,6 +639,10 @@ mod tests {
         roots: Mutex<Vec<Arc<Mutex<OnEvents>>>>,
         hold_from: AtomicUsize,
         gate: (async_channel::Sender<()>, async_channel::Receiver<()>),
+        /// How many subscriptions are set up and not yet stopped.
+        live: AtomicUsize,
+        /// Whether subscribing fails while one is (see `only_one_fits`).
+        one_fits: AtomicBool,
     }
 
     impl Probe {
@@ -633,6 +654,8 @@ mod tests {
                 roots: Mutex::new(Vec::new()),
                 hold_from: AtomicUsize::new(usize::MAX),
                 gate: async_channel::unbounded(),
+                live: AtomicUsize::new(0),
+                one_fits: AtomicBool::new(false),
             })
         }
 
@@ -644,6 +667,12 @@ mod tests {
                     let call = probe.calls.fetch_add(1, Ordering::SeqCst);
                     if call >= probe.hold_from.load(Ordering::SeqCst) {
                         let _ = probe.gate.1.recv().await;
+                    }
+                    // As if there were only watches enough for one.
+                    if probe.one_fits.load(Ordering::SeqCst)
+                        && probe.live.load(Ordering::SeqCst) > 0
+                    {
+                        return Err(Error::WatchLimitReached);
                     }
                     let roots = roots.into_iter().map(|root| {
                         let told = Arc::new(Mutex::new(root.on_events));
@@ -659,7 +688,14 @@ mod tests {
                     });
                     let subscription = watcher::subscribe(roots.collect()).await?;
                     probe.subscribed.fetch_add(1, Ordering::SeqCst);
-                    Ok(subscription)
+                    probe.live.fetch_add(1, Ordering::SeqCst);
+                    let live = Arc::clone(&probe);
+                    Ok(Subscription::new(move || {
+                        Box::pin(async move {
+                            subscription.unsubscribe().await;
+                            live.live.fetch_sub(1, Ordering::SeqCst);
+                        })
+                    }))
                 })
             })
         }
@@ -674,6 +710,12 @@ mod tests {
         /// Holds subscribing back from the `call`th subscription on (counting from 0).
         fn hold_from(&self, call: usize) {
             self.hold_from.store(call, Ordering::SeqCst);
+        }
+
+        /// Has subscribing fail with `Error::WatchLimitReached` while another subscription is set up,
+        /// as if there were only watches enough for one.
+        fn only_one_fits(&self) {
+            self.one_fits.store(true, Ordering::SeqCst);
         }
 
         /// Lets one subscription that's held back through.
@@ -904,6 +946,29 @@ mod tests {
                 get_status(&repo).await.unwrap();
             }
             assert!(changes.quiet().await);
+        });
+    }
+
+    #[test]
+    fn the_working_tree_stops_watching_first_when_both_watches_dont_fit() {
+        let fx = Fixture::new();
+        let path = fx.create_repo("watched-limit");
+        let probe = Probe::new();
+        smol::block_on(async {
+            let repo = fx.repos.open("watched-limit").await.unwrap();
+            let changes = watching(watch_working_tree_with(repo, probe.subscribe()));
+            probe.subscribed(1).await;
+
+            probe.only_one_fits();
+            write(path.join(".gitignore"), "build/\n");
+            assert!(is_change(changes.next().await));
+            // Then what may have changed while nothing was watched.
+            assert!(is_change(changes.next().await));
+            assert_eq!(probe.calls.load(Ordering::SeqCst), 3);
+            assert_eq!(probe.subscribed.load(Ordering::SeqCst), 2);
+
+            write(path.join("file.txt"), "x");
+            assert!(is_change(changes.next().await));
         });
     }
 
