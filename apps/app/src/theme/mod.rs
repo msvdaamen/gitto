@@ -21,7 +21,7 @@ pub mod palette;
 use std::rc::Rc;
 
 use gpui_kit::component::{Colorize as _, Theme, ThemeConfig, ThemeConfigColors, ThemeMode};
-use gpui_kit::{App, Global, Hsla};
+use gpui_kit::{App, Global, Hsla, Rems};
 
 pub use self::palette::Palette;
 use crate::services::LocalStorage;
@@ -32,6 +32,12 @@ pub const STORAGE_KEY: &str = "gitto-theme";
 /// The base font size: the rem every size is relative to (see the module's doc).
 pub const FONT_SIZE: f32 = 15.;
 pub const MONO_FONT_SIZE: f32 = 13.;
+
+/// `px` of `index.css`'s, in rems of the [`FONT_SIZE`] base: what a size with no step on the rem
+/// scale is written as, e.g. `.h(base_px(38.))`.
+pub const fn base_px(px: f32) -> Rems {
+    Rems(px / FONT_SIZE)
+}
 /// Controls' corners (`rounded-[7px]`), and large surfaces' (`rounded-[11px]`).
 pub const RADIUS: usize = 7;
 pub const RADIUS_LG: usize = 11;

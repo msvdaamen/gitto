@@ -4,6 +4,7 @@ use std::rc::Rc;
 
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::input::RepositoryId;
+use gitto_ui::git::rows::RowId;
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -22,7 +23,6 @@ use crate::components::repository::toolbar::{RepositoryToolbar, ToolbarEvent};
 use crate::components::ui::{HandleSide, PanelDrag, ResizeHandle, dragged_width};
 use crate::data::{QueryClient, RepositoryWatcher};
 use crate::git::diff_source::DiffSource;
-use crate::git::rows::WIP_ID;
 use crate::services::Services;
 use crate::state::panel_width::{PanelBounds, PanelWidth};
 use crate::state::router::Router;
@@ -91,13 +91,13 @@ impl Panel {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RowOf {
     repository_id: RepositoryId,
-    id: String,
+    id: RowId,
 }
 
 /// The file whose changes are shown in place of the history, with the row and the list it's from.
 struct OpenFile {
     repository_id: RepositoryId,
-    row_id: String,
+    row_id: RowId,
     source: DiffSource,
     file: ChangedFile,
     view: Entity<FileDiffView>,
@@ -335,7 +335,7 @@ impl RepositoryView {
     }
 
     /// The selected row, if it's of the repository on show.
-    pub fn selected_id(&self) -> Option<String> {
+    pub fn selected_id(&self) -> Option<RowId> {
         self.selection
             .as_ref()
             .filter(|row| row.repository_id == self.repository_id)
@@ -343,7 +343,7 @@ impl RepositoryView {
     }
 
     /// The row the details show, if it's of the repository on show.
-    pub fn details_id(&self, cx: &gpui_kit::App) -> Option<String> {
+    pub fn details_id(&self, cx: &gpui_kit::App) -> Option<RowId> {
         self.settled
             .read(cx)
             .value()
@@ -359,7 +359,7 @@ impl RepositoryView {
         })
     }
 
-    fn select(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+    fn select(&mut self, id: RowId, window: &mut Window, cx: &mut Context<Self>) {
         let row = RowOf {
             repository_id: self.repository_id.clone(),
             id,
@@ -379,8 +379,9 @@ impl RepositoryView {
         self.history.update(cx, |history, cx| {
             history.set_selection(selected.clone(), details.clone(), cx)
         });
-        self.commit_details
-            .update(cx, |commit, cx| commit.set_selected(details.clone(), cx));
+        self.commit_details.update(cx, |commit, cx| {
+            commit.set_selected(details.clone(), window, cx)
+        });
 
         if self.open_file.is_some() && self.shown_file(cx).is_none() {
             self.open_file = None;
@@ -394,11 +395,11 @@ impl RepositoryView {
         if let Some((repository_id, file)) = self.resolving.clone() {
             // Not once another row, or another repository, was picked meanwhile: it was asked for
             // there.
-            if repository_id != self.repository_id || selected.as_deref() != Some(WIP_ID) {
+            if repository_id != self.repository_id || selected != Some(RowId::Wip) {
                 self.resolving = None;
-            } else if details.as_deref() == Some(WIP_ID) {
+            } else if details == Some(RowId::Wip) {
                 self.resolving = None;
-                self.open_file_of(WIP_ID.to_owned(), DiffSource::Unstaged, file, window, cx);
+                self.open_file_of(RowId::Wip, DiffSource::Unstaged, file, window, cx);
             }
         }
         cx.notify();
@@ -416,7 +417,7 @@ impl RepositoryView {
     /// the file on show lets go.
     fn open_file_of(
         &mut self,
-        row_id: String,
+        row_id: RowId,
         source: DiffSource,
         file: ChangedFile,
         window: &mut Window,
@@ -496,7 +497,7 @@ impl RepositoryView {
             }
             let _ = this.update_in(cx, |this, window, cx| {
                 this.resolving = Some((this.repository_id.clone(), file));
-                this.select(WIP_ID.to_owned(), window, cx);
+                this.select(RowId::Wip, window, cx);
             });
         }));
     }
