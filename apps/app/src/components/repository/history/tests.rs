@@ -1448,6 +1448,24 @@ fn keeps_the_rest_of_a_rows_labels_listed_while_the_pointer_moves_from_the_count
 }
 
 #[gpui_kit::test]
+fn closes_the_rest_of_a_rows_labels_once_its_scrolled_out_of_view(cx: &mut TestAppContext) {
+    let mut start = branches(vec![]);
+    start.log.extend(numbered(150));
+    let history = render(cx, start);
+    let sha = "e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5";
+    history.hover_more(sha, cx);
+    assert!(history.more_listed(sha, cx));
+
+    // Scrolled away from under the pointer, the row never hears it left.
+    history.scroll_to(120, cx);
+    history.render_frame(cx);
+    history.scroll_to(0, cx);
+    cx.executor().advance_clock(Duration::from_millis(300));
+    cx.run_until_parked();
+    assert!(!history.more_listed(sha, cx));
+}
+
+#[gpui_kit::test]
 fn closes_the_rest_of_a_rows_labels_once_the_menu_opened_from_them_closes(cx: &mut TestAppContext) {
     let history = render(cx, branches(vec![]));
     history.hover_more("e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5", cx);

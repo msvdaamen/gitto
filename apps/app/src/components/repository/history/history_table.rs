@@ -725,6 +725,14 @@ impl HistoryTable {
         }
     }
 
+    /// Forgets that the commit `sha`'s other labels are hovered or listed: its row's out of view.
+    fn forget_more_labels(&mut self, sha: &str, cx: &mut Context<Self>) {
+        if self.more_labels.row.as_deref() == Some(sha) {
+            self.more_labels = MoreLabelsState::default();
+            cx.notify();
+        }
+    }
+
     /// Closes the list of a row's other labels after a moment, unless the pointer's back on it by
     /// then, or a branch's menu opened from it is open: the menu goes with its label.
     fn close_more_labels_soon(&mut self, cx: &mut Context<Self>) {
@@ -883,6 +891,7 @@ impl HistoryTable {
                 .row
                 .clone()
                 .map(|row| (row, self.more_labels.open)),
+            more_active: self.more_labels.hovered > 0 || self.more_labels.open,
             searching: !self.needle.is_empty(),
             asked_for_more: Rc::clone(&self.layout.asked_for_more),
         });
@@ -893,6 +902,7 @@ impl HistoryTable {
             if is_near_end(&range, count, LOAD_AHEAD) {
                 context.ask_for_more(cx);
             }
+            context.forget_more_labels_out_of(&rows, &range, cx);
             range
                 .filter_map(|ix| context.render_row(&rows, ix, count))
                 .collect()
@@ -917,6 +927,8 @@ struct RowsContext {
     commit_menu: Entity<CommitMenu>,
     commit_menu_open: Option<SharedString>,
     more: Option<(String, bool)>,
+    /// Whether the pointer's on that row's count or list, or the list is open.
+    more_active: bool,
     searching: bool,
     /// Whether more of the log was asked for since the rows were laid out.
     asked_for_more: Rc<Cell<bool>>,
@@ -942,6 +954,30 @@ impl RowsContext {
         match &self.shown {
             None => rows.get(ix),
             Some(shown) => rows.get(*shown.get(ix)?),
+        }
+    }
+
+    /// Forgets the row whose other labels are hovered or listed if it's not among those rendered,
+    /// `range`: scrolled out of view, it never hears the pointer left it, and its list would open
+    /// again once it's back.
+    fn forget_more_labels_out_of(
+        &self,
+        rows: &HistoryLayout,
+        range: &std::ops::Range<usize>,
+        cx: &mut App,
+    ) {
+        let Some((sha, _)) = self.more.as_ref().filter(|_| self.more_active) else {
+            return;
+        };
+        let rendered = range.clone().any(|ix| {
+            matches!(self.row(rows, ix), Some(HistoryRow::Commit(commit)) if commit.id == *sha)
+        });
+        if !rendered {
+            let table = self.table.clone();
+            let sha = sha.clone();
+            cx.defer(move |cx| {
+                let _ = table.update(cx, |table, cx| table.forget_more_labels(&sha, cx));
+            });
         }
     }
 
