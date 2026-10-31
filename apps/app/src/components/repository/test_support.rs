@@ -1,7 +1,7 @@
 //! For the repository area's tests: the app's globals, made-up repositories, and what their
 //! entities hold. GPUI tests can't run git (see `gitto_app_data::data`), so all a view shows of a
-//! repository is given to its entity first, and stays fresh: its git, `NoGit`, fails, and
-//! nothing reloads it.
+//! repository is given to its entity first, and stays fresh: what's given isn't asked of git
+//! again, and its git, `NoGit`, panics if it's asked anything.
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -156,7 +156,7 @@ pub fn with_conflicts(
     status
 }
 
-/// The repository `id`'s entity, asking `NoGit` if it wasn't opened: its git fails, so only what
+/// The repository `id`'s entity, asking `NoGit` if it wasn't opened: its git panics, so only what
 /// the test gives it is shown.
 pub fn repository_entity(
     id: &RepositoryId,

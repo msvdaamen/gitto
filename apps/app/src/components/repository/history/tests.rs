@@ -35,13 +35,14 @@ use crate::components::repository::add_worktree_dialog::AddWorktreeDialog;
 use crate::components::repository::branch_menu::BranchMenuProvider;
 use crate::components::repository::create_branch_dialog::CreateBranchDialog;
 use crate::components::repository::test_support::{
-    Repositories, fake_git, repository_entity, repository_id, set_files, set_operation, set_refs,
-    set_remotes, set_stashes, set_status, set_worktrees, setup_with, uncommitted,
+    Repositories, fake_git, repository_entity, repository_id, set_files, set_log, set_operation,
+    set_refs, set_remotes, set_stashes, set_status, set_worktrees, setup_with, uncommitted,
 };
 use gitto_app_data::data::branch::{Merge, NewBranchFrom, Rebase};
 use gitto_app_data::data::commit::Reword;
 use gitto_app_data::data::diff::{ChangedFiles, FilesOf};
 use gitto_app_data::data::git::{GitTask, RepositoryGit};
+use gitto_app_data::data::history::Log;
 use gitto_app_data::data::{DataError, Field, Opaque};
 use gitto_git::Page;
 use gitto_git::features::status::schema::StatusReply;
@@ -1513,6 +1514,15 @@ fn closes_the_menu_once_the_repository_is_switched(cx: &mut TestAppContext) {
     set_worktrees(&other, vec![], cx);
     set_remotes(&other, &[], cx);
     set_stashes(&other, vec![], cx);
+    set_log(
+        &other,
+        Log {
+            repository_id: other.clone(),
+            commits: vec![].into(),
+            complete: true,
+        },
+        cx,
+    );
     let provider = history.host.read_with(cx, |host, _| host.provider.clone());
     let table = history.table.clone();
     cx.update_window(history.window, |_, window, cx| {

@@ -44,6 +44,9 @@ impl Repository {
     pub fn reload(&mut self, field: Field, cx: &mut Context<Self>) -> Reloading {
         let git = Rc::clone(&self.git);
         let part = field.part();
+        if self.is_seeded(part) {
+            return Reloading(Vec::new());
+        }
         let wait = match field {
             Field::Status => {
                 let previous = self.status.data().cloned();
@@ -154,8 +157,10 @@ impl Repository {
                 _ => {}
             }
         }
-        for sha in self.pushed_to.held_and_drop_rest(|_| true) {
-            waits.extend(self.load_pushed_to(sha, cx));
+        if !self.is_seeded(Part::PushedTo) {
+            for sha in self.pushed_to.held_and_drop_rest(|_| true) {
+                waits.extend(self.load_pushed_to(sha, cx));
+            }
         }
         Reloading(waits)
     }

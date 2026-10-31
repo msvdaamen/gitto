@@ -215,6 +215,9 @@ pub struct Repository {
     messages: Keyed<String, String>,
     more: LoadingMore,
     changes: HashMap<Change, ChangeState>,
+    /// What a test gave it (see [`is_seeded`](Self::is_seeded)).
+    #[cfg(any(test, feature = "test-support"))]
+    seeded: std::collections::HashSet<Part>,
 }
 
 /// Loading more of the log: whether it's under way, and why it last failed, both of the log as it
@@ -251,6 +254,8 @@ impl Repository {
             messages: Keyed::new(KEPT_COMMITS),
             more: LoadingMore::default(),
             changes: HashMap::new(),
+            #[cfg(any(test, feature = "test-support"))]
+            seeded: Default::default(),
         }
     }
 
@@ -311,62 +316,62 @@ impl Repository {
     pub fn set_status(&mut self, status: Uncommitted, cx: &mut Context<Self>) {
         self.status.cancel();
         self.status.set(Opaque::new(status));
-        self.changed(Part::Status, cx);
+        self.seed(Part::Status, cx);
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_operation(&mut self, operation: Option<Operation>, cx: &mut Context<Self>) {
         self.operation.cancel();
         self.operation.set(operation);
-        self.changed(Part::Operation, cx);
+        self.seed(Part::Operation, cx);
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_log(&mut self, log: Log, cx: &mut Context<Self>) {
         self.log.cancel();
         self.log.set(log);
-        self.changed(Part::Log, cx);
+        self.seed(Part::Log, cx);
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_refs(&mut self, refs: Vec<Ref>, cx: &mut Context<Self>) {
         self.refs.cancel();
         self.refs.set(refs.into());
-        self.changed(Part::Refs, cx);
+        self.seed(Part::Refs, cx);
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_remotes(&mut self, remotes: Vec<String>, cx: &mut Context<Self>) {
         self.remotes.cancel();
         self.remotes.set(remotes);
-        self.changed(Part::Remotes, cx);
+        self.seed(Part::Remotes, cx);
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_stashes(&mut self, stashes: Vec<Stash>, cx: &mut Context<Self>) {
         self.stashes.cancel();
         self.stashes.set(stashes.into());
-        self.changed(Part::Stashes, cx);
+        self.seed(Part::Stashes, cx);
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_worktrees(&mut self, worktrees: Vec<Worktree>, cx: &mut Context<Self>) {
         self.worktrees.cancel();
         self.worktrees.set(worktrees.into());
-        self.changed(Part::Worktrees, cx);
+        self.seed(Part::Worktrees, cx);
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_push_target(&mut self, target: PushTarget, cx: &mut Context<Self>) {
         self.push_target.cancel();
         self.push_target.set(target);
-        self.changed(Part::PushTarget, cx);
+        self.seed(Part::PushTarget, cx);
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_pushed_to(&mut self, sha: &str, remote: Option<String>, cx: &mut Context<Self>) {
         self.pushed_to.set(sha.to_owned(), remote);
-        self.changed(Part::PushedTo, cx);
+        self.seed(Part::PushedTo, cx);
     }
 
     /// Puts `patch` in place of the patch of the file at `path` in `source`, and of a load of it
@@ -414,6 +419,27 @@ impl Repository {
     /// Says `part` changed (see the module's doc).
     fn changed(&mut self, part: Part, cx: &mut Context<Self>) {
         cx.emit(Changed(part));
+    }
+
+    /// Says `part` changed, as a test gave it: what it gave stays, as git isn't asked for it again
+    /// (see [`is_seeded`](Self::is_seeded)).
+    #[cfg(any(test, feature = "test-support"))]
+    fn seed(&mut self, part: Part, cx: &mut Context<Self>) {
+        self.seeded.insert(part);
+        self.changed(part, cx);
+    }
+
+    /// Whether a test gave it `part`, a field or where commits were pushed (`set_*`): that's
+    /// reloaded as it is, without asking git, so a test's git only answers what the test is about,
+    /// and a change the test makes reloads what it gave as git would, unchanged.
+    fn is_seeded(&self, part: Part) -> bool {
+        #[cfg(any(test, feature = "test-support"))]
+        return self.seeded.contains(&part);
+        #[cfg(not(any(test, feature = "test-support")))]
+        {
+            let _ = part;
+            false
+        }
     }
 
     // Changes: their state.

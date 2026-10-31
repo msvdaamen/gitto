@@ -150,7 +150,8 @@ fn render(
 ) {
     let dir = setup(cx);
     let id = repository_id();
-    set_status(&id, status(), cx);
+    // Loaded from git, which answers it again as the repository reloads after a merge.
+    *calls.now.borrow_mut() = Some(status());
     set_operation(&id, None, cx);
     set_refs(
         &id,
