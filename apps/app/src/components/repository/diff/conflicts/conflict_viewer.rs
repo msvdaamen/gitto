@@ -49,6 +49,9 @@ use gitto_app_data::data::DataError;
 use gitto_app_kit::theme::{Palette, PaletteExt as _};
 use gitto_app_kit::ui::{Icon, IconName};
 
+/// Why a conflict couldn't be resolved as asked: what it left didn't read as the other conflicts.
+const UNRESOLVABLE: &str = "This conflict can't be resolved here: its file's other markers would be misread. Edit the file by hand.";
+
 /// How resolving the file on show is going.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ConflictProgress {
@@ -564,6 +567,13 @@ impl ConflictViewer {
                 })
                 .await;
             let Some((resolved, widest)) = resolved else {
+                // What resolving it leaves doesn't read as the other conflicts: a side's line that
+                // looks like a marker, say.
+                let _ = this.update(cx, |this, cx| {
+                    if this.is_shown(&from_state) {
+                        cx.emit(ConflictViewerEvent::Error(Some(UNRESOLVABLE.to_owned())));
+                    }
+                });
                 return;
             };
             let Ok(Some((from_version, saving, highlighting))) = this.update(cx, |this, cx| {
@@ -1468,6 +1478,37 @@ mod tests {
         let written = format!("one\ntheirs\ntwo\n{MARKERS}");
         assert_eq!(opened.tree.saves(), [save("a.txt", &written, "v1", false)]);
         assert_eq!(shown(&opened, cx), (Some(written), Some("v2".into())));
+    }
+
+    #[gpui_kit::test]
+    fn says_why_a_conflict_cant_be_resolved_rather_than_doing_nothing(cx: &mut TestAppContext) {
+        let _dir = init(cx);
+        let opened = open_conflict(&two_conflicts(), cx);
+        let viewer = viewer(&opened, cx);
+        // Text whose other conflict doesn't read as one once it's written out again: its
+        // separator isn't a marker.
+        cx.update(|cx| {
+            viewer.update(cx, |viewer, _| {
+                let shown = viewer.shown.as_mut().expect("on show");
+                let mut state = ConflictState::clone(shown.state.as_ref().expect("conflicts"));
+                if let Some(Some(other)) = state.conflicts.get_mut(1) {
+                    other.separator = "-------\n".to_owned();
+                }
+                shown.state = Some(Arc::new(state));
+            })
+        });
+        cx.update_window(opened.window, |_, window, cx| {
+            viewer.update(cx, |viewer, cx| {
+                viewer.resolve(Resolution::Ours, window, cx)
+            })
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert_eq!(opened.tree.saves(), []);
+        let error = opened.read(cx, |view, cx| {
+            view.resolution.read(cx).error().map(str::to_owned)
+        });
+        assert_eq!(error.as_deref(), Some(UNRESOLVABLE));
     }
 
     #[gpui_kit::test]
