@@ -12,9 +12,8 @@ use crate::components::footer::Footer;
 use crate::components::git_version_dialog::GitVersionDialog;
 use crate::components::header::Header;
 use crate::components::whats_new_dialog::WhatsNewDialog;
-use crate::data::QueryClient;
-use crate::state::router::{Route, Router};
-use crate::theme::PaletteExt as _;
+use gitto_app_data::state::router::{Route, Router};
+use gitto_app_kit::theme::PaletteExt as _;
 
 /// The page on show. Pages are made when they're shown and dropped when they're left, as the
 /// router mounted them, so what they load stops being kept fresh; a repository's page is kept
@@ -58,11 +57,11 @@ impl AppShell {
             cx.observe_in(&router, window, |shell, _, window, cx| {
                 shell.show_route(window, cx)
             }),
-            // Shown queries that load on focus do: the home page's, the git version until it's
-            // supported (see `RefetchOnFocus`).
+            // What loads on focus does: the repository list, the git version until it's
+            // supported (see `AppData::window_focused`).
             cx.observe_window_activation(window, |_, window, cx| {
                 if window.is_window_active() {
-                    QueryClient::window_focused(cx);
+                    gitto_app_data::data::AppData::window_focused(cx);
                 }
             }),
         ];

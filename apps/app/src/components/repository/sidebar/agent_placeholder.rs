@@ -6,8 +6,8 @@ use gpui_kit::component::{Sizable as _, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{App, FontWeight, Window, div};
 
-use crate::components::ui::Mascot;
-use crate::theme::{PaletteExt as _, base_px};
+use gitto_app_kit::theme::{PaletteExt as _, base_px};
+use gitto_app_kit::ui::Mascot;
 
 /// What the sidebar's Agents view shows until agent sessions exist: the mascot, saying none are
 /// running, and a button to start one (which does nothing yet). In the rail (`rail`), the mascot

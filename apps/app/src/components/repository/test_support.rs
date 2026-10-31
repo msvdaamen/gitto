@@ -1,11 +1,11 @@
 //! For the repository area's tests: the app's globals, made-up repositories, and what their
-//! queries hold. GPUI tests can't run git (see `crate::data`), so every query a view shows is
-//! given its data first, and stays fresh: nothing loads it from git.
+//! entities hold. GPUI tests don't run git (see `gitto_app_data::data`), so all a view shows of a
+//! repository is given to its entity first, and stays fresh: what's given isn't asked of git
+//! again, and its git, `NoGit`, panics if it's asked anything.
 
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use futures::FutureExt as _;
 use futures::future::BoxFuture;
@@ -26,8 +26,13 @@ use gpui_kit::test::{TestEventExt as _, TestQueryExt as _};
 use gpui_kit::{AnyWindowHandle, AppContext as _, MouseButton, Pixels, Point, TestAppContext};
 use tempfile::TempDir;
 
-use crate::data::repositories::RepositorySource;
-use crate::data::{Opaque, QueryClient, QueryError, keys};
+use gitto_app_data::data::DataError;
+use gitto_app_data::data::diff::{ChangedFiles, FilesOf};
+use gitto_app_data::data::file_diff::FilePatch;
+use gitto_app_data::data::git::{NoGit, RepositoryGit};
+use gitto_app_data::data::history::Log;
+use gitto_app_data::data::repositories::RepositorySource;
+use gitto_ui_logic::git::diff_source::DiffSource;
 
 /// The repository list, answered at once: what the test puts in it.
 #[derive(Default)]
@@ -38,22 +43,22 @@ pub struct Repositories {
 }
 
 impl RepositorySource for Repositories {
-    fn list(&self) -> BoxFuture<'static, Result<Vec<Repository>, QueryError>> {
+    fn list(&self) -> BoxFuture<'static, Result<Vec<Repository>, DataError>> {
         let list = self.list.borrow().clone();
         async move { Ok(list) }.boxed()
     }
 
-    fn add(&self, path: PathBuf) -> BoxFuture<'static, Result<Repository, QueryError>> {
+    fn add(&self, path: PathBuf) -> BoxFuture<'static, Result<Repository, DataError>> {
         self.added.borrow_mut().push(path);
-        async { Err(QueryError::msg("Not in this test.")) }.boxed()
+        async { Err(DataError::msg("Not in this test.")) }.boxed()
     }
 
-    fn remove(&self, _: RepositoryId) -> BoxFuture<'static, Result<(), QueryError>> {
-        async { Err(QueryError::msg("Not in this test.")) }.boxed()
+    fn remove(&self, _: RepositoryId) -> BoxFuture<'static, Result<(), DataError>> {
+        async { Err(DataError::msg("Not in this test.")) }.boxed()
     }
 
-    fn reorder(&self, _: Vec<RepositoryId>) -> BoxFuture<'static, Result<(), QueryError>> {
-        async { Err(QueryError::msg("Not in this test.")) }.boxed()
+    fn reorder(&self, _: Vec<RepositoryId>) -> BoxFuture<'static, Result<(), DataError>> {
+        async { Err(DataError::msg("Not in this test.")) }.boxed()
     }
 }
 
@@ -64,7 +69,7 @@ pub fn setup(cx: &mut TestAppContext) -> TempDir {
 }
 
 /// [`setup`], with the repository list `repositories`.
-pub fn setup_with(cx: &mut TestAppContext, repositories: Rc<Repositories>) -> TempDir {
+pub fn setup_with(cx: &mut TestAppContext, repositories: Rc<dyn RepositorySource>) -> TempDir {
     crate::test_support::init(cx, |services| services.with_repository_source(repositories))
 }
 
@@ -151,36 +156,89 @@ pub fn with_conflicts(
     status
 }
 
+/// The repository `id`'s entity, asking `NoGit` if it wasn't opened: its git panics, so only what
+/// the test gives it is shown.
+pub fn repository_entity(
+    id: &RepositoryId,
+    cx: &mut gpui_kit::App,
+) -> gpui_kit::Entity<gitto_app_data::data::Repository> {
+    use gitto_app_data::data::Repositories as Open;
+    Open::get(id, cx).unwrap_or_else(|| Open::insert(id, Rc::new(NoGit), cx))
+}
+
+/// Has the repository `id` ask `git`, which makes up what the test's view asks of it.
+pub fn fake_git(id: &RepositoryId, git: Rc<dyn RepositoryGit>, cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        repository_entity(id, cx).update(cx, |repository, _| repository.set_git(git));
+    });
+}
+
+/// Changes the repository `id`'s entity with `update`.
+fn update(
+    id: &RepositoryId,
+    cx: &mut TestAppContext,
+    update: impl FnOnce(
+        &mut gitto_app_data::data::Repository,
+        &mut gpui_kit::Context<gitto_app_data::data::Repository>,
+    ),
+) {
+    cx.update(|cx| repository_entity(id, cx).update(cx, update));
+}
+
 pub fn set_status(id: &RepositoryId, status: Uncommitted, cx: &mut TestAppContext) {
-    cx.update(|cx| QueryClient::set_data(&keys::status(id), Opaque::new(status), cx));
+    update(id, cx, |repository, cx| repository.set_status(status, cx));
 }
 
 pub fn set_stashes(id: &RepositoryId, stashes: Vec<Stash>, cx: &mut TestAppContext) {
-    let stashes: Arc<[Stash]> = stashes.into();
-    cx.update(|cx| QueryClient::set_data(&keys::stashes(id), stashes, cx));
+    update(id, cx, |repository, cx| repository.set_stashes(stashes, cx));
 }
 
 pub fn set_push_target(id: &RepositoryId, target: PushTarget, cx: &mut TestAppContext) {
-    cx.update(|cx| QueryClient::set_data(&keys::push_target(id), target, cx));
+    update(id, cx, |repository, cx| {
+        repository.set_push_target(target, cx)
+    });
 }
 
 pub fn set_operation(id: &RepositoryId, operation: Option<Operation>, cx: &mut TestAppContext) {
-    cx.update(|cx| QueryClient::set_data(&keys::operation(id), operation, cx));
+    update(id, cx, |repository, cx| {
+        repository.set_operation(operation, cx)
+    });
 }
 
 pub fn set_refs(id: &RepositoryId, refs: Vec<Ref>, cx: &mut TestAppContext) {
-    let refs: Arc<[Ref]> = refs.into();
-    cx.update(|cx| QueryClient::set_data(&keys::refs(id), refs, cx));
+    update(id, cx, |repository, cx| repository.set_refs(refs, cx));
 }
 
 pub fn set_worktrees(id: &RepositoryId, worktrees: Vec<Worktree>, cx: &mut TestAppContext) {
-    let worktrees: Arc<[Worktree]> = worktrees.into();
-    cx.update(|cx| QueryClient::set_data(&keys::worktrees(id), worktrees, cx));
+    update(id, cx, |repository, cx| {
+        repository.set_worktrees(worktrees, cx)
+    });
 }
 
 pub fn set_remotes(id: &RepositoryId, remotes: &[&str], cx: &mut TestAppContext) {
     let remotes: Vec<String> = remotes.iter().map(|remote| (*remote).to_owned()).collect();
-    cx.update(|cx| QueryClient::set_data(&keys::remotes(id), remotes, cx));
+    update(id, cx, |repository, cx| repository.set_remotes(remotes, cx));
+}
+
+pub fn set_log(id: &RepositoryId, log: Log, cx: &mut TestAppContext) {
+    update(id, cx, |repository, cx| repository.set_log(log, cx));
+}
+
+/// The files the commit or stash `files.sha` changed, as `of`'s.
+pub fn set_files(id: &RepositoryId, of: FilesOf, files: ChangedFiles, cx: &mut TestAppContext) {
+    update(id, cx, |repository, cx| repository.set_files(of, files, cx));
+}
+
+/// The patch of a file in `source`, as if it had loaded.
+pub fn set_patch(
+    id: &RepositoryId,
+    source: &DiffSource,
+    patch: FilePatch,
+    cx: &mut TestAppContext,
+) {
+    update(id, cx, |repository, cx| {
+        repository.set_patch(source, patch, cx)
+    });
 }
 
 /// The repository `id` at `path`, named after its folder.

@@ -1,0 +1,428 @@
+//! What a [`Repository`] loads by a key (see `super::super::keyed`): where a commit was pushed, a
+//! file's patch, a conflict, a commit and its files and message.
+
+use futures::FutureExt as _;
+use futures::channel::oneshot;
+use gitto_git::features::conflicts::schema::Conflict;
+use gitto_git::features::diff::schema::ChangedFile;
+use gitto_git::features::history::schema::Commit;
+use gitto_git::input::{FullSha, RepoPath, Sha};
+use gitto_git::schema::FileStatus;
+use gpui_kit::{Context, Task};
+
+use super::{Part, PatchKey, Repository, failed, loaded_result};
+use crate::data::diff::{ChangedFiles, FilesOf};
+use crate::data::error::DataError;
+use crate::data::file_diff::FilePatch;
+use crate::data::git::{GitTask, file_input};
+use crate::data::keyed::Hold;
+use crate::data::loaded::Loaded;
+use crate::data::opaque::Opaque;
+use gitto_ui_logic::git::diff_source::{DiffFileKey, DiffSource, is_uncommitted};
+
+impl Repository {
+    /// Which remote branch has the commit `sha`, if that's loaded.
+    pub fn pushed_to(&self, sha: &str) -> Option<&Loaded<Option<String>>> {
+        self.pushed_to.get(&sha.to_owned())
+    }
+
+    /// Holds which remote branch has the commit `sha`, loading it unless it's loaded or loading,
+    /// and loading it again as the refs change, while it's held.
+    pub fn hold_pushed_to(&mut self, sha: &str, cx: &mut Context<Self>) -> Hold {
+        let hold = self.pushed_to.hold(sha.to_owned());
+        let loaded = self.pushed_to.entry(sha.to_owned());
+        if loaded.wants_load() {
+            drop(self.load_pushed_to(sha.to_owned(), cx));
+        }
+        hold
+    }
+
+    pub(super) fn load_pushed_to(
+        &mut self,
+        sha: String,
+        cx: &mut Context<Self>,
+    ) -> Option<oneshot::Receiver<()>> {
+        self.pushed_to.entry(sha.clone());
+        let key = sha.clone();
+        self.start(
+            Part::PushedTo,
+            move |repo| repo.pushed_to.get_mut(&key),
+            move |repo, _| match Sha::parse(sha.clone()) {
+                Ok(commit) => repo.git.pushed_to(commit),
+                Err(error) => failed(repo.git.invalid(error)),
+            },
+            cx,
+        )
+    }
+
+    /// The patch of the file at `path` in `source`, if that's loaded.
+    pub fn patch(&self, source: &DiffSource, path: &str) -> Option<&Loaded<FilePatch>> {
+        self.patches.get(&DiffFileKey::new(source, path))
+    }
+
+    /// Holds the patch of `file` in `source`, loading it unless it's loaded or loading, and
+    /// loading it again as the uncommitted changes change, if it's of those, while it's held; or as
+    /// `file` changes in a way that has git read it otherwise (see [`ask_patch`](Self::ask_patch)).
+    pub fn hold_patch(
+        &mut self,
+        source: &DiffSource,
+        file: &ChangedFile,
+        cx: &mut Context<Self>,
+    ) -> Hold {
+        let key = DiffFileKey::new(source, &file.path);
+        let hold = self.patches.hold(key.clone());
+        if self.ask_patch(&key, file) || self.patches.entry(key.clone()).wants_load() {
+            drop(self.load_patch(key, cx));
+        }
+        hold
+    }
+
+    /// The patch of `file` in `source`: what's loaded, or what loads; e.g. for a file about to be
+    /// opened.
+    pub fn fetch_patch(
+        &mut self,
+        source: &DiffSource,
+        file: &ChangedFile,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<FilePatch, DataError>> {
+        let key = DiffFileKey::new(source, &file.path);
+        let wait = if self.ask_patch(&key, file) || self.patches.entry(key.clone()).wants_load() {
+            self.load_patch(key.clone(), cx)
+        } else {
+            self.patches.entry(key.clone()).wait()
+        };
+        cx.spawn(async move |this, cx| {
+            if let Some(wait) = wait {
+                let _ = wait.await;
+            }
+            this.read_with(cx, |repo, _| loaded_result(repo.patches.get(&key)))?
+        })
+    }
+
+    /// Has the patch at `key` loaded for `file` from now on: as its list has it now, which a view
+    /// shows it for. Whether that has git read it otherwise than before, as its status or the path
+    /// it was renamed from changed (an untracked file whose lines were staged, say): what's loaded,
+    /// or loading, for the file as it was is then out of date, and the load under way is dropped.
+    fn ask_patch(&mut self, key: &PatchKey, file: &ChangedFile) -> bool {
+        let read_otherwise = self
+            .patches
+            .ask(key.clone(), file.clone())
+            .is_some_and(|before| {
+                before.status != file.status || before.orig_path != file.orig_path
+            });
+        if read_otherwise {
+            let loaded = self.patches.entry(key.clone());
+            loaded.drop_load();
+            loaded.mark_stale();
+        }
+        read_otherwise
+    }
+
+    /// Loads the patch at `key`, of the file it was last asked for.
+    pub(super) fn load_patch(
+        &mut self,
+        key: PatchKey,
+        cx: &mut Context<Self>,
+    ) -> Option<oneshot::Receiver<()>> {
+        self.patches.entry(key.clone());
+        let at = key.clone();
+        self.start(
+            Part::Patches,
+            move |repo| repo.patches.get_mut(&at),
+            move |repo, _| match repo.patches.asked(&key) {
+                Some(file) => repo.fetch_file_patch(&key.source, file),
+                None => failed(DataError::msg("No file was asked for.")),
+            },
+            cx,
+        )
+    }
+
+    /// Asks git for the patch of `file` in `source`.
+    fn fetch_file_patch(&self, source: &DiffSource, file: &ChangedFile) -> GitTask<FilePatch> {
+        let patch = match file_input(file) {
+            Err(error) => failed(self.git.invalid(error)),
+            Ok(input) => match source {
+                DiffSource::Commit { sha } => match Sha::parse(sha.clone()) {
+                    Ok(commit) => self.git.commit_file_patch(commit, input),
+                    Err(error) => failed(self.git.invalid(error)),
+                },
+                DiffSource::Stash { sha } => match FullSha::parse(sha.clone()) {
+                    Ok(stash) => self.git.stash_file_patch(stash, input),
+                    Err(error) => failed(self.git.invalid(error)),
+                },
+                DiffSource::Unstaged => {
+                    let untracked = file.status == FileStatus::Untracked;
+                    self.git.unstaged_file_patch(input, untracked)
+                }
+                DiffSource::Staged => self.git.staged_file_patch(input),
+            },
+        };
+        let key = DiffFileKey::new(source, &file.path);
+        let file = file.clone();
+        async move {
+            Ok(FilePatch {
+                key,
+                file,
+                patch: patch.await?.into(),
+            })
+        }
+        .boxed()
+    }
+
+    /// The conflicted file at `path`, if it's loaded.
+    pub fn conflict(&self, path: &str) -> Option<&Loaded<Conflict>> {
+        self.conflicts.get(&path.to_owned())
+    }
+
+    /// Holds the conflicted file at `path`, loading it unless it's loaded or loading, and loading
+    /// it again as the uncommitted changes change, while it's held.
+    pub fn hold_conflict(&mut self, path: &str, cx: &mut Context<Self>) -> Hold {
+        let hold = self.conflicts.hold(path.to_owned());
+        let loaded = self.conflicts.entry(path.to_owned());
+        if loaded.wants_load() {
+            drop(self.load_conflict(path.to_owned(), cx));
+        }
+        hold
+    }
+
+    /// Loads the conflicted file at `path` again: it changed on disk since it was read, say.
+    pub fn reload_conflict(
+        &mut self,
+        path: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<oneshot::Receiver<()>> {
+        self.load_conflict(path.to_owned(), cx)
+    }
+
+    /// The conflicted file at `path`: what's loaded, or what loads; e.g. for one about to be
+    /// opened.
+    pub fn fetch_conflict(
+        &mut self,
+        path: &str,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<Conflict, DataError>> {
+        let path = path.to_owned();
+        let wait = {
+            let loaded = self.conflicts.entry(path.clone());
+            if loaded.wants_load() {
+                self.load_conflict(path.clone(), cx)
+            } else if loaded.is_fetching() {
+                loaded.wait()
+            } else {
+                None
+            }
+        };
+        cx.spawn(async move |this, cx| {
+            if let Some(wait) = wait {
+                let _ = wait.await;
+            }
+            this.read_with(cx, |repo, _| loaded_result(repo.conflicts.get(&path)))?
+        })
+    }
+
+    pub(super) fn load_conflict(
+        &mut self,
+        path: String,
+        cx: &mut Context<Self>,
+    ) -> Option<oneshot::Receiver<()>> {
+        self.conflicts.entry(path.clone());
+        let key = path.clone();
+        self.start(
+            Part::Conflicts,
+            move |repo| repo.conflicts.get_mut(&key),
+            move |repo, _| match RepoPath::parse(path.clone()) {
+                Ok(file) => repo.git.conflict(file),
+                Err(error) => failed(repo.git.invalid(error)),
+            },
+            cx,
+        )
+    }
+
+    /// The contents of the object `oid`, a file's at some version: what's loaded, or what loads;
+    /// to show more of a file around its changes, say.
+    pub fn fetch_blob(
+        &mut self,
+        oid: &str,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<String, DataError>> {
+        let oid = oid.to_owned();
+        let wait = {
+            let loaded = self.blobs.entry(oid.clone());
+            if loaded.is_fetching() {
+                loaded.wait()
+            } else if loaded.is_stale() {
+                let (key, blob) = (oid.clone(), oid.clone());
+                self.start(
+                    Part::Patches,
+                    move |repo| repo.blobs.get_mut(&key),
+                    move |repo, _| match FullSha::parse(blob.clone()) {
+                        Ok(blob) => repo.git.blob(blob),
+                        Err(error) => failed(repo.git.invalid(error)),
+                    },
+                    cx,
+                )
+            } else {
+                None
+            }
+        };
+        cx.spawn(async move |this, cx| {
+            if let Some(wait) = wait {
+                let _ = wait.await;
+            }
+            this.read_with(cx, |repo, _| loaded_result(repo.blobs.get(&oid)))?
+        })
+    }
+
+    /// The commit `sha`, if it's loaded, or in the log: the log has all of a commit, so git isn't
+    /// asked for it again.
+    pub fn commit(&self, sha: &str) -> Option<&Commit> {
+        self.commits
+            .get(&sha.to_owned())
+            .and_then(Loaded::data)
+            .or_else(|| self.commit_in_log(sha))
+    }
+
+    /// Why loading the commit `sha` failed, if it did.
+    pub fn commit_error(&self, sha: &str) -> Option<&DataError> {
+        self.commits.get(&sha.to_owned()).and_then(Loaded::error)
+    }
+
+    fn commit_in_log(&self, sha: &str) -> Option<&Commit> {
+        self.log
+            .data()?
+            .commits
+            .iter()
+            .find(|commit| commit.sha == sha)
+    }
+
+    /// Holds the commit `sha`, loading it unless it's loaded or in the log.
+    pub fn hold_commit(&mut self, sha: &str, cx: &mut Context<Self>) -> Hold {
+        let hold = self.commits.hold(sha.to_owned());
+        if let Some(commit) = self.commit_in_log(sha).cloned() {
+            self.commits.set(sha.to_owned(), commit);
+        } else if self.commits.entry(sha.to_owned()).is_stale()
+            && !self.commits.entry(sha.to_owned()).is_fetching()
+        {
+            drop(self.load_commit(sha.to_owned(), cx));
+        }
+        hold
+    }
+
+    fn load_commit(
+        &mut self,
+        sha: String,
+        cx: &mut Context<Self>,
+    ) -> Option<oneshot::Receiver<()>> {
+        let key = sha.clone();
+        self.start(
+            Part::Commits,
+            move |repo| repo.commits.get_mut(&key),
+            move |repo, _| match Sha::parse(sha.clone()) {
+                Ok(commit) => repo.git.commit(commit),
+                Err(error) => failed(repo.git.invalid(error)),
+            },
+            cx,
+        )
+    }
+
+    /// The files the commit or stash `sha` changed, if they're loaded.
+    pub fn files(&self, of: FilesOf, sha: &str) -> Option<&Loaded<ChangedFiles>> {
+        self.files.get(&(of, sha.to_owned()))
+    }
+
+    /// Holds the files the commit or stash `sha` changed, loading them unless they're loaded.
+    pub fn hold_files(&mut self, of: FilesOf, sha: &str, cx: &mut Context<Self>) -> Hold {
+        let key = (of, sha.to_owned());
+        let hold = self.files.hold(key.clone());
+        let loaded = self.files.entry(key.clone());
+        if loaded.is_stale() && !loaded.is_fetching() {
+            drop(self.load_files(key, cx));
+        }
+        hold
+    }
+
+    fn load_files(
+        &mut self,
+        (of, sha): (FilesOf, String),
+        cx: &mut Context<Self>,
+    ) -> Option<oneshot::Receiver<()>> {
+        let key = (of, sha.clone());
+        self.start(
+            Part::Commits,
+            move |repo| repo.files.get_mut(&key),
+            move |repo, _| {
+                let files = match of {
+                    FilesOf::Commit => match Sha::parse(sha.clone()) {
+                        Ok(commit) => repo.git.commit_files(commit),
+                        Err(error) => failed(repo.git.invalid(error)),
+                    },
+                    FilesOf::Stash => match FullSha::parse(sha.clone()) {
+                        Ok(stash) => repo.git.stash_files(stash),
+                        Err(error) => failed(repo.git.invalid(error)),
+                    },
+                };
+                let sha = sha.clone();
+                async move {
+                    Ok(ChangedFiles {
+                        sha,
+                        files: Opaque::new(files.await?),
+                    })
+                }
+                .boxed()
+            },
+            cx,
+        )
+    }
+
+    /// Loads again what's held by a key, of what never changes, and failed to load: once git works
+    /// again, say. What's of the uncommitted changes is reloaded with them, and what failed that
+    /// nothing holds is loaded again once it's asked for (see `Loaded::is_stale`).
+    pub(crate) fn reload_failed(&mut self, cx: &mut Context<Self>) {
+        for sha in self.commits.held_failed() {
+            drop(self.load_commit(sha, cx));
+        }
+        for key in self.files.held_failed() {
+            drop(self.load_files(key, cx));
+        }
+        for sha in self.messages.held_failed() {
+            drop(self.load_message(sha, cx));
+        }
+        for key in self.patches.held_failed() {
+            if !is_uncommitted(&key.source) {
+                drop(self.load_patch(key, cx));
+            }
+        }
+    }
+
+    /// The commit `sha`'s whole message, if it's loaded.
+    pub fn message(&self, sha: &str) -> Option<&Loaded<String>> {
+        self.messages.get(&sha.to_owned())
+    }
+
+    /// Holds the commit `sha`'s whole message, loading it unless it's loaded.
+    pub fn hold_message(&mut self, sha: &str, cx: &mut Context<Self>) -> Hold {
+        let hold = self.messages.hold(sha.to_owned());
+        let loaded = self.messages.entry(sha.to_owned());
+        if loaded.is_stale() && !loaded.is_fetching() {
+            drop(self.load_message(sha.to_owned(), cx));
+        }
+        hold
+    }
+
+    fn load_message(
+        &mut self,
+        sha: String,
+        cx: &mut Context<Self>,
+    ) -> Option<oneshot::Receiver<()>> {
+        let key = sha.clone();
+        self.start(
+            Part::Commits,
+            move |repo| repo.messages.get_mut(&key),
+            move |repo, _| match Sha::parse(sha.clone()) {
+                Ok(commit) => repo.git.commit_message(commit),
+                Err(error) => failed(repo.git.invalid(error)),
+            },
+            cx,
+        )
+    }
+}

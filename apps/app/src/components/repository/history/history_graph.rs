@@ -5,7 +5,7 @@
 //! in a tooltip. The geometry is the TS's, in pixels of the 15px base, scaled with the window's
 //! rem size so the graph zooms with the rest of the app.
 
-use gitto_ui::git::graph::{GraphEdge, GraphRow};
+use gitto_ui_logic::git::graph::{GraphEdge, GraphRow};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     App, BorderStyle, Bounds, ElementId, FontWeight, Hsla, PathBuilder, Pixels, Rems, SharedString,
@@ -14,7 +14,7 @@ use gpui_kit::{
 
 use super::author_tooltip::{GraphAuthor, author_tooltip};
 use super::columns::{ROW_HEIGHT, ROW_PX, part};
-use crate::theme::{FONT_SIZE, Palette, PaletteExt as _, base_px};
+use gitto_app_kit::theme::{FONT_SIZE, Palette, PaletteExt as _, base_px};
 
 /// Width of a lane, and the space left and right of the lanes.
 const LANE: f32 = 20.;
@@ -394,7 +394,7 @@ fn commit_node(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::base_px;
+    use gitto_app_kit::theme::base_px;
 
     /// A path as the TS's SVG `d` attribute spelled it.
     fn svg(path: &[PathStep]) -> String {

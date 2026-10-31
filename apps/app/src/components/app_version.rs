@@ -6,11 +6,11 @@ use gpui_kit::component::{Sizable as _, h_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{App, TestSupportExt as _, Window, div};
 
-use crate::components::ui::{Divider, IconName, LinkButton};
-use crate::services::system::{UpdateChannel, UpdateState};
-use crate::state::update::UpdateStatus;
-use crate::state::whats_new::WhatsNew;
-use crate::theme::PaletteExt as _;
+use gitto_app_data::services::system::{UpdateChannel, UpdateState};
+use gitto_app_data::state::update::UpdateStatus;
+use gitto_app_data::state::whats_new::WhatsNew;
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{Divider, IconName, LinkButton};
 
 /// Which Gitto this is, which opens what's new in it, and the update it's getting: restarting
 /// into it, once it's downloaded. Nothing until the updater says (its owner observes
@@ -95,8 +95,8 @@ mod tests {
     use gpui_kit::{Context, IntoElement, Render, TestAppContext, Window};
 
     use super::*;
-    use crate::services::system::Update;
     use crate::test_support;
+    use gitto_app_data::services::system::Update;
 
     /// A window showing the version, as `state` says.
     struct Host {

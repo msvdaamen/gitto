@@ -3,7 +3,7 @@
 use std::ops::Range;
 use std::rc::Rc;
 
-use gitto_ui::format::compact_count;
+use gitto_ui_logic::format::compact_count;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::spinner::Spinner;
@@ -15,9 +15,9 @@ use gpui_kit::{
 };
 
 use super::sidebar_row::{ROW_HEIGHT, ROW_PX, RowAction};
-use crate::components::ui::{FailurePopover, Icon, IconName, VirtualList};
-use crate::data::QueryError;
-use crate::theme::{PaletteExt as _, base_px};
+use gitto_app_data::data::DataError;
+use gitto_app_kit::theme::{PaletteExt as _, base_px};
+use gitto_app_kit::ui::{FailurePopover, Icon, IconName, VirtualList};
 
 /// Height of a section's header.
 const HEADER_HEIGHT: f32 = 30.;
@@ -44,7 +44,7 @@ pub type RenderRows = Rc<dyn Fn(Range<usize>, &mut Window, &mut App) -> Vec<AnyE
 /// Why an action on a section's items failed, shown beside the section until dismissed.
 pub struct SectionFailure {
     pub title: SharedString,
-    pub error: Option<QueryError>,
+    pub error: Option<DataError>,
     pub on_dismiss: RowAction,
 }
 
@@ -197,7 +197,7 @@ impl SidebarSection {
                 FailurePopover::new(
                     SharedString::from(format!("{}-failure", self.id)),
                     failure.title,
-                    failure.error.map(|error| error.message().into()),
+                    failure.error.map(|error| error.to_string().into()),
                     FailureAnchor::default(),
                 )
                 .on_dismiss(move |window, cx| on_dismiss(window, cx)),

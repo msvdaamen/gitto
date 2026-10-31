@@ -12,11 +12,11 @@ use gpui_kit::{
 
 use super::demo_action::demo_action;
 use super::summaries::RepositorySummary;
-use crate::components::ui::{FailurePopover, Icon, IconName};
-use crate::data::QueryError;
-use crate::state::clock::relative_time;
-use crate::theme::breakpoints::MEDIUM;
-use crate::theme::{AppTheme, PaletteExt as _, base_px};
+use gitto_app_data::data::DataError;
+use gitto_app_data::state::clock::relative_time;
+use gitto_app_kit::theme::breakpoints::MEDIUM;
+use gitto_app_kit::theme::{AppTheme, PaletteExt as _, base_px};
+use gitto_app_kit::ui::{FailurePopover, Icon, IconName};
 
 type Handler = Rc<dyn Fn(&mut Window, &mut App) + 'static>;
 
@@ -27,7 +27,7 @@ pub struct WelcomeHero {
     pub(crate) user_name: Option<SharedString>,
     pub(crate) summaries: Rc<[RepositorySummary]>,
     /// Why the last repository couldn't be opened, under the button, until it's dismissed.
-    pub(crate) open_error: Option<QueryError>,
+    pub(crate) open_error: Option<DataError>,
     pub(crate) on_open_repository: Handler,
     pub(crate) on_dismiss_open_error: Handler,
 }
@@ -36,7 +36,7 @@ impl WelcomeHero {
     pub fn new(
         user_name: Option<SharedString>,
         summaries: Rc<[RepositorySummary]>,
-        open_error: Option<QueryError>,
+        open_error: Option<DataError>,
         on_open_repository: impl Fn(&mut Window, &mut App) + 'static,
         on_dismiss_open_error: impl Fn(&mut Window, &mut App) + 'static,
     ) -> Self {
@@ -155,7 +155,7 @@ impl RenderOnce for WelcomeHero {
                                 FailurePopover::new(
                                     "open-repository-failure",
                                     "Open repository",
-                                    self.open_error.map(|error| error.message().into()),
+                                    self.open_error.map(|error| error.to_string().into()),
                                     Button::new("open-repository")
                                         .primary()
                                         .icon(Icon::new(IconName::Folder))

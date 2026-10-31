@@ -12,10 +12,10 @@ use gpui_kit::{
 };
 
 use super::changed_file_list::{ChangedFileList, ROW_PITCH};
-use crate::components::ui::{Icon, IconName, LineStats, SectionHeader};
-use crate::data::{Opaque, QueryError};
-use crate::theme::{PaletteExt as _, base_px};
-use gitto_ui::git::changes::LineCounts;
+use gitto_app_data::data::{DataError, Opaque};
+use gitto_app_kit::theme::{PaletteExt as _, base_px};
+use gitto_app_kit::ui::{Icon, IconName, LineStats, SectionHeader};
+use gitto_ui_logic::git::changes::LineCounts;
 
 /// Why some of the details couldn't be loaded, e.g. "Couldn't load the commit", above the rest;
 /// nothing without an error.
@@ -23,14 +23,14 @@ use gitto_ui::git::changes::LineCounts;
 pub struct DetailsError {
     id: ElementId,
     title: SharedString,
-    error: Option<QueryError>,
+    error: Option<DataError>,
 }
 
 impl DetailsError {
     pub fn new(
         id: impl Into<ElementId>,
         title: impl Into<SharedString>,
-        error: Option<QueryError>,
+        error: Option<DataError>,
     ) -> Self {
         DetailsError {
             id: id.into(),
@@ -68,7 +68,7 @@ impl RenderOnce for DetailsError {
                         div()
                             .text_xs()
                             .text_color(palette.coral)
-                            .child(error.message()),
+                            .child(error.to_string()),
                     ),
             )
         })

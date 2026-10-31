@@ -1,20 +1,20 @@
 //! The menu of what can be done with a commit. Ported from
 //! `components/repository/history/commit-menu.tsx`.
 
-use gitto_git::features::operation::schema::Operation;
-use gitto_git::features::status::schema::{Head, StatusSummary, Uncommitted};
+use gitto_git::features::status::schema::Head;
 use gitto_git::input::RepositoryId;
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::{
-    AppContext as _, Context, Entity, EventEmitter, SharedString, Subscription, Window,
+    App, AppContext as _, Context, Entity, EventEmitter, SharedString, Subscription, Window,
 };
 
-use super::reword_dialog::{RewordDialog, RewordEvent, RewordMutation};
+use super::reword_dialog::{RewordDialog, RewordEvent};
 use crate::components::repository::row_menu::RowMenu;
-use crate::components::ui::{IconName, context_menu_item};
-use crate::data::progress::operation_in_progress_query;
-use crate::data::status::status_query;
-use crate::data::{Opaque, Query};
+use gitto_app_data::data::{Part, Shown};
+use gitto_app_kit::ui::{IconName, context_menu_item};
+
+/// What the commit menu shows of the repository: HEAD, and whether an operation is under way.
+const PARTS: &[Part] = &[Part::Status, Part::Operation];
 
 /// The menu of what can be done with a commit, opened by right-clicking its row in the history
 /// (see `HistoryOption::menu`). Only the last commit of the checked-out branch has one, to edit
@@ -23,9 +23,7 @@ use crate::data::{Opaque, Query};
 /// innermost element's menu opens. An entity, kept by the history: it says which commit's menu
 /// is open, for its row to show, and passes on the dialog's [`RewordEvent`]s.
 pub struct CommitMenu {
-    repository_id: RepositoryId,
-    status: Query<Opaque<Uncommitted>, StatusSummary>,
-    operation: Query<Option<Operation>>,
+    repository: Shown,
     menu: RowMenu,
     reword: Entity<RewordDialog>,
     _subscription: Subscription,
@@ -36,33 +34,11 @@ impl EventEmitter<RewordEvent> for CommitMenu {}
 impl CommitMenu {
     pub fn new(repository_id: RepositoryId, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let reword = cx.new(|cx| RewordDialog::new(repository_id.clone(), window, cx));
-        CommitMenu::with_dialog(repository_id, reword, cx)
-    }
-
-    /// With the dialog rewording commits with `reword`: a test's.
-    pub(crate) fn with_reword(
-        repository_id: RepositoryId,
-        reword: Entity<RewordMutation>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let dialog =
-            cx.new(|cx| RewordDialog::with_reword(repository_id.clone(), reword, window, cx));
-        CommitMenu::with_dialog(repository_id, dialog, cx)
-    }
-
-    fn with_dialog(
-        repository_id: RepositoryId,
-        reword: Entity<RewordDialog>,
-        cx: &mut Context<Self>,
-    ) -> Self {
         let subscription = cx.subscribe(&reword, |_, _, event: &RewordEvent, cx| {
             cx.emit(event.clone())
         });
         CommitMenu {
-            status: status_query(&repository_id, cx),
-            operation: operation_in_progress_query(&repository_id, cx),
-            repository_id,
+            repository: Shown::new(&repository_id, PARTS, cx),
             menu: RowMenu::default(),
             reword,
             _subscription: subscription,
@@ -77,12 +53,9 @@ impl CommitMenu {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.repository_id == repository_id {
+        if !self.repository.set(&repository_id, cx) {
             return;
         }
-        self.status = status_query(&repository_id, cx);
-        self.operation = operation_in_progress_query(&repository_id, cx);
-        self.repository_id = repository_id.clone();
         self.menu.close(cx);
         self.reword.update(cx, |dialog, cx| {
             dialog.set_repository(repository_id, window, cx)
@@ -95,16 +68,16 @@ impl CommitMenu {
     }
 
     /// The last commit of the checked-out branch; none with HEAD detached, or before the first.
-    pub fn branch_tip(&self) -> Option<String> {
-        match self.status.data()?.head {
-            Head::Branch { sha, .. } => Some(sha),
+    pub fn branch_tip(&self, cx: &App) -> Option<String> {
+        match &self.repository.read(cx).status().data()?.summary.head {
+            Head::Branch { sha, .. } => Some(sha.clone()),
             Head::Detached { .. } | Head::Unborn { .. } => None,
         }
     }
 
     /// Whether the commit `sha` has a menu: it's the last of the checked-out branch.
-    pub fn has_menu(&self, sha: &str) -> bool {
-        self.branch_tip().as_deref() == Some(sha)
+    pub fn has_menu(&self, sha: &str, cx: &App) -> bool {
+        self.branch_tip(cx).as_deref() == Some(sha)
     }
 
     /// The SHA of the commit whose menu is open, if any, for its row to show which one it's for.
@@ -125,7 +98,7 @@ impl CommitMenu {
         menu: PopupMenu,
         cx: &mut Context<PopupMenu>,
     ) -> PopupMenu {
-        if !this.read(cx).has_menu(&sha) {
+        if !this.read(cx).has_menu(&sha, cx) {
             return menu;
         }
         RowMenu::track(
@@ -135,7 +108,8 @@ impl CommitMenu {
             cx,
         );
         // Not while an operation is under way; also until it's known whether one is.
-        let disabled = this.read(cx).operation.data() != Some(None);
+        let operation = this.read(cx).repository.read(cx).operation().data();
+        let disabled = operation != Some(&None);
         let this = this.clone();
         menu.item(context_menu_item(
             IconName::PenLine,

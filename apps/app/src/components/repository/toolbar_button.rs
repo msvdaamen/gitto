@@ -9,10 +9,10 @@ use gpui_kit::component::{Disableable as _, Selectable, Sizable as _, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{App, ClickEvent, ElementId, FontWeight, SharedString, Window, div, rems};
 
-use crate::components::ui::{FailurePopover, Icon, IconName};
-use crate::data::QueryError;
-use crate::theme::PaletteExt as _;
-use crate::theme::breakpoints::{LARGE, MEDIUM, SMALL};
+use gitto_app_data::data::DataError;
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::theme::breakpoints::{LARGE, MEDIUM, SMALL};
+use gitto_app_kit::ui::{FailurePopover, Icon, IconName};
 
 /// Below which window width a toolbar button is left out, to make room (TS's `hideBelow`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,7 +38,7 @@ type OnDismiss = Rc<dyn Fn(&mut Window, &mut App) + 'static>;
 /// Why the button's action failed, shown under it until dismissed (see `FailurePopover`).
 struct Failure {
     title: SharedString,
-    error: Option<QueryError>,
+    error: Option<DataError>,
     on_dismiss: OnDismiss,
 }
 
@@ -132,7 +132,7 @@ impl ToolbarButton {
     pub fn failure(
         mut self,
         title: impl Into<SharedString>,
-        error: Option<QueryError>,
+        error: Option<DataError>,
         on_dismiss: impl Fn(&mut Window, &mut App) + 'static,
     ) -> Self {
         self.failure = Some(Failure {
@@ -173,7 +173,7 @@ impl ToolbarButton {
     }
 
     /// Why its action failed, if that's shown.
-    pub fn shown_failure(&self) -> Option<&QueryError> {
+    pub fn shown_failure(&self) -> Option<&DataError> {
         self.failure
             .as_ref()
             .and_then(|failure| failure.error.as_ref())
@@ -274,7 +274,7 @@ impl RenderOnce for ToolbarButton {
                 FailurePopover::new(
                     SharedString::from(format!("{}-failure", self.id)),
                     failure.title,
-                    failure.error.map(|error| error.message().into()),
+                    failure.error.map(|error| error.to_string().into()),
                     button,
                 )
                 .on_dismiss(move |window, cx| on_dismiss(window, cx))

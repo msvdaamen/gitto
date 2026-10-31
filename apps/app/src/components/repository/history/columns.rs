@@ -10,7 +10,7 @@ use std::sync::Arc;
 use gpui_kit::prelude::*;
 use gpui_kit::{Div, ElementId, Hsla, Rems, SharedString, rems};
 
-use crate::theme::base_px;
+use gitto_app_kit::theme::base_px;
 
 /// Height of a history row in pixels of the 15px base, including its 1px bottom border: the
 /// graph's rows are drawn to it.

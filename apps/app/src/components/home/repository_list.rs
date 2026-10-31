@@ -11,9 +11,9 @@ use gpui_kit::{AnyElement, App, Entity, SharedString, TestSupportExt as _, Windo
 
 use super::repository_card::RepositoryCard;
 use super::summaries::RepositorySummary;
-use crate::components::ui::{Icon, IconName, TextInput};
-use crate::theme::PaletteExt as _;
-use crate::theme::breakpoints::SMALL;
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::theme::breakpoints::SMALL;
+use gitto_app_kit::ui::{Icon, IconName, TextInput};
 
 type Handler = Rc<dyn Fn(&mut Window, &mut App) + 'static>;
 
@@ -212,8 +212,8 @@ mod tests {
 
     use super::*;
     use crate::components::home::test_support::{self as home, GITTO, NOTES};
-    use crate::state::router::{Route, Router};
     use crate::test_support;
+    use gitto_app_data::state::router::{Route, Router};
 
     /// The card of the repository with `id`.
     fn card(id: &str) -> SharedString {

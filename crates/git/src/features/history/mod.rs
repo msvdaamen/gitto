@@ -2,6 +2,6 @@
 //!
 //! Ported from `packages/git/src/features/history/`.
 
-pub mod commands;
+pub(crate) mod commands;
 pub(crate) mod parse;
 pub mod schema;

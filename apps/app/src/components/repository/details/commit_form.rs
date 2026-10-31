@@ -2,21 +2,23 @@
 //! `components/repository/details/commit-form.tsx`.
 
 use gitto_git::input::RepositoryId;
-use gitto_ui::git::message::{CommitMessage, edit_message, join_message, split_message};
+use gitto_ui_logic::git::message::{CommitMessage, edit_message, join_message, split_message};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, v_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{Context, Entity, FontWeight, SharedString, Subscription, Window, div, rems};
+use gpui_kit::{App, Context, Entity, FontWeight, SharedString, Subscription, Window, div, rems};
 
-use super::details_data::DetailsData;
 use crate::components::repository::commit_message::{
     CommitMessageEditor, CommitMessageEvent, push_warning,
 };
-use crate::components::ui::{Icon, IconName};
-use crate::data::commit::NewCommit;
-use crate::data::{Mutation, Query, QueryError};
-use crate::theme::{PaletteExt as _, base_px};
+use gitto_app_data::data::commit::{NewCommit, create_commit_mutation};
+use gitto_app_data::data::keyed::Hold;
+use gitto_app_data::data::{
+    DataError, Loaded, Mutation, Part, Repositories, Repository, observe_parts,
+};
+use gitto_app_kit::theme::{PaletteExt as _, base_px};
+use gitto_app_kit::ui::{Icon, IconName};
 
 /// The shortcut that commits, as the button shows it.
 const SHORTCUT: &str = if cfg!(target_os = "macos") {
@@ -40,7 +42,9 @@ pub struct CommitForm {
     staged_count: usize,
     /// The commit to amend, HEAD's; `None` before the first commit.
     last_commit: Option<String>,
-    data: DetailsData,
+    /// The repository `repository_id`, which loads the last commit's message and where it was
+    /// pushed.
+    repository: Entity<Repository>,
     commit: Entity<Mutation<(RepositoryId, NewCommit)>>,
     /// The commit being amended (as [`head`](Self::head)). Amending stops once HEAD moves to
     /// another commit: after the amend, or when one is made or checked out elsewhere, so a stale
@@ -50,21 +54,21 @@ pub struct CommitForm {
     /// Edits to the amended message, kept for the commit they were made to while amending is
     /// toggled.
     edits: Option<(Head, CommitMessage)>,
-    /// The last commit's message and where it was pushed, loaded while amending it.
-    last_message: Query<String>,
-    pushed_to: Query<Option<String>>,
+    /// Holds the last commit's message and where it was pushed, loaded while amending it.
+    amend_holds: Option<(Hold, Hold)>,
     editor: Entity<CommitMessageEditor>,
+    _repository_changes: Subscription,
     _subscriptions: Vec<Subscription>,
 }
 
+/// What the form shows of the repository.
+const PARTS: &[Part] = &[Part::Commits, Part::PushedTo];
+
 impl CommitForm {
-    pub fn new(
-        repository_id: RepositoryId,
-        data: DetailsData,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let commit = data.create_commit(cx);
+    pub fn new(repository_id: RepositoryId, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let commit = create_commit_mutation(cx);
+        let repository = Repositories::open(&repository_id, cx);
+        let repository_changes = observe_parts(&repository, PARTS, cx);
         let editor = cx.new(|cx| CommitMessageEditor::new(3, window, cx));
         let subscriptions = vec![
             cx.observe(&commit, |_, _, cx| cx.notify()),
@@ -78,23 +82,18 @@ impl CommitForm {
                 CommitMessageEvent::Submit => this.submit(cx),
             }),
         ];
-        let last_message = Query::new(
-            data.commit_message(&repository_id, "", cx).enabled(false),
-            cx,
-        );
-        let pushed_to = Query::new(data.pushed_to(&repository_id, "", cx).enabled(false), cx);
         CommitForm {
             repository_id,
             staged_count: 0,
             last_commit: None,
-            data,
+            repository,
             commit,
             amending: None,
             draft: CommitMessage::default(),
             edits: None,
-            last_message,
-            pushed_to,
+            amend_holds: None,
             editor,
+            _repository_changes: repository_changes,
             _subscriptions: subscriptions,
         }
     }
@@ -115,20 +114,14 @@ impl CommitForm {
         }
         self.staged_count = staged_count;
         if moved {
+            if self.repository_id != repository_id {
+                self.repository = Repositories::open(&repository_id, cx);
+                self._repository_changes = observe_parts(&self.repository, PARTS, cx);
+            }
             self.repository_id = repository_id;
             self.last_commit = last_commit;
             self.amending = None;
-            let sha = self.last_commit.clone().unwrap_or_default();
-            let message = self
-                .data
-                .commit_message(&self.repository_id, &sha, cx)
-                .enabled(false);
-            self.last_message.set_options(message, cx);
-            let pushed_to = self
-                .data
-                .pushed_to(&self.repository_id, &sha, cx)
-                .enabled(false);
-            self.pushed_to.set_options(pushed_to, cx);
+            self.amend_holds = None;
         }
         cx.notify();
     }
@@ -153,20 +146,35 @@ impl CommitForm {
             .is_some_and(|head| self.is_head(head))
     }
 
+    /// The last commit's message, as far as it's loaded.
+    fn last_message<'a>(&self, cx: &'a App) -> Option<&'a Loaded<String>> {
+        self.repository.read(cx).message(self.last_commit.as_ref()?)
+    }
+
+    /// Which remote branch has the last commit, as far as that's loaded.
+    fn pushed_to<'a>(&self, cx: &'a App) -> Option<&'a Loaded<Option<String>>> {
+        self.repository
+            .read(cx)
+            .pushed_to(self.last_commit.as_ref()?)
+    }
+
+    /// The last commit's message, once loaded, and if the last load didn't fail.
+    fn original(&self, cx: &App) -> Option<String> {
+        self.last_message(cx)
+            .filter(|message| message.is_success())
+            .and_then(Loaded::data)
+            .cloned()
+    }
+
     /// The last commit's message, split, once loaded.
-    fn loaded(&self) -> Option<CommitMessage> {
-        if !self.last_message.is_success() {
-            return None;
-        }
-        self.last_message
-            .data()
-            .map(|message| split_message(&message))
+    fn loaded(&self, cx: &App) -> Option<CommitMessage> {
+        self.original(cx).map(|message| split_message(&message))
     }
 
     /// Whether the fields wait: for the last commit's message while amending (also if it failed
     /// to load, which the error says, so no edits stand in for it), or for the commit.
-    fn is_locked(&self, cx: &gpui_kit::App) -> bool {
-        (self.is_amending() && self.loaded().is_none()) || self.commit.read(cx).is_pending()
+    fn is_locked(&self, cx: &App) -> bool {
+        (self.is_amending() && self.loaded(cx).is_none()) || self.commit.read(cx).is_pending()
     }
 
     fn amend_edits(&self) -> Option<CommitMessage> {
@@ -177,10 +185,10 @@ impl CommitForm {
     }
 
     /// The message on show: the amended one's, or the new commit's.
-    pub fn message(&self) -> CommitMessage {
+    pub fn message(&self, cx: &App) -> CommitMessage {
         if self.is_amending() {
             self.amend_edits()
-                .or_else(|| self.loaded())
+                .or_else(|| self.loaded(cx))
                 .unwrap_or_default()
         } else {
             self.draft.clone()
@@ -189,7 +197,7 @@ impl CommitForm {
 
     /// The message on show was typed as `message`.
     fn edit(&mut self, message: CommitMessage, cx: &mut Context<Self>) {
-        if message == self.message() {
+        if message == self.message(cx) {
             return;
         }
         match self.head().filter(|_| self.is_amending()) {
@@ -202,35 +210,43 @@ impl CommitForm {
     /// Turns amending on or off; either way, the last commit's failure is forgotten.
     pub fn toggle_amend(&mut self, checked: bool, cx: &mut Context<Self>) {
         self.amending = if checked { self.head() } else { None };
-        let amend = self.is_amending();
-        self.last_message.set_enabled(amend, cx);
-        self.pushed_to.set_enabled(amend, cx);
+        self.amend_holds = self
+            .last_commit
+            .clone()
+            .filter(|_| self.is_amending())
+            .map(|sha| {
+                self.repository.update(cx, |repository, cx| {
+                    (
+                        repository.hold_message(&sha, cx),
+                        repository.hold_pushed_to(&sha, cx),
+                    )
+                })
+            });
         self.commit.update(cx, |commit, cx| commit.reset(cx));
         cx.notify();
     }
 
     /// The message to amend with, once the last one has loaded: what wasn't edited of it exactly
     /// as written, not as the form split it into two fields.
-    fn amended_message(&self) -> Option<String> {
-        self.loaded()?;
-        let original = self.last_message.data()?;
-        Some(edit_message(&original, &self.message()))
+    fn amended_message(&self, cx: &App) -> Option<String> {
+        let original = self.original(cx)?;
+        Some(edit_message(&original, &self.message(cx)))
     }
 
     /// Whether amending changes anything: with nothing staged and the same message, it would
     /// only rewrite the commit's date.
-    fn amend_changes(&self) -> bool {
+    fn amend_changes(&self, cx: &App) -> bool {
         self.staged_count > 0
             || self
-                .amended_message()
-                .is_some_and(|amended| Some(amended) != self.last_message.data())
+                .amended_message(cx)
+                .is_some_and(|amended| Some(amended) != self.original(cx))
     }
 
-    pub fn can_commit(&self, cx: &gpui_kit::App) -> bool {
-        !self.message().summary.trim().is_empty()
+    pub fn can_commit(&self, cx: &App) -> bool {
+        !self.message(cx).summary.trim().is_empty()
             // Once the push check is done too, so its warning is seen before amending.
             && if self.is_amending() {
-                self.amend_changes() && !self.pushed_to.is_pending()
+                self.amend_changes(cx) && !self.pushed_to(cx).is_none_or(Loaded::is_pending)
             } else {
                 self.staged_count > 0
             }
@@ -245,15 +261,17 @@ impl CommitForm {
         let amended = self.last_commit.clone().filter(|_| self.is_amending());
         let message = amended
             .as_ref()
-            .and_then(|_| self.amended_message())
-            .unwrap_or_else(|| join_message(&self.message()));
-        let input = (
-            self.repository_id.clone(),
-            NewCommit {
-                message,
-                amend: amended.clone(),
-            },
-        );
+            .and_then(|_| self.amended_message(cx))
+            .unwrap_or_else(|| join_message(&self.message(cx)));
+        let input = match NewCommit::parse(message, amended.clone()) {
+            Ok(commit) => (self.repository_id.clone(), commit),
+            Err(error) => {
+                let error = self.repository.read(cx).git().invalid(error);
+                self.commit
+                    .update(cx, |commit, cx| commit.refuse(error, cx));
+                return;
+            }
+        };
         let done = self
             .commit
             .update(cx, |commit, cx| commit.mutate(input, cx));
@@ -287,29 +305,30 @@ impl CommitForm {
 
     /// Why the commit, or the amend's last message, failed, if either did. Not whether it's been
     /// pushed: that only decides the warning, and doesn't stop amending.
-    pub fn error(&self, cx: &gpui_kit::App) -> Option<QueryError> {
-        self.commit
-            .read(cx)
-            .error()
-            .cloned()
-            .or_else(|| self.last_message.error().filter(|_| self.is_amending()))
+    pub fn error(&self, cx: &App) -> Option<DataError> {
+        self.commit.read(cx).error().cloned().or_else(|| {
+            self.last_message(cx)
+                .and_then(Loaded::error)
+                .filter(|_| self.is_amending())
+                .cloned()
+        })
     }
 
     /// What to know before amending: the last commit is already on a remote branch, or whether it
     /// is couldn't be checked; amending it then means force-pushing.
-    pub fn push_warning(&self) -> Option<String> {
+    pub fn push_warning(&self, cx: &App) -> Option<String> {
         if !self.is_amending() {
             return None;
         }
-        push_warning(&self.pushed_to, "the last commit", "amending it")
+        push_warning(self.pushed_to(cx), "the last commit", "amending it")
     }
 
     /// Puts the message on show in the fields once it changed other than by typing (amending
     /// turned on or off, the last message loaded, a commit made, HEAD moved), and says in the
     /// summary's placeholder when the last commit's message is loading.
     fn show(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let message = self.message();
-        let loading = self.is_amending() && self.last_message.is_pending();
+        let message = self.message(cx);
+        let loading = self.is_amending() && self.last_message(cx).is_none_or(Loaded::is_pending);
         self.editor.update(cx, |editor, cx| {
             editor.set_message(&message, false, window, cx);
             editor.set_loading(loading.then_some("Loading the last commit…"), window, cx);
@@ -323,7 +342,7 @@ impl Render for CommitForm {
         let amend = self.is_amending();
         let locked = self.is_locked(cx);
         let pending = self.commit.read(cx).is_pending();
-        let warning = self.push_warning();
+        let warning = self.push_warning(cx);
         let error = self.error(cx);
         let can_commit = self.can_commit(cx);
         let label = self.label();
@@ -391,459 +410,11 @@ impl Render for CommitForm {
                         .text_xs()
                         .text_color(palette.coral)
                         .whitespace_normal()
-                        .child(error.message()),
+                        .child(error.to_string()),
                 )
             })
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use std::rc::Rc;
-
-    use gpui_kit::test::TestWindowExt as _;
-    use gpui_kit::{AnyWindowHandle, TestAppContext};
-
-    use super::*;
-    use crate::components::repository::details::test_fakes::{
-        Fakes, open, other_repository_id, repository_id,
-    };
-
-    /// The form, with files staged and HEAD at a commit, in a window.
-    struct Form {
-        _dir: tempfile::TempDir,
-        window: AnyWindowHandle,
-        form: Entity<CommitForm>,
-        fakes: Rc<Fakes>,
-    }
-
-    fn render_form(cx: &mut TestAppContext, staged: usize, last_commit: Option<&str>) -> Form {
-        let fakes = Fakes::new();
-        let data = fakes.data();
-        let last_commit = last_commit.map(str::to_owned);
-        let (dir, window, form) = open(cx, move |window, cx| {
-            let mut form = CommitForm::new(repository_id(), data, window, cx);
-            form.set_head(repository_id(), staged, last_commit, cx);
-            form
-        });
-        Form {
-            _dir: dir,
-            window,
-            form,
-            fakes,
-        }
-    }
-
-    impl Form {
-        fn click(&self, id: &'static str, cx: &mut TestAppContext) {
-            cx.update_window(self.window, |_, window, cx| window.click(id, cx))
-                .unwrap();
-            cx.run_until_parked();
-        }
-
-        /// Types `text` in the summary, at its end; `replace` first selects what's there.
-        fn type_summary(&self, text: &str, replace: bool, cx: &mut TestAppContext) {
-            let summary = self
-                .form
-                .read_with(cx, |form, cx| form.editor.read(cx).summary().clone());
-            cx.update_window(self.window, |_, window, cx| {
-                summary.update(cx, |input, cx| input.focus(window, cx));
-                window.render_frame(cx);
-                window.press(if replace { "secondary-a" } else { "end" }, cx);
-                window.input(text, cx);
-            })
-            .unwrap();
-            cx.run_until_parked();
-        }
-
-        /// Moves to the end of a multi-line input: there's no key for it every platform shares.
-        #[cfg(target_os = "macos")]
-        const TO_END: &str = "cmd-down";
-        #[cfg(not(target_os = "macos"))]
-        const TO_END: &str = "ctrl-end";
-
-        fn type_description(&self, text: &str, cx: &mut TestAppContext) {
-            let description = self
-                .form
-                .read_with(cx, |form, cx| form.editor.read(cx).description().clone());
-            cx.update_window(self.window, |_, window, cx| {
-                description.update(cx, |input, cx| input.focus(window, cx));
-                window.render_frame(cx);
-                window.press(Self::TO_END, cx);
-                window.input(text, cx);
-            })
-            .unwrap();
-            cx.run_until_parked();
-        }
-
-        fn set_head(
-            &self,
-            repository_id: RepositoryId,
-            staged: usize,
-            sha: Option<&str>,
-            cx: &mut TestAppContext,
-        ) {
-            let sha = sha.map(str::to_owned);
-            self.form
-                .update(cx, |form, cx| form.set_head(repository_id, staged, sha, cx));
-            cx.run_until_parked();
-        }
-
-        /// What the fields show: the summary, and the description.
-        fn fields(&self, cx: &mut TestAppContext) -> (String, String) {
-            self.render(cx);
-            self.form.read_with(cx, |form, cx| {
-                let editor = form.editor.read(cx);
-                (
-                    editor.summary().read(cx).value().to_string(),
-                    editor.description().read(cx).value().to_string(),
-                )
-            })
-        }
-
-        fn is_readonly(&self, cx: &mut TestAppContext) -> bool {
-            self.render(cx);
-            self.form.read_with(cx, |form, cx| {
-                !form.editor.read(cx).summary().read(cx).is_editable()
-            })
-        }
-
-        fn is_amend_checked(&self, cx: &mut TestAppContext) -> bool {
-            self.render(cx);
-            cx.update_window(self.window, |_, window, _| window.find("amend").checked())
-                .unwrap()
-                == Some(true)
-        }
-
-        fn is_amend_disabled(&self, cx: &mut TestAppContext) -> bool {
-            self.render(cx);
-            cx.update_window(self.window, |_, window, _| window.find("amend").disabled())
-                .unwrap()
-                == Some(true)
-        }
-
-        /// The commit button's label, and whether it's enabled.
-        fn button(&self, cx: &mut TestAppContext) -> (String, bool) {
-            self.render(cx);
-            let disabled = cx
-                .update_window(self.window, |_, window, _| window.find("commit").disabled())
-                .unwrap();
-            let label = self.form.read_with(cx, |form, _| form.label());
-            (label, disabled != Some(true))
-        }
-
-        fn render(&self, cx: &mut TestAppContext) {
-            cx.update_window(self.window, |_, window, cx| window.render_frame(cx))
-                .unwrap();
-        }
-
-        fn placeholder(&self, cx: &mut TestAppContext) -> &'static str {
-            self.form
-                .read_with(cx, |form, cx| form.editor.read(cx).placeholder())
-        }
-
-        fn committed(&self) -> Vec<NewCommit> {
-            self.fakes.committed.borrow().clone()
-        }
-    }
-
-    fn amended(message: &str, sha: &str) -> NewCommit {
-        NewCommit {
-            message: message.to_owned(),
-            amend: Some(sha.to_owned()),
-        }
-    }
-
-    #[gpui_kit::test]
-    fn edits_the_last_commits_message_and_amends_it_without_anything_staged(
-        cx: &mut TestAppContext,
-    ) {
-        let form = render_form(cx, 0, Some("a1"));
-        assert_eq!(form.button(cx), ("Nothing staged".to_owned(), false));
-
-        form.click("amend", cx);
-        assert_eq!(
-            form.fields(cx),
-            ("Commit a1".to_owned(), "Its body".to_owned())
-        );
-
-        form.type_summary("Reworded", true, cx);
-        assert_eq!(form.button(cx), ("Amend message".to_owned(), true));
-        form.click("commit", cx);
-        assert_eq!(form.committed(), [amended("Reworded\n\nIts body\n", "a1")]);
-        assert!(!form.is_amend_checked(cx));
-    }
-
-    /// Holds the form without rendering it.
-    struct Unrendered {
-        form: Entity<CommitForm>,
-    }
-
-    impl Render for Unrendered {
-        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            div()
-        }
-    }
-
-    #[gpui_kit::test]
-    fn puts_the_last_commits_message_in_the_fields_without_being_rendered(cx: &mut TestAppContext) {
-        let fakes = Fakes::new();
-        let data = fakes.data();
-        let _dir = crate::test_support::init(cx, |services| services);
-        let (_, host) = crate::test_support::open(cx, move |window, cx| Unrendered {
-            form: cx.new(|cx| {
-                let mut form = CommitForm::new(repository_id(), data, window, cx);
-                form.set_head(repository_id(), 0, Some("a1".to_owned()), cx);
-                form
-            }),
-        });
-        let form = host.read_with(cx, |host, _| host.form.clone());
-        form.update(cx, |form, cx| form.toggle_amend(true, cx));
-        cx.run_until_parked();
-        assert_eq!(
-            form.read_with(cx, |form, cx| {
-                let editor = form.editor.read(cx);
-                (
-                    editor.summary().read(cx).value().to_string(),
-                    editor.description().read(cx).value().to_string(),
-                )
-            }),
-            ("Commit a1".to_owned(), "Its body".to_owned())
-        );
-    }
-
-    #[gpui_kit::test]
-    fn amends_what_wasnt_edited_exactly_as_it_was_written(cx: &mut TestAppContext) {
-        let form = render_form(cx, 1, Some("a1"));
-        form.fakes
-            .messages
-            .once(Ok("First line\nsecond line\n\n    code();\n".into()));
-        form.click("amend", cx);
-        assert_eq!(form.button(cx), ("Amend with 1 file".to_owned(), true));
-        form.click("commit", cx);
-        assert_eq!(
-            form.committed().last(),
-            Some(&amended("First line\nsecond line\n\n    code();\n", "a1"))
-        );
-
-        form.set_head(repository_id(), 1, Some("b2"), cx);
-        form.fakes
-            .messages
-            .once(Ok("First line\nsecond line\n\nBody\n".into()));
-        form.click("amend", cx);
-        assert_eq!(form.fields(cx).1, "Body");
-        form.type_description(" edited", cx);
-        form.click("commit", cx);
-        assert_eq!(
-            form.committed().last(),
-            Some(&amended("First line\nsecond line\n\nBody edited\n", "b2"))
-        );
-    }
-
-    #[gpui_kit::test]
-    fn cant_be_edited_until_the_last_commits_message_has_loaded(cx: &mut TestAppContext) {
-        let form = render_form(cx, 0, Some("a1"));
-        let answer = form.fakes.messages.later();
-        form.click("amend", cx);
-        assert!(form.is_readonly(cx));
-        assert_eq!(form.placeholder(cx), "Loading the last commit…");
-
-        answer.send(Ok("Loaded".into())).unwrap();
-        cx.run_until_parked();
-        assert_eq!(form.fields(cx).0, "Loaded");
-        assert!(!form.is_readonly(cx));
-    }
-
-    #[gpui_kit::test]
-    fn keeps_both_messages_when_switching_between_them_and_the_new_one_after_amending(
-        cx: &mut TestAppContext,
-    ) {
-        let form = render_form(cx, 2, Some("a1"));
-        form.type_summary("Draft", false, cx);
-
-        form.click("amend", cx);
-        assert_eq!(form.fields(cx).0, "Commit a1");
-        form.type_summary(" edited", false, cx);
-        form.click("amend", cx);
-        assert_eq!(form.fields(cx).0, "Draft");
-        form.click("amend", cx);
-        assert_eq!(form.fields(cx).0, "Commit a1 edited");
-
-        assert_eq!(form.button(cx), ("Amend with 2 files".to_owned(), true));
-        form.click("commit", cx);
-        assert_eq!(form.fields(cx).0, "Draft");
-    }
-
-    #[gpui_kit::test]
-    fn stops_amending_once_head_moves_on_without_loading_the_new_commits_message(
-        cx: &mut TestAppContext,
-    ) {
-        let form = render_form(cx, 1, Some("a1"));
-        form.type_summary("Draft", false, cx);
-        form.click("amend", cx);
-        assert_eq!(form.fields(cx).0, "Commit a1");
-
-        // Made in a terminal, say.
-        form.set_head(repository_id(), 1, Some("b2"), cx);
-        assert!(!form.is_amend_checked(cx));
-        assert_eq!(form.fields(cx).0, "Draft");
-        assert!(!form.fakes.messages.calls().contains(&"b2".to_owned()));
-    }
-
-    #[gpui_kit::test]
-    fn stops_amending_once_the_amend_moves_head_before_its_done(cx: &mut TestAppContext) {
-        let form = render_form(cx, 1, Some("a1"));
-        form.click("amend", cx);
-        assert_eq!(form.fields(cx).0, "Commit a1");
-        let finish = form.fakes.commits.later();
-        form.click("commit", cx);
-        assert!(form.is_readonly(cx));
-
-        form.set_head(repository_id(), 1, Some("b2"), cx);
-        finish.send(Ok(())).unwrap();
-        cx.run_until_parked();
-        assert!(!form.is_amend_checked(cx));
-        assert_eq!(form.fakes.messages.calls().len(), 1);
-    }
-
-    #[gpui_kit::test]
-    fn turns_off_when_theres_no_commit_left_to_amend_and_stays_off(cx: &mut TestAppContext) {
-        let form = render_form(cx, 1, Some("a1"));
-        form.click("amend", cx);
-        assert_eq!(form.fields(cx).0, "Commit a1");
-
-        form.set_head(repository_id(), 1, None, cx);
-        assert!(!form.is_amend_checked(cx));
-        assert!(form.is_amend_disabled(cx));
-        form.type_summary("First commit", false, cx);
-        assert_eq!(form.button(cx), ("Commit 1 file".to_owned(), true));
-
-        form.set_head(repository_id(), 1, Some("c3"), cx);
-        assert!(!form.is_amend_checked(cx));
-        assert_eq!(form.button(cx), ("Commit 1 file".to_owned(), true));
-    }
-
-    #[gpui_kit::test]
-    fn warns_when_the_last_commit_is_already_on_a_remote_branch(cx: &mut TestAppContext) {
-        let form = render_form(cx, 0, Some("a1"));
-        form.fakes.pushed_to.once(Ok(Some("origin/side".into())));
-        form.click("amend", cx);
-        let warning = form.form.read_with(cx, |form, _| form.push_warning());
-        assert!(warning.unwrap().contains("already on origin/side"));
-    }
-
-    #[gpui_kit::test]
-    fn doesnt_come_back_on_when_head_returns_to_the_commit(cx: &mut TestAppContext) {
-        let form = render_form(cx, 0, Some("a1"));
-        form.click("amend", cx);
-        assert_eq!(form.fields(cx).0, "Commit a1");
-
-        form.set_head(repository_id(), 0, Some("b2"), cx);
-        form.set_head(repository_id(), 0, Some("a1"), cx);
-        assert!(!form.is_amend_checked(cx));
-        assert_eq!(form.fields(cx).0, "");
-    }
-
-    #[gpui_kit::test]
-    fn says_why_the_fields_stay_locked_when_the_last_commits_message_cant_be_loaded(
-        cx: &mut TestAppContext,
-    ) {
-        let form = render_form(cx, 0, Some("a1"));
-        form.fakes.messages.once(Err(QueryError::msg("log failed")));
-        form.click("amend", cx);
-        let error = form.form.read_with(cx, |form, cx| form.error(cx));
-        assert_eq!(error.unwrap().message(), "log failed");
-        assert!(form.is_readonly(cx));
-        assert_eq!(form.placeholder(cx), "Summary of your changes");
-
-        form.click("amend", cx);
-        assert!(!form.is_readonly(cx));
-    }
-
-    #[gpui_kit::test]
-    fn waits_for_the_push_check_before_amending_so_its_warning_is_seen(cx: &mut TestAppContext) {
-        let form = render_form(cx, 1, Some("a1"));
-        let finish = form.fakes.pushed_to.later();
-        form.click("amend", cx);
-        assert_eq!(form.fields(cx).0, "Commit a1");
-        assert_eq!(form.button(cx), ("Amend with 1 file".to_owned(), false));
-
-        finish.send(Ok(Some("origin/feature".into()))).unwrap();
-        cx.run_until_parked();
-        let warning = form.form.read_with(cx, |form, _| form.push_warning());
-        assert!(warning.unwrap().contains("already on origin/feature"));
-        assert_eq!(form.button(cx), ("Amend with 1 file".to_owned(), true));
-    }
-
-    #[gpui_kit::test]
-    fn doesnt_amend_with_nothing_staged_and_the_same_message(cx: &mut TestAppContext) {
-        let form = render_form(cx, 0, Some("a1"));
-        form.click("amend", cx);
-        assert_eq!(form.fields(cx).0, "Commit a1");
-        assert_eq!(form.button(cx), ("Amend message".to_owned(), false));
-
-        form.type_summary(" ", false, cx);
-        assert_eq!(form.button(cx), ("Amend message".to_owned(), false));
-        form.type_summary("!", false, cx);
-        assert_eq!(form.button(cx), ("Amend message".to_owned(), true));
-    }
-
-    #[gpui_kit::test]
-    fn doesnt_carry_amending_over_to_another_repository_at_the_same_commit(
-        cx: &mut TestAppContext,
-    ) {
-        let form = render_form(cx, 1, Some("a1"));
-        form.click("amend", cx);
-        assert_eq!(form.fields(cx).0, "Commit a1");
-
-        form.set_head(other_repository_id(), 1, Some("a1"), cx);
-        assert!(!form.is_amend_checked(cx));
-        assert_eq!(form.fields(cx).0, "");
-    }
-
-    #[gpui_kit::test]
-    fn doesnt_call_a_failed_push_check_an_error_but_says_it_couldnt_check(cx: &mut TestAppContext) {
-        let form = render_form(cx, 1, Some("a1"));
-        form.fakes
-            .pushed_to
-            .once(Err(QueryError::msg("for-each-ref failed")));
-        form.click("amend", cx);
-        assert_eq!(form.fields(cx).0, "Commit a1");
-        assert_eq!(form.fakes.pushed_to.calls(), ["a1"]);
-        assert!(form.form.read_with(cx, |form, cx| form.error(cx)).is_none());
-        let warning = form.form.read_with(cx, |form, _| form.push_warning());
-        assert!(
-            warning
-                .unwrap()
-                .starts_with("Couldn't check whether the last commit has been pushed")
-        );
-        assert_eq!(form.button(cx), ("Amend with 1 file".to_owned(), true));
-    }
-
-    #[gpui_kit::test]
-    fn cant_amend_before_the_first_commit(cx: &mut TestAppContext) {
-        let form = render_form(cx, 0, None);
-        assert!(form.is_amend_disabled(cx));
-    }
-
-    #[gpui_kit::test]
-    fn commits_with_the_shortcut_from_either_field(cx: &mut TestAppContext) {
-        let form = render_form(cx, 1, Some("a1"));
-        form.type_summary("Shortcut", false, cx);
-        form.type_description("Body", cx);
-        cx.update_window(form.window, |_, window, cx| {
-            window.press("secondary-enter", cx)
-        })
-        .unwrap();
-        cx.run_until_parked();
-        assert_eq!(
-            form.committed(),
-            [NewCommit {
-                message: "Shortcut\n\nBody".into(),
-                amend: None,
-            }]
-        );
-        // The draft's cleared, without a line added to the description first.
-        assert_eq!(form.fields(cx), (String::new(), String::new()));
-    }
-}
+mod tests;

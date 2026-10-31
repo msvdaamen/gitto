@@ -5,7 +5,7 @@ use gpui_kit::ElementId;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::prelude::*;
 
-use crate::state::router::{Route, Router};
+use gitto_app_data::state::router::{Route, Router};
 
 /// A row that opens the repository `repository`, as the element `id`: a ghost button, so Tab
 /// stops at it, and a click, Enter or Space opens the repository. Its look past that, and what it

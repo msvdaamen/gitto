@@ -4,16 +4,16 @@ use std::rc::Rc;
 
 use gitto_git::features::overview::schema::{Activity, ActivityKind};
 use gitto_repository::Repository;
-use gitto_ui::git::activity::describe_activity;
+use gitto_ui_logic::git::activity::describe_activity;
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{App, FontWeight, SharedString, TestSupportExt as _, Window, div};
 
 use super::repository_link::repository_link;
 use super::summaries::RepositorySummary;
-use crate::components::ui::{Card, Icon, IconName, Tone};
-use crate::state::clock::relative_time;
-use crate::theme::PaletteExt as _;
+use gitto_app_data::state::clock::relative_time;
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{Card, Icon, IconName, Tone};
 
 /// How many of the latest things done, across all repositories, are shown.
 pub const SHOWN: usize = 6;
@@ -35,8 +35,11 @@ fn activity_style(kind: ActivityKind) -> (IconName, Tone) {
     }
 }
 
+/// Things done, each in its repository.
+pub type RecentEntries = Rc<[(Repository, Activity)]>;
+
 /// The latest things done across all the repositories, the most recent first: [`SHOWN`] of them.
-pub fn recent_entries(summaries: &[RepositorySummary]) -> Vec<(Repository, Activity)> {
+pub fn recent_entries(summaries: &[RepositorySummary]) -> RecentEntries {
     let mut entries: Vec<(&Repository, &Activity)> = summaries
         .iter()
         .flat_map(|summary| {
@@ -56,23 +59,23 @@ pub fn recent_entries(summaries: &[RepositorySummary]) -> Vec<(Repository, Activ
         .collect()
 }
 
-/// What was last done in any of the repositories, as their reflogs have it. Each opens its
-/// repository.
+/// What was last done in any of the repositories, as their reflogs have it ([`recent_entries`],
+/// made once for each change of the summaries). Each opens its repository.
 #[derive(IntoElement)]
 pub struct RecentActivity {
-    summaries: Rc<[RepositorySummary]>,
+    entries: RecentEntries,
 }
 
 impl RecentActivity {
-    pub fn new(summaries: Rc<[RepositorySummary]>) -> Self {
-        RecentActivity { summaries }
+    pub fn new(entries: RecentEntries) -> Self {
+        RecentActivity { entries }
     }
 }
 
 impl RenderOnce for RecentActivity {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let palette = *cx.palette();
-        let entries = recent_entries(&self.summaries);
+        let entries = self.entries;
         let card = Card::new(IconName::RotateCcwClock, "Recent activity");
         if entries.is_empty() {
             return card.child(
@@ -87,8 +90,8 @@ impl RenderOnce for RecentActivity {
             );
         }
         let mut rows = Vec::with_capacity(entries.len());
-        for (ix, (repository, activity)) in entries.into_iter().enumerate() {
-            rows.push(activity_row(ix, repository, activity, cx));
+        for (ix, (repository, activity)) in entries.iter().enumerate() {
+            rows.push(activity_row(ix, repository.clone(), activity.clone(), cx));
         }
         card.child(v_flex().id("recent-activity").children(rows))
     }
@@ -181,8 +184,8 @@ mod tests {
 
     use super::*;
     use crate::components::home::test_support::{self as home, GITTO, NOTES};
-    use crate::state::router::{Route, Router};
     use crate::test_support;
+    use gitto_app_data::state::router::{Route, Router};
 
     fn activity(at: i64, kind: ActivityKind, subject: &str) -> Activity {
         Activity {
@@ -220,8 +223,8 @@ mod tests {
             home::summary(GITTO, "other").without_overview().build(),
         ];
         let subjects: Vec<String> = recent_entries(&summaries)
-            .into_iter()
-            .map(|(_, activity)| activity.subject)
+            .iter()
+            .map(|(_, activity)| activity.subject.clone())
             .collect();
         assert_eq!(
             subjects,
@@ -237,7 +240,7 @@ mod tests {
 
     impl Render for Host {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            RecentActivity::new(self.summaries.clone())
+            RecentActivity::new(recent_entries(&self.summaries))
         }
     }
 

@@ -1,15 +1,14 @@
 //! What the home page shows of each repository. Ported from `components/home/summaries.ts`.
 
+use std::cell::Cell;
 use std::rc::Rc;
 
 use gitto_git::features::overview::schema::Overview;
-use gitto_git::features::status::schema::{StatusSummary, Uncommitted};
+use gitto_git::features::status::schema::StatusSummary;
 use gitto_repository::Repository;
-use gpui_kit::Context;
+use gpui_kit::{App, Context, Entity, Subscription};
 
-use crate::data::overview::overview_query;
-use crate::data::status::unwatched_status_query;
-use crate::data::{Opaque, Query, QueryError};
+use gitto_app_data::data::{Changed, DataError, Field, Part, Repositories};
 
 /// A repository on the home page, with what's loaded of it so far.
 #[derive(Debug, Clone, PartialEq)]
@@ -19,25 +18,30 @@ pub struct RepositorySummary {
     pub status: Option<StatusSummary>,
     pub overview: Option<Overview>,
     /// Why the repository couldn't be read, e.g. its folder is gone.
-    pub error: Option<QueryError>,
+    pub error: Option<DataError>,
     /// Whether its status is loaded, or couldn't be.
     pub settled: bool,
 }
 
-/// One repository's queries.
+/// One repository, as it's shown.
 struct Entry {
     repository: Repository,
-    status: Query<Opaque<Uncommitted>, StatusSummary>,
-    overview: Query<Overview>,
+    data: Entity<gitto_app_data::data::Repository>,
+    _subscription: Subscription,
 }
 
-/// The status and overview of every repository, kept up to date while the home page shows them
-/// (see `watch::unwatched`): its view holds them, and [`sync`](Self::sync)s them with the list of
-/// repositories. Each repository shows what it has as it loads, and a reload doesn't take the
-/// page away meanwhile (`useRepositorySummaries`).
+/// The status and overview of every repository, kept up to date while the home page shows them:
+/// its view holds them, and [`sync`](Self::sync)s them with the list of repositories. Nothing
+/// watches them here, so they're loaded again whenever they're shown, and when the window gets
+/// focus. Each repository shows what it has as it loads, and a reload doesn't take the page away
+/// meanwhile (`useRepositorySummaries`).
 #[derive(Default)]
 pub struct RepositorySummaries {
     entries: Vec<Entry>,
+    /// What [`summaries`](Self::summaries) last made, kept until a repository's status or
+    /// overview changes (`stale`), or the list does: the page draws again every minute.
+    made: Option<Rc<[RepositorySummary]>>,
+    stale: Rc<Cell<bool>>,
 }
 
 impl RepositorySummaries {
@@ -45,9 +49,22 @@ impl RepositorySummaries {
         RepositorySummaries::default()
     }
 
-    /// Follows `repositories`: their queries are kept for the ones still there, made for new ones,
+    /// Loads again what's shown of `repository`, which nothing watches here.
+    fn reload(repository: &Entity<gitto_app_data::data::Repository>, cx: &mut App) {
+        repository.update(cx, |repository, cx| {
+            if !repository.status().is_fetching() {
+                drop(repository.reload(Field::Status, cx));
+            }
+            if !repository.overview().is_fetching() {
+                drop(repository.reload(Field::Overview, cx));
+            }
+        });
+    }
+
+    /// Follows `repositories`: what's shown of them is kept for the ones still there, opened for new ones,
     /// and dropped for those that are gone (`mapArray`).
     pub fn sync<V: 'static>(&mut self, repositories: &[Repository], cx: &mut Context<V>) {
+        self.made = None;
         let mut previous = std::mem::take(&mut self.entries);
         for repository in repositories {
             if let Some(at) = previous
@@ -59,25 +76,125 @@ impl RepositorySummaries {
                 self.entries.push(entry);
                 continue;
             }
+            let data = Repositories::open(&repository.id, cx);
+            Self::reload(&data, cx);
+            let stale = Rc::clone(&self.stale);
+            let subscription = cx.subscribe(&data, move |_, _, Changed(part), cx| {
+                if matches!(part, Part::Status | Part::Overview) {
+                    stale.set(true);
+                    cx.notify();
+                }
+            });
             self.entries.push(Entry {
                 repository: repository.clone(),
-                status: unwatched_status_query(&repository.id, cx),
-                overview: overview_query(&repository.id, cx),
+                data,
+                _subscription: subscription,
             });
         }
     }
 
-    /// What's loaded of each repository, in the list's order.
-    pub fn summaries(&self) -> Rc<[RepositorySummary]> {
-        self.entries
+    /// Loads again what's shown of every repository: when the window gets focus (see
+    /// `AppPart::Focus`).
+    pub fn reload_all(&self, cx: &mut App) {
+        for entry in &self.entries {
+            Self::reload(&entry.data, cx);
+        }
+    }
+
+    /// What's loaded of each repository, in the list's order: the same as last time, until
+    /// something of it changes.
+    pub fn summaries(&mut self, cx: &App) -> Rc<[RepositorySummary]> {
+        if !self.stale.replace(false)
+            && let Some(made) = &self.made
+        {
+            return Rc::clone(made);
+        }
+        let made: Rc<[RepositorySummary]> = self
+            .entries
             .iter()
-            .map(|entry| RepositorySummary {
-                repository: entry.repository.clone(),
-                status: entry.status.data(),
-                overview: entry.overview.data(),
-                error: entry.status.error().or_else(|| entry.overview.error()),
-                settled: entry.status.data().is_some() || entry.status.is_error(),
+            .map(|entry| {
+                let data = entry.data.read(cx);
+                let status = data.status();
+                let overview = data.overview();
+                RepositorySummary {
+                    repository: entry.repository.clone(),
+                    status: status.data().map(|status| status.summary.clone()),
+                    overview: overview.data().cloned(),
+                    error: status.error().or_else(|| overview.error()).cloned(),
+                    settled: status.data().is_some() || status.is_error(),
+                }
             })
-            .collect()
+            .collect();
+        self.made = Some(Rc::clone(&made));
+        made
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use futures::FutureExt as _;
+    use gitto_app_data::data::git::{GitTask, RepositoryGit};
+    use gpui_kit::{IntoElement, Render, TestAppContext, Window, div};
+
+    use super::*;
+    use crate::components::repository::test_support::{
+        changed, fake_git, repository, repository_id, set_status, setup, status,
+    };
+
+    /// A repository's git that answers its overview, which the summaries load beside the status
+    /// the test gives: nothing done in it.
+    struct Git;
+
+    impl RepositoryGit for Git {
+        fn overview(&self) -> GitTask<Overview> {
+            async {
+                Ok(Overview {
+                    remote: None,
+                    fetched_at: None,
+                    committed_at: None,
+                    activity: Vec::new(),
+                })
+            }
+            .boxed()
+        }
+    }
+
+    struct Host {
+        summaries: RepositorySummaries,
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    #[gpui_kit::test]
+    fn makes_the_summaries_again_only_once_something_of_them_changes(cx: &mut TestAppContext) {
+        let _dir = setup(cx);
+        let id = repository_id();
+        set_status(&id, status(), cx);
+        fake_git(&id, Rc::new(Git), cx);
+        let listed = [repository(&id, "/work/gitto")];
+        let (_, host) = crate::test_support::open(cx, |_, cx| {
+            let mut summaries = RepositorySummaries::new();
+            summaries.sync(&listed, cx);
+            Host { summaries }
+        });
+        cx.run_until_parked();
+        let summaries =
+            |cx: &mut TestAppContext| host.update(cx, |host, cx| host.summaries.summaries(cx));
+
+        let first = summaries(cx);
+        assert!(Rc::ptr_eq(&first, &summaries(cx)));
+
+        set_status(&id, changed(status(), 1), cx);
+        cx.run_until_parked();
+        let again = summaries(cx);
+        assert!(!Rc::ptr_eq(&first, &again));
+        assert_eq!(
+            again[0].status.as_ref().map(|status| status.counts.files),
+            Some(1)
+        );
     }
 }

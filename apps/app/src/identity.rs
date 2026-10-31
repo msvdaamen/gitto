@@ -77,12 +77,14 @@ mod linux {
 
     use super::{APP_ID, APP_NAME, ICON_PNG};
 
+    /// What the entries Gitto writes say they are: one without it is a user's, or an installer's.
+    const WRITTEN_BY_GITTO: &str =
+        "# Written by Gitto when it runs without being installed, for its name and icon.";
+
     /// Gives an unpackaged build a desktop entry, so the task bar shows Gitto's name and icon:
     /// on Wayland, a window has no icon of its own, only the app id the desktop finds its entry
     /// by. Kept out of the menus (`NoDisplay`), as it's only a build's. Left to a package that
-    /// installs an entry of its own, and only written when it changes. Another build's entry
-    /// does as well, as long as its program's still there: builds run from other worktrees, or
-    /// target directories, don't take it from each other each time they start.
+    /// installs an entry of its own, and only written when it changes.
     pub fn register_desktop_entry() -> io::Result<()> {
         let file = format!("{APP_ID}.desktop");
         let installed = system_data_dirs()
@@ -91,20 +93,35 @@ mod linux {
         let Some(data_home) = data_home().filter(|_| !installed) else {
             return Ok(());
         };
+        register_in(&data_home, &env::current_exe()?)
+    }
+
+    /// Writes the entry of the program `exe`, and its icon, in `data_home`. Not over an entry
+    /// Gitto didn't write: one installed in the home folder, or the user's own. Nor over another
+    /// build's, as long as its program's still there: builds run from other worktrees, or target
+    /// directories, don't take it from each other each time they start.
+    fn register_in(data_home: &Path, exe: &Path) -> io::Result<()> {
+        let path = data_home
+            .join("applications")
+            .join(format!("{APP_ID}.desktop"));
+        let written = fs::read_to_string(&path).ok();
+        if written
+            .as_deref()
+            .is_some_and(|written| !written.contains(WRITTEN_BY_GITTO))
+        {
+            return Ok(());
+        }
         let icon = data_home
             .join("icons/hicolor/512x512/apps")
             .join(format!("{APP_ID}.png"));
         write_if_changed(&icon, ICON_PNG)?;
-        let path = data_home.join("applications").join(file);
-        let written = fs::read_to_string(&path).ok();
         if written
             .as_deref()
             .is_some_and(|written| is_another_builds(written, &icon))
         {
             return Ok(());
         }
-        let entry = desktop_entry(&env::current_exe()?, &icon);
-        write_if_changed(&path, entry.as_bytes())
+        write_if_changed(&path, desktop_entry(exe, &icon).as_bytes())
     }
 
     /// Whether `written` is the entry another build wrote, with `icon`, whose program is still
@@ -134,7 +151,7 @@ mod linux {
     fn desktop_entry(exe: &Path, icon: &Path) -> String {
         format!(
             "[Desktop Entry]\n\
-             # Written by Gitto when it runs without being installed, for its name and icon.\n\
+             {WRITTEN_BY_GITTO}\n\
              Type=Application\n\
              Name={APP_NAME}\n\
              Comment=Gitto desktop app\n\
@@ -248,6 +265,42 @@ mod linux {
             assert!(!is_another_builds(&written, &dir.path().join("old.png")));
             let older = written.replace("NoDisplay=true\n", "");
             assert!(!is_another_builds(&older, &icon));
+        }
+
+        #[test]
+        fn writes_its_entry_over_its_own_but_not_over_anothers() {
+            let dir = tempfile::tempdir().unwrap();
+            let exe = dir.path().join("target/gitto");
+            let entry = dir.path().join(format!("applications/{APP_ID}.desktop"));
+            let icon = dir
+                .path()
+                .join(format!("icons/hicolor/512x512/apps/{APP_ID}.png"));
+
+            register_in(dir.path(), &exe).unwrap();
+            assert_eq!(
+                fs::read_to_string(&entry).unwrap(),
+                desktop_entry(&exe, &icon)
+            );
+            assert!(icon.is_file());
+
+            // An older Gitto's: replaced.
+            let older = desktop_entry(&exe, &icon).replace("NoDisplay=true\n", "");
+            fs::write(&entry, &older).unwrap();
+            register_in(dir.path(), &exe).unwrap();
+            assert_eq!(
+                fs::read_to_string(&entry).unwrap(),
+                desktop_entry(&exe, &icon)
+            );
+
+            // A user's, or one installed in the home folder: left as it is, without an icon of
+            // Gitto's beside it.
+            let installed =
+                "[Desktop Entry]\nType=Application\nName=Gitto\nExec=/opt/Gitto/gitto %U\n";
+            fs::write(&entry, installed).unwrap();
+            fs::remove_file(&icon).unwrap();
+            register_in(dir.path(), &exe).unwrap();
+            assert_eq!(fs::read_to_string(&entry).unwrap(), installed);
+            assert!(!icon.exists());
         }
 
         #[test]

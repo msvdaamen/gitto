@@ -3,6 +3,6 @@
 //!
 //! Ported from `packages/git/src/features/overview/`.
 
-pub mod commands;
+pub(crate) mod commands;
 pub(crate) mod parse;
 pub mod schema;

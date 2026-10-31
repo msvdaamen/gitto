@@ -3,8 +3,8 @@
 use std::rc::Rc;
 
 use gitto_git::features::status::schema::StatusSummary;
-use gitto_ui::git::remote::{Provider, remote_provider};
-use gitto_ui::git::status::{head_label, sync_label};
+use gitto_ui_logic::git::remote::{Provider, remote_provider};
+use gitto_ui_logic::git::status::{head_label, sync_label};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
@@ -15,10 +15,10 @@ use gpui_kit::{
 
 use super::repository_link::repository_link;
 use super::summaries::RepositorySummary;
-use crate::components::ui::{Badge, Icon, IconName, Tone};
-use crate::state::clock::relative_time;
-use crate::theme::PaletteExt as _;
-use crate::theme::breakpoints::SMALL;
+use gitto_app_data::state::clock::relative_time;
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::theme::breakpoints::SMALL;
+use gitto_app_kit::ui::{Badge, Icon, IconName, Tone};
 
 /// How a remote's host is marked: the two best known in their colors, the rest neutral.
 fn provider_tone(provider: &Provider) -> Tone {
@@ -161,7 +161,7 @@ impl RenderOnce for RepositoryCard {
                                         .child(
                                             Icon::new(IconName::TriangleAlert).size_3().flex_none(),
                                         )
-                                        .child(div().min_w_0().truncate().child(error.message()))
+                                        .child(div().min_w_0().truncate().child(error.to_string()))
                                         .into_any_element(),
                                 ],
                                 None => summary

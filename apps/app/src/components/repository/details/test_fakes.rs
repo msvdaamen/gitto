@@ -8,8 +8,8 @@ use std::rc::Rc;
 use futures::FutureExt as _;
 use futures::channel::oneshot;
 use futures::future::BoxFuture;
-use std::sync::Arc;
 
+use gitto_git::Discarded;
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::features::history::schema::Commit;
 use gitto_git::features::operation::schema::Operation;
@@ -17,21 +17,19 @@ use gitto_git::features::stash::schema::Stash;
 use gitto_git::features::status::schema::{
     Head, StatusCounts, StatusReply, StatusSummary, Uncommitted, WorkingTreeFiles,
 };
-use gitto_git::input::RepositoryId;
+use gitto_git::input::{FullSha, Message, Paths, RepositoryId, Sha};
 use gitto_git::schema::FileStatus;
 use gpui_kit::prelude::*;
 use gpui_kit::test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _};
 use gpui_kit::{
-    AnyWindowHandle, App, Context, Entity, MouseButton, Render, Task, TestAppContext, Window, div,
+    AnyWindowHandle, App, Context, Entity, MouseButton, Render, TestAppContext, Window, div,
 };
 
-use super::details_data::DetailsData;
-use crate::data::Opaque;
-use crate::data::commit::NewCommit;
-use crate::data::diff::{ChangedFiles, FilesOf};
-use crate::data::staging::{DiscardTarget, StagingTarget};
-use crate::data::status::GetStatus;
-use crate::data::{Mutation, QueryError, QueryOptions, StaleTime, keys};
+use crate::components::repository::test_support::fake_git;
+use gitto_app_data::data::DataError;
+use gitto_app_data::data::commit::NewCommit;
+use gitto_app_data::data::git::{GitTask, RepositoryGit};
+use gitto_app_data::data::staging::{DiscardTarget, StagingTarget};
 
 pub fn repository_id() -> RepositoryId {
     RepositoryId::parse("01890a5d-ac96-774b-bcce-b302099a8057").unwrap()
@@ -44,12 +42,12 @@ pub fn other_repository_id() -> RepositoryId {
 
 /// How a call is answered: at once, or when the test sends the answer.
 enum Answer<T> {
-    Now(Result<T, QueryError>),
-    Later(oneshot::Receiver<Result<T, QueryError>>),
+    Now(Result<T, DataError>),
+    Later(oneshot::Receiver<Result<T, DataError>>),
 }
 
 /// What a call is answered when the test lined nothing up, by what it was asked with.
-type DefaultAnswer<T> = Box<dyn Fn(&str) -> Result<T, QueryError>>;
+type DefaultAnswer<T> = Box<dyn Fn(&str) -> Result<T, DataError>>;
 
 /// The answers to one kind of call: the ones the test lined up, in turn, then the default's. Keeps
 /// what each was asked with.
@@ -60,7 +58,7 @@ pub struct Answers<T> {
 }
 
 impl<T: Send + 'static> Answers<T> {
-    pub fn new(default: impl Fn(&str) -> Result<T, QueryError> + 'static) -> Self {
+    pub fn new(default: impl Fn(&str) -> Result<T, DataError> + 'static) -> Self {
         Answers {
             queue: RefCell::new(VecDeque::new()),
             default: Box::new(default),
@@ -69,12 +67,12 @@ impl<T: Send + 'static> Answers<T> {
     }
 
     /// The next call is answered `result`.
-    pub fn once(&self, result: Result<T, QueryError>) {
+    pub fn once(&self, result: Result<T, DataError>) {
         self.queue.borrow_mut().push_back(Answer::Now(result));
     }
 
     /// The next call is answered with what's sent on the sender returned.
-    pub fn later(&self) -> oneshot::Sender<Result<T, QueryError>> {
+    pub fn later(&self) -> oneshot::Sender<Result<T, DataError>> {
         let (send, receive) = oneshot::channel();
         self.queue.borrow_mut().push_back(Answer::Later(receive));
         send
@@ -85,14 +83,14 @@ impl<T: Send + 'static> Answers<T> {
         self.calls.borrow().clone()
     }
 
-    fn answer(&self, asked: &str) -> BoxFuture<'static, Result<T, QueryError>> {
+    fn answer(&self, asked: &str) -> BoxFuture<'static, Result<T, DataError>> {
         self.calls.borrow_mut().push(asked.to_owned());
         match self.queue.borrow_mut().pop_front() {
             Some(Answer::Now(result)) => async move { result }.boxed(),
             Some(Answer::Later(answer)) => async move {
                 answer
                     .await
-                    .unwrap_or_else(|_| Err(QueryError::msg("Never answered.")))
+                    .unwrap_or_else(|_| Err(DataError::msg("Never answered.")))
             }
             .boxed(),
             None => {
@@ -100,12 +98,6 @@ impl<T: Send + 'static> Answers<T> {
                 async move { result }.boxed()
             }
         }
-    }
-
-    /// Runs a mutation's call, as a task.
-    fn run(&self, asked: &str, cx: &mut App) -> Task<Result<T, QueryError>> {
-        let answer = self.answer(asked);
-        cx.background_spawn(answer)
     }
 }
 
@@ -154,136 +146,115 @@ impl Fakes {
         })
     }
 
-    /// The details' data, from these.
-    pub fn data(self: &Rc<Self>) -> DetailsData {
-        let (commits_of, files_of, stashes) = (Rc::clone(self), Rc::clone(self), Rc::clone(self));
-        let messages = Rc::clone(self);
-        let pushed_to = Rc::clone(self);
-        let commits = Rc::clone(self);
-        let status = Rc::clone(self);
-        let operation = Rc::clone(self);
-        let (stage, unstage, discard) = (Rc::clone(self), Rc::clone(self), Rc::clone(self));
-        let get_status: GetStatus = Rc::new(move |_, _| {
-            let gate = status.status_gate.borrow_mut().take();
-            let status = status.status.borrow().clone();
-            async move {
-                // Answered once the test lets it through.
-                if let Some(gate) = gate {
-                    let _ = gate.await;
-                }
-                Ok(StatusReply::Status(Box::new(status)))
-            }
-            .boxed()
-        });
-        DetailsData::git()
-            .with_commit(move |id, sha, _| {
-                let fakes = Rc::clone(&commits_of);
-                let sha = sha.to_owned();
-                QueryOptions::new(keys::commit(id, &sha), move |_, _| {
-                    fakes.commit.answer(&sha)
-                })
-                .stale_time(StaleTime::Infinite)
-                .keep_previous_data()
-            })
-            .with_changed_files(move |id, sha, of, _| {
-                let fakes = Rc::clone(&files_of);
-                let sha = sha.to_owned();
-                let key = match of {
-                    FilesOf::Commit => keys::commit_files(id, &sha),
-                    FilesOf::Stash => keys::stash_files(id, &sha),
-                };
-                QueryOptions::new(key, move |_, _| {
-                    let sha = sha.clone();
-                    fakes
-                        .files
-                        .answer(&sha)
-                        .map(move |files| {
-                            files.map(|files| ChangedFiles {
-                                sha,
-                                files: Opaque::new(files),
-                            })
-                        })
-                        .boxed()
-                })
-                .stale_time(StaleTime::Infinite)
-                .keep_previous_data()
-            })
-            .with_stashes(move |id, _| {
-                let fakes = Rc::clone(&stashes);
-                QueryOptions::new(keys::stashes(id), move |_, _| {
-                    let stashes: Arc<[Stash]> = fakes.stashes.borrow().clone().into();
-                    async move { Ok(stashes) }.boxed()
-                })
-            })
-            .with_commit_message(move |id, sha, _| {
-                let fakes = Rc::clone(&messages);
-                let sha = sha.to_owned();
-                QueryOptions::new(keys::commit_message(id, &sha), move |_, _| {
-                    fakes.messages.answer(&sha)
-                })
-                .stale_time(StaleTime::Infinite)
-            })
-            .with_pushed_to(move |id, sha, _| {
-                let fakes = Rc::clone(&pushed_to);
-                let sha = sha.to_owned();
-                QueryOptions::new(keys::pushed_to(id, &sha), move |_, _| {
-                    fakes.pushed_to.answer(&sha)
-                })
-                .stale_time(StaleTime::Infinite)
-            })
-            .with_create_commit(move |cx| {
-                let fakes = Rc::clone(&commits);
-                Mutation::new(
-                    move |(_, commit): (RepositoryId, NewCommit), cx: &mut App| {
-                        fakes.committed.borrow_mut().push(commit.clone());
-                        fakes.commits.run(&commit.message, cx)
-                    },
-                    cx,
-                )
-            })
-            .with_status(get_status)
-            .with_operation(move |id, _| {
-                let fakes = Rc::clone(&operation);
-                QueryOptions::new(keys::operation(id), move |_, _| {
-                    let operation = fakes.operation.borrow().clone();
-                    async move { Ok(operation) }.boxed()
-                })
-            })
-            .with_staging(
-                move |cx| {
-                    let fakes = Rc::clone(&stage);
-                    Mutation::new(
-                        move |(_, target): (RepositoryId, StagingTarget), cx: &mut App| {
-                            fakes.staged.run(&format!("{target:?}"), cx)
-                        },
-                        cx,
-                    )
-                },
-                move |cx| {
-                    let fakes = Rc::clone(&unstage);
-                    Mutation::new(
-                        move |(_, target): (RepositoryId, StagingTarget), cx: &mut App| {
-                            fakes.unstaged.run(&format!("{target:?}"), cx)
-                        },
-                        cx,
-                    )
-                },
-                move |cx| {
-                    let fakes = Rc::clone(&discard);
-                    Mutation::new(
-                        move |(_, target): (RepositoryId, DiscardTarget), cx: &mut App| {
-                            fakes.discarded.borrow_mut().push(target.clone());
-                            fakes.discards.run(&format!("{target:?}"), cx)
-                        },
-                        cx,
-                    )
-                },
-            )
-    }
-
     /// The uncommitted changes are `unstaged` and `staged` from now on (TS's `setChanges`).
     pub fn set_changes(&self, unstaged: Vec<ChangedFile>, staged: Vec<ChangedFile>) {
         *self.status.borrow_mut() = uncommitted(unstaged, staged);
+    }
+}
+
+impl RepositoryGit for Fakes {
+    fn status(&self, _: Option<gitto_git::ContentVersion>) -> GitTask<StatusReply> {
+        let gate = self.status_gate.borrow_mut().take();
+        let status = self.status.borrow().clone();
+        async move {
+            // Answered once the test lets it through.
+            if let Some(gate) = gate {
+                let _ = gate.await;
+            }
+            Ok(StatusReply::Status(Box::new(status)))
+        }
+        .boxed()
+    }
+
+    fn commit(&self, sha: Sha) -> GitTask<Commit> {
+        self.commit.answer(sha.as_str())
+    }
+
+    fn commit_files(&self, sha: Sha) -> GitTask<Vec<ChangedFile>> {
+        self.files.answer(sha.as_str())
+    }
+
+    fn stash_files(&self, sha: FullSha) -> GitTask<Vec<ChangedFile>> {
+        self.files.answer(sha.as_str())
+    }
+
+    fn stashes(&self) -> GitTask<Vec<Stash>> {
+        let stashes = self.stashes.borrow().clone();
+        async move { Ok(stashes) }.boxed()
+    }
+
+    fn commit_message(&self, sha: Sha) -> GitTask<String> {
+        self.messages.answer(sha.as_str())
+    }
+
+    fn pushed_to(&self, sha: Sha) -> GitTask<Option<String>> {
+        self.pushed_to.answer(sha.as_str())
+    }
+
+    fn create_commit(&self, message: Message, amend: Option<FullSha>) -> GitTask<()> {
+        let commit = NewCommit { message, amend };
+        let answer = self.commits.answer(&commit.message);
+        self.committed.borrow_mut().push(commit);
+        answer
+    }
+
+    fn operation(&self) -> GitTask<Option<Operation>> {
+        let operation = self.operation.borrow().clone();
+        async move { Ok(operation) }.boxed()
+    }
+
+    fn stage(&self, paths: Paths) -> GitTask<()> {
+        let target = StagingTarget::Paths(
+            paths
+                .as_slice()
+                .iter()
+                .map(|path| path.as_str().to_owned())
+                .collect(),
+        );
+        self.staged.answer(&format!("{target:?}"))
+    }
+
+    fn stage_all(&self) -> GitTask<()> {
+        self.staged.answer(&format!("{:?}", StagingTarget::All))
+    }
+
+    fn unstage(&self, paths: Paths) -> GitTask<()> {
+        let target = StagingTarget::Paths(
+            paths
+                .as_slice()
+                .iter()
+                .map(|path| path.as_str().to_owned())
+                .collect(),
+        );
+        self.unstaged.answer(&format!("{target:?}"))
+    }
+
+    fn unstage_all(&self) -> GitTask<()> {
+        self.unstaged.answer(&format!("{:?}", StagingTarget::All))
+    }
+
+    fn discard(&self, discarded: Discarded) -> GitTask<()> {
+        let Discarded {
+            path,
+            orig_path,
+            status,
+            side,
+        } = discarded;
+        // What the details asked to discard: the file as their list has it.
+        let file = file(&path, status, orig_path.as_deref());
+        self.discard_target(DiscardTarget::File { side, file })
+    }
+
+    fn discard_all(&self) -> GitTask<()> {
+        self.discard_target(DiscardTarget::All)
+    }
+}
+
+impl Fakes {
+    fn discard_target(&self, target: DiscardTarget) -> GitTask<()> {
+        let answer = self.discards.answer(&format!("{target:?}"));
+        self.discarded.borrow_mut().push(target);
+        answer
     }
 }
 
@@ -313,7 +284,7 @@ pub fn file(path: &str, status: FileStatus, orig_path: Option<&str>) -> ChangedF
     }
 }
 
-/// The uncommitted changes `unstaged` and `staged`, on main at `a1`.
+/// The uncommitted changes `unstaged` and `staged`, on main at `a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1`.
 pub fn uncommitted(unstaged: Vec<ChangedFile>, staged: Vec<ChangedFile>) -> Uncommitted {
     let conflicted = unstaged
         .iter()
@@ -323,7 +294,7 @@ pub fn uncommitted(unstaged: Vec<ChangedFile>, staged: Vec<ChangedFile>) -> Unco
         summary: StatusSummary {
             head: Head::Branch {
                 name: "main".into(),
-                sha: "a1".into(),
+                sha: "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1".into(),
             },
             upstream: None,
             ahead: 0,
@@ -362,7 +333,29 @@ pub fn open<V: Render>(
     cx: &mut TestAppContext,
     build: impl FnOnce(&mut Window, &mut Context<V>) -> V + 'static,
 ) -> (tempfile::TempDir, AnyWindowHandle, Entity<V>) {
+    open_on(cx, None, build)
+}
+
+/// [`open`], with `fakes` as the git of the test's repositories.
+pub fn open_with<V: Render>(
+    cx: &mut TestAppContext,
+    fakes: &Rc<Fakes>,
+    build: impl FnOnce(&mut Window, &mut Context<V>) -> V + 'static,
+) -> (tempfile::TempDir, AnyWindowHandle, Entity<V>) {
+    open_on(cx, Some(fakes), build)
+}
+
+fn open_on<V: Render>(
+    cx: &mut TestAppContext,
+    fakes: Option<&Rc<Fakes>>,
+    build: impl FnOnce(&mut Window, &mut Context<V>) -> V + 'static,
+) -> (tempfile::TempDir, AnyWindowHandle, Entity<V>) {
     let dir = crate::test_support::init(cx, |services| services);
+    if let Some(fakes) = fakes {
+        for id in [repository_id(), other_repository_id()] {
+            fake_git(&id, Rc::clone(fakes) as Rc<dyn RepositoryGit>, cx);
+        }
+    }
     let (window, host) = crate::test_support::open(cx, move |window, cx| Host {
         view: cx.new(|cx| build(window, cx)),
     });

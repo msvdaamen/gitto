@@ -1,11 +1,11 @@
 //! Asking before deleting a branch. Ported from
 //! `components/repository/delete-branch-dialog.tsx`.
 
-use gitto_ui::git::status::branch_name;
+use gitto_ui_logic::git::status::branch_name;
 use gpui_kit::component::button::ButtonVariant;
 use gpui_kit::{App, Window};
 
-use crate::components::ui::{ConfirmDialog, IconName, Tone};
+use gitto_app_kit::ui::{ConfirmDialog, DialogId, IconName, Tone};
 
 /// A branch, by its short name, with how many commits it has that its remote one doesn't.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,7 +137,7 @@ pub fn open_delete_branch_dialog(
     on_cancel: impl Fn(&mut Window, &mut App) + 'static,
     window: &mut Window,
     cx: &mut App,
-) {
+) -> DialogId {
     let description = consequences(&deletion);
     ConfirmDialog::new(IconName::Trash, Tone::Coral, deletion.title())
         .description(description)
@@ -145,7 +145,7 @@ pub fn open_delete_branch_dialog(
             on_delete(&deletion, window, cx)
         })
         .on_cancel(on_cancel)
-        .open(window, cx);
+        .open(window, cx)
 }
 
 #[cfg(test)]

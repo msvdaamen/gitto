@@ -4,20 +4,19 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use gitto_git::DiscardSide;
 use gitto_git::features::diff::schema::ChangedFile;
-use gitto_git::features::staging::discard::DiscardSide;
 use gitto_git::schema::FileStatus;
-use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::prelude::*;
 use gpui_kit::{App, Window, div};
 
 use super::changed_file_list::name_and_folder;
-use crate::components::ui::dialog::CONFIRM_WIDTH;
-use crate::components::ui::{DialogHeading, IconName, Tone};
-use crate::data::staging::DiscardTarget;
-use crate::state::lingering::Lingering;
+use gitto_app_data::data::staging::DiscardTarget;
+use gitto_app_data::state::lingering::Lingering;
+use gitto_app_kit::ui::dialog::CONFIRM_WIDTH;
+use gitto_app_kit::ui::{DialogHeading, DialogId, IconName, Tone};
 
 /// What the dialog asks about: the changes to discard and, for a file's unstaged ones, whether it
 /// has staged ones too, `also_staged`, which it's put back as; else as the last commit has it.
@@ -113,20 +112,23 @@ impl DiscardPrompt {
 
 /// Asks before discarding changes, which are lost: the ones `prompt` says, read again whenever
 /// the dialog is drawn, so it asks about them as they are now (a file staged in a terminal
-/// meanwhile, say); still named once they're gone, as the dialog closes. Escape, Enter, a click
-/// outside, or Cancel runs `on_cancel`; Discard runs `on_discard` with the changes asked about.
+/// meanwhile, say); still named once they're gone, as the dialog closes. Escape, Enter (but on
+/// Discard), a click outside, or Cancel runs `on_cancel`; Discard runs `on_discard` with the
+/// changes asked about.
 pub fn open_discard_dialog(
     prompt: impl Fn(&App) -> Option<DiscardPrompt> + 'static,
     on_cancel: impl Fn(&mut Window, &mut App) + 'static,
     on_discard: impl Fn(DiscardPrompt, &mut Window, &mut App) + 'static,
     window: &mut Window,
     cx: &mut App,
-) {
+) -> DialogId {
     let prompt = Rc::new(prompt);
     let on_cancel = Rc::new(on_cancel);
     let on_discard = Rc::new(on_discard);
     let shown = Rc::new(RefCell::new(Lingering::default()));
-    window.open_dialog(cx, move |dialog, window, cx| {
+    // Around Discard, to tell whether Enter is on it.
+    let discard_focus = cx.focus_handle();
+    DialogId::open(window, cx, move |id, dialog, window, cx| {
         let current = prompt(cx);
         let asked = shown.borrow_mut().update(current.clone()).cloned();
         let (title, description) = asked
@@ -141,36 +143,48 @@ pub fn open_discard_dialog(
                     .on_click({
                         let on_cancel = Rc::clone(&on_cancel);
                         move |_, window, cx| {
-                            window.close_dialog(cx);
+                            id.close(window, cx);
                             on_cancel(window, cx);
                         }
                     }),
             )
             .child(
-                Button::new("discard-confirm")
-                    .primary()
-                    .label("Discard")
-                    .on_click({
-                        let on_discard = Rc::clone(&on_discard);
-                        let prompt = Rc::clone(&prompt);
-                        move |_, window, cx| {
-                            let current = prompt(cx);
-                            window.close_dialog(cx);
-                            if let Some(current) = current {
-                                on_discard(current, window, cx);
+                div().track_focus(&discard_focus).child(
+                    Button::new("discard-confirm")
+                        .danger()
+                        .label("Discard")
+                        .on_click({
+                            let on_discard = Rc::clone(&on_discard);
+                            let prompt = Rc::clone(&prompt);
+                            move |_, window, cx| {
+                                let current = prompt(cx);
+                                id.close(window, cx);
+                                if let Some(current) = current {
+                                    on_discard(current, window, cx);
+                                }
                             }
-                        }
-                    }),
+                        }),
+                ),
             );
         let on_ok = Rc::clone(&on_cancel);
         let on_cancel = Rc::clone(&on_cancel);
+        let ok_discard = Rc::clone(&on_discard);
+        let ok_prompt = Rc::clone(&prompt);
+        let ok_focus = discard_focus.clone();
         dialog
             .w(CONFIRM_WIDTH.to_pixels(window.rem_size()))
             .close_button(false)
-            // Kit's dialog takes Enter as OK: it cancels, as Escape does.
+            // Kit's dialog takes Enter as OK, even on a button: on Discard it discards, and
+            // elsewhere it cancels, as Escape does.
             .on_ok(move |_, window, cx| {
-                on_ok(window, cx);
-                true
+                let discarding = ok_focus.contains_focused(window, cx);
+                let current = ok_prompt(cx);
+                id.close(window, cx);
+                match current {
+                    Some(current) if discarding => ok_discard(current, window, cx),
+                    _ => on_ok(window, cx),
+                }
+                false
             })
             .on_cancel(move |_, window, cx| {
                 on_cancel(window, cx);
@@ -181,20 +195,24 @@ pub fn open_discard_dialog(
                     .description(div().id("discard-description").child(description)),
             )
             .footer(footer)
-    });
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
 
+    use gpui_kit::component::WindowExt as _;
     use gpui_kit::test::TestWindowExt as _;
-    use gpui_kit::{Context, IntoElement, Render, TestAppContext};
+    use gpui_kit::{AnyWindowHandle, Context, IntoElement, Render, TestAppContext};
 
     use super::*;
     use crate::test_support;
 
     struct Host;
+
+    /// How many times it was cancelled, and discarded.
+    type Counts = (Rc<Cell<u32>>, Rc<Cell<u32>>);
 
     impl Render for Host {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
@@ -228,9 +246,9 @@ mod tests {
         }
     }
 
-    #[gpui_kit::test]
-    fn cancels_on_enter(cx: &mut TestAppContext) {
-        let _dir = test_support::init(cx, |services| services);
+    /// Opens it about all the changes, counting the cancels and the discards.
+    fn open(cx: &mut TestAppContext) -> (tempfile::TempDir, AnyWindowHandle, Counts) {
+        let dir = test_support::init(cx, |services| services);
         let (window, _) = test_support::open(cx, |_, _| Host);
         let (cancelled, discarded) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
         cx.update_window(window, |_, window, cx| {
@@ -245,15 +263,36 @@ mod tests {
         })
         .unwrap();
         cx.run_until_parked();
+        (dir, window, (cancelled, discarded))
+    }
 
-        cx.update_window(window, |_, window, cx| window.press("enter", cx))
-            .unwrap();
+    fn press(window: AnyWindowHandle, keys: &[&str], cx: &mut TestAppContext) {
+        cx.update_window(window, |_, window, cx| {
+            for key in keys {
+                window.press(key, cx);
+            }
+        })
+        .unwrap();
         cx.run_until_parked();
         assert!(
             !cx.update_window(window, |_, window, cx| window.has_active_dialog(cx))
                 .unwrap()
         );
+    }
+
+    #[gpui_kit::test]
+    fn cancels_on_enter(cx: &mut TestAppContext) {
+        let (_dir, window, (cancelled, discarded)) = open(cx);
+        press(window, &["enter"], cx);
         assert_eq!((cancelled.get(), discarded.get()), (1, 0));
+    }
+
+    #[gpui_kit::test]
+    fn discards_on_enter_on_discard(cx: &mut TestAppContext) {
+        let (_dir, window, (cancelled, discarded)) = open(cx);
+        // Past Cancel.
+        press(window, &["tab", "tab", "enter"], cx);
+        assert_eq!((cancelled.get(), discarded.get()), (0, 1));
     }
 
     #[test]

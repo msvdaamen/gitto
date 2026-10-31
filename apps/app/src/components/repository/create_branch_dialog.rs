@@ -1,19 +1,18 @@
 //! Naming a branch to create from another. Ported from
 //! `components/repository/create-branch-dialog.tsx`.
 
-use gitto_git::features::status::schema::{StatusSummary, Uncommitted};
 use gitto_git::input::RepositoryId;
-use gitto_ui::git::status::{branch_name, has_uncommitted_changes, is_checked_out};
-use gpui_kit::component::WindowExt as _;
+use gitto_ui_logic::git::status::{branch_name, has_uncommitted_changes, is_checked_out};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::prelude::*;
-use gpui_kit::{Context, Entity, Focusable as _, Subscription, Window, rems};
+use gpui_kit::{App, Context, Entity, Focusable as _, Subscription, Window, rems};
 
 use super::branch_form::{BranchForm, NAME_PLACEHOLDER, submitted_name};
-use crate::data::branch::{BranchChange, NewBranchFrom, create_branch_from_operation};
-use crate::data::status::status_query;
-use crate::data::{Opaque, Operations, Query};
-use crate::state::lingering::Lingering;
+use gitto_app_data::data::Change;
+use gitto_app_data::data::branch::NewBranchFrom;
+use gitto_app_data::data::{Part, Repository, Shown};
+use gitto_app_data::state::lingering::Lingering;
+use gitto_app_kit::ui::DialogId;
 
 /// How wide the dialog is (`max-w-[320px]`), in rems of the 15px base.
 const WIDTH: f32 = 21.33;
@@ -25,31 +24,19 @@ const WIDTH: f32 = 21.33;
 /// to fix it, whichever branch's menu it's opened from again, and is for the repository it was
 /// typed in.
 pub struct CreateBranchDialog {
-    repository_id: RepositoryId,
-    status: Query<Opaque<Uncommitted>, StatusSummary>,
-    create: BranchChange<NewBranchFrom>,
+    repository: Shown,
     name: Entity<InputState>,
     /// The branch it's made from, by its full ref name: still named while the dialog closes.
     from: Lingering<String>,
-    open: bool,
+    /// The dialog, while it's open.
+    dialog: Option<DialogId>,
     _subscriptions: Vec<Subscription>,
 }
 
 impl CreateBranchDialog {
     pub fn new(repository_id: RepositoryId, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        CreateBranchDialog::with_create(repository_id, create_branch_from_operation(), window, cx)
-    }
-
-    /// With `create` creating the branch: a test's.
-    pub(crate) fn with_create(
-        repository_id: RepositoryId,
-        create: BranchChange<NewBranchFrom>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
         let name = cx.new(|cx| InputState::new(window, cx).placeholder(NAME_PLACEHOLDER));
         let subscriptions = vec![
-            cx.observe_global::<Operations>(|_, cx| cx.notify()),
             // Enter in it is the dialog's: see its `on_ok`.
             cx.subscribe(&name, |_, _, event, cx| {
                 if let InputEvent::Change = event {
@@ -58,12 +45,10 @@ impl CreateBranchDialog {
             }),
         ];
         CreateBranchDialog {
-            status: status_query(&repository_id, cx),
-            repository_id,
-            create,
+            repository: Shown::new(&repository_id, &[Part::Status, Part::Changes], cx),
             name,
             from: Lingering::default(),
-            open: false,
+            dialog: None,
             _subscriptions: subscriptions,
         }
     }
@@ -75,18 +60,16 @@ impl CreateBranchDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.repository_id == repository_id {
+        if !self.repository.set(&repository_id, cx) {
             return;
         }
-        self.status = status_query(&repository_id, cx);
-        self.repository_id = repository_id;
         self.name
             .update(cx, |name, cx| name.set_value("", window, cx));
         self.close(window, cx);
     }
 
     pub fn is_open(&self) -> bool {
-        self.open
+        self.dialog.is_some()
     }
 
     pub fn name(&self) -> &Entity<InputState> {
@@ -96,25 +79,25 @@ impl CreateBranchDialog {
     /// Opens it to name a branch made from `from`, by its full ref name. Why the last one failed
     /// is put out of the way of the name, which is kept after a failure to fix it.
     pub fn open(&mut self, from: String, window: &mut Window, cx: &mut Context<Self>) {
-        self.create.dismiss(&self.repository_id, cx);
+        self.repository
+            .update(cx, |repository, cx| repository.dismiss(Change::Switch, cx));
         self.from.update(Some(from));
-        if self.open {
+        if self.dialog.is_some() {
             cx.notify();
             return;
         }
-        self.open = true;
         let this = cx.entity().downgrade();
         let focus = self.name.focus_handle(cx);
-        window.open_dialog(cx, move |dialog, window, cx| {
+        let dialog = DialogId::open(window, cx, move |_, dialog, window, cx| {
             let Some(shown) = this.upgrade() else {
                 return dialog;
             };
             let (summary, name, disabled) = {
                 let shown = shown.read(cx);
                 (
-                    shown.summary(),
+                    shown.summary(cx),
                     shown.name.clone(),
-                    shown.create.is_blocked(&shown.repository_id, cx),
+                    shown.repository.read(cx).branches_changing(),
                 )
             };
             let cancel = this.clone();
@@ -131,7 +114,7 @@ impl CreateBranchDialog {
                 })
                 .on_cancel(move |_, _, cx| {
                     let _ = cancel.update(cx, |this, cx| {
-                        this.open = false;
+                        this.dialog = None;
                         cx.notify();
                     });
                     true
@@ -145,23 +128,28 @@ impl CreateBranchDialog {
                         }),
                 )
         });
+        self.dialog = Some(dialog);
         focus.focus(window, cx);
         cx.notify();
     }
 
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.open {
-            self.open = false;
-            window.close_dialog(cx);
+        if let Some(dialog) = self.dialog.take() {
+            dialog.close(window, cx);
             cx.notify();
         }
     }
 
     /// What the new branch is made from, and what comes along: from another commit than HEAD,
     /// the uncommitted changes can conflict with it.
-    pub fn summary(&self) -> String {
+    pub fn summary(&self, cx: &App) -> String {
         let from = self.from.get().map_or("", String::as_str);
-        let status = self.status.data();
+        let status = self
+            .repository
+            .read(cx)
+            .status()
+            .data()
+            .map(|status| status.summary.clone());
         let changes = if !status.as_ref().is_some_and(has_uncommitted_changes) {
             "."
         } else if status
@@ -184,15 +172,16 @@ impl CreateBranchDialog {
         else {
             return;
         };
-        if !self.open || self.create.is_blocked(&self.repository_id, cx) {
+        if self.dialog.is_none() || self.repository.read(cx).branches_changing() {
             return;
         }
         self.close(window, cx);
-        let input = NewBranchFrom {
-            name: trimmed.clone(),
-            from,
-        };
-        let Some(done) = self.create.run(&self.repository_id, input, cx) else {
+        let input = NewBranchFrom::parse(trimmed.clone(), from);
+        let done = self.repository.update(cx, |repository, cx| {
+            let create = Repository::create_branch_from;
+            repository.parsing(Change::Switch, input, create, cx)
+        });
+        let Some(done) = done else {
             return;
         };
         cx.spawn_in(window, async move |this, cx| {
@@ -216,16 +205,32 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
+    use futures::FutureExt as _;
     use gitto_git::features::status::schema::Head;
+    use gitto_git::input::{BranchName, BranchRef};
     use gpui_kit::component::WindowExt as _;
     use gpui_kit::test::TestWindowExt as _;
-    use gpui_kit::{AnyWindowHandle, App, IntoElement, Render, TestAppContext, div};
+    use gpui_kit::{AnyWindowHandle, IntoElement, Render, TestAppContext, div};
 
     use super::*;
     use crate::components::repository::test_support::{
-        changed, has_dialog, repository_id, set_status, setup, status,
+        changed, fake_git, has_dialog, repository_id, set_status, setup, status,
     };
-    use crate::data::{QueryError, RepositoryOperation};
+    use gitto_app_data::data::git::{GitTask, RepositoryGit};
+
+    /// A repository's git that records the branches asked to be created.
+    #[derive(Default)]
+    struct Creates(RefCell<Vec<NewBranchFrom>>);
+
+    impl RepositoryGit for Creates {
+        fn create_branch(&self, name: BranchName, from: Option<BranchRef>) -> GitTask<()> {
+            self.0.borrow_mut().push(NewBranchFrom {
+                name,
+                from: from.expect("a branch made from another"),
+            });
+            async { Ok(()) }.boxed()
+        }
+    }
 
     struct Host {
         dialog: Entity<CreateBranchDialog>,
@@ -240,19 +245,12 @@ mod tests {
     fn render(
         cx: &mut TestAppContext,
         id: &RepositoryId,
-        calls: &Rc<RefCell<Vec<NewBranchFrom>>>,
+        calls: &Rc<Creates>,
     ) -> (AnyWindowHandle, Entity<CreateBranchDialog>) {
-        let calls = Rc::clone(calls);
-        let create = BranchChange::new(RepositoryOperation::new(
-            "switch",
-            move |_, input: NewBranchFrom, cx: &mut App| {
-                calls.borrow_mut().push(input);
-                cx.background_spawn(async { Ok::<_, QueryError>(()) })
-            },
-        ));
+        fake_git(id, calls.clone(), cx);
         let id = id.clone();
         let (window, host) = crate::test_support::open(cx, move |window, cx| Host {
-            dialog: cx.new(|cx| CreateBranchDialog::with_create(id, create, window, cx)),
+            dialog: cx.new(|cx| CreateBranchDialog::new(id, window, cx)),
         });
         let dialog = host.read_with(cx, |host, _| host.dialog.clone());
         (window, dialog)
@@ -263,7 +261,7 @@ mod tests {
         let _dir = setup(cx);
         let id = repository_id();
         set_status(&id, changed(status(), 2), cx);
-        let calls = Rc::new(RefCell::new(Vec::new()));
+        let calls = Rc::new(Creates::default());
         let (window, dialog) = render(cx, &id, &calls);
 
         cx.update_window(window, |_, window, cx| {
@@ -278,7 +276,7 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(
-            dialog.read_with(cx, |dialog, _| dialog.summary()),
+            dialog.read_with(cx, |dialog, cx| dialog.summary(cx)),
             "From origin/feature, with your uncommitted changes, unless they conflict with it: \
              then they're kept in the stash."
         );
@@ -290,11 +288,8 @@ mod tests {
         .unwrap();
         cx.run_until_parked();
         assert_eq!(
-            *calls.borrow(),
-            [NewBranchFrom {
-                name: "topic".into(),
-                from: "refs/remotes/origin/feature".into(),
-            }]
+            *calls.0.borrow(),
+            [NewBranchFrom::parse("topic", "refs/remotes/origin/feature").unwrap()]
         );
         assert!(!dialog.read_with(cx, |dialog, _| dialog.is_open()));
         // Created: the next one gets a fresh name.
@@ -311,12 +306,12 @@ mod tests {
         tempfile::TempDir,
         AnyWindowHandle,
         Entity<CreateBranchDialog>,
-        Rc<RefCell<Vec<NewBranchFrom>>>,
+        Rc<Creates>,
     ) {
         let dir = setup(cx);
         let id = repository_id();
         set_status(&id, status(), cx);
-        let calls = Rc::new(RefCell::new(Vec::new()));
+        let calls = Rc::new(Creates::default());
         let (window, dialog) = render(cx, &id, &calls);
         cx.update_window(window, |_, window, cx| {
             dialog.update(cx, |dialog, cx| {
@@ -334,7 +329,7 @@ mod tests {
         cx.update_window(window, |_, window, cx| window.press("enter", cx))
             .unwrap();
         cx.run_until_parked();
-        assert!(calls.borrow().is_empty());
+        assert!(calls.0.borrow().is_empty());
         assert!(dialog.read_with(cx, |dialog, _| dialog.is_open()));
         assert!(has_dialog(window, cx));
 
@@ -362,7 +357,7 @@ mod tests {
         cx.update_window(window, |_, window, cx| window.press("enter", cx))
             .unwrap();
         cx.run_until_parked();
-        assert_eq!(calls.borrow().len(), 1);
+        assert_eq!(calls.0.borrow().len(), 1);
         assert!(!dialog.read_with(cx, |dialog, _| dialog.is_open()));
         assert!(!has_dialog(window, cx));
     }
@@ -372,7 +367,7 @@ mod tests {
         let _dir = setup(cx);
         let id = repository_id();
         set_status(&id, status(), cx);
-        let calls = Rc::new(RefCell::new(Vec::new()));
+        let calls = Rc::new(Creates::default());
         let (window, dialog) = render(cx, &id, &calls);
         cx.update_window(window, |_, window, cx| {
             window.open_dialog(cx, |dialog, _, _| dialog);
@@ -388,7 +383,7 @@ mod tests {
         })
         .unwrap();
         cx.run_until_parked();
-        assert_eq!(calls.borrow().len(), 1);
+        assert_eq!(calls.0.borrow().len(), 1);
         assert!(!dialog.read_with(cx, |dialog, _| dialog.is_open()));
         // The one under it is still open.
         assert!(has_dialog(window, cx));
@@ -399,7 +394,7 @@ mod tests {
         let _dir = setup(cx);
         let id = repository_id();
         set_status(&id, status(), cx);
-        let calls = Rc::new(RefCell::new(Vec::new()));
+        let calls = Rc::new(Creates::default());
         let (window, dialog) = render(cx, &id, &calls);
         cx.update_window(window, |_, window, cx| {
             dialog.update(cx, |dialog, cx| {
@@ -427,7 +422,7 @@ mod tests {
             dialog.read_with(cx, |dialog, cx| dialog.name.read(cx).value().to_string()),
             ""
         );
-        assert!(calls.borrow().is_empty());
+        assert!(calls.0.borrow().is_empty());
     }
 
     #[gpui_kit::test]
@@ -440,7 +435,7 @@ mod tests {
             sha: "abc".into(),
         };
         set_status(&id, on_main, cx);
-        let calls = Rc::new(RefCell::new(Vec::new()));
+        let calls = Rc::new(Creates::default());
         let (window, dialog) = render(cx, &id, &calls);
         cx.update_window(window, |_, window, cx| {
             dialog.update(cx, |dialog, cx| {
@@ -449,7 +444,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!(
-            dialog.read_with(cx, |dialog, _| dialog.summary()),
+            dialog.read_with(cx, |dialog, cx| dialog.summary(cx)),
             "From main, with your uncommitted changes."
         );
     }

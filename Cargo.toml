@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["apps/app", "crates/*"]
+members = ["apps/app", "apps/app/data", "apps/app/kit", "crates/*"]
 
 [workspace.package]
 edition = "2024"
@@ -59,12 +59,16 @@ windows-sys = { version = "0.61.2", features = [
 dirs = "6.0.0"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 
-# apps/app: the GPUI app.
+# apps/app: the GPUI app, and the times its log's lines are written at.
 anyhow = "1.0.104"
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+# The socket a second launch tells the Gitto running through, on Windows: Unix domain sockets,
+# which std only has on Unix (see `apps/app/src/single_instance.rs`).
+uds_windows = "1.2.1"
 
 # apps/app's diffs: syntax highlighting as gpui-kit's `syntect` feature does it (the same syntect
 # and syntax set), and the words that changed between a removed line and the line added for it
-# (and, in crates/ui, the diff of two whole files). The regexes are Oniguruma's (`regex-onig`,
+# (and, in crates/ui-logic, the diff of two whole files). The regexes are Oniguruma's (`regex-onig`,
 # which syntect takes over `regex-fancy`, which gpui-kit asks for): it parses a file about three
 # times as fast, so a diff's colors don't lag its text.
 similar = "2.7.0"
@@ -78,15 +82,26 @@ two-face = { version = "0.4.5", default-features = false, features = [
   "syntect-fancy",
   "syntect-onig",
 ] }
+# How many columns a character of a diff's lines takes, e.g. two for CJK (already in the tree, from
+# gpui-kit).
+unicode-width = "0.2.2"
 
-# crates/ui: what the UI works out for itself, e.g. the order of the sidebar's folders.
+# crates/ui-logic: what the UI works out for itself, e.g. the order of the sidebar's folders.
 indexmap = "2.14.2"
 url = "2.5.8"
+# Relative times in the system's language, as `Intl.RelativeTimeFormat` told them: ICU4X's
+# formatter, with its data compiled in, and the language the system's set to.
+fixed_decimal = { version = "0.7.3", default-features = false }
+icu_experimental = { version = "0.7.0", default-features = false, features = ["compiled_data"] }
+icu_locale_core = { version = "2.4.0", default-features = false }
+sys-locale = "0.3.2"
 
 gitto-db = { path = "crates/db" }
 gitto-git = { path = "crates/git" }
 gitto-repository = { path = "crates/repository" }
-gitto-ui = { path = "crates/ui" }
+gitto-ui-logic = { path = "crates/ui-logic" }
+gitto-app-data = { path = "apps/app/data" }
+gitto-app-kit = { path = "apps/app/kit" }
 
 # Dependencies are built optimized in dev builds too: GPUI (its layout, text and rendering) and
 # syntect are many times slower unoptimized, which makes `cargo run -p app` feel sluggish, while

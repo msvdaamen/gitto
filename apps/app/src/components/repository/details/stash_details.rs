@@ -2,7 +2,6 @@
 
 use std::hash::{DefaultHasher, Hash as _, Hasher as _};
 use std::rc::Rc;
-use std::sync::Arc;
 
 use gitto_git::features::stash::schema::Stash;
 use gitto_git::input::RepositoryId;
@@ -12,24 +11,24 @@ use gpui_kit::{App, Context, Entity, EventEmitter, FontWeight, Subscription, Win
 
 use super::changed_file_list::{ChangedFileList, HoverIntent};
 use super::commit_details::{CommitDetailsEvent, ShownFile, openable_files};
-use super::details_data::DetailsData;
 use super::details_sections::{DetailsError, DetailsList, FileTotals, RenderTop};
-use crate::components::ui::{Icon, IconName, LoadingState, Tone};
-use crate::data::diff::{ChangedFiles, FilesOf, ShownFiles, select_shown_files};
-use crate::data::{Opaque, Query};
-use crate::state::clock::{Clock, relative_time};
-use crate::theme::{PaletteExt as _, base_px};
-use gitto_ui::git::changes::LineCounts;
-use gitto_ui::git::diff_source::DiffSource;
+use gitto_app_data::data::diff::{FilesOf, FilesOnShow};
+use gitto_app_data::data::{Opaque, Part, Shown};
+use gitto_app_data::state::clock::{Clock, relative_time};
+use gitto_app_kit::theme::{PaletteExt as _, base_px};
+use gitto_app_kit::ui::{Icon, IconName, LoadingState, Tone};
+use gitto_ui_logic::git::changes::LineCounts;
+use gitto_ui_logic::git::diff_source::DiffSource;
+
+/// What the stash details show of the repository.
+const PARTS: &[Part] = &[Part::Stashes, Part::Commits];
 
 /// A stash selected in the history: what git named it, when it was made, and the files it
 /// changed, scrolled with the summary.
 pub struct StashDetails {
-    repository_id: RepositoryId,
+    repository: Shown,
     sha: String,
-    data: DetailsData,
-    stashes: Query<Arc<[Stash]>>,
-    changes: Query<ChangedFiles, ShownFiles>,
+    files: FilesOnShow,
     shown_file: ShownFile,
     list: DetailsList,
     hover: Entity<HoverIntent>,
@@ -39,25 +38,14 @@ pub struct StashDetails {
 impl EventEmitter<CommitDetailsEvent> for StashDetails {}
 
 impl StashDetails {
-    pub fn new(
-        repository_id: RepositoryId,
-        sha: &str,
-        data: DetailsData,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let stashes = Query::new(data.stashes(&repository_id, cx), cx);
-        let changes = Query::with_select(
-            data.changed_files(&repository_id, sha, FilesOf::Stash, cx),
-            select_shown_files(),
-            cx,
-        );
+    pub fn new(repository_id: &RepositoryId, sha: &str, cx: &mut Context<Self>) -> Self {
+        let repository = Shown::new(repository_id, PARTS, cx);
+        let files = FilesOnShow::new(FilesOf::Stash, sha, repository.entity(), cx);
         let clock = Clock::global(cx);
         StashDetails {
-            repository_id,
+            repository,
             sha: sha.to_owned(),
-            data,
-            stashes,
-            changes,
+            files,
             shown_file: None,
             list: DetailsList::new(),
             hover: cx.new(|_| HoverIntent::default()),
@@ -71,10 +59,7 @@ impl StashDetails {
             return;
         }
         self.sha = sha.to_owned();
-        let files = self
-            .data
-            .changed_files(&self.repository_id, sha, FilesOf::Stash, cx);
-        self.changes.set_options(files, cx);
+        self.files.set_sha(sha, self.repository.entity(), cx);
         cx.notify();
     }
 
@@ -88,17 +73,22 @@ impl StashDetails {
 
 impl Render for StashDetails {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let files = self.changes.data();
+        let repository = self.repository.read(cx);
+        let files = self.files.data(repository);
         let shown_sha = files.as_ref().map(|files| files.shown_sha.clone());
         // The stash whose files are on show, so the summary never names another one while its
         // files load. Gone once it's popped; the history then selects another row.
-        let shown = self.stashes.data().and_then(|stashes| {
+        let shown = repository.stashes().data().and_then(|stashes| {
             stashes
                 .iter()
                 .find(|stash| Some(&stash.sha) == shown_sha.as_ref())
                 .cloned()
         });
-        let error = self.stashes.error().or_else(|| self.changes.error());
+        let error = repository
+            .stashes()
+            .error()
+            .cloned()
+            .or_else(|| self.files.error(repository));
         let loading = files.is_none() && error.is_none();
         let (count, totals) = files.as_ref().map_or((0, LineCounts::default()), |files| {
             (files.files.len(), files.totals)
@@ -130,7 +120,7 @@ impl Render for StashDetails {
         let mut hasher = DefaultHasher::new();
         (
             shown.as_ref().map(|stash| stash.sha.clone()),
-            error.as_ref().map(|error| error.message()),
+            error.as_ref().map(|error| error.to_string()),
             loading,
         )
             .hash(&mut hasher);

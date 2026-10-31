@@ -6,10 +6,10 @@ use gpui_kit::component::{Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{Anchor, App, Context, Entity, FontWeight, Subscription, Window, div};
 
-use crate::components::ui::{Icon, IconName};
-use crate::services::system::Update;
-use crate::state::update::UpdateStatus;
-use crate::theme::PaletteExt as _;
+use gitto_app_data::services::system::Update;
+use gitto_app_data::state::update::UpdateStatus;
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{Icon, IconName};
 
 /// The bell, which opens what Gitto has to tell the user: for now, a newer version it's getting.
 /// Its dot says there's something the user hasn't opened the bell to see since it last changed.
@@ -187,8 +187,8 @@ mod tests {
     use gpui_kit::{AnyWindowHandle, AppContext as _, IntoElement, Render, TestAppContext};
 
     use super::*;
-    use crate::services::system::{UpdateChannel, UpdateState};
     use crate::test_support;
+    use gitto_app_data::services::system::{UpdateChannel, UpdateState};
 
     struct Host {
         notifications: Entity<Notifications>,

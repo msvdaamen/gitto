@@ -6,8 +6,8 @@ use gpui_kit::{Context, Entity, Window, div, rems};
 
 use crate::components::settings::settings_section::SettingsSection;
 use crate::components::settings::telemetry_setting::TelemetrySetting;
-use crate::components::ui::IconName;
-use crate::theme::PaletteExt as _;
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::IconName;
 
 /// The widest the settings get (`max-w-180`, 720px), in rems.
 pub const CONTENT_MAX_WIDTH: f32 = 48.;

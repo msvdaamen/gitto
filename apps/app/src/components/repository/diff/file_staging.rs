@@ -7,17 +7,17 @@ use std::sync::Arc;
 use gitto_git::PatchVersion;
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::features::staging::schema::LineSelection;
-use gitto_ui::git::changes::is_nested_repository;
-use gitto_ui::git::patch::has_hunks;
+use gitto_ui_logic::git::changes::is_nested_repository;
+use gitto_ui_logic::git::patch::has_hunks;
 use gpui_kit::{App, Context, Entity, Subscription, Task};
 
 use super::file_diff_view::{FileDiffEvent, FileDiffView};
-use super::line_picker::LineStaging;
-use crate::data::staging::{
+use super::viewer::line_picker::LineStaging;
+use gitto_app_data::data::staging::{
     FileToStage, LinesToStage, StageAction, stage_file_mutation, stage_lines_mutation,
 };
-use crate::data::{Mutation, QueryError};
-use gitto_ui::git::diff_source::{DiffFileKey, DiffSource, is_uncommitted};
+use gitto_app_data::data::{DataError, Mutation};
+use gitto_ui_logic::git::diff_source::{DiffFileKey, DiffSource, is_uncommitted};
 
 /// Stages, or unstages, a file's lines; resolves to the patch they leave.
 pub type StageLinesMutation = Entity<Mutation<LinesToStage, String>>;
@@ -121,7 +121,7 @@ impl FileDiffView {
         from: Arc<str>,
         lines: LineSelection,
         cx: &mut Context<Self>,
-    ) -> Task<Result<(), QueryError>> {
+    ) -> Task<Result<(), DataError>> {
         let key = self.view.file_key();
         self.staging.error = None;
         let input = LinesToStage {
@@ -140,14 +140,14 @@ impl FileDiffView {
             let left = match staged.await {
                 Ok(Ok(left)) => left,
                 Ok(Err(error)) => {
-                    let message = error.message();
+                    let message = error.to_string();
                     let _ = this.update(cx, |this, cx| {
                         this.staging.error = Some((key, message));
                         cx.notify();
                     });
                     return Err(error);
                 }
-                Err(_) => return Err(QueryError::msg("The lines weren't staged.")),
+                Err(_) => return Err(DataError::msg("The lines weren't staged.")),
             };
             let _ = this.update(cx, |this, cx| {
                 // The patch staged from stays on show until the one they leave is highlighted;
@@ -222,7 +222,7 @@ impl FileDiffView {
                 this.staging.staging_whole = false;
                 match result {
                     Ok(Ok(())) => this.move_on(&key, target, cx),
-                    Ok(Err(error)) => this.staging.error = Some((key, error.message())),
+                    Ok(Err(error)) => this.staging.error = Some((key, error.to_string())),
                     Err(_) => {}
                 }
                 cx.notify();

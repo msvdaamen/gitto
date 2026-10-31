@@ -3,10 +3,10 @@
 use gpui_kit::prelude::*;
 use gpui_kit::{Context, Role, Task, TestSupportExt as _, Window, div};
 
-use crate::components::ui::SettingSwitch;
-use crate::services::Services;
-use crate::services::system::TelemetryState;
-use crate::theme::PaletteExt as _;
+use gitto_app_data::services::Services;
+use gitto_app_data::services::system::TelemetryState;
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::SettingSwitch;
 
 /// Where saving the setting is.
 enum Save {
@@ -122,8 +122,8 @@ mod tests {
     use gpui_kit::{AnyWindowHandle, Entity, TestAppContext};
 
     use super::*;
-    use crate::services::system::Telemetry;
     use crate::test_support;
+    use gitto_app_data::services::system::Telemetry;
 
     /// The setting as a test says it is, with what saving it gives, and what was saved.
     struct TestTelemetry {

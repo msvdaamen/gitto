@@ -21,24 +21,24 @@ path = "src/main.rs"
 gpui-kit = { workspace = true, features = ["syntect"] }
 
 # What the UI shows and changes, called directly (there's no RPC).
-gitto-db.workspace = true
 gitto-git.workspace = true
 gitto-repository.workspace = true
 # The UI's pure logic (TS's `apps/ui/src/git/*.ts` and the like).
-gitto-ui.workspace = true
+gitto-ui-logic.workspace = true
+# The data layer, services and state, and the primitives and theme: the app's own crates.
+gitto-app-data.workspace = true
+gitto-app-kit.workspace = true
 
 anyhow.workspace = true
-async-fs.workspace = true
 futures.workspace = true
 image.workspace = true
 log.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-thiserror.workspace = true
 # Diffs: syntax highlighting, and the words that changed in a line (see `components::repository::diff`).
 similar.workspace = true
 syntect.workspace = true
+thiserror.workspace = true
 two-face.workspace = true
+unicode-width.workspace = true
 
 # The Dock's icon, set as the app starts (see `identity.rs`).
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -46,13 +46,19 @@ objc2.workspace = true
 objc2-app-kit.workspace = true
 objc2-foundation.workspace = true
 
+# The socket a second launch tells the Gitto running through (see `single_instance.rs`).
+[target.'cfg(windows)'.dependencies]
+uds_windows.workspace = true
+
 # The .exe's icon and the name Windows shows for it (see `build.rs`).
 [build-dependencies]
 winresource.workspace = true
 
 [dev-dependencies]
 gitto-git = { workspace = true, features = ["test-support"] }
-gpui-kit = { workspace = true, features = ["syntect", "test-support"] }
 smol.workspace = true
+gpui-kit = { workspace = true, features = ["syntect", "test-support"] }
+gitto-app-data = { workspace = true, features = ["test-support"] }
+serde_json.workspace = true
 tempfile.workspace = true
 uuid.workspace = true

@@ -2,7 +2,7 @@
 
 use std::rc::Rc;
 
-use gitto_ui::git::rows::CommitRow;
+use gitto_ui_logic::git::rows::CommitRow;
 use gpui_kit::prelude::*;
 use gpui_kit::{
     App, FontWeight, Hsla, Rems, SharedString, Window, div, linear_color_stop, linear_gradient, rgb,
@@ -15,9 +15,9 @@ use super::history_option::{
     HistoryOption, MenuBuilder, OnSelect, RowLook, RowPosition, RowTotals,
 };
 use super::ref_labels::{HistoryRefLabels, LabelActions, MoreLabels};
-use crate::state::clock::relative_time;
-use crate::theme::{Palette, PaletteExt as _, base_px};
-use gitto_ui::git::changes::LineCounts;
+use gitto_app_data::state::clock::relative_time;
+use gitto_app_kit::theme::{Palette, PaletteExt as _, base_px};
+use gitto_ui_logic::git::changes::LineCounts;
 
 /// What every row gets from the table.
 #[derive(Clone)]
@@ -193,7 +193,7 @@ mod tests {
     fn colours_authors_as_their_avatars_are() {
         for key in ["ada@example.com", "grace@example.com", "linus@example.com"] {
             assert_eq!(
-                author_color(gitto_ui::format::avatar_color(key)),
+                author_color(gitto_ui_logic::format::avatar_color(key)),
                 avatar_color(key)
             );
         }

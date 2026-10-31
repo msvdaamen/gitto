@@ -6,17 +6,19 @@ use gpui_kit::{
 };
 use tempfile::TempDir;
 
-use crate::services::Services;
-use crate::state::router::Route;
+use gitto_app_data::services::Services;
+use gitto_app_data::state::router::Route;
 
 /// Sets up what the app sets up (see `app::init`), on services `configure` makes of in-memory
 /// ones; the folder they keep their files in lives as long as what's returned.
 ///
 /// Motion is reduced: dialogs and popovers then open where they end up at once, rather than after
-/// an animation timed by the wall clock, which a test's clicks could land in the middle of.
+/// an animation timed by the wall clock, which a test's clicks could land in the middle of. Times
+/// are told in English ("3 minutes ago"), whatever the system's language.
 pub fn init(cx: &mut TestAppContext, configure: impl FnOnce(Services) -> Services) -> TempDir {
     cx.update(gpui_kit::init);
     cx.update(|cx| cx.set_reduce_motion(true));
+    gitto_ui_logic::format::tell_relative_times_in("en");
     let dir = tempfile::tempdir().expect("a temporary folder");
     let services = configure(Services::in_memory(dir.path()).expect("in-memory services"));
     cx.update(|cx| crate::app::init(services, Route::Home, cx));
@@ -49,7 +51,11 @@ pub fn open<V: Render>(
 /// Updates that a test says, and counts the installs asked for.
 pub struct TestUpdates {
     states: std::sync::Mutex<
-        Option<futures::channel::mpsc::UnboundedReceiver<crate::services::system::UpdateState>>,
+        Option<
+            futures::channel::mpsc::UnboundedReceiver<
+                gitto_app_data::services::system::UpdateState,
+            >,
+        >,
     >,
     pub installs: std::sync::atomic::AtomicUsize,
 }
@@ -58,7 +64,7 @@ impl TestUpdates {
     /// The updates, and what sends their states.
     pub fn new() -> (
         std::sync::Arc<TestUpdates>,
-        futures::channel::mpsc::UnboundedSender<crate::services::system::UpdateState>,
+        futures::channel::mpsc::UnboundedSender<gitto_app_data::services::system::UpdateState>,
     ) {
         let (sender, receiver) = futures::channel::mpsc::unbounded();
         let updates = TestUpdates {
@@ -69,8 +75,10 @@ impl TestUpdates {
     }
 }
 
-impl crate::services::system::Updates for TestUpdates {
-    fn watch(&self) -> futures::stream::BoxStream<'static, crate::services::system::UpdateState> {
+impl gitto_app_data::services::system::Updates for TestUpdates {
+    fn watch(
+        &self,
+    ) -> futures::stream::BoxStream<'static, gitto_app_data::services::system::UpdateState> {
         use futures::StreamExt as _;
         self.states
             .lock()

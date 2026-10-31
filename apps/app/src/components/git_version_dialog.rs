@@ -3,20 +3,18 @@
 
 use gitto_git::GitInstall;
 use gpui_kit::component::Disableable as _;
-use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    App, Context, Entity, FontWeight, HighlightStyle, Role, SharedString, StyledText, Subscription,
+    App, Context, Entity, FontWeight, HighlightStyle, Role, StyledText, Subscription,
     TestSupportExt as _, Window, div,
 };
 
-use crate::components::ui::dialog::CONFIRM_WIDTH;
-use crate::components::ui::{DialogHeading, Icon, IconName, Tone};
-use crate::data::version::git_version_query;
-use crate::data::{Query, QueryClient, QueryKey, keys};
-use crate::theme::PaletteExt as _;
+use gitto_app_data::data::{AppChanged, AppData, AppPart, Repositories};
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::dialog::CONFIRM_WIDTH;
+use gitto_app_kit::ui::{DialogHeading, DialogId, Icon, IconName, Tone};
 
 pub const GIT_DOWNLOAD_URL: &str = "https://git-scm.com/downloads";
 
@@ -25,38 +23,43 @@ pub const GIT_DOWNLOAD_URL: &str = "https://git-scm.com/downloads";
 /// checking again closes it once git has been updated, and loads again what failed for want of
 /// it. An entity the shell keeps, which opens the dialog on the window when it's needed.
 pub struct GitVersionDialog {
-    install: Query<GitInstall>,
+    data: Entity<AppData>,
     /// Whether a check the user asked for found the same git as before.
     unchanged: bool,
     checking: bool,
-    open: bool,
+    /// The dialog, while it's open.
+    dialog: Option<DialogId>,
     was_supported: Option<bool>,
     _subscription: Subscription,
 }
 
 impl GitVersionDialog {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let install = git_version_query(cx);
-        let subscription = cx.observe_in(install.entry(), window, |this, _, window, cx| {
-            this.sync(window, cx);
-        });
+        let data = AppData::global(cx);
+        data.update(cx, |data, cx| data.show(AppPart::GitVersion, cx));
+        let subscription =
+            cx.subscribe_in(&data, window, |this, _, AppChanged(part), window, cx| {
+                if *part == AppPart::GitVersion {
+                    this.sync(window, cx);
+                }
+            });
         GitVersionDialog {
-            install,
+            data,
             unchanged: false,
             checking: false,
-            open: false,
+            dialog: None,
             was_supported: None,
             _subscription: subscription,
         }
     }
 
     fn installed(&self, cx: &App) -> Option<GitInstall> {
-        self.install.entry().read(cx).data().cloned()
+        self.data.read(cx).git_version().data().cloned()
     }
 
     /// Whether it's showing.
     pub fn is_open(&self) -> bool {
-        self.open
+        self.dialog.is_some()
     }
 
     /// Opens or closes the dialog as the installed git says, and loads again what failed once
@@ -64,26 +67,20 @@ impl GitVersionDialog {
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let supported = self.installed(cx).map(|install| install.supported);
         if supported == Some(true) && self.was_supported == Some(false) {
-            let git_version = keys::git_version();
-            let _ = QueryClient::invalidate_where(
-                &QueryKey::new(Vec::<SharedString>::new()),
-                move |entry| entry.key != git_version,
-                cx,
-            );
+            Repositories::reload_all(cx);
+            self.data.update(cx, |data, cx| data.reload_shown(cx));
         }
         if supported.is_some() {
             self.was_supported = supported;
         }
         let needed = supported == Some(false);
-        if needed && !self.open {
-            self.open = true;
+        if needed && self.dialog.is_none() {
             let this = cx.entity();
-            window.open_dialog(cx, move |dialog, window, cx| {
+            self.dialog = Some(DialogId::open(window, cx, move |_, dialog, window, cx| {
                 render_dialog(&this, dialog, window, cx)
-            });
-        } else if !needed && self.open {
-            self.open = false;
-            window.close_dialog(cx);
+            }));
+        } else if !needed && let Some(dialog) = self.dialog.take() {
+            dialog.close(window, cx);
         }
         window.refresh();
         cx.notify();
@@ -95,9 +92,13 @@ impl GitVersionDialog {
         self.unchanged = false;
         self.checking = true;
         window.refresh();
-        let checked = self.install.refetch(cx);
+        let checked = self
+            .data
+            .update(cx, |data, cx| data.reload(AppPart::GitVersion, cx));
         cx.spawn_in(window, async move |this, cx| {
-            checked.await;
+            if let Some(checked) = checked {
+                let _ = checked.await;
+            }
             let _ = this.update_in(cx, |this, window, cx| {
                 let after = this.installed(cx);
                 this.checking = false;
@@ -254,7 +255,13 @@ fn render_dialog(
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
     use std::sync::{Arc, Mutex};
+
+    use futures::FutureExt as _;
+    use gitto_git::features::status::schema::StatusReply;
+    use gitto_git::input::RepositoryId;
 
     use gitto_git::{GitApi, GitRepos, GitVersion};
     use gpui_kit::component::WindowExt as _;
@@ -265,6 +272,20 @@ mod tests {
 
     use super::*;
     use crate::test_support;
+    use gitto_app_data::data::git::{GitTask, RepositoryGit};
+    use gitto_app_data::data::{DataError, Field};
+
+    /// A repository's git that counts how many times it's asked for the status, which it can't
+    /// give.
+    #[derive(Default)]
+    struct Statuses(Cell<usize>);
+
+    impl RepositoryGit for Statuses {
+        fn status(&self, _: Option<gitto_git::ContentVersion>) -> GitTask<StatusReply> {
+            self.0.set(self.0.get() + 1);
+            async { Err(DataError::msg("No git.")) }.boxed()
+        }
+    }
 
     /// What `git version` says, as a test sets it.
     type Installed = Arc<Mutex<Option<String>>>;
@@ -325,7 +346,11 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let (_dir, installed, window, _) = open(Some("2.39.3"), cx);
-        cx.update(|cx| QueryClient::set_data(&QueryKey::new(["git", "repo", "status"]), 1, cx));
+        let id = RepositoryId::parse(uuid::Uuid::now_v7().to_string()).unwrap();
+        let statuses = Rc::new(Statuses::default());
+        let repository = cx.update(|cx| Repositories::insert(&id, statuses.clone(), cx));
+        repository.update(cx, |repository, cx| repository.show(Field::Status, cx));
+        cx.run_until_parked();
         assert!(has_dialog(window, cx));
 
         // It can't be dismissed: nothing works until git is updated.
@@ -351,14 +376,39 @@ mod tests {
             .unwrap();
         cx.run_until_parked();
         assert!(!has_dialog(window, cx));
-        // What failed meanwhile is loaded again.
-        let invalidated = cx.update(|cx| {
-            QueryClient::get_entry::<i32>(&QueryKey::new(["git", "repo", "status"]), cx)
+        // What failed meanwhile is loaded again: what an open repository shows of itself.
+        assert_eq!(statuses.0.get(), 2);
+        assert!(!repository.read_with(cx, |repository, _| repository.status().is_fetching()));
+    }
+
+    #[gpui_kit::test]
+    fn closes_its_own_dialog_not_the_one_over_it_once_git_is_updated(cx: &mut TestAppContext) {
+        let (_dir, installed, window, host) = open(Some("2.39.3"), cx);
+        // What's new, say.
+        let over = cx
+            .update_window(window, |_, window, cx| {
+                DialogId::open(window, cx, |_, dialog, _, _| dialog)
+            })
+            .unwrap();
+
+        *installed.lock().unwrap() = Some("git version 2.51.0\n".into());
+        let dialog = host.read_with(cx, |host, _| host.dialog.clone());
+        cx.update_window(window, |_, window, cx| {
+            dialog.update(cx, |dialog, cx| dialog.check_again(window, cx))
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert!(!dialog.read_with(cx, |dialog, _| dialog.is_open()));
+        assert!(
+            cx.update_window(window, |_, window, cx| over.is_open(window, cx))
                 .unwrap()
-                .read(cx)
-                .is_invalidated()
-        });
-        assert!(invalidated);
+        );
+
+        // Its own goes once the one over it does.
+        cx.update_window(window, |_, window, cx| window.press("escape", cx))
+            .unwrap();
+        cx.run_until_parked();
+        assert!(!has_dialog(window, cx));
     }
 
     #[test]

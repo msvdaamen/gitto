@@ -2,14 +2,13 @@
 
 use gpui_kit::component::h_flex;
 use gpui_kit::prelude::*;
-use gpui_kit::{Context, Entity, Window, rems};
+use gpui_kit::{Context, Entity, Subscription, Window, rems};
 
 use super::notifications::Notifications;
 use super::profile::Profile;
 use super::tabs::Tabs;
-use crate::data::Query;
-use crate::data::user::user_name_query;
-use crate::theme::PaletteExt as _;
+use gitto_app_data::data::{AppChanged, AppData, AppPart};
+use gitto_app_kit::theme::PaletteExt as _;
 
 /// The header's height (TS's grid row, 49px).
 pub const HEADER_HEIGHT: f32 = 3.25;
@@ -18,16 +17,25 @@ pub const HEADER_HEIGHT: f32 = 3.25;
 pub struct Header {
     tabs: Entity<Tabs>,
     notifications: Entity<Notifications>,
-    /// The name the user commits with, which the profile shows the initials of.
-    user_name: Query<Option<String>>,
+    /// What holds the name the user commits with, which the profile shows the initials of.
+    data: Entity<AppData>,
+    _user_name: Subscription,
 }
 
 impl Header {
     pub fn new(cx: &mut Context<Self>) -> Self {
+        let data = AppData::global(cx);
+        data.update(cx, |data, cx| data.show(AppPart::UserName, cx));
+        let user_name = cx.subscribe(&data, |_, _, AppChanged(part), cx| {
+            if *part == AppPart::UserName {
+                cx.notify();
+            }
+        });
         Header {
             tabs: cx.new(Tabs::new),
             notifications: cx.new(Notifications::new),
-            user_name: user_name_query(cx),
+            data,
+            _user_name: user_name,
         }
     }
 
@@ -39,6 +47,7 @@ impl Header {
 impl Render for Header {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = *cx.palette();
+        let user_name = self.data.read(cx).user_name().data().cloned().flatten();
         h_flex()
             .h(rems(HEADER_HEIGHT))
             .flex_none()
@@ -56,7 +65,7 @@ impl Render for Header {
                     .pl_2()
                     .pr_3()
                     .child(self.notifications.clone())
-                    .child(Profile::new(self.user_name.data().flatten().as_deref())),
+                    .child(Profile::new(user_name.as_deref())),
             )
     }
 }

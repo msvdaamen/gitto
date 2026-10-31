@@ -4,12 +4,12 @@ use std::rc::Rc;
 
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::input::RepositoryId;
-use gitto_ui::git::rows::RowId;
+use gitto_ui_logic::git::rows::RowId;
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    Context, DragMoveEvent, Entity, SharedString, Subscription, Task, WeakEntity, Window, div, px,
-    rems,
+    Context, DragMoveEvent, Entity, Focusable as _, SharedString, Subscription, Task, WeakEntity,
+    Window, div, px, rems,
 };
 
 use crate::components::repository::BeforeChange;
@@ -22,15 +22,15 @@ use crate::components::repository::history::history_table::{HistoryEvent, Histor
 use crate::components::repository::operation_bar::{OperationBar, OperationBarEvent};
 use crate::components::repository::sidebar::refs_sidebar::RefsSidebar;
 use crate::components::repository::toolbar::{RepositoryToolbar, ToolbarEvent};
-use crate::components::ui::{HandleSide, PanelDrag, ResizeHandle, dragged_width};
-use crate::data::watch::WatchStreams;
-use crate::data::{QueryClient, RepositoryWatcher};
-use crate::services::Services;
-use crate::state::panel_width::{PanelBounds, PanelWidth};
-use crate::state::router::Router;
-use crate::state::settled::{SETTLE_AFTER, Settled};
-use crate::theme::PaletteExt as _;
-use gitto_ui::git::diff_source::DiffSource;
+use gitto_app_data::data::watch::WatchStreams;
+use gitto_app_data::data::{Repositories, RepositoryWatcher};
+use gitto_app_data::services::Services;
+use gitto_app_data::state::panel_width::{PanelBounds, PanelWidth};
+use gitto_app_data::state::router::Router;
+use gitto_app_data::state::settled::{SETTLE_AFTER, Settled};
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{HandleSide, PanelDrag, ResizeHandle, dragged_width};
+use gitto_ui_logic::git::diff_source::DiffSource;
 
 /// The sidebar's widths. The panels can't take more than a share of the window either (see
 /// [`SIDEBAR_SHARE`]), so the history keeps room on small screens.
@@ -42,7 +42,7 @@ pub const DETAILS_SHARE: f32 = 0.4;
 /// The window widths the layout changes at (`index.css`'s breakpoints): below `MEDIUM` the open
 /// sidebar is a rail of icons; below `LARGE` the details slide over the history instead of
 /// taking a column.
-pub use crate::theme::breakpoints::{LARGE, MEDIUM};
+pub use gitto_app_kit::theme::breakpoints::{LARGE, MEDIUM};
 /// The sidebar as a rail (52px), and the details over the history (340px), in rems.
 pub const RAIL_WIDTH: f32 = 3.47;
 pub const DETAILS_OVERLAY_WIDTH: f32 = 22.67;
@@ -305,9 +305,8 @@ impl RepositoryView {
     ) -> Entity<RepositoryWatcher> {
         let git = Rc::clone(streams);
         let focused = window.is_window_active();
-        let shown_at = QueryClient::now(cx);
-        let id = id.clone();
-        cx.new(|cx| RepositoryWatcher::new(id, git, focused, shown_at, cx))
+        let repository = Repositories::open(id, cx);
+        cx.new(|cx| RepositoryWatcher::new(&repository, git, focused, cx))
     }
 
     /// What closing the file, or opening another, waits for: its edits saved (see
@@ -336,6 +335,8 @@ impl RepositoryView {
             return;
         }
         self.repository_id = id.clone();
+        // A file asked for in the other one isn't opened in this one.
+        self.pending = None;
         self.watcher = Self::watch(&id, &self.streams, window, cx);
         let (toolbar, toolbar_events) = Self::toolbar(&id, window, cx);
         let (sidebar, details) = (self.sidebar_open, self.details_open);
@@ -415,6 +416,16 @@ impl RepositoryView {
         if self.open_file.is_some() && self.shown_file(cx).is_none() {
             self.open_file = None;
         }
+        // Under the file on show, the history doesn't take the keyboard, nor keep the focus.
+        let shown_view = self.shown_file(cx).map(|open| open.view.clone());
+        self.history.update(cx, |history, cx| {
+            history.set_inert(shown_view.is_some(), cx)
+        });
+        if let Some(view) = shown_view
+            && self.history.focus_handle(cx).contains_focused(window, cx)
+        {
+            view.focus_handle(cx).focus(window, cx);
+        }
         let shown = self
             .shown_file(cx)
             .map(|open| (open.source.clone(), open.file.path.clone()));
@@ -458,13 +469,17 @@ impl RepositoryView {
         if same {
             return;
         }
+        let repository_id = self.repository_id.clone();
         let leave = self.may_leave_file(cx);
         self.pending = Some(cx.spawn_in(window, async move |this, cx| {
             if !leave.await {
                 return;
             }
             let _ = this.update_in(cx, |this, window, cx| {
-                let repository_id = this.repository_id.clone();
+                // The row and the file are of the repository it was asked in.
+                if this.repository_id != repository_id {
+                    return;
+                }
                 // The view on show takes the other file: the last one stays on show until the
                 // next one's changes are in.
                 if let Some(open) = this.open_file.as_mut()
@@ -533,13 +548,17 @@ impl RepositoryView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let repository_id = self.repository_id.clone();
         let leave = self.may_leave_file(cx);
         self.pending = Some(cx.spawn_in(window, async move |this, cx| {
             if !leave.await {
                 return;
             }
             let _ = this.update_in(cx, |this, window, cx| {
-                this.resolving = Some((this.repository_id.clone(), file));
+                if this.repository_id != repository_id {
+                    return;
+                }
+                this.resolving = Some((repository_id, file));
                 this.select(RowId::Wip, window, cx);
             });
         }));
@@ -595,7 +614,7 @@ impl RepositoryView {
             panel.side(),
             panel.label(),
             width,
-            panel.bounds(),
+            panel.bounds().range(),
         )
         .on_resize(move |width, save, _, cx| {
             let _ = this.update(cx, |this, cx| {
@@ -738,30 +757,30 @@ impl Render for RepositoryView {
 #[cfg(test)]
 mod tests {
     //! The page as a whole: its areas, each tested on its own, wired together. GPUI tests can't
-    //! run git, so every query the page shows is given its data first (see
+    //! run git, so all the page shows is given to the repository's entity first (see
     //! `components::repository::test_support`).
 
     use std::rc::Rc;
-    use std::sync::Arc;
     use std::time::Duration;
 
     use gitto_git::features::history::schema::Commit;
     use gitto_git::features::status::schema::Head;
     use gitto_git::schema::FileStatus;
-    use gitto_ui::git::diff_source::DiffFileKey;
+    use gitto_ui_logic::git::diff_source::DiffFileKey;
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{AnyWindowHandle, Entity, TestAppContext};
 
     use super::*;
     use crate::components::repository::history::columns::keyed;
     use crate::components::repository::test_support::{
-        Repositories, repository, repository_id, set_operation, set_push_target, set_refs,
-        set_remotes, set_stashes, set_status, set_worktrees, setup_with, uncommitted,
+        Repositories, repository, repository_id, set_files, set_log, set_operation, set_patch,
+        set_push_target, set_refs, set_remotes, set_stashes, set_status, set_worktrees, setup_with,
+        uncommitted,
     };
-    use crate::data::diff::ChangedFiles;
-    use crate::data::file_diff::{FilePatch, file_patch_key};
-    use crate::data::history::Log;
-    use crate::data::{Opaque, QueryClient, keys};
+    use gitto_app_data::data::Opaque;
+    use gitto_app_data::data::diff::{ChangedFiles, FilesOf};
+    use gitto_app_data::data::file_diff::FilePatch;
+    use gitto_app_data::data::history::Log;
 
     fn commit(sha: &str, subject: &str, parents: &[&str], committed_at: i64) -> Commit {
         Commit {
@@ -829,6 +848,13 @@ mod tests {
             .borrow_mut()
             .push(repository(&id, "/work/repo"));
         let dir = setup_with(cx, repositories);
+        seed(&id, cx);
+        (dir, id)
+    }
+
+    /// What [`loaded`] gives the repository `id`.
+    fn seed(id: &RepositoryId, cx: &mut TestAppContext) {
+        let id = id.clone();
         set_status(
             &id,
             uncommitted(Head::Branch {
@@ -851,19 +877,20 @@ mod tests {
         );
         let log = Log {
             repository_id: id.clone(),
-            commits: Arc::from(vec![
+            commits: vec![
                 commit("b1", "Second", &["a1"], 2000),
                 commit("a1", "First", &[], 1000),
-            ]),
+            ]
+            .into(),
             complete: true,
         };
-        cx.update(|cx| QueryClient::set_data(&keys::log(&id), log, cx));
+        set_log(&id, log, cx);
         for (sha, path) in [("b1", "second.txt"), ("a1", "first.txt")] {
             let files = ChangedFiles {
                 sha: sha.into(),
                 files: Opaque::new(vec![added(path)]),
             };
-            cx.update(|cx| QueryClient::set_data(&keys::commit_files(&id, sha), files, cx));
+            set_files(&id, FilesOf::Commit, files, cx);
             let source = DiffSource::Commit { sha: sha.into() };
             let patch = FilePatch {
                 key: DiffFileKey::new(&source, path),
@@ -873,9 +900,8 @@ mod tests {
                 )
                 .into(),
             };
-            cx.update(|cx| QueryClient::set_data(&file_patch_key(&id, &source, path), patch, cx));
+            set_patch(&id, &source, patch, cx);
         }
-        (dir, id)
     }
 
     /// The page of the repository [`loaded`].
@@ -981,5 +1007,44 @@ mod tests {
         assert_eq!(page.shown_file(cx), None);
         page.click(keyed("commit", "b1"), cx);
         assert_eq!(page.details(cx), Some(commit_id("b1")));
+    }
+
+    #[gpui_kit::test]
+    fn leaves_the_keyboard_to_a_file_over_the_history(cx: &mut TestAppContext) {
+        let page = render(cx);
+        page.click(keyed("commit", "a1"), cx);
+        page.click("file:first.txt", cx);
+        assert!(page.shown_file(cx).is_some());
+
+        // Even with the focus in the history, the arrows don't move its selection.
+        let history = page
+            .view
+            .read_with(cx, |view, cx| view.history.focus_handle(cx));
+        cx.update_window(page.window, |_, window, cx| {
+            history.focus(window, cx);
+            window.press("up", cx);
+        })
+        .unwrap();
+        settle(cx);
+        assert_eq!(page.selected(cx), Some(commit_id("a1")));
+        assert!(page.shown_file(cx).is_some());
+    }
+
+    #[gpui_kit::test]
+    fn doesnt_open_a_file_asked_for_in_another_repository(cx: &mut TestAppContext) {
+        let page = render(cx);
+        let other = repository_id();
+        seed(&other, cx);
+        let view = page.view.clone();
+        cx.update_window(page.window, |_, window, cx| {
+            view.update(cx, |view, cx| {
+                let source = DiffSource::Commit { sha: "b1".into() };
+                view.open_file_of(commit_id("b1"), source, added("second.txt"), window, cx);
+                view.set_repository(other, window, cx);
+            })
+        })
+        .unwrap();
+        settle(cx);
+        assert!(page.view.read_with(cx, |view, _| view.open_file.is_none()));
     }
 }

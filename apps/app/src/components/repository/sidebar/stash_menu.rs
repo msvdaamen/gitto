@@ -11,83 +11,76 @@
 use std::rc::Rc;
 
 use gitto_git::features::stash::schema::Stash;
-use gitto_git::input::RepositoryId;
+use gitto_git::input::FullSha;
 use gpui_kit::component::menu::PopupMenu;
-use gpui_kit::{App, Window};
+use gpui_kit::{App, Entity, Window};
 
 use super::sidebar_section::SectionFailure;
-use crate::components::ui::{IconName, context_menu_item};
-use crate::data::stash::{StashActions, stash_actions};
+use gitto_app_data::data::Repository;
+use gitto_app_data::data::{Change, PopFrom};
+use gitto_app_kit::ui::{IconName, context_menu_item};
 
 /// The menu of what can be done with a stash: popping it puts its changes back and drops it;
 /// deleting it asks first, as its changes are lost. Like the toolbar's, one at a time. The
 /// stashes' section shows each running ([`is_busy`](Self::is_busy)), and why it failed beside it
 /// ([`failure`](Self::failure)).
-#[derive(Clone)]
-pub struct StashMenu {
-    actions: StashActions,
-}
+pub struct StashMenu;
 
 impl StashMenu {
-    /// With the data layer's actions.
-    pub fn new() -> Self {
-        StashMenu::with_actions(stash_actions())
+    /// Whether a stash is being popped or deleted from the sidebar on `repository`.
+    pub fn is_busy(repository: &Repository) -> bool {
+        repository.is_running(&[Change::Pop(PopFrom::Picked), Change::DropStash])
     }
 
-    /// With `actions`: a test's.
-    pub fn with_actions(actions: StashActions) -> Self {
-        StashMenu { actions }
-    }
-
-    pub fn actions(&self) -> &StashActions {
-        &self.actions
-    }
-
-    /// Whether a stash is being popped or deleted from the sidebar on the repository `id`.
-    pub fn is_busy(&self, id: &RepositoryId, cx: &App) -> bool {
-        self.actions.pop_picked.state(id, cx).running || self.actions.drop.state(id, cx).running
-    }
-
-    /// Why popping or deleting a stash failed on the repository `id`, if it did. One at a time,
-    /// the deletion's first: both can have failed, one after the other.
-    pub fn failure(&self, id: &RepositoryId, cx: &App) -> SectionFailure {
-        let drop = self.actions.drop.state(id, cx);
-        let (title, error, dismiss) = if drop.error.is_some() {
-            ("Delete stash", drop.error, self.actions.drop.clone())
+    /// Why popping or deleting a stash failed on `repository`, if it did. One at a time, the
+    /// deletion's first: both can have failed, one after the other.
+    pub fn failure(repository: &Entity<Repository>, cx: &App) -> SectionFailure {
+        let shown = repository.read(cx);
+        let drop = shown.change_state(Change::DropStash);
+        let (title, error, name) = if drop.error.is_some() {
+            ("Delete stash", drop.error, Change::DropStash)
         } else {
-            let pop = self.actions.pop_picked.state(id, cx);
-            ("Pop stash", pop.error, self.actions.pop_picked.clone())
+            let pop = shown.change_state(Change::Pop(PopFrom::Picked));
+            ("Pop stash", pop.error, Change::Pop(PopFrom::Picked))
         };
-        let id = id.clone();
+        let repository = repository.clone();
         SectionFailure {
             title: title.into(),
             error,
-            on_dismiss: Rc::new(move |_, cx| dismiss.dismiss(&id, cx)),
+            on_dismiss: Rc::new(move |_, cx| {
+                repository.update(cx, |repository, cx| repository.dismiss(name, cx))
+            }),
         }
     }
 
-    /// The menu's items for `stash` on the repository `id`. Popping it isn't possible while
-    /// `poppable` says it can't be (conflicts, say), nor either while a stash action runs;
-    /// `on_delete` asks before deleting it.
+    /// The menu's items for `stash` on `repository`. Popping it isn't possible while `poppable`
+    /// says it can't be (conflicts, say), nor either while a stash action runs; `on_delete` asks
+    /// before deleting it.
     pub fn items(
-        &self,
         menu: PopupMenu,
-        id: &RepositoryId,
+        repository: &Entity<Repository>,
         stash: &Stash,
         poppable: bool,
         on_delete: impl Fn(&mut Window, &mut App) + 'static,
         cx: &App,
     ) -> PopupMenu {
-        let pending = StashActions::is_pending(id, cx);
-        let pop = self.actions.pop_picked.clone();
-        let popped = (id.clone(), stash.sha.clone());
+        let pending = repository.read(cx).stashes_changing();
+        let pop = repository.clone();
+        let sha = stash.sha.clone();
         menu.item(context_menu_item(
             IconName::ArchiveRestore,
             "Pop stash",
             !poppable || pending,
             move |_, _, cx| {
-                let (id, sha) = popped.clone();
-                let _ = pop.run(&id, sha, cx);
+                let sha = FullSha::parse(sha.clone());
+                pop.update(cx, |repository, cx| {
+                    drop(repository.parsing(
+                        Change::Pop(PopFrom::Picked),
+                        sha,
+                        |repository, sha, cx| repository.pop_stash(PopFrom::Picked, sha, cx),
+                        cx,
+                    ))
+                });
             },
         ))
         .item(context_menu_item(
@@ -98,15 +91,13 @@ impl StashMenu {
         ))
     }
 
-    /// Deletes `stash` on the repository `id`, once that's confirmed: not while another stash
-    /// action runs.
-    pub fn drop(&self, id: &RepositoryId, stash: &Stash, cx: &mut App) {
-        let _ = self.actions.drop.run(id, stash.sha.clone(), cx);
-    }
-}
-
-impl Default for StashMenu {
-    fn default() -> Self {
-        StashMenu::new()
+    /// Deletes `stash` on `repository`, once that's confirmed: not while another stash action
+    /// runs.
+    pub fn drop(repository: &Entity<Repository>, stash: &Stash, cx: &mut App) {
+        let sha = FullSha::parse(stash.sha.clone());
+        repository.update(cx, |repository, cx| {
+            let drop_stash = Repository::drop_stash;
+            drop(repository.parsing(Change::DropStash, sha, drop_stash, cx))
+        });
     }
 }

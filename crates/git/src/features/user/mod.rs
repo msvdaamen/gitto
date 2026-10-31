@@ -2,4 +2,4 @@
 //!
 //! Ported from `packages/git/src/features/user/`.
 
-pub mod commands;
+pub(crate) mod commands;

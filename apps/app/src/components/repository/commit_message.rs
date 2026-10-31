@@ -2,14 +2,14 @@
 //! (`history::reword_dialog`) share: the summary and the description of a message, and what
 //! they say about a commit that's pushed already.
 
-use gitto_ui::git::message::CommitMessage;
+use gitto_ui_logic::git::message::CommitMessage;
 use gpui_kit::component::input::{Enter, InputEvent, InputState, TextareaState};
 use gpui_kit::component::v_flex;
 use gpui_kit::prelude::*;
 use gpui_kit::{App, Context, Entity, EventEmitter, Focusable as _, Subscription, Window};
 
-use crate::components::ui::FormField;
-use crate::data::Query;
+use gitto_app_data::data::Loaded;
+use gitto_app_kit::ui::FormField;
 
 /// What the summary's placeholder says when no message is loading.
 const SUMMARY_PLACEHOLDER: &str = "Summary of your changes";
@@ -190,12 +190,13 @@ impl CommitMessageEditor {
 /// What to know before rewriting `commit` (e.g. "the last commit") by `rewriting` it (e.g.
 /// "amending it"), from where it's pushed to (`pushed_to`): it's already on a remote branch, or
 /// whether it is couldn't be checked; rewriting it then means force-pushing. Nothing while that's
-/// being checked.
+/// being checked, or before it is.
 pub fn push_warning(
-    pushed_to: &Query<Option<String>>,
+    pushed_to: Option<&Loaded<Option<String>>>,
     commit: &str,
     rewriting: &str,
 ) -> Option<String> {
+    let pushed_to = pushed_to?;
     if pushed_to.is_error() {
         return Some(format!(
             "Couldn't check whether {commit} has been pushed; if it has, {rewriting} means \
@@ -204,6 +205,7 @@ pub fn push_warning(
     }
     let branch = pushed_to
         .data()
+        .cloned()
         .flatten()
         .filter(|_| pushed_to.is_success())?;
     Some(format!(

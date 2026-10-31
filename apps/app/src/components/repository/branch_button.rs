@@ -1,8 +1,7 @@
 //! The toolbar's Branch. Ported from `components/repository/branch-button.tsx`.
 
-use gitto_git::features::status::schema::{StatusSummary, Uncommitted};
-use gitto_git::input::RepositoryId;
-use gitto_ui::git::status::{branch_source, has_uncommitted_changes};
+use gitto_git::input::{BranchName, RepositoryId};
+use gitto_ui_logic::git::status::{branch_source, has_uncommitted_changes};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::prelude::*;
@@ -10,19 +9,16 @@ use gpui_kit::{Anchor, App, Context, Entity, Focusable as _, Subscription, Windo
 
 use super::branch_form::{BranchForm, NAME_PLACEHOLDER, submitted_name};
 use super::toolbar_button::{HideBelow, ToolbarButton};
-use crate::components::ui::IconName;
-use crate::data::branch::{BranchChange, create_branch_operation};
-use crate::data::status::status_query;
-use crate::data::{Opaque, Operations, Query};
+use gitto_app_data::data::Change;
+use gitto_app_data::data::{Part, Repository, Shown};
+use gitto_app_kit::ui::IconName;
 
 /// Creates a branch from the current one and switches to it, with a popover to name it, and says
 /// why if that failed. Uncommitted changes come along to the new branch. An entity: it keeps the
 /// popover's name, which is kept after a failure to fix it, and is for the repository it was
 /// typed in: another repository starts with none, and the popover closed.
 pub struct BranchButton {
-    repository_id: RepositoryId,
-    status: Query<Opaque<Uncommitted>, StatusSummary>,
-    create: BranchChange<String>,
+    repository: Shown,
     name: Entity<InputState>,
     open: bool,
     _subscriptions: Vec<Subscription>,
@@ -30,19 +26,8 @@ pub struct BranchButton {
 
 impl BranchButton {
     pub fn new(repository_id: RepositoryId, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        BranchButton::with_create(repository_id, create_branch_operation(), window, cx)
-    }
-
-    /// With `create` creating the branch: a test's.
-    pub(crate) fn with_create(
-        repository_id: RepositoryId,
-        create: BranchChange<String>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
         let name = cx.new(|cx| InputState::new(window, cx).placeholder(NAME_PLACEHOLDER));
         let subscriptions = vec![
-            cx.observe_global::<Operations>(|_, cx| cx.notify()),
             cx.subscribe_in(&name, window, |this, _, event, window, cx| match event {
                 InputEvent::PressEnter { .. } => this.submit(window, cx),
                 InputEvent::Change => cx.notify(),
@@ -50,17 +35,11 @@ impl BranchButton {
             }),
         ];
         BranchButton {
-            status: status_query(&repository_id, cx),
-            repository_id,
-            create,
+            repository: Shown::new(&repository_id, &[Part::Status, Part::Changes], cx),
             name,
             open: false,
             _subscriptions: subscriptions,
         }
-    }
-
-    pub fn repository_id(&self) -> &RepositoryId {
-        &self.repository_id
     }
 
     pub fn is_open(&self) -> bool {
@@ -68,8 +47,13 @@ impl BranchButton {
     }
 
     /// What the new branch is made from, and what comes along.
-    pub fn summary(&self) -> String {
-        let status = self.status.data();
+    pub fn summary(&self, cx: &App) -> String {
+        let status = self
+            .repository
+            .read(cx)
+            .status()
+            .data()
+            .map(|status| status.summary.clone());
         let source = status
             .as_ref()
             .map_or("HEAD", |status| branch_source(&status.head));
@@ -85,7 +69,9 @@ impl BranchButton {
     /// the name, which is kept after a failure to fix it.
     pub fn toggle(&mut self, open: bool, cx: &mut Context<Self>) {
         if open {
-            self.create.dismiss(&self.repository_id, cx);
+            self.repository.update(cx, |repository, cx| {
+                repository.dismiss(Change::CreateBranch, cx)
+            });
         }
         self.open = open;
         cx.notify();
@@ -97,12 +83,17 @@ impl BranchButton {
         let Some(trimmed) = submitted_name(&self.name, cx) else {
             return;
         };
-        if !self.open || self.create.is_blocked(&self.repository_id, cx) {
+        if !self.open || self.repository.read(cx).branches_changing() {
             return;
         }
         self.open = false;
         cx.notify();
-        let Some(done) = self.create.run(&self.repository_id, trimmed.clone(), cx) else {
+        let name = BranchName::parse(trimmed.clone());
+        let done = self.repository.update(cx, |repository, cx| {
+            let create = Repository::create_branch;
+            repository.parsing(Change::CreateBranch, name, create, cx)
+        });
+        let Some(done) = done else {
             return;
         };
         cx.spawn_in(window, async move |this, cx| {
@@ -121,19 +112,21 @@ impl BranchButton {
 
     /// The button as it is now. Until the status has loaded, it's disabled.
     pub fn button(&self, cx: &App) -> ToolbarButton {
-        let id = self.repository_id.clone();
-        let state = self.create.state(&id, cx);
-        let status = self.status.data();
-        let source = status
-            .as_ref()
-            .map_or("HEAD", |status| branch_source(&status.head));
-        let dismiss = self.create.clone();
+        let repository = self.repository.read(cx);
+        let state = repository.change_state(Change::CreateBranch);
+        let status = repository.status().data();
+        let source = status.map_or("HEAD", |status| branch_source(&status.summary.head));
+        let dismiss = self.repository.entity().clone();
         ToolbarButton::new("branch", IconName::GitBranch, "Branch")
             .hide_below(HideBelow::Small)
             .title(format!("Create a branch from {source}"))
-            .disabled(status.is_none() || self.create.is_blocked(&id, cx))
+            .disabled(status.is_none() || repository.branches_changing())
             .busy(state.running)
-            .failure("Branch", state.error, move |_, cx| dismiss.dismiss(&id, cx))
+            .failure("Branch", state.error, move |_, cx| {
+                dismiss.update(cx, |repository, cx| {
+                    repository.dismiss(Change::CreateBranch, cx)
+                })
+            })
     }
 }
 
@@ -164,7 +157,7 @@ impl Render for BranchButton {
             .content(move |_, _, cx| {
                 let form = form.clone();
                 let shown = form
-                    .read_with(cx, |button, _| (button.summary(), button.name.clone()))
+                    .read_with(cx, |button, cx| (button.summary(cx), button.name.clone()))
                     .ok();
                 div()
                     .w(rems(18.67))
@@ -185,37 +178,34 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
+    use futures::FutureExt as _;
     use futures::channel::oneshot;
     use gitto_git::features::status::schema::Head;
+    use gitto_git::input::{BranchName, BranchRef};
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{AnyWindowHandle, TestAppContext};
 
     use super::*;
     use crate::components::repository::test_support::{
-        changed, repository_id, set_status, setup, status, uncommitted,
+        changed, fake_git, repository_id, set_status, setup, status, uncommitted,
     };
-    use crate::data::{QueryError, RepositoryOperation};
+    use gitto_app_data::data::DataError;
+    use gitto_app_data::data::git::{GitTask, RepositoryGit};
 
-    /// The branches asked to be created, by repository, and what settles each.
+    /// A repository's git that records the branches asked to be created, and what settles each.
     #[derive(Default)]
     struct Creates {
-        calls: RefCell<Vec<(String, String)>>,
-        settle: RefCell<Vec<oneshot::Sender<Result<(), QueryError>>>>,
+        calls: RefCell<Vec<String>>,
+        settle: RefCell<Vec<oneshot::Sender<Result<(), DataError>>>>,
     }
 
-    fn create(creates: &Rc<Creates>) -> BranchChange<String> {
-        let creates = Rc::clone(creates);
-        BranchChange::new(RepositoryOperation::new(
-            "branch",
-            move |id: RepositoryId, name: String, cx: &mut App| {
-                creates.calls.borrow_mut().push((id.to_string(), name));
-                let (settle, settled) = oneshot::channel();
-                creates.settle.borrow_mut().push(settle);
-                cx.background_spawn(async move {
-                    settled.await.unwrap_or(Err(QueryError::msg("dropped")))
-                })
-            },
-        ))
+    impl RepositoryGit for Creates {
+        fn create_branch(&self, name: BranchName, _: Option<BranchRef>) -> GitTask<()> {
+            self.calls.borrow_mut().push(name.as_str().to_owned());
+            let (settle, settled) = oneshot::channel();
+            self.settle.borrow_mut().push(settle);
+            async move { settled.await.unwrap_or(Err(DataError::msg("dropped"))) }.boxed()
+        }
     }
 
     fn render(
@@ -223,11 +213,9 @@ mod tests {
         id: &RepositoryId,
         creates: &Rc<Creates>,
     ) -> (AnyWindowHandle, Entity<BranchButton>) {
-        let create = create(creates);
+        fake_git(id, creates.clone(), cx);
         let id = id.clone();
-        crate::test_support::open(cx, move |window, cx| {
-            BranchButton::with_create(id, create, window, cx)
-        })
+        crate::test_support::open(cx, move |window, cx| BranchButton::new(id, window, cx))
     }
 
     fn click(window: AnyWindowHandle, id: &'static str, cx: &mut TestAppContext) {
@@ -267,17 +255,14 @@ mod tests {
         click(window, "branch", cx);
         assert!(button.read_with(cx, |button, _| button.is_open()));
         assert_eq!(
-            button.read_with(cx, |button, _| button.summary()),
+            button.read_with(cx, |button, cx| button.summary(cx)),
             "From main, with your uncommitted changes."
         );
 
         // The name field has focus once the popover opens.
         typed(window, "  feature/new  ", cx);
         press(window, "enter", cx);
-        assert_eq!(
-            *creates.calls.borrow(),
-            [(id.to_string(), "feature/new".to_owned())]
-        );
+        assert_eq!(*creates.calls.borrow(), ["feature/new"]);
         // The popover closes, and the button shows it running.
         assert!(!button.read_with(cx, |button, _| button.is_open()));
         let shown = button.read_with(cx, |button, cx| button.button(cx));
@@ -315,13 +300,13 @@ mod tests {
         click(window, "create-branch", cx);
         let settle = creates.settle.borrow_mut().remove(0);
         settle
-            .send(Err(QueryError::msg(
+            .send(Err(DataError::msg(
                 "fatal: cannot switch branch while merging",
             )))
             .unwrap();
         cx.run_until_parked();
         let failure = button.read_with(cx, |button, cx| {
-            button.button(cx).shown_failure().map(QueryError::message)
+            button.button(cx).shown_failure().map(DataError::to_string)
         });
         assert_eq!(
             failure.as_deref(),
@@ -366,13 +351,13 @@ mod tests {
         assert!(button.read_with(cx, |button, cx| button.button(cx).is_busy()));
         let settle = creates.settle.borrow_mut().remove(0);
         settle
-            .send(Err(QueryError::msg(
+            .send(Err(DataError::msg(
                 "fatal: a branch named 'topic' already exists",
             )))
             .unwrap();
         cx.run_until_parked();
         let failure = button.read_with(cx, |button, cx| {
-            button.button(cx).shown_failure().map(QueryError::message)
+            button.button(cx).shown_failure().map(DataError::to_string)
         });
         assert_eq!(
             failure.as_deref(),
@@ -392,7 +377,7 @@ mod tests {
             "Create a branch from this commit"
         );
         assert_eq!(
-            button.read_with(cx, |button, _| button.summary()),
+            button.read_with(cx, |button, cx| button.summary(cx)),
             "From this commit."
         );
     }

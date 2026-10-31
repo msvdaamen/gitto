@@ -6,10 +6,10 @@ use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::prelude::*;
 use gpui_kit::{App, FontWeight, SharedString, Window, div};
 
-use crate::components::ui::{Icon, IconName};
-use crate::state::router::{Route, Router};
-use crate::theme::{AppTheme, PaletteExt as _};
 use crate::util::format;
+use gitto_app_data::state::router::{Route, Router};
+use gitto_app_kit::theme::{AppTheme, PaletteExt as _};
+use gitto_app_kit::ui::{Icon, IconName};
 
 /// The user's avatar, which opens a menu of what's Gitto's own rather than a repository's: the
 /// theme, and the settings. It shows the initials of the name the user commits with, or a person
@@ -62,7 +62,7 @@ impl RenderOnce for Profile {
                     .item(
                         PopupMenuItem::new(if dark { "Light theme" } else { "Dark theme" })
                             .icon(Icon::new(if dark { IconName::Sun } else { IconName::Moon }))
-                            .on_click(|_, _, cx| crate::theme::toggle(cx)),
+                            .on_click(|_, _, cx| gitto_app_kit::theme::toggle(cx)),
                     )
                     .item(
                         PopupMenuItem::new("Settings")

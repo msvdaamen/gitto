@@ -13,15 +13,15 @@ use gpui_kit::{
 };
 
 use super::remove_repository_dialog::open_remove_repository_dialog;
-use crate::components::ui::kbd::aria_keyshortcuts;
-use crate::components::ui::{FailurePopover, GittoIcon, Icon, IconName};
-use crate::data::repositories::{
-    OpenRepository, remove_repository, reorder_repositories, repositories_query,
+use gitto_app_data::data::repositories::{
+    OpenRepository, Opened, remove_repository, reorder_repositories,
 };
-use crate::data::{Query, QueryError};
-use crate::state::router::{Route, Router};
-use crate::theme::breakpoints::{MEDIUM, SMALL};
-use crate::theme::{PaletteExt as _, base_px};
+use gitto_app_data::data::{AppChanged, AppData, AppPart, DataError};
+use gitto_app_data::state::router::{Route, Router};
+use gitto_app_kit::theme::breakpoints::{MEDIUM, SMALL};
+use gitto_app_kit::theme::{PaletteExt as _, base_px};
+use gitto_app_kit::ui::kbd::aria_keyshortcuts;
+use gitto_app_kit::ui::{FailurePopover, GittoIcon, Icon, IconName};
 
 actions!(
     tabs,
@@ -107,35 +107,44 @@ impl Render for TabDrag {
 /// Alt+Shift and the arrow keys ([`MoveTabLeft`], [`MoveTabRight`]), into another order; their
 /// close button removes them, asking first.
 pub struct Tabs {
-    repositories: Query<Vec<Repository>>,
+    data: Entity<AppData>,
     open_repository: Entity<OpenRepository>,
     /// The tabs' order once one's moved, until that's saved and read back.
     moved_order: Option<Vec<RepositoryId>>,
     /// The tab last moved, which says why if the new order couldn't be saved.
     moved: Option<RepositoryId>,
-    move_error: Option<QueryError>,
+    move_error: Option<DataError>,
     /// The repository last tried to be removed, and why that failed.
     removing: Option<RepositoryId>,
-    remove_error: Option<QueryError>,
+    remove_error: Option<DataError>,
     /// Each repository's tab's, made and dropped as the list of repositories changes.
     focus: HashMap<RepositoryId, FocusHandle>,
+    /// The home tab's, a Tab stop as the repositories' tabs are.
+    home_focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
 
 impl Tabs {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let repositories = repositories_query(cx);
+        let data = AppData::global(cx);
+        data.update(cx, |data, cx| data.show(AppPart::Repositories, cx));
         let open_repository = OpenRepository::new(cx);
         let subscriptions = vec![
             cx.observe(&Router::global(cx), |_, _, cx| cx.notify()),
             cx.observe(&open_repository, |_, _, cx| cx.notify()),
-            cx.observe(repositories.entry(), |tabs, _, cx| {
-                tabs.forget_saved_order(cx);
-                tabs.sync_focus(cx);
+            cx.subscribe(&open_repository, |_, _, Opened(id), cx| {
+                Router::navigate(Route::Repository(id.clone()), cx);
+            }),
+            cx.subscribe(&data, |tabs, _, AppChanged(part), cx| {
+                if *part == AppPart::Repositories {
+                    tabs.forget_saved_order(cx);
+                    tabs.sync_focus(cx);
+                    cx.notify();
+                }
             }),
         ];
         let mut tabs = Tabs {
-            repositories,
+            data,
             open_repository,
             moved_order: None,
             moved: None,
@@ -143,6 +152,7 @@ impl Tabs {
             removing: None,
             remove_error: None,
             focus: HashMap::new(),
+            home_focus: cx.focus_handle().tab_stop(true),
             _subscriptions: subscriptions,
         };
         tabs.sync_focus(cx);
@@ -152,7 +162,7 @@ impl Tabs {
     /// Gives each repository listed its tab's focus handle, and forgets those of the
     /// repositories removed.
     fn sync_focus(&mut self, cx: &mut Context<Self>) {
-        let listed = self.saved_order();
+        let listed = self.saved_order(cx);
         self.focus.retain(|id, _| listed.contains(id));
         for id in listed {
             self.focus
@@ -161,30 +171,33 @@ impl Tabs {
         }
     }
 
-    fn saved_order(&self) -> Vec<RepositoryId> {
-        self.repositories
+    fn repositories<'a>(&self, cx: &'a App) -> &'a [Repository] {
+        self.data
+            .read(cx)
+            .repositories()
             .data()
-            .map(|repositories| {
-                repositories
-                    .into_iter()
-                    .map(|repository| repository.id)
-                    .collect()
-            })
-            .unwrap_or_default()
+            .map_or(&[], Vec::as_slice)
+    }
+
+    fn saved_order(&self, cx: &App) -> Vec<RepositoryId> {
+        self.repositories(cx)
+            .iter()
+            .map(|repository| repository.id.clone())
+            .collect()
     }
 
     /// The repositories' ids in the order their tabs are shown: ids rather than the repositories,
     /// so the tabs stay as they are when the list is read again.
-    pub fn ordered(&self) -> Vec<RepositoryId> {
+    pub fn ordered(&self, cx: &App) -> Vec<RepositoryId> {
         self.moved_order
             .clone()
-            .unwrap_or_else(|| self.saved_order())
+            .unwrap_or_else(|| self.saved_order(cx))
     }
 
     /// The tabs show the saved order again once the order they were moved into is read back.
     fn forget_saved_order(&mut self, cx: &mut Context<Self>) {
         if let Some(order) = &self.moved_order
-            && same_order(order, &self.saved_order())
+            && same_order(order, &self.saved_order(cx))
         {
             self.moved_order = None;
             cx.notify();
@@ -194,7 +207,7 @@ impl Tabs {
     /// Shows the tabs in `order` (with `id` moved) until it's saved, unless it's the order they
     /// had; puts them back, saying why, if it can't be saved.
     fn reorder(&mut self, id: &RepositoryId, order: Vec<RepositoryId>, cx: &mut Context<Self>) {
-        let unchanged = same_order(&order, &self.saved_order());
+        let unchanged = same_order(&order, &self.saved_order(cx));
         self.moved_order = Some(order.clone());
         cx.notify();
         if unchanged {
@@ -219,7 +232,7 @@ impl Tabs {
 
     /// Moves the tab `id` one place left (`-1`) or right (`1`); it keeps focus.
     pub fn move_tab(&mut self, id: &RepositoryId, by: isize, cx: &mut Context<Self>) {
-        let mut order = self.ordered();
+        let mut order = self.ordered(cx);
         let Some(from) = order.iter().position(|other| other == id) else {
             return;
         };
@@ -236,7 +249,7 @@ impl Tabs {
         if dragged == target {
             return;
         }
-        let order = moved_to(&self.ordered(), dragged, target);
+        let order = moved_to(&self.ordered(cx), dragged, target);
         self.reorder(dragged, order, cx);
     }
 
@@ -278,6 +291,7 @@ impl Tabs {
         tab_frame("home-tab", selected, cx)
             .w(if narrow { base_px(53.) } else { base_px(116.) })
             .flex_none()
+            .track_focus(&self.home_focus)
             .aria_label("Home")
             .when(narrow, |this| this.justify_center())
             .when(!narrow, |this| this.px_3p5())
@@ -315,7 +329,7 @@ impl Tabs {
             None
         };
         let (action, error) = error.unwrap_or(("Remove", None));
-        let error = error.map(|error| SharedString::from(error.message()));
+        let error = error.map(|error| SharedString::from(error.to_string()));
         // Whether its remove button's shown, rather than only as the pointer's over it.
         let shown = selected || error.is_some();
         let name: SharedString = repository.name.clone().into();
@@ -462,10 +476,10 @@ impl Render for Tabs {
         let route = Router::current(cx);
         let width = f32::from(window.viewport_size().width);
         let selected = |id: &RepositoryId| route.repository_id() == Some(id);
-        let repositories = self.repositories.data().unwrap_or_default();
+        let repositories = self.repositories(cx).to_vec();
         let shortcuts = aria_keyshortcuts(window, &[&MoveTabLeft, &MoveTabRight], KEY_CONTEXT);
         let mut tabs = Vec::new();
-        for id in self.ordered() {
+        for id in self.ordered(cx) {
             if let Some(repository) = repositories.iter().find(|repository| repository.id == id) {
                 tabs.push(
                     self.render_repository_tab(
@@ -483,7 +497,7 @@ impl Render for Tabs {
             .open_repository
             .read(cx)
             .error()
-            .map(|error| SharedString::from(error.message()));
+            .map(|error| SharedString::from(error.to_string()));
         let open_repository = self.open_repository.clone();
         h_flex()
             .h_full()
@@ -554,9 +568,9 @@ mod ui_tests {
     use gpui_kit::{AnyWindowHandle, AppContext as _, IntoElement, Render, TestAppContext};
 
     use super::*;
-    use crate::data::repositories::RepositorySource;
-    use crate::data::{QueryClient, keys};
     use crate::test_support;
+    use gitto_app_data::data::repositories::RepositorySource;
+    use gitto_app_data::data::{AppData, AppPart};
 
     /// The repositories as saved, which `reorder` changes, unless it's told to fail (TS's mocked
     /// `rpc.repository`).
@@ -568,23 +582,23 @@ mod ui_tests {
     }
 
     impl RepositorySource for Saved {
-        fn list(&self) -> BoxFuture<'static, Result<Vec<Repository>, QueryError>> {
+        fn list(&self) -> BoxFuture<'static, Result<Vec<Repository>, DataError>> {
             let repositories = self.repositories.borrow().clone();
             async move { Ok(repositories) }.boxed()
         }
 
-        fn add(&self, _: PathBuf) -> BoxFuture<'static, Result<Repository, QueryError>> {
-            async { Err(QueryError::msg("Not in this test.")) }.boxed()
+        fn add(&self, _: PathBuf) -> BoxFuture<'static, Result<Repository, DataError>> {
+            async { Err(DataError::msg("Not in this test.")) }.boxed()
         }
 
-        fn remove(&self, _: RepositoryId) -> BoxFuture<'static, Result<(), QueryError>> {
-            async { Err(QueryError::msg("Not in this test.")) }.boxed()
+        fn remove(&self, _: RepositoryId) -> BoxFuture<'static, Result<(), DataError>> {
+            async { Err(DataError::msg("Not in this test.")) }.boxed()
         }
 
-        fn reorder(&self, ids: Vec<RepositoryId>) -> BoxFuture<'static, Result<(), QueryError>> {
+        fn reorder(&self, ids: Vec<RepositoryId>) -> BoxFuture<'static, Result<(), DataError>> {
             self.reorders.borrow_mut().push(ids.clone());
             if self.fail.get() {
-                return async { Err(QueryError::msg("The database is locked.")) }.boxed();
+                return async { Err(DataError::msg("The database is locked.")) }.boxed();
             }
             let mut repositories = self.repositories.borrow_mut();
             repositories.sort_by_key(|repository| {
@@ -643,7 +657,7 @@ mod ui_tests {
     }
 
     fn order(host: &Entity<Host>, cx: &mut TestAppContext) -> Vec<RepositoryId> {
-        host.read_with(cx, |host, cx| host.tabs.read(cx).ordered())
+        host.read_with(cx, |host, cx| host.tabs.read(cx).ordered(cx))
     }
 
     fn move_right(id: &RepositoryId, window: AnyWindowHandle, cx: &mut TestAppContext) {
@@ -673,6 +687,25 @@ mod ui_tests {
     }
 
     #[gpui_kit::test]
+    fn goes_home_from_the_keyboard(cx: &mut TestAppContext) {
+        let (_dir, _saved, ids, window, host) = render_tabs(cx);
+        cx.update(|cx| Router::navigate(Route::Repository(ids[0].clone()), cx));
+        cx.run_until_parked();
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            let tabs = host.read(cx).tabs.read(cx);
+            let (first, home) = (tabs.focus[&ids[0]].clone(), tabs.home_focus.clone());
+            window.focus(&first, cx);
+            window.focus_prev(cx);
+            assert!(home.is_focused(window));
+            window.press("enter", cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert_eq!(cx.update(|cx| Router::current(cx)), Route::Home);
+    }
+
+    #[gpui_kit::test]
     fn moves_a_tab_with_alt_shift_and_the_arrow_keys_keeping_it_focused(cx: &mut TestAppContext) {
         let (_dir, saved, ids, window, host) = render_tabs(cx);
         assert_eq!(order(&host, cx), ids);
@@ -697,7 +730,9 @@ mod ui_tests {
     fn forgets_the_focus_of_a_removed_repositorys_tab(cx: &mut TestAppContext) {
         let (_dir, saved, ids, _, host) = render_tabs(cx);
         saved.repositories.borrow_mut().remove(0);
-        drop(cx.update(|cx| QueryClient::invalidate(&keys::repositories(), cx)));
+        cx.update(|cx| {
+            AppData::global(cx).update(cx, |data, cx| drop(data.reload(AppPart::Repositories, cx)))
+        });
         cx.run_until_parked();
 
         let mut focused: Vec<RepositoryId> = host.read_with(cx, |host, cx| {
@@ -730,7 +765,7 @@ mod ui_tests {
 
         assert_eq!(order(&host, cx), ids);
         let error = host.read_with(cx, |host, cx| host.tabs.read(cx).move_error.clone());
-        assert_eq!(error.unwrap().message(), "The database is locked.");
+        assert_eq!(error.unwrap().to_string(), "The database is locked.");
         let moved = host.read_with(cx, |host, cx| host.tabs.read(cx).moved.clone());
         assert_eq!(moved.as_ref(), Some(&ids[0]));
     }

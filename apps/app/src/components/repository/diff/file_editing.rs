@@ -19,10 +19,10 @@ use gpui_kit::{AnyElement, App, Context, Entity, Task, Window, div};
 use super::autosave::{AUTOSAVE_DELAY, Autosave, ReadEdits, SaveEdits, SaveState};
 use super::file_diff_view::FileDiffView;
 use super::unsaved_changes_dialog::{UnsavedChoice, open_unsaved_changes_dialog};
-use crate::components::ui::{IconButton, IconName, Notice};
-use crate::data::file_diff::{fetch_working_tree_file, save_working_tree_file};
-use crate::data::{QueryClient, QueryError, QueryKey, keys};
-use crate::theme::PaletteExt as _;
+use gitto_app_data::data::file_diff::{fetch_working_tree_file, save_working_tree_file};
+use gitto_app_data::data::{DataError, Repositories};
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::ui::{IconButton, IconName, Notice};
 
 /// Whether a save goes over the file whatever it is now, or only as it was at the version
 /// expected.
@@ -52,28 +52,36 @@ pub struct EditSession {
 
 /// Reads a file in the working tree, with its version.
 pub type ReadWorkingTreeFile =
-    Rc<dyn Fn(&RepositoryId, &str, &mut App) -> Task<Result<WorkingTreeFile, QueryError>>>;
+    Rc<dyn Fn(&RepositoryId, &str, &mut App) -> Task<Result<WorkingTreeFile, DataError>>>;
 
 /// Saves a file's text over it in the working tree, as the request says; resolves to its new
 /// version.
 pub type SaveWorkingTreeFile = Rc<
-    dyn Fn(&RepositoryId, &str, SaveRequest, &mut App) -> Task<Result<ContentVersion, QueryError>>,
+    dyn Fn(&RepositoryId, &str, SaveRequest, &mut App) -> Task<Result<ContentVersion, DataError>>,
 >;
 
-/// Loads again what's under a key, as what it's of changed: the file's changes once its edits
-/// are saved, say.
-pub type ReloadQueries = Rc<dyn Fn(QueryKey, &mut App)>;
+/// What of a repository is loaded again, as what it's of changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Reload {
+    /// The uncommitted changes: once a file's edits are saved, say.
+    Uncommitted,
+    /// The conflicted file at a path: once saving it failed, say, as it changed on disk.
+    Conflict(String),
+}
+
+/// Loads again what of the repository it's given changed.
+pub type ReloadData = Rc<dyn Fn(&RepositoryId, Reload, &mut App)>;
 
 /// What the view reads and writes the working tree with: git, or a test's.
 #[derive(Clone)]
 pub struct FileIo {
     pub read: ReadWorkingTreeFile,
     pub save: SaveWorkingTreeFile,
-    pub reload: ReloadQueries,
+    pub reload: ReloadData,
 }
 
 impl FileIo {
-    /// With git (`fetchWorkingTreeFile`, `saveWorkingTreeFile`), and the query client.
+    /// With git (`fetchWorkingTreeFile`, `saveWorkingTreeFile`), and the repository's data.
     pub fn git() -> Self {
         FileIo {
             read: Rc::new(fetch_working_tree_file),
@@ -87,7 +95,16 @@ impl FileIo {
                     cx,
                 )
             }),
-            reload: Rc::new(|key, cx| drop(QueryClient::invalidate(&key, cx))),
+            // After a save, by when the repository may have been removed.
+            reload: Rc::new(|id, reload, cx| {
+                let Some(repository) = Repositories::get(id, cx) else {
+                    return;
+                };
+                repository.update(cx, |repository, cx| match reload {
+                    Reload::Uncommitted => drop(repository.reload_uncommitted(cx)),
+                    Reload::Conflict(path) => drop(repository.reload_conflict(&path, cx)),
+                })
+            }),
         }
     }
 }
@@ -126,7 +143,7 @@ impl FileEditing {
             let (io, target) = (Rc::clone(&io), Rc::clone(&target));
             Rc::new(move |request, cx| {
                 let Some((id, path)) = target.borrow().clone() else {
-                    return Task::ready(Err(QueryError::msg("Nothing is being edited.")));
+                    return Task::ready(Err(DataError::msg("Nothing is being edited.")));
                 };
                 let save = Rc::clone(&io.borrow().save);
                 save(&id, &path, request, cx)
@@ -232,7 +249,7 @@ impl FileDiffView {
         // working tree while the window is in the background).
         if std::mem::take(&mut self.editing.edited) {
             let reload = Rc::clone(&self.editing.io.borrow().reload);
-            reload(keys::uncommitted(self.view.repository_id()), cx);
+            reload(self.view.repository_id(), Reload::Uncommitted, cx);
         }
         cx.notify();
     }
@@ -454,7 +471,7 @@ impl FileDiffView {
             match self.editing.autosave.read(cx).state().clone() {
                 SaveState::ChangedOnDisk(message) => {
                     banners.push(
-                        Notice::new(message)
+                        Notice::new("changed-on-disk", message)
                             .child(
                                 Button::new("reload-edits")
                                     .ghost()
@@ -481,7 +498,7 @@ impl FileDiffView {
                     )
                 }
                 SaveState::Failed(message) => banners.push(
-                    Notice::new(message)
+                    Notice::new("save-failed", message)
                         .child(
                             Button::new("retry-save")
                                 .ghost()
@@ -501,8 +518,10 @@ impl FileDiffView {
             }
         }
         if let Some(message) = &self.editing.start_error {
-            banners
-                .push(Notice::new(format!("Couldn't edit the file: {message}")).into_any_element());
+            banners.push(
+                Notice::new("edit-failed", format!("Couldn't edit the file: {message}"))
+                    .into_any_element(),
+            );
         }
         banners
     }
@@ -578,20 +597,18 @@ mod tests {
     use super::super::autosave::AUTOSAVE_DELAY;
     use super::super::file_diff_view::FileDiffEvent;
     use super::super::test_views::{
-        Opened, changed_line, file, id, init, open, save, set_changes, set_patch,
+        DiffGit, Opened, changed_line, file, init, open, save, set_changes, set_patch,
+        update_repository,
     };
     use super::*;
-    use crate::data::QueryOptions;
-    use crate::data::file_diff::{FilePatch, file_patch_key};
-    use gitto_ui::git::diff_source::DiffSource;
+    use gitto_ui_logic::git::diff_source::{DiffFileKey, DiffSource};
 
     /// Saving fails as git's API says the file changed on disk.
-    fn changed_on_disk() -> QueryError {
-        ApiError::unreported(Error::FileChangedOnDisk {
+    fn changed_on_disk() -> DataError {
+        DataError::from(ApiError::unreported(Error::FileChangedOnDisk {
             path: "a.txt".into(),
             how: DiskChange::Changed,
-        })
-        .into()
+        }))
     }
 
     /// `a.txt`'s unstaged changes, open: one line changed to `old`, which the file on disk has.
@@ -770,7 +787,7 @@ mod tests {
         assert!(opened.read(cx, |view, _| view.patch_editor.is_none()
             && view.patch_editor_events.is_none()));
         // Typed in meanwhile: the file's changes are read again.
-        assert_eq!(opened.tree.reloads(), [keys::uncommitted(&id())]);
+        assert_eq!(opened.tree.reloads(), [Reload::Uncommitted]);
         assert!(!is_editing(&opened, cx));
     }
 
@@ -815,15 +832,13 @@ mod tests {
         let opened = open_unstaged(cx);
         start_editing(&opened, cx);
 
-        let options = QueryOptions::new(
-            file_patch_key(&id(), &DiffSource::Unstaged, "a.txt"),
-            |_, _| async { Err(QueryError::msg("These changes are over 10 MB.")) }.boxed(),
-        );
         cx.update(|cx| {
-            let entry = QueryClient::entry::<FilePatch>(options.key(), cx);
-            entry.update(cx, |entry, _| entry.set_options(&options));
-            let _ = QueryClient::invalidate(options.key(), cx);
+            DiffGit::get(cx).set_patch(
+                DiffFileKey::new(&DiffSource::Unstaged, "a.txt"),
+                Err(DataError::msg("These changes are over 10 MB.")),
+            )
         });
+        update_repository(cx, |repository, cx| drop(repository.reload_uncommitted(cx)));
         cx.run_until_parked();
 
         assert!(opened.read(cx, |view, _| view.view.patch_error().is_none()));

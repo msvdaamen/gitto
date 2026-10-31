@@ -2,6 +2,6 @@
 //!
 //! Ported from `packages/git/src/features/conflicts/`.
 
-pub mod commands;
+pub(crate) mod commands;
 pub mod markers;
 pub mod schema;

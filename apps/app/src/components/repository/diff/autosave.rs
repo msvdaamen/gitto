@@ -10,7 +10,7 @@ use gitto_git::ContentVersion;
 use gpui_kit::{App, Context, Task};
 
 use super::file_editing::{Overwrite, SaveRequest};
-use crate::data::QueryError;
+use gitto_app_data::data::DataError;
 
 /// Where saving a file that's being edited is at.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,7 +37,7 @@ impl SaveState {
 
 /// Saves the edits over the file being edited, as the request says; resolves to the version saved.
 pub type SaveEdits =
-    Rc<dyn Fn(SaveRequest, &mut App) -> Task<Result<ContentVersion, QueryError>> + 'static>;
+    Rc<dyn Fn(SaveRequest, &mut App) -> Task<Result<ContentVersion, DataError>> + 'static>;
 
 /// The text the edits left, as it is now (an editor's): read only as it's saved, rather than
 /// copied with each edit, as a file can be megabytes.
@@ -138,7 +138,7 @@ impl Autosave {
     pub fn flush_now(
         &mut self,
         cx: &mut Context<Self>,
-    ) -> Option<Task<Result<ContentVersion, QueryError>>> {
+    ) -> Option<Task<Result<ContentVersion, DataError>>> {
         self.clear_timer();
         self.unsaved?;
         let (edits, expected) = (self.edits.clone()?, self.version.clone()?);
@@ -217,7 +217,7 @@ impl Autosave {
         &mut self,
         overwrite: bool,
         cx: &mut Context<Self>,
-    ) -> Option<(u64, Task<Result<ContentVersion, QueryError>>)> {
+    ) -> Option<(u64, Task<Result<ContentVersion, DataError>>)> {
         let at = self.unsaved?;
         let (edits, expected) = (self.edits.clone()?, self.version.clone()?);
         if !overwrite && matches!(self.state, SaveState::ChangedOnDisk(_)) {
@@ -241,7 +241,7 @@ impl Autosave {
     fn saved(
         &mut self,
         at: u64,
-        result: Result<ContentVersion, QueryError>,
+        result: Result<ContentVersion, DataError>,
         cx: &mut Context<Self>,
     ) {
         // Stopped meanwhile: nothing left to save, nor to say about it.
@@ -250,7 +250,7 @@ impl Autosave {
         }
         match result {
             Err(error) => {
-                let message = error.message();
+                let message = error.to_string();
                 let state = if is_changed_on_disk(&error) {
                     SaveState::ChangedOnDisk(message)
                 } else {
@@ -277,7 +277,7 @@ impl Autosave {
 
 /// Whether saving failed because the file changed, or went, on disk since it was read: git's API
 /// error for that (`Error::FileChangedOnDisk`, a `CONFLICT`), which an overwrite doesn't get.
-fn is_changed_on_disk(error: &QueryError) -> bool {
+fn is_changed_on_disk(error: &DataError) -> bool {
     error.has_code(ApiCode::Conflict)
 }
 
@@ -303,7 +303,7 @@ mod tests {
 
     fn autosave(
         cx: &mut TestAppContext,
-        respond: impl Fn(&str, &str, bool, &mut App) -> Task<Result<String, QueryError>> + 'static,
+        respond: impl Fn(&str, &str, bool, &mut App) -> Task<Result<String, DataError>> + 'static,
     ) -> (Entity<Autosave>, Calls, Text) {
         let calls: Calls = Rc::default();
         let recorded = Rc::clone(&calls);
@@ -345,7 +345,7 @@ mod tests {
     }
 
     /// An error as git's API makes it for a file changed on disk.
-    fn changed_on_disk() -> QueryError {
+    fn changed_on_disk() -> DataError {
         ApiError::unreported(Error::FileChangedOnDisk {
             path: "a.txt".into(),
             how: DiskChange::Changed,
@@ -484,7 +484,7 @@ mod tests {
         let (autosave, _, text) = autosave(cx, move |_, _, _, _| {
             let first = !failed.replace(true);
             Task::ready(if first {
-                Err(QueryError::msg("The disk is full."))
+                Err(DataError::msg("The disk is full."))
             } else {
                 Ok("v1".into())
             })
@@ -514,7 +514,7 @@ mod tests {
             }
             let (send, receive) = oneshot::channel::<String>();
             *pending.borrow_mut() = Some(send);
-            cx.spawn(async move |_| receive.await.map_err(|_| QueryError::msg("Dropped.")))
+            cx.spawn(async move |_| receive.await.map_err(|_| DataError::msg("Dropped.")))
         });
         autosave.update(cx, |autosave, cx| {
             start(autosave, &text, cx);

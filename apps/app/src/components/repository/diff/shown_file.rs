@@ -3,24 +3,27 @@
 //! staging the file and resolving its conflicts read from, rather than each deriving its own.
 //! Ported from `shown-file.ts`.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use gitto_git::FileStatus;
 use gitto_git::PatchVersion;
 use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::input::RepositoryId;
-use gitto_ui::git::changes::{
+use gitto_ui_logic::git::changes::{
     LineCounts, counts_of, has_patch, is_known_binary, is_nested_repository, total_lines,
 };
-use gitto_ui::git::patch::{PatchSummary, is_link, staged_whole, summarize_patch};
-use gpui_kit::{AppContext as _, Context, Entity};
+use gitto_ui_logic::git::patch::{PatchSummary, is_link, staged_whole, summarize_patch};
+use gpui_kit::{AppContext as _, Context, Entity, Subscription, Task};
 
-use crate::data::file_diff::{
-    DiffSourceFiles, FilePatch, file_patch_query, file_patch_query_options,
+use gitto_app_data::data::file_diff::{DiffSourceFiles, FilePatch};
+use gitto_app_data::data::keyed::Hold;
+use gitto_app_data::data::{
+    DataError, Loaded, Opaque, Part, Repositories, Repository, observe_parts,
 };
-use crate::data::{Opaque, Query, QueryError};
-use crate::state::delayed::{DELAY, Delayed};
-use gitto_ui::git::diff_source::{DiffFileKey, DiffSource, is_uncommitted};
+use gitto_app_kit::delayed::{DELAY, Delayed};
+use gitto_ui_logic::git::diff_source::{DiffFileKey, DiffSource, is_uncommitted};
 
 /// Changed lines above which a file's changes are only shown when asked: reading and parsing them
 /// takes a noticeable moment, and such a change is rarely read line by line (a lockfile, say).
@@ -54,8 +57,8 @@ pub fn patch_cache_key(source: &DiffSource, data: &FilePatch) -> String {
 }
 
 /// A loaded patch, with what the view reads of it worked out once, as it's loaded, rather than
-/// each time it's read: a patch can be megabytes, and an uncommitted one is loaded again whenever
-/// the working tree changes.
+/// each time it's read, and off the main thread (see `ShownFile::prepare_loaded`): a patch can be
+/// megabytes, and an uncommitted one is loaded again whenever the working tree changes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedPatch {
     pub data: FilePatch,
@@ -86,8 +89,13 @@ impl PreparedPatch {
 
     /// Whether it's `data`, as loaded: the same patch, not another one alike.
     fn is(&self, data: &FilePatch) -> bool {
-        self.data.key == data.key && Arc::ptr_eq(&self.data.patch, &data.patch)
+        same_patch(&self.data, data)
     }
+}
+
+/// Whether `a` and `b` are the same patch as loaded, not only alike.
+fn same_patch(a: &FilePatch, b: &FilePatch) -> bool {
+    a.key == b.key && Arc::ptr_eq(&a.patch, &b.patch)
 }
 
 /// The patch on show, and the file it's of.
@@ -118,6 +126,7 @@ pub struct HeaderFile {
 /// Kept by the view, which [`sync`](Self::sync)s it with what's loaded before it reads it.
 pub struct ShownFile {
     repository_id: RepositoryId,
+    repository: Entity<Repository>,
     source: DiffSource,
     file: ChangedFile,
     /// The files whose changes the source has, to step through.
@@ -127,14 +136,21 @@ pub struct ShownFile {
     last_place: (DiffFileKey, Option<usize>),
     /// The large file the user asked to see anyway.
     shown_large: Option<DiffFileKey>,
-    /// What the patch's query is of, changing only when that does: an uncommitted file's list is
+    /// What the patch held is of, changing only when that does: an uncommitted file's list is
     /// replaced whenever anything in the working tree changes.
     patch_file: ChangedFile,
     patch_enabled: bool,
-    patch_query: Query<FilePatch>,
+    /// Holds the patch while it's loaded (see `sync`).
+    patch_hold: Option<Hold>,
     /// The patch loaded last, as last synced: this file's, or the last one's while this one's
-    /// loads.
+    /// loads, or is prepared.
     patch: Option<PreparedPatch>,
+    /// The patch loaded since, being prepared off the main thread, and where it's put once it is,
+    /// for the next sync to take.
+    preparing: Option<(FilePatch, Task<()>)>,
+    prepared: Rc<RefCell<Option<PreparedPatch>>>,
+    /// Why this file's patch couldn't be loaded, as last synced.
+    patch_error: Option<DataError>,
     /// The patch on show: going to another file, the last one stays on show until the new one's
     /// is loaded and highlighted; they're swapped at once, without flicker.
     shown_patch: Option<ShownPatch>,
@@ -145,7 +161,11 @@ pub struct ShownFile {
     busy: Entity<Delayed>,
     /// While the file's edited: the file, and its patch, as they were when that started.
     editing: Option<(ChangedFile, Option<PreparedPatch>)>,
+    _changes: Subscription,
 }
+
+/// What a file's view shows of the repository: the lists, and the patch, or the conflicted file.
+const PARTS: &[Part] = &[Part::Status, Part::Commits, Part::Patches, Part::Conflicts];
 
 impl ShownFile {
     pub fn new<V: 'static>(
@@ -154,12 +174,14 @@ impl ShownFile {
         file: ChangedFile,
         cx: &mut Context<V>,
     ) -> Self {
-        let lists = DiffSourceFiles::new(&repository_id, source.clone(), cx);
-        let patch_query = file_patch_query(&repository_id, &source, &file, false, cx);
+        let repository = Repositories::open(&repository_id, cx);
+        let lists = DiffSourceFiles::new(&repository, source.clone(), cx);
         let busy = cx.new(|cx| Delayed::new(false, DELAY, cx));
+        let changes = observe_parts(&repository, PARTS, cx);
         let last_place = (DiffFileKey::new(&source, &file.path), None);
         let mut shown = ShownFile {
             repository_id,
+            repository,
             source,
             patch_file: file.clone(),
             file,
@@ -167,13 +189,17 @@ impl ShownFile {
             last_place,
             shown_large: None,
             patch_enabled: false,
-            patch_query,
+            patch_hold: None,
             patch: None,
+            preparing: None,
+            prepared: Rc::default(),
+            patch_error: None,
             shown_patch: None,
             loading_files: false,
             files_error: None,
             busy,
             editing: None,
+            _changes: changes,
         };
         shown.sync(cx);
         shown
@@ -188,11 +214,15 @@ impl ShownFile {
         cx: &mut Context<V>,
     ) {
         if repository_id != self.repository_id {
-            self.lists = DiffSourceFiles::new(&repository_id, source.clone(), cx);
+            self.repository = Repositories::open(&repository_id, cx);
+            self.lists = DiffSourceFiles::new(&self.repository, source.clone(), cx);
+            self._changes = observe_parts(&self.repository, PARTS, cx);
             self.repository_id = repository_id;
+            // Of another repository: its patch is held anew.
+            self.patch_hold = None;
+            self.patch_enabled = false;
         } else if self.source != source {
-            self.lists
-                .set_source(&self.repository_id, source.clone(), cx);
+            self.lists.set_source(source.clone(), cx);
         }
         self.source = source;
         self.file = file;
@@ -200,8 +230,9 @@ impl ShownFile {
     }
 
     /// Brings what follows from the lists and the file up to date: its place in its list, what
-    /// the patch's query is of, and the patch loaded, prepared once.
+    /// the patch held is of, and the patch loaded, prepared once.
     pub fn sync<V: 'static>(&mut self, cx: &mut Context<V>) {
+        self.lists.sync(cx);
         let key = self.file_key();
         self.last_place = match self.found() {
             Some(ix) => (key, Some(ix)),
@@ -217,33 +248,80 @@ impl ShownFile {
         let same = file.path == self.patch_file.path
             && file.orig_path == self.patch_file.orig_path
             && file.status == self.patch_file.status;
-        if !same || enabled != self.patch_enabled {
-            let options =
-                file_patch_query_options(&self.repository_id, &self.source, &file, enabled, cx);
-            self.patch_query.set_options(options, cx);
+        if !same || enabled != self.patch_enabled || (enabled && self.patch_hold.is_none()) {
+            let source = self.source.clone();
+            self.patch_hold = enabled.then(|| {
+                self.repository.update(cx, |repository, cx| {
+                    repository.hold_patch(&source, &file, cx)
+                })
+            });
             self.patch_file = file;
             self.patch_enabled = enabled;
         }
-        self.prepare_loaded();
+        self.prepare_loaded(cx);
         let busy = self.shows_other() || self.loading_files;
         self.busy.update(cx, |delayed, cx| delayed.set(busy, cx));
     }
 
-    /// Prepares the patch loaded last, unless it is already.
-    fn prepare_loaded(&mut self) {
-        let loaded = self.patch_query.data();
-        let prepared = self.patch.as_ref();
-        if loaded
-            .as_ref()
-            .map(|data| prepared.is_some_and(|prepared| prepared.is(data)))
-            != Some(true)
+    /// Takes the patch loaded last, prepared, unless it has already, and why this file's couldn't
+    /// be loaded. It's prepared off the main thread, the view told once it is; the last one stays
+    /// meanwhile, as it does while this one's loads.
+    fn prepare_loaded<V: 'static>(&mut self, cx: &mut Context<V>) {
+        // One prepared since: taken if it's still the one wanted.
+        let ready = self.prepared.borrow_mut().take();
+        if let Some(prepared) = ready
+            && self
+                .preparing
+                .as_ref()
+                .is_some_and(|(data, _)| prepared.is(data))
         {
-            self.patch = loaded.map(|data| PreparedPatch::new(&self.source, data));
+            self.patch = Some(prepared);
+            self.preparing = None;
         }
+        let loaded = self
+            .repository
+            .read(cx)
+            .patch(&self.source, &self.patch_file.path);
+        if let Some(data) = loaded.and_then(Loaded::data) {
+            if self
+                .patch
+                .as_ref()
+                .is_some_and(|prepared| prepared.is(data))
+            {
+                // Back to the one prepared already: another being prepared isn't wanted now.
+                self.preparing = None;
+            } else if !self
+                .preparing
+                .as_ref()
+                .is_some_and(|(being, _)| same_patch(being, data))
+            {
+                let source = self.source.clone();
+                let into = Rc::clone(&self.prepared);
+                let data = data.clone();
+                let to_prepare = data.clone();
+                let task = cx.spawn(async move |view, cx| {
+                    let prepared = cx
+                        .background_spawn(async move { PreparedPatch::new(&source, to_prepare) })
+                        .await;
+                    *into.borrow_mut() = Some(prepared);
+                    let _ = view.update(cx, |_, cx| cx.notify());
+                });
+                self.preparing = Some((data, task));
+            }
+        }
+        self.patch_error = loaded
+            .and_then(Loaded::error)
+            .filter(|_| self.patch_enabled)
+            .cloned();
     }
 
     pub fn repository_id(&self) -> &RepositoryId {
         &self.repository_id
+    }
+
+    /// The repository the file is in.
+    pub fn repository(&self) -> &Entity<Repository> {
+        &self.repository
     }
 
     pub fn source(&self) -> &DiffSource {
@@ -342,7 +420,7 @@ impl ShownFile {
         if editing == self.editing.is_some() {
             return;
         }
-        self.prepare_loaded();
+        self.prepare_loaded(cx);
         self.editing = editing.then(|| (self.live_file(), self.patch.clone()));
         self.sync(cx);
     }
@@ -373,11 +451,11 @@ impl ShownFile {
 
     /// Why the patch couldn't be loaded; nothing while the file's edited, as the patch on show is
     /// the one editing started from.
-    pub fn patch_error(&self) -> Option<QueryError> {
+    pub fn patch_error(&self) -> Option<DataError> {
         if self.editing.is_some() {
             return None;
         }
-        self.patch_query.error()
+        self.patch_error.clone()
     }
 
     /// The patch of this file, if it's loaded.

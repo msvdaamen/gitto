@@ -3,7 +3,7 @@
 //! Ported from `packages/git/src/features/watch/`.
 
 mod batches;
-pub mod commands;
+pub(crate) mod commands;
 pub mod git_dirs;
 #[cfg(target_os = "linux")]
 mod linux;

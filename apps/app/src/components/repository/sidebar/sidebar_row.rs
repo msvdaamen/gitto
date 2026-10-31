@@ -13,8 +13,8 @@ use gpui_kit::{
     anchored, deferred, div, px,
 };
 
-use crate::components::ui::{Icon, IconName, menu_frame};
-use crate::theme::{PaletteExt as _, base_px};
+use gitto_app_kit::theme::{PaletteExt as _, base_px};
+use gitto_app_kit::ui::{Icon, IconName, menu_frame};
 
 /// Space below every row in a section.
 const ROW_GAP: f32 = 1.;

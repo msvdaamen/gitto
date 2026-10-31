@@ -1,9 +1,7 @@
 //! The repository's toolbar. Ported from `components/repository/toolbar.tsx`.
 
-use gitto_git::features::status::schema::{StatusSummary, Uncommitted};
 use gitto_git::input::RepositoryId;
-use gitto_repository::Repository;
-use gitto_ui::git::status::head_label;
+use gitto_ui_logic::git::status::head_label;
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{Sizable as _, h_flex, v_flex};
@@ -17,16 +15,11 @@ use super::pull_button::PullButton;
 use super::push_button::PushButton;
 use super::stash_buttons::StashButtons;
 use super::toolbar_button::{HideBelow, ToolbarButton};
-use crate::components::ui::{Divider, FailurePopover, Icon, IconButton, IconName, TextInput};
-use crate::data::branch::{
-    self, delete_branch_state, merge_branch_state, rebase_branch_state, switch_branch_state,
-};
-use crate::data::remote::{self, fetch_operation, pull_branch_state};
-use crate::data::repositories::{find, repositories_query};
-use crate::data::status::status_query;
-use crate::data::{Opaque, OperationState, Operations, Query, QueryError, RepositoryOperation};
-use crate::theme::PaletteExt as _;
-use crate::theme::breakpoints::{MEDIUM, SMALL};
+use gitto_app_data::data::repositories::find;
+use gitto_app_data::data::{AppData, AppPart, Change, Changed, DataError, Part, Shown};
+use gitto_app_kit::theme::PaletteExt as _;
+use gitto_app_kit::theme::breakpoints::{MEDIUM, SMALL};
+use gitto_app_kit::ui::{Divider, FailurePopover, Icon, IconButton, IconName, TextInput};
 
 /// The toolbar's height (TS's grid row, 49px).
 pub const TOOLBAR_HEIGHT: f32 = 3.25;
@@ -71,24 +64,14 @@ impl BranchChangeKind {
         }
     }
 
-    fn state(self, id: &RepositoryId, cx: &App) -> OperationState {
+    /// The repository's change it is.
+    pub fn change(self) -> Change {
         match self {
-            BranchChangeKind::Merge => merge_branch_state(id, cx),
-            BranchChangeKind::Rebase => rebase_branch_state(id, cx),
-            BranchChangeKind::Switch => switch_branch_state(id, cx),
-            BranchChangeKind::Delete => delete_branch_state(id, cx),
-            BranchChangeKind::Pull => pull_branch_state(id, cx),
-        }
-    }
-
-    /// The name of its operation (see `data::branch` and `data::remote`).
-    fn operation(self) -> &'static str {
-        match self {
-            BranchChangeKind::Merge => branch::MERGE,
-            BranchChangeKind::Rebase => branch::REBASE,
-            BranchChangeKind::Switch => branch::SWITCH,
-            BranchChangeKind::Delete => branch::DELETE,
-            BranchChangeKind::Pull => remote::PULL_BRANCH,
+            BranchChangeKind::Merge => Change::Merge,
+            BranchChangeKind::Rebase => Change::Rebase,
+            BranchChangeKind::Switch => Change::Switch,
+            BranchChangeKind::Delete => Change::DeleteBranch,
+            BranchChangeKind::Pull => Change::PullBranch,
         }
     }
 }
@@ -99,7 +82,7 @@ impl BranchChangeKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FailureOrder {
     order: Vec<BranchChangeKind>,
-    errors: Vec<(BranchChangeKind, Option<QueryError>)>,
+    errors: Vec<(BranchChangeKind, Option<DataError>)>,
 }
 
 impl Default for FailureOrder {
@@ -116,7 +99,7 @@ impl Default for FailureOrder {
 
 impl FailureOrder {
     /// Takes in each change's error now (`error_of`), putting first one that failed since.
-    pub fn update(&mut self, error_of: impl Fn(BranchChangeKind) -> Option<QueryError>) {
+    pub fn update(&mut self, error_of: impl Fn(BranchChangeKind) -> Option<DataError>) {
         for (kind, last) in &mut self.errors {
             let error = error_of(*kind);
             if error != *last {
@@ -130,7 +113,7 @@ impl FailureOrder {
     }
 
     /// The failure to show: the last to fail of those that still have an error.
-    pub fn shown(&self) -> Option<(BranchChangeKind, QueryError)> {
+    pub fn shown(&self) -> Option<(BranchChangeKind, DataError)> {
         self.order.iter().find_map(|kind| {
             self.errors
                 .iter()
@@ -151,14 +134,10 @@ impl FailureOrder {
 /// deleting or pulling another (from a branch's menu), and a popover under it says why that
 /// failed.
 pub struct RepositoryToolbar {
-    repository_id: RepositoryId,
+    repository: Shown,
     search: Entity<InputState>,
     sidebar_open: bool,
     details_open: bool,
-    status: Query<Opaque<Uncommitted>, StatusSummary>,
-    repositories: Query<Vec<Repository>>,
-    /// Fetching every remote of the repository.
-    fetch: RepositoryOperation<()>,
     failures: FailureOrder,
     pull: Entity<PullButton>,
     push: Entity<PushButton>,
@@ -171,42 +150,40 @@ impl EventEmitter<ToolbarEvent> for RepositoryToolbar {}
 
 impl RepositoryToolbar {
     pub fn new(repository_id: RepositoryId, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        RepositoryToolbar::with_fetch(repository_id, fetch_operation(), window, cx)
-    }
-
-    /// With `fetch` fetching: a test's.
-    pub(crate) fn with_fetch(
-        repository_id: RepositoryId,
-        fetch: RepositoryOperation<()>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search history…"));
-        let subscriptions = vec![
+        let mut subscriptions = vec![
             cx.subscribe(&search, |_, search, event, cx| {
                 if matches!(event, InputEvent::Change) {
                     let value = search.read(cx).value();
                     cx.emit(ToolbarEvent::Search(value));
                 }
             }),
-            cx.observe_global::<Operations>(|this, cx| {
-                this.update_failures(cx);
-                cx.notify();
+            cx.subscribe(&AppData::global(cx), |_, _, event, cx| {
+                if event.0 == AppPart::Repositories {
+                    cx.notify();
+                }
             }),
         ];
+        AppData::global(cx).update(cx, |data, cx| data.show(AppPart::Repositories, cx));
+        let repository = Shown::new(&repository_id, &[Part::Status, Part::Changes], cx);
+        // Takes in the changes of the branches' failures as they change.
+        subscriptions.push(
+            cx.subscribe(repository.entity(), |this, _, Changed(part), cx| {
+                if *part == Part::Changes {
+                    this.update_failures(cx);
+                }
+            }),
+        );
         let id = repository_id.clone();
         let mut toolbar = RepositoryToolbar {
+            repository,
             pull: cx.new(|cx| PullButton::new(id.clone(), window, cx)),
             push: cx.new(|cx| PushButton::new(id.clone(), window, cx)),
             branch: cx.new(|cx| BranchButton::new(id.clone(), window, cx)),
             stash: cx.new(|cx| StashButtons::new(id, window, cx)),
-            status: status_query(&repository_id, cx),
-            repositories: repositories_query(cx),
-            repository_id,
             search,
             sidebar_open: true,
             details_open: true,
-            fetch,
             failures: FailureOrder::default(),
             _subscriptions: subscriptions,
         };
@@ -214,8 +191,9 @@ impl RepositoryToolbar {
         toolbar
     }
 
-    pub fn repository_id(&self) -> &RepositoryId {
-        &self.repository_id
+    /// The id of the repository on show.
+    pub fn repository_id<'a>(&self, cx: &'a App) -> &'a RepositoryId {
+        self.repository.read(cx).id()
     }
 
     /// Puts `search` in the search box: the history's search, as the toolbar of the repository
@@ -236,61 +214,68 @@ impl RepositoryToolbar {
     }
 
     fn update_failures(&mut self, cx: &App) {
-        let id = self.repository_id.clone();
-        self.failures.update(|kind| kind.state(&id, cx).error);
+        let repository = self.repository.read(cx);
+        self.failures
+            .update(|kind| repository.change_state(kind.change()).error);
     }
 
     /// Whether the current branch is changing (see the type's doc).
     pub fn is_branch_busy(&self, cx: &App) -> bool {
+        let repository = self.repository.read(cx);
         BranchChangeKind::ALL
             .iter()
-            .any(|kind| kind.state(&self.repository_id, cx).running)
+            .any(|kind| repository.change_state(kind.change()).running)
     }
 
     /// The failure the current branch shows, if any.
-    pub fn branch_failure(&self) -> Option<(BranchChangeKind, QueryError)> {
+    pub fn branch_failure(&self) -> Option<(BranchChangeKind, DataError)> {
         self.failures.shown()
     }
 
-    /// Fetch, as it is now: spinning while it runs, red with the reason once it failed. Both
-    /// are the repository's: a fetch of another stays with that one.
+    /// Fetch, as it is now: spinning while it runs, red with the reason once it failed. It's the
+    /// repository's: one of another stays with that repository.
     pub fn fetch_button(&self, cx: &App) -> ToolbarButton {
-        let state = self.fetch.state(&self.repository_id, cx);
-        let title = match &state.error {
-            Some(error) => format!("Fetch failed: {}", error.message()),
+        let state = self.repository.read(cx).change_state(Change::Fetch);
+        let pending = state.running;
+        let error = state.error;
+        let title = match &error {
+            Some(error) => format!("Fetch failed: {error}"),
             None => "Fetch all remotes".to_owned(),
         };
-        let fetch = self.fetch.clone();
-        let id = self.repository_id.clone();
+        let repository = self.repository.entity().clone();
         ToolbarButton::new("fetch", IconName::RefreshCw, "Fetch")
             .hide_below(HideBelow::Small)
             .title(title)
-            .disabled(state.running)
-            .danger(state.error.is_some())
-            .busy(state.running)
-            .on_click(move |_, _, cx| drop(fetch.run(&id, (), cx)))
+            .disabled(pending)
+            .danger(error.is_some())
+            .busy(pending)
+            .on_click(move |_, _, cx| {
+                repository.update(cx, |repository, cx| drop(repository.fetch(cx)));
+            })
     }
 
     fn render_current_branch(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = *cx.palette();
         let busy = self.is_branch_busy(cx);
-        let name = self
-            .repositories
+        let repository = self.repository.read(cx);
+        let name = AppData::global(cx)
+            .read(cx)
+            .repositories()
             .data()
-            .and_then(|list| find(&list, &self.repository_id).map(|r| r.name.clone()))
+            .and_then(|list| find(list, repository.id()).map(|r| r.name.clone()))
             .unwrap_or_default();
-        let head = self
-            .status
+        let head = repository
+            .status()
             .data()
-            .map(|status| head_label(&status.head).to_owned())
+            .map(|status| head_label(&status.summary.head).to_owned())
             .unwrap_or_default();
         let failure = self.branch_failure();
         let (title, error) = match &failure {
-            Some((kind, error)) => (kind.title(), Some(error.message().into())),
+            Some((kind, error)) => (kind.title(), Some(error.clone())),
             None => ("Merge", None),
         };
         let dismiss = failure.map(|(kind, _)| kind);
-        let id = self.repository_id.clone();
+        let dismissed = self.repository.entity().clone();
         let with_name = f32::from(window.viewport_size().width) >= MEDIUM;
         let mark = div()
             .flex()
@@ -316,13 +301,17 @@ impl RepositoryToolbar {
             busy,
             selected: false,
         };
-        FailurePopover::new("current-branch-failure", title, error, trigger).on_dismiss(
-            move |_, cx| {
-                if let Some(kind) = dismiss {
-                    Operations::dismiss(kind.operation(), &id, cx);
-                }
-            },
+        FailurePopover::new(
+            "current-branch-failure",
+            title,
+            error.map(|error| error.to_string().into()),
+            trigger,
         )
+        .on_dismiss(move |_, cx| {
+            if let Some(kind) = dismiss {
+                dismissed.update(cx, |repository, cx| repository.dismiss(kind.change(), cx));
+            }
+        })
     }
 }
 
@@ -459,15 +448,21 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
+    use futures::FutureExt as _;
     use futures::channel::oneshot;
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{AnyWindowHandle, AppContext as _, TestAppContext};
 
     use super::*;
+    use crate::components::repository::test_support::fake_git;
     use crate::components::repository::test_support::{
         Repositories, click_label, repository, repository_id, set_operation, set_push_target,
         set_refs, set_remotes, set_stashes, set_status, set_worktrees, setup_with, status,
     };
+    use gitto_app_data::data::branch::Merge;
+    use gitto_app_data::data::git::{GitTask, RepositoryGit};
+    use gitto_git::features::branch::schema::MergeOutcome;
+    use gitto_git::input::{BranchRef, BranchShortName};
 
     /// Gives `id` what the toolbar's buttons show, so none of them loads from git.
     fn seed(id: &RepositoryId, cx: &mut TestAppContext) {
@@ -490,7 +485,22 @@ mod tests {
     #[derive(Default)]
     struct Fetches {
         calls: RefCell<Vec<RepositoryId>>,
-        settle: RefCell<Option<oneshot::Sender<Result<(), QueryError>>>>,
+        settle: RefCell<Option<oneshot::Sender<Result<(), DataError>>>>,
+    }
+
+    /// The repository `id`'s git, which fetches when the test says.
+    struct FetchingGit {
+        id: RepositoryId,
+        fetches: Rc<Fetches>,
+    }
+
+    impl RepositoryGit for FetchingGit {
+        fn fetch(&self) -> GitTask<()> {
+            self.fetches.calls.borrow_mut().push(self.id.clone());
+            let (settle, settled) = oneshot::channel();
+            *self.fetches.settle.borrow_mut() = Some(settle);
+            async move { settled.await.unwrap_or(Err(DataError::msg("dropped"))) }.boxed()
+        }
     }
 
     fn render(
@@ -514,30 +524,26 @@ mod tests {
         seed(&a, cx);
         seed(&b, cx);
         let fetches = Rc::new(Fetches::default());
-        let (window, toolbar) = switch(&a, &fetches, cx);
+        for id in [&a, &b] {
+            let git = FetchingGit {
+                id: id.clone(),
+                fetches: Rc::clone(&fetches),
+            };
+            fake_git(id, Rc::new(git), cx);
+        }
+        let (window, toolbar) = switch(&a, cx);
         (dir, a, b, fetches, window, toolbar)
     }
 
-    /// The toolbar of the repository `id`, fetching into `fetches`, as the page makes it when
-    /// that repository comes on show.
+    /// The toolbar of the repository `id`, as the page makes it when that repository comes on
+    /// show.
     fn switch(
         id: &RepositoryId,
-        fetches: &Rc<Fetches>,
         cx: &mut TestAppContext,
     ) -> (AnyWindowHandle, Entity<RepositoryToolbar>) {
         let shown = id.clone();
-        let fetches = Rc::clone(fetches);
         let opened = crate::test_support::open(cx, move |window, cx| {
-            let fetch =
-                RepositoryOperation::new("fetch", move |id: RepositoryId, (), cx: &mut App| {
-                    fetches.calls.borrow_mut().push(id);
-                    let (settle, settled) = oneshot::channel();
-                    *fetches.settle.borrow_mut() = Some(settle);
-                    cx.background_spawn(async move {
-                        settled.await.unwrap_or(Err(QueryError::msg("dropped")))
-                    })
-                });
-            RepositoryToolbar::with_fetch(shown, fetch, window, cx)
+            RepositoryToolbar::new(shown, window, cx)
         });
         cx.run_until_parked();
         opened
@@ -562,14 +568,14 @@ mod tests {
         assert!(shown.is_busy());
 
         // Another repository's fetch is its own.
-        let (_, other) = switch(&b, &fetches, cx);
+        let (_, other) = switch(&b, cx);
         assert!(!fetch_button(&other, cx).is_busy());
-        let (window, toolbar) = switch(&a, &fetches, cx);
+        let (window, toolbar) = switch(&a, cx);
         assert!(fetch_button(&toolbar, cx).is_busy());
 
         let settle = fetches.settle.borrow_mut().take().unwrap();
         settle
-            .send(Err(QueryError::msg("Could not resolve host: example.com")))
+            .send(Err(DataError::msg("Could not resolve host: example.com")))
             .unwrap();
         cx.run_until_parked();
         let shown = fetch_button(&toolbar, cx);
@@ -595,7 +601,7 @@ mod tests {
     #[gpui_kit::test]
     fn keeps_a_repositorys_fetch_failure_while_another_is_fetched(cx: &mut TestAppContext) {
         let (_dir, a, b, fetches, window, _) = render(cx);
-        let settle = |result: Result<(), QueryError>, cx: &mut TestAppContext| {
+        let settle = |result: Result<(), DataError>, cx: &mut TestAppContext| {
             let settle = fetches.settle.borrow_mut().take().unwrap();
             settle.send(result).unwrap();
             cx.run_until_parked();
@@ -603,15 +609,15 @@ mod tests {
 
         cx.update_window(window, |_, window, cx| window.click("fetch", cx))
             .unwrap();
-        settle(Err(QueryError::msg("Could not resolve host.")), cx);
-        let (window, toolbar) = switch(&b, &fetches, cx);
+        settle(Err(DataError::msg("Could not resolve host.")), cx);
+        let (window, toolbar) = switch(&b, cx);
         assert_eq!(fetch_button(&toolbar, cx).tooltip(), "Fetch all remotes");
         cx.update_window(window, |_, window, cx| window.click("fetch", cx))
             .unwrap();
         settle(Ok(()), cx);
         assert_eq!(*fetches.calls.borrow(), [a.clone(), b.clone()]);
 
-        let (_, toolbar) = switch(&a, &fetches, cx);
+        let (_, toolbar) = switch(&a, cx);
         assert_eq!(
             fetch_button(&toolbar, cx).tooltip(),
             "Fetch failed: Could not resolve host."
@@ -620,25 +626,41 @@ mod tests {
 
     #[gpui_kit::test]
     fn shows_the_last_change_of_the_branches_to_fail(cx: &mut TestAppContext) {
-        let (_dir, a, _, _, _, toolbar) = render(cx);
-        let fail = |name: &'static str, message: &'static str, cx: &mut TestAppContext| {
-            let operation = RepositoryOperation::new(name, move |_, (), cx: &mut App| {
-                cx.background_spawn(async move { Err::<(), _>(QueryError::msg(message)) })
-            });
-            let a = a.clone();
-            cx.update(|cx| drop(operation.run(&a, (), cx)));
-            cx.run_until_parked();
-        };
+        /// A repository's git whose merges and deletes of branches fail.
+        struct Failing;
 
-        fail("merge", "Merge conflict.", cx);
-        fail("delete-branch", "Not fully merged.", cx);
+        impl RepositoryGit for Failing {
+            fn merge_branch(&self, _: BranchRef, _: BranchShortName) -> GitTask<MergeOutcome> {
+                async { Err(DataError::msg("Merge conflict.")) }.boxed()
+            }
+
+            fn delete_branch(&self, _: BranchRef) -> GitTask<()> {
+                async { Err(DataError::msg("Not fully merged.")) }.boxed()
+            }
+        }
+
+        let (_dir, a, _, _, _, toolbar) = render(cx);
+        fake_git(&a, Rc::new(Failing), cx);
+        let repository = cx.update(|cx| gitto_app_data::data::Repositories::open(&a, cx));
+        repository.update(cx, |repository, cx| {
+            let merge = Merge::parse("refs/heads/feature", "main").unwrap();
+            drop(repository.merge(merge, cx));
+        });
+        cx.run_until_parked();
+        repository.update(cx, |repository, cx| {
+            let reference = BranchRef::parse("refs/heads/feature").unwrap();
+            drop(repository.delete_branch(reference, cx));
+        });
+        cx.run_until_parked();
         let shown = toolbar.read_with(cx, |toolbar, _| toolbar.branch_failure());
         let (kind, error) = shown.unwrap();
         assert_eq!(kind.title(), "Delete branch");
-        assert_eq!(error.message(), "Not fully merged.");
+        assert_eq!(error.to_string(), "Not fully merged.");
 
         // Dismissed, the one before it shows again.
-        cx.update(|cx| Operations::dismiss("delete-branch", &a, cx));
+        repository.update(cx, |repository, cx| {
+            repository.dismiss(Change::DeleteBranch, cx)
+        });
         let (kind, _) = toolbar
             .read_with(cx, |toolbar, _| toolbar.branch_failure())
             .unwrap();
@@ -647,11 +669,22 @@ mod tests {
 
     #[gpui_kit::test]
     fn dismisses_the_failure_shown_from_its_popover(cx: &mut TestAppContext) {
+        /// A repository's git whose merges fail.
+        struct Failing;
+
+        impl RepositoryGit for Failing {
+            fn merge_branch(&self, _: BranchRef, _: BranchShortName) -> GitTask<MergeOutcome> {
+                async { Err(DataError::msg("Merge conflict.")) }.boxed()
+            }
+        }
+
         let (_dir, a, _, _, window, toolbar) = render(cx);
-        let merge = RepositoryOperation::new("merge", |_, (), cx: &mut App| {
-            cx.background_spawn(async { Err::<(), _>(QueryError::msg("Merge conflict.")) })
+        fake_git(&a, Rc::new(Failing), cx);
+        let repository = cx.update(|cx| gitto_app_data::data::Repositories::open(&a, cx));
+        repository.update(cx, |repository, cx| {
+            let merge = Merge::parse("refs/heads/feature", "main").unwrap();
+            drop(repository.merge(merge, cx));
         });
-        cx.update(|cx| drop(merge.run(&a, (), cx)));
         cx.run_until_parked();
         assert!(
             toolbar
@@ -665,7 +698,12 @@ mod tests {
                 .read_with(cx, |toolbar, _| toolbar.branch_failure())
                 .is_none()
         );
-        assert!(cx.update(|cx| merge.state(&a, cx)).error.is_none());
+        assert!(
+            repository
+                .read_with(cx, |repository, _| repository.change_state(Change::Merge))
+                .error
+                .is_none()
+        );
     }
 
     #[test]
@@ -681,8 +719,8 @@ mod tests {
 
     #[test]
     fn puts_the_change_that_failed_last_first() {
-        let diverged = QueryError::msg("Diverged.");
-        let local_changes = QueryError::msg("Local changes.");
+        let diverged = DataError::msg("Diverged.");
+        let local_changes = DataError::msg("Local changes.");
         let mut order = FailureOrder::default();
         assert!(order.shown().is_none());
         order.update(|kind| (kind == BranchChangeKind::Pull).then(|| diverged.clone()));

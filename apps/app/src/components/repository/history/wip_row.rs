@@ -4,7 +4,7 @@
 use std::rc::Rc;
 
 use gitto_git::features::status::schema::StatusCounts;
-use gitto_ui::git::rows::{WIP_MESSAGE, WipRow};
+use gitto_ui_logic::git::rows::{WIP_MESSAGE, WipRow};
 use gpui_kit::component::h_flex;
 use gpui_kit::prelude::*;
 use gpui_kit::{App, FontWeight, SharedString, Window, div, linear_color_stop, linear_gradient};
@@ -15,8 +15,8 @@ use super::columns::{
 use super::commit_row::RowProps;
 use super::history_graph::{GraphNode, HistoryGraph};
 use super::history_option::{HistoryOption, RowKindBadge, RowLook};
-use crate::components::ui::{IconName, Tone};
-use crate::theme::{Palette, PaletteExt as _, mixed};
+use gitto_app_kit::theme::{Palette, PaletteExt as _, mixed};
+use gitto_app_kit::ui::{IconName, Tone};
 
 /// What the uncommitted changes' row says of them: how many files are staged, unstaged and
 /// conflicted, and the branch they're on.
