@@ -90,3 +90,29 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test -p gitto-git --locked
+
+  # The code that's only built for Windows or macOS (running git there, say), linted and tested on
+  # each, as Gitto ships for both. In one job each, as their runners take longer to start.
+  rust-platforms:
+    name: Rust (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Windows, os: windows-latest }
+          - { name: macOS, os: macos-latest }
+    runs-on: ${{ matrix.os }}
+    env:
+      CARGO_PROFILE_DEV_DEBUG: 0
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.97.0
+        with:
+          components: clippy
+      # Cached as in rust-lint.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo clippy -p gitto-git --all-targets --locked -- -D warnings
+      - run: cargo test -p gitto-git --locked
+
