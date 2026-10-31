@@ -616,6 +616,15 @@ mod tests {
             .await
         }
 
+        /// Itself, once what FSEvents, on macOS, tells of what changed just before the watch
+        /// started (making the repository, say) has gone by.
+        async fn settled(self) -> Self {
+            if cfg!(target_os = "macos") {
+                while let Some(Some(_)) = self.within(700).await {}
+            }
+            self
+        }
+
         /// Whether no item comes for longer than the watcher's debounce: TS's `quiet(next)`.
         async fn quiet(&self) -> bool {
             self.within(700).await.is_none()
@@ -749,7 +758,7 @@ mod tests {
         let probe = Probe::new();
         let changes = watching(watch_working_tree_with(repo.clone(), probe.subscribe()));
         probe.subscribed(1).await;
-        changes
+        changes.settled().await
     }
 
     /// The git directory's changes, once it's watched: it only sees what happens after that.
@@ -757,7 +766,7 @@ mod tests {
         let probe = Probe::new();
         let changes = watching(watch_git_dir_with(repo.clone(), probe.subscribe()));
         probe.subscribed(1).await;
-        changes
+        changes.settled().await
     }
 
     fn write(path: impl AsRef<Path>, contents: &str) {
@@ -1067,6 +1076,7 @@ mod tests {
             let repo = fx.repos.open("watched-git-dir-rescan").await.unwrap();
             let changes = watching(watch_git_dir_with(repo, probe.subscribe()));
             probe.subscribed(1).await;
+            let changes = changes.settled().await;
 
             probe.rescan();
             assert_eq!(changed(changes.next().await), [Index, Refs]);
