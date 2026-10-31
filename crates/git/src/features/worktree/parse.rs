@@ -6,6 +6,15 @@ use super::schema::{Lock, Worktree};
 /// each worktree.
 pub const WORKTREE_LIST_ARGS: [&str; 4] = ["worktree", "list", "--porcelain", "-z"];
 
+/// `path`, which git writes with `/`, as the OS writes it: `C:\…` on Windows.
+fn native(path: &str) -> String {
+    if cfg!(windows) {
+        path.replace('/', "\\")
+    } else {
+        path.to_owned()
+    }
+}
+
 /// The last part of `path`, as Node's `basename` has it: trailing slashes left out.
 fn basename(path: &str) -> &str {
     let trimmed = path.trim_end_matches('/');
@@ -35,7 +44,7 @@ pub fn parse_worktree_list(output: &str) -> Vec<Worktree> {
             })
         };
         worktrees.push(Worktree {
-            path: path.to_owned(),
+            path: native(path),
             name: basename(path).to_owned(),
             head: attribute("HEAD"),
             branch: attribute("branch"),
@@ -78,7 +87,7 @@ mod tests {
         assert_eq!(
             worktrees[0],
             Worktree {
-                path: "/repo".to_owned(),
+                path: native("/repo"),
                 name: "repo".to_owned(),
                 head: Some("aaa".to_owned()),
                 branch: Some("refs/heads/main".to_owned()),
