@@ -3,7 +3,8 @@
 //! last shown); re-exported here, where the features take it all from.
 //!
 //! Ported from `packages/git/src/core/runner.ts`. Cancellation: TS's `AbortSignal` is dropping the
-//! future. A command's future that's dropped before git exits stops git, and all it started.
+//! future. A command's future that's dropped before git exits stops git, and all it started; a
+//! repository's writes aren't stopped that way, as TS's never were (see `Repo::write`).
 
 #[cfg(unix)]
 use std::collections::HashSet;
@@ -27,8 +28,9 @@ pub(crate) use super::queue::WriteQueue;
 /// How a command is run. Every field is off by default; set them with the builder methods, e.g.
 /// `RunOptions::default().stdin(message).rewrites_files()`.
 ///
-/// TS's `signal` is dropping the command's future, and its `binary` is reading the output with a
-/// `*_bytes` method (`run_bytes`, `run_git_bytes`) rather than as UTF-8; `stdin` is always bytes.
+/// TS's `signal` is dropping a read's or a fetch's future, and its `binary` is reading the output
+/// with a `*_bytes` method (`run_bytes`, `run_git_bytes`) rather than as UTF-8; `stdin` is always
+/// bytes.
 #[derive(Debug, Clone, Default)]
 pub struct RunOptions {
     /// Written to git's stdin, e.g. a commit message for `commit -F -`.
