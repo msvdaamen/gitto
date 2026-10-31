@@ -32,6 +32,11 @@ futures.workspace = true
 log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
+# Diffs: syntax highlighting, and the words that changed in a line (see `components::repository::diff`).
+similar.workspace = true
+syntect.workspace = true
+two-face.workspace = true
 
 [dev-dependencies]
 gitto-git = { workspace = true, features = ["test-support"] }

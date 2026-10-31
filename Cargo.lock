@@ -202,8 +202,12 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "similar",
  "smol",
+ "syntect",
  "tempfile",
+ "thiserror 2.0.21",
+ "two-face",
  "uuid",
 ]
 
@@ -2175,7 +2179,10 @@ dependencies = [
  "gitto-git",
  "indexmap",
  "memchr",
+ "regex",
  "serde_json",
+ "similar",
+ "thiserror 2.0.21",
  "url",
 ]
 

@@ -80,6 +80,7 @@ pub fn init(services: Services, route: Route, cx: &mut App) {
     crate::state::init(cx);
     Router::init(route, cx);
     cx.bind_keys([KeyBinding::new("secondary-q", Quit, None)]);
+    cx.bind_keys(crate::components::repository::diff::viewer_actions::key_bindings());
     crate::components::repository::sidebar::ref_list::bind_keys(cx);
     crate::components::repository::history::history_table::bind_keys(cx);
     crate::components::tabs::bind_keys(cx);

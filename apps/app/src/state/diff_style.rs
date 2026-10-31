@@ -1,6 +1,8 @@
 //! How a file's changes are laid out. Ported from `hooks/diff-style.ts`.
 
-use crate::services::LocalStorage;
+use gpui_kit::{App, Global};
+
+use crate::services::{LocalStorage, Services};
 
 const STORAGE_KEY: &str = "gitto-diff-style";
 
@@ -32,7 +34,30 @@ impl DiffStyle {
     pub fn save(self, storage: &LocalStorage) {
         storage.set_item(STORAGE_KEY, self.as_str());
     }
+
+    /// The layout every file's changes are shown in (`useDiffStyle`'s `diffStyle`): the saved one,
+    /// read the first time it's asked for.
+    pub fn current(cx: &mut App) -> DiffStyle {
+        if let Some(setting) = cx.try_global::<DiffStyleSetting>() {
+            return setting.0;
+        }
+        let style = DiffStyle::load(Services::global(cx).storage());
+        cx.set_global(DiffStyleSetting(style));
+        style
+    }
+
+    /// Shows every file's changes in this layout, and saves it (`setDiffStyle`). Views showing
+    /// it observe [`DiffStyleSetting`].
+    pub fn apply(self, cx: &mut App) {
+        cx.set_global(DiffStyleSetting(self));
+        self.save(Services::global(cx).storage());
+    }
 }
+
+/// The layout of the changes on show, shared by every view (see [`DiffStyle::current`]).
+pub struct DiffStyleSetting(DiffStyle);
+
+impl Global for DiffStyleSetting {}
 
 #[cfg(test)]
 mod tests {

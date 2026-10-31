@@ -20,6 +20,7 @@ pub mod palette;
 
 use std::rc::Rc;
 
+use gpui_kit::component::highlighter::HighlightThemeStyle;
 use gpui_kit::component::{Colorize as _, Theme, ThemeConfig, ThemeConfigColors, ThemeMode};
 use gpui_kit::{App, Global, Hsla, Rems};
 
@@ -313,7 +314,22 @@ pub fn theme_config(theme: AppTheme, inter: bool) -> ThemeConfig {
         radius_lg: Some(RADIUS_LG),
         shadow: Some(true),
         colors,
+        // Without, code is drawn with GPUI Kit's light colors in either theme.
+        highlight: Some(highlight_style(theme)),
         ..ThemeConfig::default()
+    }
+}
+
+/// The colors of code, by the theme's highlight names (see `palette::syntax_colors`).
+fn highlight_style(theme: AppTheme) -> HighlightThemeStyle {
+    let syntax: serde_json::Map<String, serde_json::Value> = palette::syntax_colors(theme)
+        .into_iter()
+        .map(|(name, color)| (name.to_owned(), serde_json::json!({ "color": color })))
+        .collect();
+    HighlightThemeStyle {
+        syntax: serde_json::from_value(syntax.into())
+            .expect("Gitto's syntax colors are GPUI Kit's highlight names"),
+        ..HighlightThemeStyle::default()
     }
 }
 
@@ -369,6 +385,18 @@ mod tests {
         let dark = Palette::dark();
         for (name, color) in BASE_COLORS {
             assert_eq!(colors[name], color(&dark).to_hex(), "{name}");
+        }
+    }
+
+    #[test]
+    fn colors_code_by_every_syntax_color() {
+        // A name GPUI Kit doesn't know would be dropped as the style is read, its code uncolored.
+        for theme in [AppTheme::Dark, AppTheme::Light] {
+            let highlight = theme_config(theme, false).highlight.unwrap();
+            let syntax = serde_json::to_value(highlight.syntax).unwrap();
+            for (name, _) in palette::syntax_colors(theme) {
+                assert!(!syntax[name].is_null(), "{name}");
+            }
         }
     }
 }

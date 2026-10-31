@@ -3,6 +3,7 @@
 //! Ported from `packages/git/src/features/diff/`.
 
 pub mod commands;
+pub mod hunk_header;
 pub mod limits;
 pub(crate) mod parse;
 pub mod schema;

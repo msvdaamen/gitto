@@ -6,12 +6,9 @@
 //!
 //! Ported from `lines.ts`.
 
-use std::sync::LazyLock;
-
-use regex::bytes::Regex;
-
 use super::schema::{LineRange, LineSelection};
 use crate::core::errors::{Error, Result, StageAction};
+use crate::features::diff::hunk_header::parse_hunk_header_bytes;
 
 /// Which way the lines go: staged, from the unstaged changes (the index compared to the working
 /// tree), or unstaged, from the staged ones (HEAD compared to the index). Either way, the patch
@@ -92,12 +89,6 @@ struct Hunk<'a> {
     heading: &'a [u8],
     lines: Vec<PatchLine<'a>>,
 }
-
-/// A hunk's header, of bytes: `.` is any but a newline, which ends the line anyway.
-static HUNK_HEADER: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?-u)^@@ -([0-9]+)(?:,([0-9]+))? \+([0-9]+)(?:,([0-9]+))? @@(.*)$")
-        .expect("a valid regex")
-});
 
 const NO_EOL: &[u8] = b"\\ No newline at end of file";
 
@@ -223,16 +214,9 @@ fn unexpected_line(line: &[u8]) -> Error {
 }
 
 /// A hunk header's number; one too large to count is a patch git didn't write.
-fn number(digits: &[u8]) -> Result<u64> {
-    std::str::from_utf8(digits)
-        .ok()
-        .and_then(|digits| digits.parse().ok())
-        .ok_or_else(|| {
-            Error::Bug(format!(
-                "Unexpected number in a hunk header: {}",
-                String::from_utf8_lossy(digits)
-            ))
-        })
+fn number(value: usize) -> Result<u64> {
+    u64::try_from(value)
+        .map_err(|_| Error::Bug(format!("Unexpected number in a hunk header: {value}")))
 }
 
 /// Splits `patch` into its header's lines and its hunks.
@@ -261,25 +245,18 @@ fn parse_patch(patch: &[u8], verb: StageAction) -> Result<(Vec<&[u8]>, Vec<Hunk<
     while i < lines.len() {
         // A second file, after the first one's hunks: git has a file that changed type (from a
         // link to a file, say) as one deleted and another added.
-        let Some(captures) = HUNK_HEADER.captures(lines[i]) else {
+        let Some(header) = parse_hunk_header_bytes(lines[i]) else {
             return Err(Error::LinesNotStageable(format!(
                 "A file that changed type can only be {verb} whole."
             )));
         };
         i += 1;
-        let count = |group: usize| {
-            captures
-                .get(group)
-                .map_or(Ok(1), |digits| number(digits.as_bytes()))
-        };
         let mut hunk = Hunk {
-            old_start: number(&captures[1])?,
-            old_count: count(2)?,
-            new_start: number(&captures[3])?,
-            new_count: count(4)?,
-            heading: captures
-                .get(5)
-                .map_or(&b""[..], |heading| heading.as_bytes()),
+            old_start: number(header.old_start)?,
+            old_count: number(header.old_count)?,
+            new_start: number(header.new_start)?,
+            new_count: number(header.new_count)?,
+            heading: header.heading,
             lines: Vec::new(),
         };
         // Read by the header's counts: with `diff.suppressBlankEmpty`, an empty unchanged line is

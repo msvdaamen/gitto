@@ -96,6 +96,53 @@ pub fn avatar_color(index: usize) -> Hsla {
     hex(AVATAR_COLORS[index % AVATAR_COLORS.len()])
 }
 
+/// Code's colors, by the theme's highlight names: the TS diff viewer's themes' (@pierre/theme's
+/// `pierre-dark` and `pierre-light`), which the code in diffs and conflicts was drawn with.
+pub fn syntax_colors(theme: AppTheme) -> [(&'static str, &'static str); 26] {
+    let dark = theme == AppTheme::Dark;
+    let pick = |dark_color, light_color| if dark { dark_color } else { light_color };
+    let comment = "#737373";
+    let string = pick("#5ecc71", "#199f43");
+    let number = pick("#68cdf2", "#1ca1c7");
+    let constant = pick("#ffd452", "#d5a910");
+    let keyword = pick("#ff678d", "#d32a61");
+    let variable = pick("#ffa359", "#d47628");
+    let language = pick("#ffab16", "#d5901c");
+    let function = pick("#9d6afb", "#693acf");
+    let kind = pick("#d568ea", "#a631be");
+    let punctuation = "#636363";
+    let tag = pick("#ff855e", "#d5512f");
+    let attribute = pick("#60d199", "#18a46c");
+    [
+        ("comment", comment),
+        ("comment_doc", comment),
+        ("string", string),
+        ("string.escape", string),
+        ("string.regex", string),
+        ("string.special", string),
+        ("text.literal", string),
+        ("number", number),
+        ("boolean", number),
+        ("constant", constant),
+        ("label", constant),
+        ("keyword", keyword),
+        ("preproc", keyword),
+        ("variable", variable),
+        ("property", variable),
+        ("variable.special", language),
+        ("function", function),
+        ("type", kind),
+        ("operator", "#08c0ef"),
+        ("punctuation", punctuation),
+        ("punctuation.bracket", punctuation),
+        ("punctuation.delimiter", punctuation),
+        ("tag", tag),
+        ("title", tag),
+        ("attribute", attribute),
+        ("emphasis.strong", constant),
+    ]
+}
+
 impl Palette {
     pub fn of(theme: AppTheme) -> Self {
         match theme {
