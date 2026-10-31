@@ -4,6 +4,8 @@ members = ["apps/app", "crates/*"]
 
 [workspace.package]
 edition = "2024"
+# As rust-toolchain.toml has it.
+rust-version = "1.97"
 
 [workspace.dependencies]
 gpui-kit = { version = "0.8.0", features = ["gpui-fast"] }
