@@ -9,6 +9,7 @@ use crate::core::records::split_nul;
 use crate::core::repo::{GitCommand, Repo, has_conflicts, resolve_ref};
 use crate::core::runner::RunOptions;
 use crate::features::operation::commands::rebase_state;
+use crate::input::{BranchRef, BranchShortName};
 
 /// Rebases the checked-out branch, `branch`, the one the user saw, onto the branch `ref` (a full
 /// ref name, local or remote): replays the commits only it has on top of `ref`'s, one by one.
@@ -35,9 +36,13 @@ use crate::features::operation::commands::rebase_state;
 /// `Error::RebaseUndone` saying why: git leaves such a commit's changes staged, for the user to
 /// commit by hand before it goes on, which Gitto can't do for them. With `Error::RebaseStopped` if
 /// it couldn't be undone either, which leaves it under way, to finish in a terminal or abort. With
-/// `Error::InvalidInput` if `branch` is empty or `ref` isn't a branch, as the UI's input is
-/// checked.
-pub async fn rebase_branch(repo: &Repo, reference: &str, branch: &str) -> Result<RebaseOutcome> {
+/// `Error::InvalidInput` if `ref` isn't a branch, as the UI's input is checked.
+pub async fn rebase_branch(
+    repo: &Repo,
+    reference: &BranchRef,
+    branch: &BranchShortName,
+) -> Result<RebaseOutcome> {
+    let (reference, branch) = (reference.as_str(), branch.as_str());
     let target = preflight::target(reference, branch)?;
     let git_dir = git_dirs(repo).await?.git_dir;
     // One write, so nothing else changes the branch, or starts another operation, halfway.
@@ -218,7 +223,7 @@ mod tests {
     use crate::test_support::conflicts::{
         Files, Sides, commit_files, files, resolve_text, text_conflict, try_git,
     };
-    use crate::test_support::{Fixture, git, write_script};
+    use crate::test_support::{Fixture, git, valid, write_script};
 
     /// `side` changed `s.txt`, `main` changed `m.txt`: `side` rebases onto `main` without
     /// conflicts.
@@ -305,7 +310,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("rebase-replay").await.unwrap();
             assert_eq!(
-                rebase_branch(&repo, "refs/heads/main", "side")
+                rebase_branch(&repo, &valid("refs/heads/main"), &valid("side"))
                     .await
                     .unwrap(),
                 RebaseOutcome::Rebased
@@ -336,7 +341,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("rebase-ff").await.unwrap();
             assert_eq!(
-                rebase_branch(&repo, "refs/heads/main", "side")
+                rebase_branch(&repo, &valid("refs/heads/main"), &valid("side"))
                     .await
                     .unwrap(),
                 RebaseOutcome::FastForward
@@ -359,7 +364,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("rebase-remote").await.unwrap();
             assert_eq!(
-                rebase_branch(&repo, "refs/remotes/origin/side", "main")
+                rebase_branch(&repo, &valid("refs/remotes/origin/side"), &valid("main"))
                     .await
                     .unwrap(),
                 RebaseOutcome::Rebased
@@ -387,7 +392,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("rebase-up-to-date").await.unwrap();
             assert_eq!(
-                rebase_branch(&repo, "refs/heads/old", "main")
+                rebase_branch(&repo, &valid("refs/heads/old"), &valid("main"))
                     .await
                     .unwrap(),
                 RebaseOutcome::UpToDate
@@ -405,7 +410,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("rebase-tag-name").await.unwrap();
             assert_eq!(
-                rebase_branch(&repo, "refs/heads/main", "side")
+                rebase_branch(&repo, &valid("refs/heads/main"), &valid("side"))
                     .await
                     .unwrap(),
                 RebaseOutcome::Rebased
@@ -426,7 +431,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("rebase-keeps-untracked").await.unwrap();
             assert_eq!(
-                rebase_branch(&repo, "refs/heads/main", "side")
+                rebase_branch(&repo, &valid("refs/heads/main"), &valid("side"))
                     .await
                     .unwrap(),
                 RebaseOutcome::Rebased
@@ -445,7 +450,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("rebase-autosquash").await.unwrap();
             assert_eq!(
-                rebase_branch(&repo, "refs/heads/main", "side")
+                rebase_branch(&repo, &valid("refs/heads/main"), &valid("side"))
                     .await
                     .unwrap(),
                 RebaseOutcome::Rebased
@@ -467,7 +472,7 @@ mod tests {
             let repo = fx.repos.open("rebase-conflicts").await.unwrap();
 
             assert_eq!(
-                rebase_branch(&repo, "refs/heads/main", "side")
+                rebase_branch(&repo, &valid("refs/heads/main"), &valid("side"))
                     .await
                     .unwrap(),
                 RebaseOutcome::Conflicts
@@ -503,7 +508,7 @@ mod tests {
             let repo = fx.repos.open("rebase-resolved").await.unwrap();
 
             assert_eq!(
-                rebase_branch(&repo, "refs/heads/main", "side")
+                rebase_branch(&repo, &valid("refs/heads/main"), &valid("side"))
                     .await
                     .unwrap(),
                 RebaseOutcome::Conflicts
@@ -542,7 +547,7 @@ mod tests {
             let repo = fx.repos.open("rebase-conflicts-remote").await.unwrap();
 
             assert_eq!(
-                rebase_branch(&repo, "refs/remotes/origin/main", "side")
+                rebase_branch(&repo, &valid("refs/remotes/origin/main"), &valid("side"))
                     .await
                     .unwrap(),
                 RebaseOutcome::Conflicts
@@ -570,7 +575,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("rebase-abort").await.unwrap();
 
-            rebase_branch(&repo, "refs/heads/main", "side")
+            rebase_branch(&repo, &valid("refs/heads/main"), &valid("side"))
                 .await
                 .unwrap();
             abort_operation(&repo, OperationKind::Rebase).await.unwrap();
@@ -592,12 +597,12 @@ mod tests {
             let repo = fx.repos.open("rebase-deleted").await.unwrap();
 
             assert_eq!(
-                rebase_branch(&repo, "refs/heads/main", "side")
+                rebase_branch(&repo, &valid("refs/heads/main"), &valid("side"))
                     .await
                     .unwrap(),
                 RebaseOutcome::Conflicts
             );
-            let conflict = get_conflict(&repo, "f.txt").await.unwrap();
+            let conflict = get_conflict(&repo, &valid("f.txt")).await.unwrap();
             // In a rebase, "ours" is the branch rebased onto, and "theirs" the commit replayed.
             assert!(conflict.sides.ours.is_some());
             assert_eq!(conflict.sides.theirs, None);
@@ -605,7 +610,9 @@ mod tests {
                 sides: conflict.sides.clone(),
                 version: None,
             };
-            keep_side(&repo, "f.txt", Side::Ours, &shown).await.unwrap();
+            keep_side(&repo, &valid("f.txt"), Side::Ours, &shown)
+                .await
+                .unwrap();
             continue_operation(&repo, OperationKind::Rebase)
                 .await
                 .unwrap();
@@ -625,7 +632,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("rebase-over-changes").await.unwrap();
-            let error = rebase_branch(&repo, "refs/heads/main", "side")
+            let error = rebase_branch(&repo, &valid("refs/heads/main"), &valid("side"))
                 .await
                 .unwrap_err();
             assert_blocked(
@@ -651,7 +658,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("rebase-over-staged").await.unwrap();
-            let error = rebase_branch(&repo, "refs/heads/main", "side")
+            let error = rebase_branch(&repo, &valid("refs/heads/main"), &valid("side"))
                 .await
                 .unwrap_err();
             assert!(
@@ -673,7 +680,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("rebase-over-untracked").await.unwrap();
-            let error = rebase_branch(&repo, "refs/heads/main", "side")
+            let error = rebase_branch(&repo, &valid("refs/heads/main"), &valid("side"))
                 .await
                 .unwrap_err();
             assert_blocked(
@@ -694,7 +701,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("rebase-during-merge").await.unwrap();
-            let error = rebase_branch(&repo, "refs/heads/other", "main")
+            let error = rebase_branch(&repo, &valid("refs/heads/other"), &valid("main"))
                 .await
                 .unwrap_err();
             assert_blocked(
@@ -711,13 +718,13 @@ mod tests {
         git(&path, ["branch", "other", "main"]);
         smol::block_on(async {
             let repo = fx.repos.open("rebase-during-rebase").await.unwrap();
-            rebase_branch(&repo, "refs/heads/main", "side")
+            rebase_branch(&repo, &valid("refs/heads/main"), &valid("side"))
                 .await
                 .unwrap();
             // Resolved, but not continued yet: still under way.
             resolve_text(&repo, "one\nboth\nthree\n").await;
 
-            let error = rebase_branch(&repo, "refs/heads/other", "side")
+            let error = rebase_branch(&repo, &valid("refs/heads/other"), &valid("side"))
                 .await
                 .unwrap_err();
             assert_blocked(
@@ -738,11 +745,11 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("rebase-during-pop").await.unwrap();
             let stash = git(&path, ["rev-parse", "refs/stash"]);
-            let popped = pop_stash(&repo, &stash).await;
+            let popped = pop_stash(&repo, &valid(&stash)).await;
             assert!(matches!(popped, Err(Error::StashConflict(_))), "{popped:?}");
             let before = snapshot(&path);
 
-            let error = rebase_branch(&repo, "refs/heads/main", "side")
+            let error = rebase_branch(&repo, &valid("refs/heads/main"), &valid("side"))
                 .await
                 .unwrap_err();
             assert_blocked(
@@ -762,7 +769,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("rebase-detached").await.unwrap();
-            let error = rebase_branch(&repo, "refs/heads/main", "side")
+            let error = rebase_branch(&repo, &valid("refs/heads/main"), &valid("side"))
                 .await
                 .unwrap_err();
             assert_blocked(&error, "HEAD is detached: check out a branch to rebase it.");
@@ -780,7 +787,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("rebase-unborn").await.unwrap();
-            let error = rebase_branch(&repo, "refs/heads/main", "empty")
+            let error = rebase_branch(&repo, &valid("refs/heads/main"), &valid("empty"))
                 .await
                 .unwrap_err();
             assert_blocked(
@@ -800,7 +807,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("rebase-switched").await.unwrap();
-            let error = rebase_branch(&repo, "refs/heads/main", "side")
+            let error = rebase_branch(&repo, &valid("refs/heads/main"), &valid("side"))
                 .await
                 .unwrap_err();
             assert!(matches!(error, Error::RepositoryChanged(_)), "{error:?}");
@@ -821,7 +828,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("rebase-gone").await.unwrap();
-            let error = rebase_branch(&repo, "refs/heads/other", "side")
+            let error = rebase_branch(&repo, &valid("refs/heads/other"), &valid("side"))
                 .await
                 .unwrap_err();
             assert_blocked(&error, "other no longer exists.");
@@ -836,7 +843,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("rebase-itself").await.unwrap();
-            let error = rebase_branch(&repo, "refs/heads/side", "side")
+            let error = rebase_branch(&repo, &valid("refs/heads/side"), &valid("side"))
                 .await
                 .unwrap_err();
             assert_blocked(&error, "Can't rebase side onto itself.");
@@ -850,15 +857,16 @@ mod tests {
         create_side_repo(&fx, "rebase-onto-tag", &clean(), None);
         smol::block_on(async {
             let repo = fx.repos.open("rebase-onto-tag").await.unwrap();
-            // As the UI's input is checked, as is a missing branch to rebase.
-            for (reference, branch, message) in [
-                ("refs/tags/v1", "side", "refs/tags/v1 isn't a branch."),
-                ("refs/heads/main", "", "The branch name is empty."),
-            ] {
-                let error = rebase_branch(&repo, reference, branch).await.unwrap_err();
-                assert!(matches!(error, Error::InvalidInput(_)), "{error:?}");
-                assert_eq!(error.to_string(), message);
-            }
+            // A tag, a link to the remote's default branch, or no branch to rebase, is refused as
+            // the input's parsed: `rebase_branch` takes a `BranchRef` and a `BranchShortName`.
+            assert!(BranchRef::parse("refs/tags/v1").is_err());
+            assert!(BranchRef::parse("refs/remotes/origin/HEAD").is_err());
+            assert!(BranchShortName::parse("").is_err());
+            // Past the input's check, but not there.
+            let error = rebase_branch(&repo, &valid("refs/heads/gone"), &valid("side"))
+                .await
+                .unwrap_err();
+            assert_blocked(&error, "gone no longer exists.");
         });
     }
 
@@ -876,7 +884,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("rebase-unsigned").await.unwrap();
 
-            let error = rebase_branch(&repo, "refs/heads/main", "side")
+            let error = rebase_branch(&repo, &valid("refs/heads/main"), &valid("side"))
                 .await
                 .unwrap_err();
             assert!(matches!(error, Error::RebaseUndone { .. }), "{error:?}");
@@ -893,7 +901,7 @@ mod tests {
 
             git(&path, ["config", "commit.gpgSign", "false"]);
             assert_eq!(
-                rebase_branch(&repo, "refs/heads/main", "side")
+                rebase_branch(&repo, &valid("refs/heads/main"), &valid("side"))
                     .await
                     .unwrap(),
                 RebaseOutcome::Rebased
@@ -922,7 +930,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("rebase-stuck").await.unwrap();
 
-            let error = rebase_branch(&repo, "refs/heads/main", "side")
+            let error = rebase_branch(&repo, &valid("refs/heads/main"), &valid("side"))
                 .await
                 .unwrap_err();
             assert!(matches!(error, Error::RebaseStopped { .. }), "{error:?}");
@@ -949,7 +957,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("rebase-upstream-already").await.unwrap();
             assert_eq!(
-                rebase_branch(&repo, "refs/heads/main", "side")
+                rebase_branch(&repo, &valid("refs/heads/main"), &valid("side"))
                     .await
                     .unwrap(),
                 RebaseOutcome::FastForward
@@ -969,7 +977,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("rebase-otherwise").await.unwrap();
-            let error = rebase_branch(&repo, "refs/heads/main", "side")
+            let error = rebase_branch(&repo, &valid("refs/heads/main"), &valid("side"))
                 .await
                 .unwrap_err();
             assert!(matches!(error, Error::Git(_)), "{error:?}");

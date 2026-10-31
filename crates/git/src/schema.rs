@@ -2,6 +2,7 @@
 //! types are in its `schema` module, as in TS.
 
 use std::fmt;
+use std::ops::Deref;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
@@ -118,6 +119,58 @@ pub struct GitInstall {
     pub required: String,
     /// Whether `version` is `required` or newer.
     pub supported: bool,
+}
+
+/// A version of what Gitto read, which a change to it is sent back with, so it's only made to what
+/// was read: a file's in the working tree (`version_of`), or the status's (`Uncommitted::version`).
+/// A patch's is a `PatchVersion`. What it holds means nothing outside gitto-git; one can be made
+/// from a string for tests.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ContentVersion(String);
+
+impl ContentVersion {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for ContentVersion {
+    fn from(version: String) -> Self {
+        ContentVersion(version)
+    }
+}
+
+impl From<&str> for ContentVersion {
+    fn from(version: &str) -> Self {
+        ContentVersion(version.to_owned())
+    }
+}
+
+impl PartialEq<str> for ContentVersion {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+
+impl PartialEq<&str> for ContentVersion {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
+impl Deref for ContentVersion {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ContentVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 #[cfg(test)]

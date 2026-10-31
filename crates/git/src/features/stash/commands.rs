@@ -13,7 +13,7 @@ use crate::core::runner::RunOptions;
 use crate::features::diff::commands::{PORCELAIN_DIFF, get_commit_file_patch, read_patch};
 use crate::features::diff::parse::parse_diff;
 use crate::features::diff::schema::ChangedFile;
-use crate::input::{FileInput, Sha};
+use crate::input::{FileInput, FullSha, Sha};
 
 /// For the stash commands, which take no paths: with literal pathspecs, `stash push
 /// --include-untracked` leaves the untracked files it stashed behind, as it removes them with a
@@ -54,7 +54,7 @@ pub async fn stash_changes(run: &GitCommand, message: Option<&str>) -> Result<()
 }
 
 /// The files the stash `sha` changed compared to its base, untracked ones included.
-pub async fn get_stash_files(repo: &Repo, sha: &str) -> Result<Vec<ChangedFile>> {
+pub async fn get_stash_files(repo: &Repo, sha: &FullSha) -> Result<Vec<ChangedFile>> {
     // Diff options of its own, so `stash.showStat` and `stash.showPatch` don't add any.
     let output = repo
         .read_with(
@@ -66,7 +66,7 @@ pub async fn get_stash_files(repo: &Repo, sha: &str) -> Result<Vec<ChangedFile>>
                 "--raw",
                 "--numstat",
                 "-z",
-                sha,
+                sha.as_str(),
             ],
             stash_env(),
         )
@@ -78,9 +78,9 @@ pub async fn get_stash_files(repo: &Repo, sha: &str) -> Result<Vec<ChangedFile>>
 /// stash is a merge of what was staged into its base, with the working tree's files, so the
 /// tracked ones are compared to its first parent like a commit's. The untracked files it stashed
 /// are in a commit of their own, its third parent, without one.
-pub async fn get_stash_file_patch(repo: &Repo, sha: &str, file: &FileInput) -> Result<String> {
+pub async fn get_stash_file_patch(repo: &Repo, sha: &FullSha, file: &FileInput) -> Result<String> {
     let run = repo.git();
-    let commit = Sha::parse(sha)?;
+    let commit = Sha::from(sha.clone());
     let third = format!("{sha}^3");
     let (tracked, untracked) = futures::try_join!(
         get_commit_file_patch(repo, &commit, file),
@@ -154,7 +154,8 @@ async fn stashed_file_patch(repo: &Repo, sha: &str, file: &FileInput) -> Result<
 /// Puts the stash `sha` back and drops it, the newest or an older one. What was staged when it was
 /// stashed is staged again, if that can be done safely (see `pop_ref`). A pop that conflicts is
 /// left to resolve, and the stash kept, as git does.
-pub async fn pop_stash(repo: &Repo, sha: &str) -> Result<()> {
+pub async fn pop_stash(repo: &Repo, sha: &FullSha) -> Result<()> {
+    let sha = sha.as_str();
     // One write, so no other stash of Gitto's can move it between finding and popping it.
     let sha = sha.to_owned();
     repo.exclusive(move |run| async move {
@@ -177,7 +178,8 @@ static DROPPED: LazyLock<Regex> =
 
 /// Drops the stash `sha`, the newest or an older one, throwing its changes away. Should another
 /// have been dropped instead, as git outside Gitto pushed or dropped one meanwhile, it's put back.
-pub async fn drop_stash(repo: &Repo, sha: &str) -> Result<()> {
+pub async fn drop_stash(repo: &Repo, sha: &FullSha) -> Result<()> {
+    let sha = sha.as_str();
     // One write, so no other stash of Gitto's can move it between finding and dropping it.
     let sha = sha.to_owned();
     repo.exclusive(move |run| async move {
@@ -318,7 +320,7 @@ mod tests {
     use crate::core::repo::{How, Observed};
     use crate::schema::FileStatus;
     use crate::test_support::status::{rows, status_files};
-    use crate::test_support::{Fixture, git};
+    use crate::test_support::{Fixture, git, valid};
 
     /// A repository with `a.txt` and `b.txt` committed, which `repos` opens as `name`.
     fn create_committed_repo(fx: &Fixture, name: &str) -> PathBuf {
@@ -365,8 +367,8 @@ mod tests {
 
     fn file(path: &str, orig_path: Option<&str>) -> FileInput {
         FileInput {
-            path: path.to_owned(),
-            orig_path: orig_path.map(str::to_owned),
+            path: valid(path),
+            orig_path: orig_path.map(valid),
         }
     }
 
@@ -415,7 +417,7 @@ mod tests {
                 deletions: Some(deletions),
             };
             assert_eq!(
-                get_stash_files(&repo, &stash.sha).await.unwrap(),
+                get_stash_files(&repo, &valid(&stash.sha)).await.unwrap(),
                 [
                     changed("a.txt", FileStatus::Modified, 1, 1),
                     changed("b.txt", FileStatus::Modified, 1, 1),
@@ -423,7 +425,7 @@ mod tests {
                 ]
             );
 
-            pop_stash(&repo, &stash.sha).await.unwrap();
+            pop_stash(&repo, &valid(&stash.sha)).await.unwrap();
             // What was staged is staged again.
             assert_eq!(status_files(&repo).await, before);
             assert_eq!(list_stashes(&repo).await.unwrap(), []);
@@ -445,13 +447,13 @@ mod tests {
             let messages: Vec<&str> = stashes.iter().map(|stash| &*stash.message).collect();
             assert_eq!(messages, ["On main: newer: with a colon", "On main: older"]);
 
-            pop_stash(&repo, &stashes[1].sha).await.unwrap();
+            pop_stash(&repo, &valid(&stashes[1].sha)).await.unwrap();
             assert_eq!(list_stashes(&repo).await.unwrap(), [stashes[0].clone()]);
             assert_eq!(read(&path.join("a.txt")), "older\n");
             assert_eq!(read(&path.join("b.txt")), "b\n");
 
             // Gone now.
-            let error = pop_stash(&repo, &stashes[1].sha).await.unwrap_err();
+            let error = pop_stash(&repo, &valid(&stashes[1].sha)).await.unwrap_err();
             assert!(matches!(error, Error::RepositoryChanged(_)), "{error:?}");
             assert_eq!(list_stashes(&repo).await.unwrap(), [stashes[0].clone()]);
         });
@@ -473,7 +475,7 @@ mod tests {
             let stashes = list_stashes(&repo).await.unwrap();
             let [newer, middle, older] = [&stashes[0], &stashes[1], &stashes[2]];
 
-            drop_stash(&repo, &middle.sha).await.unwrap();
+            drop_stash(&repo, &valid(&middle.sha)).await.unwrap();
             assert_eq!(
                 list_stashes(&repo).await.unwrap(),
                 [newer.clone(), older.clone()]
@@ -483,13 +485,13 @@ mod tests {
                 rows(&[("b.txt", None, Some(FileStatus::Modified))])
             );
 
-            drop_stash(&repo, &newer.sha).await.unwrap();
+            drop_stash(&repo, &valid(&newer.sha)).await.unwrap();
             assert_eq!(
                 list_stashes(&repo).await.unwrap(),
                 std::slice::from_ref(older)
             );
 
-            let error = drop_stash(&repo, &middle.sha).await.unwrap_err();
+            let error = drop_stash(&repo, &valid(&middle.sha)).await.unwrap_err();
             assert!(matches!(error, Error::RepositoryChanged(_)), "{error:?}");
             assert_eq!(
                 list_stashes(&repo).await.unwrap(),
@@ -512,7 +514,9 @@ mod tests {
             let outside = path.clone();
             let moving = listed_then(&repo, move || stash_outside(&outside));
 
-            let error = pop_stash(&moving, &stashes[1].sha).await.unwrap_err();
+            let error = pop_stash(&moving, &valid(&stashes[1].sha))
+                .await
+                .unwrap_err();
             assert!(matches!(error, Error::RepositoryChanged(_)), "{error:?}");
             assert_eq!(list_stashes(&repo).await.unwrap()[1..], stashes[..]);
             assert_eq!(status_files(&repo).await, rows(&[]));
@@ -534,7 +538,7 @@ mod tests {
             let outside = path.clone();
             let moving = listed_then(&repo, move || stash_outside(&outside));
 
-            let error = drop_stash(&moving, &older.sha).await.unwrap_err();
+            let error = drop_stash(&moving, &valid(&older.sha)).await.unwrap_err();
             assert!(matches!(error, Error::RepositoryChanged(_)), "{error:?}");
             let after = list_stashes(&repo).await.unwrap();
             assert_eq!(after.len(), 3);
@@ -573,7 +577,9 @@ mod tests {
             fs::write(path.join("other.txt"), "other\n").unwrap();
             git(&path, ["add", "other.txt"]);
 
-            pop_stash(&repo, &newest(&repo).await).await.unwrap();
+            pop_stash(&repo, &valid(&newest(&repo).await))
+                .await
+                .unwrap();
             assert_eq!(
                 status_files(&repo).await,
                 rows(&[
@@ -602,7 +608,9 @@ mod tests {
             fs::write(path.join("a.txt"), "1\n2\n3\ncommitted\n5\n").unwrap();
             git(&path, ["commit", "-qam", "change a"]);
 
-            pop_stash(&repo, &newest(&repo).await).await.unwrap();
+            pop_stash(&repo, &valid(&newest(&repo).await))
+                .await
+                .unwrap();
             assert_eq!(
                 status_files(&repo).await,
                 rows(&[
@@ -627,7 +635,7 @@ mod tests {
             git(&path, ["commit", "-qam", "change a"]);
             let sha = newest(&repo).await;
 
-            let error = pop_stash(&repo, &sha).await.unwrap_err();
+            let error = pop_stash(&repo, &valid(&sha)).await.unwrap_err();
             assert!(matches!(error, Error::StashConflict(_)), "{error:?}");
             assert_eq!(
                 status_files(&repo).await,
@@ -640,7 +648,7 @@ mod tests {
             assert_eq!(newest(&repo).await, sha);
 
             // Git refuses to pop over the conflicts, which aren't the pop's.
-            let error = pop_stash(&repo, &sha).await.unwrap_err();
+            let error = pop_stash(&repo, &valid(&sha)).await.unwrap_err();
             assert!(!matches!(error, Error::StashConflict(_)), "{error:?}");
         });
     }
@@ -656,7 +664,10 @@ mod tests {
             fs::write(path.join("a.txt"), "local\n").unwrap();
             let sha = newest(&repo).await;
 
-            let message = pop_stash(&repo, &sha).await.unwrap_err().to_string();
+            let message = pop_stash(&repo, &valid(&sha))
+                .await
+                .unwrap_err()
+                .to_string();
             let overwritten = Regex::new("local changes .* would be overwritten").unwrap();
             assert!(overwritten.is_match(&message), "{message}");
             assert!(!message.contains("Index was not unstashed"), "{message}");
@@ -692,18 +703,18 @@ mod tests {
             push_stash(&repo).await.unwrap();
             let sha = newest(&repo).await;
 
-            let patch = get_stash_file_patch(&repo, &sha, &file("a.txt", None))
+            let patch = get_stash_file_patch(&repo, &valid(&sha), &file("a.txt", None))
                 .await
                 .unwrap();
             assert!(patch.contains("@@ -1 +1,2 @@\n a\n+more\n"), "{patch}");
-            let patch = get_stash_file_patch(&repo, &sha, &file("c.txt", Some("b.txt")))
+            let patch = get_stash_file_patch(&repo, &valid(&sha), &file("c.txt", Some("b.txt")))
                 .await
                 .unwrap();
             assert!(
                 patch.contains("rename from b.txt\nrename to c.txt\n"),
                 "{patch}"
             );
-            let untracked = get_stash_file_patch(&repo, &sha, &file("new.txt", None))
+            let untracked = get_stash_file_patch(&repo, &valid(&sha), &file("new.txt", None))
                 .await
                 .unwrap();
             assert!(
@@ -724,7 +735,7 @@ mod tests {
             git(&path, ["stash", "push", "-q"]);
             let sha = newest(&repo).await;
             assert_eq!(
-                get_stash_file_patch(&repo, &sha, &file("b.txt", None))
+                get_stash_file_patch(&repo, &valid(&sha), &file("b.txt", None))
                     .await
                     .unwrap(),
                 ""
@@ -747,7 +758,7 @@ mod tests {
             push_stash(&repo).await.unwrap();
             let sha = newest(&repo).await;
 
-            let renamed = get_stash_files(&repo, &sha)
+            let renamed = get_stash_files(&repo, &valid(&sha))
                 .await
                 .unwrap()
                 .into_iter()
@@ -757,7 +768,7 @@ mod tests {
             assert_eq!(renamed.orig_path.as_deref(), Some("old.txt"));
             let patch = get_stash_file_patch(
                 &repo,
-                &sha,
+                &valid(&sha),
                 &file(&renamed.path, renamed.orig_path.as_deref()),
             )
             .await

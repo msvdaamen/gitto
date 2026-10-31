@@ -17,7 +17,7 @@ use crate::features::diff::commands::{
     get_staged_file_patch, get_staged_file_patch_bytes, get_unstaged_file_patch,
     get_unstaged_file_patch_bytes,
 };
-use crate::input::FileInput;
+use crate::input::{FileInput, Paths};
 
 /// Paths go to git's stdin, NUL-separated, rather than on the command line, which holds only so
 /// many (32k characters on Windows).
@@ -27,22 +27,10 @@ use crate::input::FileInput;
 /// with everything else (`stage_all`, `unstage_all`, `discard_all`), which go by git's own paths.
 pub const PATHS_FROM_STDIN: [&str; 2] = ["--pathspec-from-file=-", "--pathspec-file-nul"];
 
-/// Refuses no paths, or an empty one, as the contract's `z.array(z.string().min(1)).min(1)` did.
-fn check_paths(paths: &[String]) -> Result<()> {
-    if paths.is_empty() {
-        return Err(Error::InvalidInput("No paths.".to_owned()));
-    }
-    if paths.iter().any(String::is_empty) {
-        return Err(Error::InvalidInput("Not a path.".to_owned()));
-    }
-    Ok(())
-}
-
 /// Stages the files at `paths`, whole. A conflicted one is marked resolved by that, so it isn't
 /// while it still has conflict markers: fails with `Error::ConflictMarkers`, and stages none.
-pub async fn stage(repo: &Repo, paths: &[String]) -> Result<()> {
-    check_paths(paths)?;
-    let (owned, paths) = (repo.clone(), paths.to_vec());
+pub async fn stage(repo: &Repo, paths: &Paths) -> Result<()> {
+    let (owned, paths) = (repo.clone(), paths.clone());
     repo.exclusive(move |run| async move {
         let (repo, paths) = (&owned, paths.as_slice());
         refuse_conflict_markers(repo, &run, Some(paths)).await?;
@@ -56,8 +44,8 @@ pub async fn stage(repo: &Repo, paths: &[String]) -> Result<()> {
 }
 
 /// Unstages the files at `paths`, whole; their changes stay in the working tree.
-pub async fn unstage(repo: &Repo, paths: &[String]) -> Result<()> {
-    check_paths(paths)?;
+pub async fn unstage(repo: &Repo, paths: &Paths) -> Result<()> {
+    let paths = paths.as_slice();
     let args = unstage_args(repo.has_head().await);
     repo.write_with(args, RunOptions::default().stdin(nul_terminated(paths)))
         .await?;
@@ -156,7 +144,6 @@ pub async fn stage_lines(
     version: &PatchVersion,
     selection: &LineSelection,
 ) -> Result<String> {
-    selection.check()?;
     apply_lines(repo, file, Side::Unstaged { untracked }, version, selection).await
 }
 
@@ -168,7 +155,6 @@ pub async fn unstage_lines(
     version: &PatchVersion,
     selection: &LineSelection,
 ) -> Result<String> {
-    selection.check()?;
     apply_lines(repo, file, Side::Staged, version, selection).await
 }
 
@@ -298,16 +284,16 @@ mod tests {
     #[cfg(unix)]
     use crate::test_support::non_utf8_names;
     use crate::test_support::status::status_entries;
-    use crate::test_support::{Fixture, git};
+    use crate::test_support::{Fixture, git, valid};
 
-    fn strings(paths: &[&str]) -> Vec<String> {
-        paths.iter().map(|path| (*path).to_owned()).collect()
+    fn strings(paths: &[&str]) -> Paths {
+        Paths::parse(paths.iter().copied()).unwrap()
     }
 
     fn file(path: &str, orig_path: Option<&str>) -> FileInput {
         FileInput {
-            path: path.to_owned(),
-            orig_path: orig_path.map(str::to_owned),
+            path: valid(path),
+            orig_path: orig_path.map(valid),
         }
     }
 
@@ -472,17 +458,11 @@ mod tests {
 
     #[test]
     fn refuses_no_paths_or_an_empty_one() {
-        let fx = Fixture::new();
-        fx.create_repo("no-paths");
-        smol::block_on(async {
-            let repo = fx.repos.open("no-paths").await.unwrap();
-            for paths in [vec![], strings(&[""])] {
-                let error = stage(&repo, &paths).await.unwrap_err();
-                assert!(matches!(error, Error::InvalidInput(_)), "{error:?}");
-                let error = unstage(&repo, &paths).await.unwrap_err();
-                assert!(matches!(error, Error::InvalidInput(_)), "{error:?}");
-            }
-        });
+        // Refused as the input's parsed: `stage` and `unstage` take `Paths`.
+        for paths in [vec![], vec![String::new()]] {
+            let error = Paths::parse(paths).unwrap_err();
+            assert!(matches!(error, Error::InvalidInput(_)), "{error:?}");
+        }
     }
 
     // A big working tree.
@@ -500,6 +480,7 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("big-stage").await.unwrap();
 
+            let names = Paths::parse(names).unwrap();
             stage(&repo, &names).await.unwrap();
             assert_eq!(get_status(&repo).await.unwrap().changes.staged.len(), 1000);
             unstage(&repo, &names).await.unwrap();
@@ -736,7 +717,9 @@ mod tests {
             let names: Vec<String> = (0..20_000)
                 .map(|i| format!("{}{i}", "long-file-name-".repeat(3)))
                 .collect();
-            let error = stage(&repo, &names).await.unwrap_err();
+            let error = stage(&repo, &Paths::parse(names).unwrap())
+                .await
+                .unwrap_err();
             assert!(is_index_locked(&error), "{error:?}");
         });
     }
@@ -759,16 +742,14 @@ mod tests {
                 old_line += 1;
                 new_line += 1;
             } else if line.starts_with('-') && !line.starts_with("--- ") {
-                selection.deletions.push(LineRange {
-                    start: old_line,
-                    end: old_line,
-                });
+                selection
+                    .deletions
+                    .push(LineRange::new(old_line, old_line).unwrap());
                 old_line += 1;
             } else if line.starts_with('+') && !line.starts_with("+++ ") {
-                selection.additions.push(LineRange {
-                    start: new_line,
-                    end: new_line,
-                });
+                selection
+                    .additions
+                    .push(LineRange::new(new_line, new_line).unwrap());
                 new_line += 1;
             }
         }
@@ -777,10 +758,7 @@ mod tests {
 
     /// Single lines: removed ones by their old number, added ones by their new one.
     fn lines(deletions: &[u64], additions: &[u64]) -> LineSelection {
-        let single = |line: &u64| LineRange {
-            start: *line,
-            end: *line,
-        };
+        let single = |line: &u64| LineRange::new(*line, *line).unwrap();
         LineSelection {
             deletions: deletions.iter().map(single).collect(),
             additions: additions.iter().map(single).collect(),
@@ -1276,15 +1254,9 @@ mod tests {
 
     #[test]
     fn refuses_a_line_numbered_0() {
-        let fx = Fixture::new();
-        fx.create_repo("lines-zero");
-        smol::block_on(async {
-            let repo = fx.repos.open("lines-zero").await.unwrap();
-            let error = stage_lines_of(&repo, "f.txt", None, false, "", lines(&[0], &[]))
-                .await
-                .unwrap_err();
-            assert!(matches!(error, Error::InvalidInput(_)), "{error:?}");
-        });
+        // Refused as the input's parsed: a `LineSelection` is of `LineRange`s.
+        let error = LineRange::new(0, 0).unwrap_err();
+        assert!(matches!(error, Error::InvalidInput(_)), "{error:?}");
     }
 
     // Staging lines, in any combination.

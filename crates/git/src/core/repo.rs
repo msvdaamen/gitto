@@ -14,26 +14,35 @@ use std::time::Duration;
 
 use futures::future::BoxFuture;
 
-use super::errors::{Error, Result};
+use super::errors::{Error, RepositoryListError, Result};
 use super::git_dirs::real_path;
 use super::runner::{
     CommitGraphs, IndexRefreshes, RunOptions, ShownStatuses, WriteQueue, lock, network_options,
     os_args, run_git_bytes,
 };
+use crate::input::RepositoryId;
 
 /// Finds the folder of a repository that's been added to Gitto, by its id (TS's
-/// `RepositoryService.getRepository`). A function `Fn(&str) -> Option<PathBuf>` is one.
+/// `RepositoryService.getRepository`). A function `Fn(&RepositoryId) -> Option<PathBuf>`, which
+/// can't fail, is one.
 pub trait RepositoryLookup: Send + Sync + 'static {
-    /// The folder of the repository with `repository_id`; `None` if there's none.
-    fn repository_path<'a>(&'a self, repository_id: &'a str) -> BoxFuture<'a, Option<PathBuf>>;
+    /// The folder of the repository with `repository_id`; `None` if there's none. Fails if Gitto's
+    /// list of repositories couldn't be read, as its database is locked, say, saying why.
+    fn repository_path<'a>(
+        &'a self,
+        repository_id: &'a RepositoryId,
+    ) -> BoxFuture<'a, Result<Option<PathBuf>, RepositoryListError>>;
 }
 
 impl<F> RepositoryLookup for F
 where
-    F: Fn(&str) -> Option<PathBuf> + Send + Sync + 'static,
+    F: Fn(&RepositoryId) -> Option<PathBuf> + Send + Sync + 'static,
 {
-    fn repository_path<'a>(&'a self, repository_id: &'a str) -> BoxFuture<'a, Option<PathBuf>> {
-        Box::pin(std::future::ready(self(repository_id)))
+    fn repository_path<'a>(
+        &'a self,
+        repository_id: &'a RepositoryId,
+    ) -> BoxFuture<'a, Result<Option<PathBuf>, RepositoryListError>> {
+        Box::pin(std::future::ready(Ok(self(repository_id))))
     }
 }
 
@@ -82,11 +91,14 @@ impl GitRepos {
 
     /// The repository, looked up by its id and checked to be a folder every time: one that's
     /// removed from Gitto, or whose folder is gone, is refused with why
-    /// (`Error::RepositoryNotFound`, `Error::FolderNotFound`). What's kept for it is made once.
-    pub async fn open(&self, repository_id: &str) -> Result<Repo> {
-        let Some(path) = self.inner.lookup.repository_path(repository_id).await else {
+    /// (`Error::RepositoryNotFound`, `Error::FolderNotFound`), and so is any if the list of
+    /// repositories couldn't be read (`Error::RepositoryList`). What's kept for it is made once.
+    ///
+    /// The UI opens repositories through `GitApi::call`, which also checks the installed git.
+    pub(crate) async fn open(&self, repository_id: &RepositoryId) -> Result<Repo> {
+        let Some(path) = self.inner.lookup.repository_path(repository_id).await? else {
             return Err(Error::RepositoryNotFound {
-                repository_id: repository_id.to_owned(),
+                repository_id: repository_id.clone(),
             });
         };
         // Checked up front: git can't start in a missing folder.
@@ -624,6 +636,34 @@ mod tests {
                 "{error:?}"
             );
         });
+    }
+
+    #[test]
+    fn rejects_every_repository_when_the_list_cant_be_read() {
+        use crate::core::errors::{ApiCode, ListAction};
+
+        struct Locked;
+
+        impl RepositoryLookup for Locked {
+            fn repository_path<'a>(
+                &'a self,
+                _: &'a RepositoryId,
+            ) -> BoxFuture<'a, Result<Option<PathBuf>, RepositoryListError>> {
+                let locked = std::io::Error::other("database is locked");
+                let error = RepositoryListError::new(ListAction::Read, &locked);
+                Box::pin(std::future::ready(Err(error)))
+            }
+        }
+
+        let error = smol::block_on(GitRepos::new(Locked).open(&RepositoryId::generate()))
+            .err()
+            .unwrap();
+        assert!(matches!(error, Error::RepositoryList(_)), "{error:?}");
+        assert_eq!(error.api(), ApiCode::InternalServerError);
+        assert_eq!(
+            error.to_string(),
+            "Gitto couldn't read its list of repositories: database is locked."
+        );
     }
 
     #[test]

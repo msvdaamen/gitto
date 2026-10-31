@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use crate::features::operation::schema::OperationKind;
 use crate::features::remote::blockers::{PullBlocker, PushBlocker};
+use crate::input::RepositoryId;
 
 /// What the git crate's functions return.
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -65,10 +66,11 @@ impl ApiCode {
         }
     }
 
-    /// Whether this is a bug to report rather than something to tell the user.
+    /// Whether this is a bug to report rather than something to tell the user: git failing in a
+    /// way Gitto doesn't expect, or input that the UI shouldn't have sent, which is the UI's bug.
     pub fn is_bug(self) -> bool {
         match self {
-            ApiCode::InternalServerError => true,
+            ApiCode::InternalServerError | ApiCode::BadRequest => true,
             ApiCode::NotFound
             | ApiCode::PreconditionFailed
             | ApiCode::Conflict
@@ -76,7 +78,6 @@ impl ApiCode {
             | ApiCode::Forbidden
             | ApiCode::UnsupportedMediaType
             | ApiCode::UnprocessableContent
-            | ApiCode::BadRequest
             | ApiCode::PushRewritten
             | ApiCode::PushBehind => false,
         }
@@ -230,8 +231,6 @@ impl Integration {
 /// [`Error::RebaseBlocked`], whose messages say it for each).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IntegrationBlocker {
-    /// The ref to merge, or rebase onto, isn't a branch's, e.g. a tag's.
-    NotABranch { reference: String },
     /// A merge, rebase, cherry-pick, revert or `git am` is under way: `operation`, as the user is
     /// told it, e.g. `cherry-pick`.
     OperationUnderWay { operation: String },
@@ -255,7 +254,6 @@ impl IntegrationBlocker {
     pub fn message(&self, integration: Integration) -> String {
         let verb = integration.as_str();
         match self {
-            IntegrationBlocker::NotABranch { reference } => format!("{reference} isn't a branch."),
             IntegrationBlocker::OperationUnderWay { operation } => {
                 format!("A {operation} is under way. Finish or abort it, then {verb}.")
             }
@@ -606,7 +604,11 @@ pub enum Error {
 
     /// No repository with that id has been added to Gitto.
     #[error("Repository not found.")]
-    RepositoryNotFound { repository_id: String },
+    RepositoryNotFound { repository_id: RepositoryId },
+
+    /// Gitto's list of repositories couldn't be read, to find one by its id: a bug, said with why.
+    #[error("{0}")]
+    RepositoryList(RepositoryListError),
 
     /// The repository's folder has been moved or deleted.
     #[error("{path} no longer exists.")]
@@ -674,7 +676,7 @@ impl Error {
             Error::NotUtf8 => UnsupportedMediaType,
             Error::LinesNotStageable(_) => UnprocessableContent,
             Error::InvalidInput(_) => BadRequest,
-            Error::Bug(_) | Error::Io(_) => InternalServerError,
+            Error::RepositoryList(_) | Error::Bug(_) | Error::Io(_) => InternalServerError,
         }
     }
 
@@ -703,6 +705,12 @@ impl Error {
     }
 }
 
+impl From<RepositoryListError> for Error {
+    fn from(error: RepositoryListError) -> Self {
+        Error::RepositoryList(error)
+    }
+}
+
 impl From<GitError> for Error {
     fn from(error: GitError) -> Self {
         Error::Git(error)
@@ -712,6 +720,61 @@ impl From<GitError> for Error {
 impl From<io::Error> for Error {
     fn from(error: io::Error) -> Self {
         Error::Io(Arc::new(error))
+    }
+}
+
+/// What was being done to Gitto's list of repositories (see [`RepositoryListError`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListAction {
+    Read,
+    Update,
+}
+
+impl fmt::Display for ListAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            ListAction::Read => "read",
+            ListAction::Update => "update",
+        })
+    }
+}
+
+/// Gitto's list of repositories couldn't be read or changed, e.g. as its database is locked or the
+/// disk is full: said with the database's reason. Ported from `packages/repository`'s
+/// `RepositoryListError`, which `RepositoryService` rejected with; a [`RepositoryLookup`] returns
+/// it when it can't look a repository up, and it reaches the UI with its message, as a bug.
+///
+/// [`RepositoryLookup`]: crate::core::repo::RepositoryLookup
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("Gitto couldn't {action} its list of repositories: {reason}")]
+pub struct RepositoryListError {
+    pub action: ListAction,
+    /// Why, ending in a full stop.
+    pub reason: String,
+}
+
+impl RepositoryListError {
+    /// The list couldn't be `action`ed as `cause` says: by the innermost error it wraps, which is
+    /// the database's own (the outer ones wrap it in the query that failed).
+    pub fn new(action: ListAction, cause: &(dyn std::error::Error + 'static)) -> Self {
+        let mut inner = cause;
+        while let Some(source) = inner.source() {
+            inner = source;
+        }
+        RepositoryListError {
+            action,
+            reason: sentence(&inner.to_string()),
+        }
+    }
+}
+
+/// `message`, trimmed, with a full stop if it has none.
+fn sentence(message: &str) -> String {
+    let message = message.trim();
+    if message.ends_with(['.', '!', '?']) {
+        message.to_owned()
+    } else {
+        format!("{message}.")
     }
 }
 
@@ -883,6 +946,58 @@ mod tests {
     }
 
     #[test]
+    fn bugs_are_internal_errors_and_input_the_ui_shouldnt_have_sent() {
+        assert!(ApiCode::InternalServerError.is_bug());
+        assert!(ApiCode::BadRequest.is_bug());
+        for code in [
+            ApiCode::NotFound,
+            ApiCode::PreconditionFailed,
+            ApiCode::Conflict,
+            ApiCode::PayloadTooLarge,
+            ApiCode::Forbidden,
+            ApiCode::UnsupportedMediaType,
+            ApiCode::UnprocessableContent,
+            ApiCode::PushRewritten,
+            ApiCode::PushBehind,
+        ] {
+            assert!(!code.is_bug(), "{code:?}");
+        }
+    }
+
+    #[test]
+    fn repository_list_errors_say_why_the_database_failed() {
+        /// An error wrapping another, as a query's wraps the database's.
+        #[derive(Debug)]
+        struct Query(io::Error);
+
+        impl fmt::Display for Query {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("Failed query: select * from repositories")
+            }
+        }
+
+        impl std::error::Error for Query {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+
+        let locked = Query(io::Error::other("database is locked"));
+        let error = Error::from(RepositoryListError::new(ListAction::Read, &locked));
+        assert_eq!(
+            error.to_string(),
+            "Gitto couldn't read its list of repositories: database is locked."
+        );
+        assert_eq!(error.api(), ApiCode::InternalServerError);
+
+        let full = io::Error::other("disk is full!");
+        assert_eq!(
+            RepositoryListError::new(ListAction::Update, &full).to_string(),
+            "Gitto couldn't update its list of repositories: disk is full!"
+        );
+    }
+
+    #[test]
     fn hints_are_left_out() {
         let error = GitError::new(
             "error: could not apply abc\nhint: Resolve all conflicts manually\nhint: then run",
@@ -937,10 +1052,11 @@ mod tests {
     }
 
     #[test]
-    fn only_internal_errors_are_bugs() {
+    fn only_internal_errors_and_bad_input_are_bugs() {
         assert!(ApiCode::InternalServerError.is_bug());
         assert!(!ApiCode::PushBehind.is_bug());
-        assert!(!ApiCode::BadRequest.is_bug());
+        // Input the UI shouldn't have sent is the UI's bug.
+        assert!(ApiCode::BadRequest.is_bug());
         assert!(Error::Bug("x".into()).api().is_bug());
         assert!(!Error::HeadMoved.api().is_bug());
     }

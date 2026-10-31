@@ -14,12 +14,7 @@ use crate::features::refs::schema::RefKind;
 use crate::features::remote::commands::list_remotes;
 use crate::features::remote::remote_name::remote_of;
 use crate::features::stash::commands::{pop_newest, stash_changes};
-
-/// Whether `value` has something but whitespace, as JavaScript's `/\S/` has it: Unicode's
-/// whitespace, and the byte order mark.
-pub(crate) fn has_non_space(value: &str) -> bool {
-    value.chars().any(|c| !c.is_whitespace() && c != '\u{feff}')
-}
+use crate::input::{BranchName, BranchRef};
 
 /// Without the hint pointing to `git help check-ref-format` after an invalid name.
 pub(crate) fn no_ref_syntax_advice() -> RunOptions {
@@ -49,12 +44,11 @@ pub(crate) fn not_a_branch(reference: &str) -> Error {
 /// pulling it doesn't pull that one's commits into it. Git refuses a name that's taken or not a
 /// valid branch name, and to switch in the middle of a merge or rebase, saying so.
 ///
-/// Fails with `Error::InvalidInput` if `name` is only whitespace, or `from` isn't a branch that's
-/// there, as the UI's input is checked.
-pub async fn create_branch(repo: &Repo, name: &str, from: Option<&str>) -> Result<()> {
-    if !has_non_space(name) {
-        return Err(Error::InvalidInput("The name is empty.".to_owned()));
-    }
+/// Fails with `Error::InvalidInput` if `from` isn't a branch that's there, as the UI's input is
+/// checked.
+pub async fn create_branch(repo: &Repo, name: &BranchName, from: Option<&BranchRef>) -> Result<()> {
+    let name = name.as_str();
+    let from = from.map(BranchRef::as_str);
     let args: Vec<String> = ["switch", "--no-track", "--create", name]
         .map(str::to_owned)
         .to_vec();
@@ -123,7 +117,8 @@ static WOULD_LOSE: LazyLock<Regex> = LazyLock::new(|| {
 /// the middle of a merge or rebase, saying so.
 ///
 /// Fails with `Error::InvalidInput` if `ref` isn't a branch, as the UI's input is checked.
-pub async fn switch_branch(repo: &Repo, reference: &str) -> Result<()> {
+pub async fn switch_branch(repo: &Repo, reference: &BranchRef) -> Result<()> {
+    let reference = reference.as_str();
     let target = branch_target(reference)?;
     let root = repo.path().to_owned();
     // One write, so nothing else changes the branches, the stashes or the working tree halfway.
@@ -384,7 +379,7 @@ mod tests {
     use std::time::{Duration, UNIX_EPOCH};
 
     use super::*;
-    use crate::test_support::{Fixture, git, wait_for, write_script};
+    use crate::test_support::{Fixture, git, valid, wait_for, write_script};
 
     /// A repository with `a.txt` committed on `main`, which `repos` opens as `name`.
     fn create_committed_repo(fx: &Fixture, name: &str) -> PathBuf {
@@ -433,7 +428,9 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("changes").await.unwrap();
-            create_branch(&repo, "feature/new", None).await.unwrap();
+            create_branch(&repo, &valid("feature/new"), None)
+                .await
+                .unwrap();
         });
         assert_eq!(
             git(&path, ["symbolic-ref", "--short", "HEAD"]),
@@ -456,7 +453,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("upstream-clone").await.unwrap();
-            create_branch(&repo, "topic", None).await.unwrap();
+            create_branch(&repo, &valid("topic"), None).await.unwrap();
         });
         assert_eq!(
             git(
@@ -475,7 +472,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("unborn").await.unwrap();
-            create_branch(&repo, "other", None).await.unwrap();
+            create_branch(&repo, &valid("other"), None).await.unwrap();
         });
         assert_eq!(git(&path, ["symbolic-ref", "--short", "HEAD"]), "other");
         assert_eq!(git(&path, ["status", "--porcelain"]), "?? a.txt");
@@ -488,14 +485,20 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("names").await.unwrap();
 
-            let error = create_branch(&repo, "main", None).await.unwrap_err();
+            let error = create_branch(&repo, &valid("main"), None)
+                .await
+                .unwrap_err();
             assert!(
                 message(&error).contains("fatal: a branch named 'main' already exists"),
                 "{error}"
             );
-            let error = create_branch(&repo, "a..b", None).await.unwrap_err();
+            let error = create_branch(&repo, &valid("a..b"), None)
+                .await
+                .unwrap_err();
             assert_eq!(message(&error), "fatal: 'a..b' is not a valid branch name");
-            let error = create_branch(&repo, "--force", None).await.unwrap_err();
+            let error = create_branch(&repo, &valid("--force"), None)
+                .await
+                .unwrap_err();
             assert!(
                 message(&error).contains("not a valid branch name"),
                 "{error}"
@@ -505,14 +508,10 @@ mod tests {
 
     #[test]
     fn refuses_a_name_thats_only_whitespace() {
-        let fx = Fixture::new();
-        create_committed_repo(&fx, "blank");
-        smol::block_on(async {
-            let repo = fx.repos.open("blank").await.unwrap();
-            let error = create_branch(&repo, " \t", None).await.unwrap_err();
-            assert!(matches!(error, Error::InvalidInput(_)), "{error:?}");
-            assert_eq!(message(&error), "The name is empty.");
-        });
+        // Refused as the input's parsed: `create_branch` takes a `BranchName`.
+        let error = BranchName::parse(" \t").unwrap_err();
+        assert!(matches!(error, Error::InvalidInput(_)), "{error:?}");
+        assert_eq!(message(&error), "The name is empty.");
     }
 
     // Switching branches.
@@ -528,7 +527,9 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("switch-along").await.unwrap();
-            switch_branch(&repo, "refs/heads/other").await.unwrap();
+            switch_branch(&repo, &valid("refs/heads/other"))
+                .await
+                .unwrap();
         });
         assert_eq!(git(&path, ["symbolic-ref", "--short", "HEAD"]), "other");
         assert_eq!(git(&path, ["status", "--porcelain"]), before);
@@ -541,7 +542,9 @@ mod tests {
         let path = create_branched_repo(&fx, "switch-refresh");
         smol::block_on(async {
             let repo = fx.repos.open("switch-refresh").await.unwrap();
-            switch_branch(&repo, "refs/heads/other").await.unwrap();
+            switch_branch(&repo, &valid("refs/heads/other"))
+                .await
+                .unwrap();
 
             // Git compares them in whole seconds: until the index is written in a later second than
             // the files, it can't tell from it whether they changed since.
@@ -571,7 +574,9 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("switch-merge").await.unwrap();
-            switch_branch(&repo, "refs/heads/other").await.unwrap();
+            switch_branch(&repo, &valid("refs/heads/other"))
+                .await
+                .unwrap();
         });
         assert_eq!(git(&path, ["symbolic-ref", "--short", "HEAD"]), "other");
         assert_eq!(read(&path, "a.txt"), "other\na\nmine\n");
@@ -588,7 +593,9 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("switch-conflict").await.unwrap();
-            let error = switch_branch(&repo, "refs/heads/other").await.unwrap_err();
+            let error = switch_branch(&repo, &valid("refs/heads/other"))
+                .await
+                .unwrap_err();
             assert!(
                 message(&error).contains(
                     "Switched to other, but your uncommitted changes conflict with it, so they're kept in the stash."
@@ -618,7 +625,9 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("switch-untracked").await.unwrap();
-            let error = switch_branch(&repo, "refs/heads/other").await.unwrap_err();
+            let error = switch_branch(&repo, &valid("refs/heads/other"))
+                .await
+                .unwrap_err();
             assert!(message(&error).contains("kept in the stash"), "{error}");
         });
         assert_eq!(git(&path, ["symbolic-ref", "--short", "HEAD"]), "other");
@@ -637,14 +646,14 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("switch-refused").await.unwrap();
 
-            let error = switch_branch(&repo, "refs/heads/missing")
+            let error = switch_branch(&repo, &valid("refs/heads/missing"))
                 .await
                 .unwrap_err();
             assert!(
                 message(&error).contains("invalid reference: missing"),
                 "{error}"
             );
-            let error = switch_branch(&repo, "refs/heads/--force")
+            let error = switch_branch(&repo, &valid("refs/heads/--force"))
                 .await
                 .unwrap_err();
             assert!(message(&error).contains("invalid reference"), "{error}");
@@ -665,7 +674,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("switch-tracked").await.unwrap();
-            switch_branch(&repo, "refs/remotes/origin/other")
+            switch_branch(&repo, &valid("refs/remotes/origin/other"))
                 .await
                 .unwrap();
         });
@@ -686,7 +695,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("switch-remote").await.unwrap();
-            switch_branch(&repo, "refs/remotes/origin/other")
+            switch_branch(&repo, &valid("refs/remotes/origin/other"))
                 .await
                 .unwrap();
         });
@@ -709,7 +718,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("switch-remote-conflict").await.unwrap();
-            let error = switch_branch(&repo, "refs/remotes/origin/other")
+            let error = switch_branch(&repo, &valid("refs/remotes/origin/other"))
                 .await
                 .unwrap_err();
             assert!(
@@ -747,7 +756,9 @@ mod tests {
         // a file there.
         smol::block_on(async {
             let repo = fx.repos.open("switch-folder").await.unwrap();
-            let error = switch_branch(&repo, "refs/heads/file").await.unwrap_err();
+            let error = switch_branch(&repo, &valid("refs/heads/file"))
+                .await
+                .unwrap_err();
             assert!(message(&error).contains("kept in the stash"), "{error}");
         });
         assert_eq!(git(&path, ["symbolic-ref", "--short", "HEAD"]), "file");
@@ -765,7 +776,9 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("switch-tag").await.unwrap();
-            let error = switch_branch(&repo, "refs/heads/other").await.unwrap_err();
+            let error = switch_branch(&repo, &valid("refs/heads/other"))
+                .await
+                .unwrap_err();
             assert!(
                 message(&error).starts_with("Switched to other, but"),
                 "{error}"
@@ -785,7 +798,9 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("switch-hook").await.unwrap();
-            let error = switch_branch(&repo, "refs/heads/other").await.unwrap_err();
+            let error = switch_branch(&repo, &valid("refs/heads/other"))
+                .await
+                .unwrap_err();
             assert!(message(&error).contains("hook failed"), "{error}");
         });
         assert_eq!(git(&path, ["symbolic-ref", "--short", "HEAD"]), "other");
@@ -805,7 +820,9 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("switch-hook-conflict").await.unwrap();
-            let error = switch_branch(&repo, "refs/heads/other").await.unwrap_err();
+            let error = switch_branch(&repo, &valid("refs/heads/other"))
+                .await
+                .unwrap_err();
             assert!(matches!(error, Error::ChangesStashed(_)), "{error:?}");
             let message = error.to_string();
             assert!(
@@ -851,7 +868,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("switch-slash").await.unwrap();
-            switch_branch(&repo, "refs/remotes/up/stream/other")
+            switch_branch(&repo, &valid("refs/remotes/up/stream/other"))
                 .await
                 .unwrap();
         });
@@ -872,12 +889,12 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("switch-several").await.unwrap();
 
-            switch_branch(&repo, "refs/remotes/origin/other")
+            switch_branch(&repo, &valid("refs/remotes/origin/other"))
                 .await
                 .unwrap();
             assert_eq!(git(&path, ["symbolic-ref", "--short", "HEAD"]), "other");
             git(&path, ["switch", "-q", "a-mine"]);
-            switch_branch(&repo, "refs/remotes/origin/other")
+            switch_branch(&repo, &valid("refs/remotes/origin/other"))
                 .await
                 .unwrap();
             assert_eq!(git(&path, ["symbolic-ref", "--short", "HEAD"]), "a-mine");
@@ -897,7 +914,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("create-from").await.unwrap();
-            create_branch(&repo, "topic", Some("refs/heads/other"))
+            create_branch(&repo, &valid("topic"), Some(&valid("refs/heads/other")))
                 .await
                 .unwrap();
         });
@@ -917,7 +934,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("create-from-merge").await.unwrap();
-            create_branch(&repo, "topic", Some("refs/heads/other"))
+            create_branch(&repo, &valid("topic"), Some(&valid("refs/heads/other")))
                 .await
                 .unwrap();
         });
@@ -934,7 +951,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("create-from-conflict").await.unwrap();
-            let error = create_branch(&repo, "topic", Some("refs/heads/other"))
+            let error = create_branch(&repo, &valid("topic"), Some(&valid("refs/heads/other")))
                 .await
                 .unwrap_err();
             assert!(
@@ -964,9 +981,13 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("create-from-remote").await.unwrap();
-            create_branch(&repo, "topic", Some("refs/remotes/origin/other"))
-                .await
-                .unwrap();
+            create_branch(
+                &repo,
+                &valid("topic"),
+                Some(&valid("refs/remotes/origin/other")),
+            )
+            .await
+            .unwrap();
         });
         assert_eq!(git(&path, ["symbolic-ref", "--short", "HEAD"]), "topic");
         assert_eq!(
@@ -990,7 +1011,7 @@ mod tests {
 
         smol::block_on(async {
             let repo = fx.repos.open("create-from-taken").await.unwrap();
-            let error = create_branch(&repo, "main", Some("refs/heads/other"))
+            let error = create_branch(&repo, &valid("main"), Some(&valid("refs/heads/other")))
                 .await
                 .unwrap_err();
             assert!(
@@ -1011,8 +1032,14 @@ mod tests {
         smol::block_on(async {
             let repo = fx.repos.open("create-from-other-refs").await.unwrap();
 
-            for from in ["refs/heads/other~1", "refs/heads/missing", "refs/tags/v1"] {
-                let error = create_branch(&repo, "topic", Some(from)).await.unwrap_err();
+            // A tag, or a link to the remote's default branch, is refused as the input's parsed:
+            // `from` is a `BranchRef`.
+            assert!(BranchRef::parse("refs/tags/v1").is_err());
+            assert!(BranchRef::parse("refs/remotes/origin/HEAD").is_err());
+            for from in ["refs/heads/other~1", "refs/heads/missing"] {
+                let error = create_branch(&repo, &valid("topic"), Some(&valid(from)))
+                    .await
+                    .unwrap_err();
                 assert!(matches!(error, Error::InvalidInput(_)), "{error:?}");
                 assert_eq!(error.to_string(), format!("{from} isn't a branch."));
             }

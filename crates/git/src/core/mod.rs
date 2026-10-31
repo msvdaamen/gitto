@@ -1,6 +1,6 @@
 //! What every feature builds on: running git ([`runner`]), the repositories it runs in
 //! ([`repo`]), and the errors it all returns ([`errors`]). Ported from `packages/git/src/core/`.
-//! The oRPC middleware isn't ported: the UI calls the features directly.
+//! The oRPC middleware is `crate::api::GitApi`, which the UI calls the features through.
 //!
 //! How git is run (`runner`'s functions, the queues and caches) is the crate's own: the features
 //! run git through a [`repo::Repo`].

@@ -444,11 +444,11 @@ mod tests {
     use crate::test_support::conflicts::{
         Sides, commit_files, files, resolve_text, text_conflict, try_git,
     };
-    use crate::test_support::{Fixture, git};
+    use crate::test_support::{Fixture, git, valid};
 
     /// `f.txt`'s contents as the conflict has them.
     async fn conflict_text(repo: &Repo) -> String {
-        let conflict = get_conflict(repo, "f.txt").await.unwrap();
+        let conflict = get_conflict(repo, &valid("f.txt")).await.unwrap();
         conflict
             .file
             .text()
@@ -953,7 +953,7 @@ mod tests {
         commit_files(&path, &files([("f.txt", "committed\n")]), "second");
         smol::block_on(async {
             let repo = fx.repos.open("op-stash").await.unwrap();
-            let popped = pop_stash(&repo, &git(&path, ["rev-parse", "refs/stash"])).await;
+            let popped = pop_stash(&repo, &valid(git(&path, ["rev-parse", "refs/stash"]))).await;
             assert!(matches!(popped, Err(Error::StashConflict(_))), "{popped:?}");
 
             assert_eq!(get_operation(&repo).await.unwrap(), None);

@@ -15,6 +15,8 @@ use super::limits::MAX_BLOB_BYTES;
 use crate::core::errors::{DiskChange, Error, Result};
 use crate::core::repo::Repo;
 use crate::core::runner::{WriteQueue, lock};
+use crate::input::RepoPath;
+use crate::schema::ContentVersion;
 
 /// Where the file at `path` (relative to the repository, as git names it) is on disk, links
 /// followed. Fails with `Error::OutsideRepository` for a path that leads out of the working tree
@@ -95,20 +97,20 @@ fn is_plain(path: &str) -> bool {
 pub struct WorkingTreeFile {
     pub contents: String,
     /// Changes whenever the file's bytes do: what a save checks the file still has.
-    pub version: String,
+    pub version: ContentVersion,
 }
 
 /// The bytes of a file in the working tree, and their version (see `read_working_tree_bytes`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkingTreeBytes {
     pub bytes: Vec<u8>,
-    pub version: String,
+    pub version: ContentVersion,
 }
 
 /// The contents of a file in the working tree, as they are on disk: to show more of its unstaged
 /// changes, which git only has a patch of, and to edit it. Fails with `Error::FileTooLarge` above
 /// `MAX_BLOB_BYTES`, like a blob, and with `Error::NotUtf8` for one that isn't UTF-8.
-pub async fn read_working_tree_file(repo: &Repo, path: &str) -> Result<WorkingTreeFile> {
+pub async fn read_working_tree_file(repo: &Repo, path: &RepoPath) -> Result<WorkingTreeFile> {
     let resolved = resolve_working_tree_path(repo, path).await?;
     let FileBytes { bytes, .. } = read_file(resolved, path, MAX_BLOB_BYTES).await?;
     let version = version_of(&bytes);
@@ -145,7 +147,7 @@ pub async fn scan_working_tree_file(
     path: &str,
     on_chunk: impl FnMut(&[u8]),
     max_bytes: u64,
-) -> Result<Option<String>> {
+) -> Result<Option<ContentVersion>> {
     let Some(resolved) = resolve_file(repo, path).await? else {
         return Ok(None);
     };
@@ -178,7 +180,7 @@ async fn scan(
     mut buffer: Vec<u8>,
     max_bytes: u64,
     mut on_chunk: impl FnMut(&[u8]),
-) -> Result<String> {
+) -> Result<ContentVersion> {
     let mut hash = sha1_smol::Sha1::new();
     let mut total: u64 = 0;
     loop {
@@ -194,7 +196,7 @@ async fn scan(
         hash.update(chunk);
         on_chunk(chunk);
     }
-    Ok(hash.digest().to_string())
+    Ok(ContentVersion::from(hash.digest().to_string()))
 }
 
 /// Where the file at `path` is on disk (see `resolve_working_tree_path`); `None` if none is.
@@ -279,8 +281,8 @@ fn read_at_most(reader: impl Read, len: u64, max_bytes: u64) -> Result<Vec<u8>> 
 }
 
 /// Names `bytes`, the contents of a file in the working tree: what a save checks it still has.
-pub fn version_of(bytes: &[u8]) -> String {
-    sha1_smol::Sha1::from(bytes).hexdigest()
+pub fn version_of(bytes: &[u8]) -> ContentVersion {
+    ContentVersion::from(sha1_smol::Sha1::from(bytes).hexdigest())
 }
 
 /// Saves to the repository's files, one after the other: a later one checks the file an earlier
@@ -293,8 +295,8 @@ struct Saves(WriteQueue<()>);
 /// The version a file was at when Gitto last saved over it, and the one it saved.
 #[derive(Debug, Clone)]
 struct SavedVersion {
-    from: String,
-    to: String,
+    from: ContentVersion,
+    to: ContentVersion,
 }
 
 /// The version each file was at when Gitto last saved over it, and the one it saved, by its path
@@ -332,7 +334,7 @@ impl SavedVersions {
 #[serde(rename_all = "camelCase")]
 pub struct SaveExpectation {
     /// The version of the file that was read to be edited.
-    pub version: String,
+    pub version: ContentVersion,
     /// Saves whatever the file is now.
     pub overwrite: bool,
 }
@@ -351,14 +353,14 @@ pub struct SaveExpectation {
 /// first polled (see `Saves`).
 pub async fn save_working_tree_file(
     repo: &Repo,
-    path: &str,
+    path: &RepoPath,
     contents: &str,
     expected: &SaveExpectation,
-) -> Result<String> {
+) -> Result<ContentVersion> {
     let saved_versions = repo.keep::<SavedVersions>();
     let saves = repo.keep::<Saves>();
     let repo = repo.clone();
-    let path = path.to_owned();
+    let path = path.as_str().to_owned();
     let contents = contents.to_owned();
     let expected = expected.clone();
     // One after the other, in the order they're first polled (see `Saves`).

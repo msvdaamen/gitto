@@ -569,7 +569,7 @@ impl Picked {
     fn new(ranges: &[LineRange]) -> Self {
         let mut ranges: Vec<(u64, u64)> = ranges
             .iter()
-            .map(|range| (range.start, range.end))
+            .map(|range| (range.start(), range.end()))
             .collect();
         ranges.sort_by_key(|&(start, _)| start);
         Picked { ranges, next: 0 }
@@ -603,10 +603,7 @@ mod tests {
 
     /// Picks single lines: removed ones by their old number, added ones by their new one.
     fn pick(deletions: &[u64], additions: &[u64]) -> LineSelection {
-        let single = |line: &u64| LineRange {
-            start: *line,
-            end: *line,
-        };
+        let single = |line: &u64| LineRange::new(*line, *line).unwrap();
         LineSelection {
             deletions: deletions.iter().map(single).collect(),
             additions: additions.iter().map(single).collect(),
@@ -725,11 +722,11 @@ mod tests {
     #[test]
     fn takes_ranges_which_can_overlap_and_come_in_any_order() {
         let selection = LineSelection {
-            deletions: vec![LineRange { start: 3, end: 3 }],
+            deletions: vec![LineRange::new(3, 3).unwrap()],
             additions: vec![
-                LineRange { start: 6, end: 6 },
-                LineRange { start: 2, end: 3 },
-                LineRange { start: 3, end: 3 },
+                LineRange::new(6, 6).unwrap(),
+                LineRange::new(2, 3).unwrap(),
+                LineRange::new(3, 3).unwrap(),
             ],
         };
         assert_eq!(

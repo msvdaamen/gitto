@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::features::diff::schema::ChangedFile;
-use crate::schema::{FileMode, FileStatus};
+use crate::schema::{ContentVersion, FileMode, FileStatus};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -145,7 +145,7 @@ pub struct Uncommitted {
     pub summary: StatusSummary,
     pub changes: WorkingTreeFiles,
     /// Changes whenever anything above does, so a caller can ask to skip a status it already has.
-    pub version: String,
+    pub version: ContentVersion,
 }
 
 /// What `status.get` answers (the contract's output): `{ unchanged: true }` when the caller

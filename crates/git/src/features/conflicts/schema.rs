@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::schema::FileMode;
+use crate::schema::{ContentVersion, FileMode};
 
 /// One side of a conflicted file, as the index has it while it's unmerged: its mode (a file's, a
 /// symbolic link's or a submodule's) and its object.
@@ -29,7 +29,7 @@ pub struct ConflictSides {
 #[serde(rename_all = "camelCase")]
 pub struct ConflictText {
     pub contents: String,
-    pub version: String,
+    pub version: ContentVersion,
 }
 
 /// A conflicted file: its sides, and what's in the working tree at its path.
@@ -48,14 +48,14 @@ pub enum ConflictFile {
     /// Text, conflict markers and all, to resolve its conflicts in.
     Text(ConflictText),
     /// A binary file, which git leaves as ours, without markers. `version` is of what's in it.
-    Binary { version: String },
+    Binary { version: ContentVersion },
     /// A file too large to show (see `MAX_BLOB_BYTES`). `stamp` is when it last changed, which
     /// keeping a side checks, rather than what's in it, which would be read again whenever the
     /// working tree changes.
     TooLarge { stamp: String },
     /// A file that isn't UTF-8 text, which can't be shown or edited as text. `version` is of
     /// what's in it.
-    NotUtf8 { version: String },
+    NotUtf8 { version: ContentVersion },
     /// A path that leads out of the repository, e.g. in a folder that's a link out of it: not
     /// read.
     Outside,
@@ -94,7 +94,7 @@ impl ConflictFile {
 #[serde(rename_all = "camelCase")]
 pub enum FileVersion {
     /// Of what's in it (see `read_working_tree_file`).
-    Content(String),
+    Content(ContentVersion),
     /// Of when it last changed, going by what the file system says of it.
     Stamp(String),
 }

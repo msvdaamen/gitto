@@ -542,7 +542,6 @@ mod tests {
         assert_eq!(Message::parse(" a\n").unwrap().as_str(), " a\n");
         // JS's `\s` has the byte order mark too.
         assert!(Message::parse("\u{feff} ").is_err());
-        assert!(serde_json::from_str::<Message>("\"\"").is_err());
         // Made as the other checked strings are.
         assert_eq!(Message::try_from("Fix").unwrap().as_ref() as &str, "Fix");
     }
