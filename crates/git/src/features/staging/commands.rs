@@ -1089,6 +1089,8 @@ mod tests {
         });
     }
 
+    // Windows has no executable bit: git doesn't see the mode change there (`core.fileMode`).
+    #[cfg(unix)]
     #[test]
     fn leaves_a_change_of_mode_where_it_is() {
         let fx = Fixture::new();
@@ -1097,7 +1099,6 @@ mod tests {
         git(&path, ["add", "."]);
         git(&path, ["commit", "-qm", "first"]);
         fs::write(path.join("run.sh"), "echo b\n").unwrap();
-        #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(path.join("run.sh"), fs::Permissions::from_mode(0o755)).unwrap();
