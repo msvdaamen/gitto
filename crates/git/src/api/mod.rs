@@ -16,7 +16,8 @@
 //! An error reaches the UI as an [`ApiError`], with the code, the message and whether it's a bug,
 //! as the renderer got it. [`GitApi::call`] does it all: opens the repository, runs what's asked
 //! with it, and turns a failure into an `ApiError`, logged, and reported if it's a bug. A call is
-//! cancelled by dropping its future, which isn't a failure, as an aborted request wasn't.
+//! cancelled by dropping its future, which isn't a failure, as an aborted request wasn't; but a
+//! write that's started runs to its end all the same, as TS's did (see `Repo::write`).
 
 mod error;
 mod handlers;
@@ -101,6 +102,10 @@ impl GitApi {
     /// `procedure` (e.g. `branch.merge`, as the renderer called it): what it resolves to, or why
     /// it failed as the UI shows it, logged and, if it's a bug, reported. `task` isn't run if the
     /// repository can't be opened. Logs how long it took when tracing (`GITTO_TRACE=1`).
+    ///
+    /// Its writes take their place in line as `task` gets to them, once the repository is open,
+    /// not when it's called: of two calls, the one made first doesn't always write first. To keep
+    /// their order, await the one before making the next.
     pub fn call<T, F, Fut>(
         &self,
         procedure: &'static str,

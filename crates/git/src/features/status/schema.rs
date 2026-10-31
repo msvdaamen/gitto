@@ -15,7 +15,8 @@ pub struct StatusFile {
     pub staged: Option<FileStatus>,
     /// Change in the working tree relative to the index; `None` when there's nothing unstaged.
     pub unstaged: Option<FileStatus>,
-    /// How a conflicted file conflicts (see [`StatusConflict`]); only on conflicted files.
+    /// How a conflicted file conflicts (see [`StatusConflict`]); only on conflicted files, and not
+    /// on one git told of in a way that isn't known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conflict: Option<StatusConflict>,
 }
