@@ -306,7 +306,11 @@ mod tests {
             };
             futures::join!(second, release);
         });
-        let warnings = logged();
+        // Only this test's: the others log warnings too, as the api's failures.
+        let warnings: Vec<String> = logged()
+            .into_iter()
+            .filter(|warning| warning.contains("\"waited-long\""))
+            .collect();
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(
             warnings[0].starts_with("a write to \"waited-long\" has waited 0.05s for its turn"),
