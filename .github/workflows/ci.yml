@@ -116,3 +116,13 @@ jobs:
       - run: cargo clippy -p gitto-git --all-targets --locked -- -D warnings
       - run: cargo test -p gitto-git --locked
 
+  # Known vulnerabilities in the Rust dependencies, and ones that are unmaintained or yanked, from
+  # RustSec's advisories (see deny.toml). Needs no build.
+  rust-advisories:
+    name: Rust advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories
