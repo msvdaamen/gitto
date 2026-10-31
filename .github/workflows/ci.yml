@@ -130,7 +130,7 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - run: cargo test -p gitto-git -p gitto-db -p gitto-repository -p gitto-ui --locked
+      - run: cargo test -p gitto-git -p gitto-db -p gitto-repository -p gitto-ui-logic --locked
 
   # Known vulnerabilities in the Rust dependencies, and ones that are unmaintained or yanked, from
   # RustSec's advisories (see deny.toml). Needs no build.
