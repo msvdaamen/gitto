@@ -592,7 +592,9 @@ mod tests {
     use crate::core::repo::{How, Observed};
     use crate::features::remote::blockers::PullBlocker;
     use crate::test_support::conflicts::try_git;
-    use crate::test_support::{Fixture, git, write_script};
+    #[cfg(unix)]
+    use crate::test_support::write_script;
+    use crate::test_support::{Fixture, git};
 
     /// Writes `content` to `file` in `path` and commits it with `message`.
     fn commit(path: &Path, file: &str, content: &str, message: &str) {
