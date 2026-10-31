@@ -9,7 +9,7 @@ use futures::future::BoxFuture;
 use super::limits::{MAX_BLOB_BYTES, MAX_PATCH_BYTES};
 use super::parse::parse_diff;
 use super::schema::ChangedFile;
-use super::working_tree::{check_working_tree_path, decode_utf8};
+use super::working_tree::check_working_tree_path;
 use crate::core::errors::{Error, Result};
 use crate::core::repo::{GitCommand, Repo};
 use crate::core::runner::RunOptions;
@@ -240,8 +240,9 @@ pub const PORCELAIN_DIFF: [&str; 4] = [
 ];
 
 /// The contents of a file, by its object name; fails with `Error::FileTooLarge` above
-/// `MAX_BLOB_BYTES`, and with `Error::NotUtf8` for one that isn't UTF-8, as
-/// `read_working_tree_file` does for the other side of a diff.
+/// `MAX_BLOB_BYTES`. One that isn't UTF-8 is read as well as it can be, with replacement characters
+/// for what isn't, as TS did: a blob is only shown, never edited and saved. The working tree's
+/// side, which is, isn't read that way (see `read_working_tree_file`).
 pub async fn get_blob(repo: &Repo, oid: &FullSha) -> Result<String> {
     let size = repo
         .read(["cat-file", "-s", "--end-of-options", oid.as_str()])
@@ -263,7 +264,8 @@ pub async fn get_blob(repo: &Repo, oid: &FullSha) -> Result<String> {
             options,
         )
         .await?;
-    decode_utf8(&blob)
+    // A byte order mark is kept, as `decode_utf8` keeps it.
+    Ok(String::from_utf8_lossy(&blob).into_owned())
 }
 
 #[cfg(test)]
@@ -493,15 +495,14 @@ mod tests {
     }
 
     #[test]
-    fn wont_read_a_file_that_isnt_utf_8_as_text() {
+    fn reads_a_file_that_isnt_utf_8_as_well_as_it_can() {
         let fx = Fixture::new();
         smol::block_on(async {
             let repo = fx.create_history_repo("latin-1-blob").await;
             let oid = write_blob(repo.path(), b"caf\xe9\n");
-            let error = get_blob(&repo, &oid).await.unwrap_err();
-            assert!(matches!(error, Error::NotUtf8), "{error:?}");
-            let oid = write_blob(repo.path(), "café\n".as_bytes());
-            assert_eq!(get_blob(&repo, &oid).await.unwrap(), "café\n");
+            assert_eq!(get_blob(&repo, &oid).await.unwrap(), "caf\u{fffd}\n");
+            let oid = write_blob(repo.path(), "\u{feff}café\n".as_bytes());
+            assert_eq!(get_blob(&repo, &oid).await.unwrap(), "\u{feff}café\n");
         });
     }
 
