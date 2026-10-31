@@ -30,8 +30,9 @@ pub const PATHS_FROM_STDIN: [&str; 2] = ["--pathspec-from-file=-", "--pathspec-f
 /// Stages the files at `paths`, whole. A conflicted one is marked resolved by that, so it isn't
 /// while it still has conflict markers: fails with `Error::ConflictMarkers`, and stages none.
 pub async fn stage(repo: &Repo, paths: &Paths) -> Result<()> {
-    let paths = paths.as_slice();
-    repo.exclusive(|run| async move {
+    let (owned, paths) = (repo.clone(), paths.clone());
+    repo.exclusive(move |run| async move {
+        let (repo, paths) = (&owned, paths.as_slice());
         refuse_conflict_markers(repo, &run, Some(paths)).await?;
         let mut args = vec!["add"];
         args.extend(PATHS_FROM_STDIN);
@@ -66,8 +67,9 @@ pub fn unstage_args(has_head: bool) -> Vec<&'static str> {
 /// Stages every change, untracked files included; conflicts too, unless markers are left (see
 /// `stage`).
 pub async fn stage_all(repo: &Repo) -> Result<()> {
-    repo.exclusive(|run| async move {
-        refuse_conflict_markers(repo, &run, None).await?;
+    let owned = repo.clone();
+    repo.exclusive(move |run| async move {
+        refuse_conflict_markers(&owned, &run, None).await?;
         run.run(["add", "-A"]).await?;
         Ok(())
     })
@@ -213,7 +215,10 @@ async fn apply_lines(
 ) -> Result<String> {
     let action = side.action();
     let verb = action.verb();
-    repo.exclusive(|run| async move {
+    let (owned, file, version, selection) =
+        (repo.clone(), file.clone(), *version, selection.clone());
+    repo.exclusive(move |run| async move {
+        let (repo, file, version, selection) = (&owned, &file, &version, &selection);
         let patch = side.read_bytes(repo, file).await?;
         if PatchVersion::of(&String::from_utf8_lossy(&patch)) != *version {
             return Err(Error::PatchChanged { action: verb });
@@ -276,8 +281,10 @@ mod tests {
     use crate::features::status::schema::StatusFile;
     use crate::features::status::schema::WorkingTreeFiles;
     use crate::schema::FileStatus::{self, *};
+    #[cfg(unix)]
+    use crate::test_support::non_utf8_names;
     use crate::test_support::status::status_entries;
-    use crate::test_support::{Fixture, git, non_utf8_names, valid};
+    use crate::test_support::{Fixture, git, valid};
 
     fn strings(paths: &[&str]) -> Paths {
         Paths::parse(paths.iter().copied()).unwrap()
@@ -603,42 +610,40 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn unstages_a_file_whose_name_isnt_utf_8() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
         if !non_utf8_names() {
             return;
         }
-        #[cfg(unix)]
-        {
-            use std::ffi::OsStr;
-            use std::os::unix::ffi::OsStrExt;
+        let fx = Fixture::new();
+        let path = fx.create_repo("all-latin1");
+        // "café.txt" in Latin-1: read as UTF-8, its é doesn't come back as the byte it was.
+        let file = path.join(OsStr::from_bytes(b"caf\xe9.txt"));
+        fs::write(&file, "a\n").unwrap();
+        git(&path, ["add", "."]);
+        git(&path, ["commit", "-q", "-m", "First"]);
+        fs::write(&file, "changed\n").unwrap();
+        git(&path, ["add", "."]);
+        smol::block_on(async {
+            let repo = fx.repos.open("all-latin1").await.unwrap();
 
-            let fx = Fixture::new();
-            let path = fx.create_repo("all-latin1");
-            // "café.txt" in Latin-1: read as UTF-8, its é doesn't come back as the byte it was.
-            let file = path.join(OsStr::from_bytes(b"caf\xe9.txt"));
-            fs::write(&file, "a\n").unwrap();
-            git(&path, ["add", "."]);
-            git(&path, ["commit", "-q", "-m", "First"]);
-            fs::write(&file, "changed\n").unwrap();
-            git(&path, ["add", "."]);
-            smol::block_on(async {
-                let repo = fx.repos.open("all-latin1").await.unwrap();
-
-                unstage_all(&repo).await.unwrap();
-                // Nothing staged, and no entry under another name.
-                assert_eq!(git(&path, ["diff", "--cached", "--name-only"]), "");
-                assert_eq!(
-                    git(&path, ["ls-files", "-z"])
-                        .split('\0')
-                        .filter(|name| !name.is_empty())
-                        .count(),
-                    1
-                );
-                // The change is still there, unstaged.
-                assert_ne!(git(&path, ["diff", "--name-only"]), "");
-            });
-        }
+            unstage_all(&repo).await.unwrap();
+            // Nothing staged, and no entry under another name.
+            assert_eq!(git(&path, ["diff", "--cached", "--name-only"]), "");
+            assert_eq!(
+                git(&path, ["ls-files", "-z"])
+                    .split('\0')
+                    .filter(|name| !name.is_empty())
+                    .count(),
+                1
+            );
+            // The change is still there, unstaged.
+            assert_ne!(git(&path, ["diff", "--name-only"]), "");
+        });
     }
 
     #[test]
