@@ -1,0 +1,18 @@
+# cargo-deny's checks of the Rust dependencies, run in CI (see .github/workflows/ci.yml): only the
+# advisories, for known vulnerabilities and crates that are no longer maintained or were yanked.
+# Run it with `cargo deny check advisories`.
+#
+# The ones left out are unmaintained crates that gpui-kit, or what it's built on, depends on: none
+# has a known vulnerability, and they go once it moves off them.
+[advisories]
+ignore = [
+  { id = "RUSTSEC-2024-0436", reason = "paste: finished rather than maintained; gpui-kit and the graphics crates under it use it" },
+  { id = "RUSTSEC-2024-0384", reason = "instant: works as it is; gpui-kit uses it" },
+  { id = "RUSTSEC-2025-0141", reason = "bincode 1: complete, says its team; syntect reads its bundled syntaxes with it, once the app highlights code" },
+  { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile: a wrapper of rustls-pki-types' code now; GPUI's HTTP client uses it" },
+  { id = "RUSTSEC-2026-0192", reason = "ttf-parser: GPUI reads fonts with it" },
+  { id = "RUSTSEC-2026-0206", reason = "rustybuzz: GPUI's SVG rendering (usvg) shapes text with it" },
+  { id = "RUSTSEC-2026-0370", reason = "zvariant: merged into zbus 6; GPUI's Linux accessibility and keyring crates use zbus 5" },
+  { id = "RUSTSEC-2026-0371", reason = "zbus_names: merged into zbus 6, as zvariant" },
+  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: merged into zbus 6, as zvariant" },
+]
