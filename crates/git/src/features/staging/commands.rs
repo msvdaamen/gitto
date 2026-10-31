@@ -42,7 +42,9 @@ fn check_paths(paths: &[String]) -> Result<()> {
 /// while it still has conflict markers: fails with `Error::ConflictMarkers`, and stages none.
 pub async fn stage(repo: &Repo, paths: &[String]) -> Result<()> {
     check_paths(paths)?;
-    repo.exclusive(|run| async move {
+    let (owned, paths) = (repo.clone(), paths.to_vec());
+    repo.exclusive(move |run| async move {
+        let (repo, paths) = (&owned, paths.as_slice());
         refuse_conflict_markers(repo, &run, Some(paths)).await?;
         let mut args = vec!["add"];
         args.extend(PATHS_FROM_STDIN);
@@ -77,8 +79,9 @@ pub fn unstage_args(has_head: bool) -> Vec<&'static str> {
 /// Stages every change, untracked files included; conflicts too, unless markers are left (see
 /// `stage`).
 pub async fn stage_all(repo: &Repo) -> Result<()> {
-    repo.exclusive(|run| async move {
-        refuse_conflict_markers(repo, &run, None).await?;
+    let owned = repo.clone();
+    repo.exclusive(move |run| async move {
+        refuse_conflict_markers(&owned, &run, None).await?;
         run.run(["add", "-A"]).await?;
         Ok(())
     })
@@ -226,7 +229,10 @@ async fn apply_lines(
 ) -> Result<String> {
     let action = side.action();
     let verb = action.verb();
-    repo.exclusive(|run| async move {
+    let (owned, file, version, selection) =
+        (repo.clone(), file.clone(), *version, selection.clone());
+    repo.exclusive(move |run| async move {
+        let (repo, file, version, selection) = (&owned, &file, &version, &selection);
         let patch = side.read_bytes(repo, file).await?;
         if PatchVersion::of(&String::from_utf8_lossy(&patch)) != *version {
             return Err(Error::PatchChanged { action: verb });
