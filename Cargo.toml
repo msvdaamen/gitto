@@ -59,8 +59,9 @@ windows-sys = { version = "0.61.2", features = [
 dirs = "6.0.0"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 
-# apps/app: the GPUI app.
+# apps/app: the GPUI app, and the times its log's lines are written at.
 anyhow = "1.0.104"
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 
 # apps/app's diffs: syntax highlighting as gpui-kit's `syntect` feature does it (the same syntect
 # and syntax set), and the words that changed between a removed line and the line added for it
@@ -82,6 +83,12 @@ two-face = { version = "0.4.5", default-features = false, features = [
 # crates/ui-logic: what the UI works out for itself, e.g. the order of the sidebar's folders.
 indexmap = "2.14.2"
 url = "2.5.8"
+# Relative times in the system's language, as `Intl.RelativeTimeFormat` told them: ICU4X's
+# formatter, with its data compiled in, and the language the system's set to.
+fixed_decimal = { version = "0.7.3", default-features = false }
+icu_experimental = { version = "0.7.0", default-features = false, features = ["compiled_data"] }
+icu_locale_core = { version = "2.4.0", default-features = false }
+sys-locale = "0.3.2"
 
 gitto-db = { path = "crates/db" }
 gitto-git = { path = "crates/git" }

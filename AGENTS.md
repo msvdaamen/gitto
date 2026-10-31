@@ -37,8 +37,9 @@ Gitto is moving to Rust, with a GPUI ([gpui-kit](https://crates.io/crates/gpui-k
   `RepositoryService` is gitto-git's `RepositoryLookup`, so `GitApi::new(service)` opens the
   repositories added to Gitto.
 - `gitto-ui-logic` (`crates/ui-logic`): what `apps/ui/src` works out without Solid or the DOM,
-  for the app's screens: `git/*.ts` outside `git/queries/` in `src/git/`, and `lib/format.ts`. It
-  has no GPUI dependency. The hooks are the app's `state/` (in `gitto-app-data`).
+  for the app's screens: `git/*.ts` outside `git/queries/` in `src/git/`, the model of a diff
+  (`components/repository/diff/*.ts`) in `src/diff/`, and `lib/format.ts`. It has no GPUI
+  dependency. The hooks are the app's `state/` (in `gitto-app-data`).
 
 In `gitto-git`:
 
@@ -54,8 +55,9 @@ In `gitto-git`:
 
 `apps/app` is laid out as `apps/ui/src` is, one module per TS file, in three crates: the app
 (`apps/app/src`), `gitto-app-data` (`apps/app/data`: `data/`, `services/`, `state/`) and
-`gitto-app-kit` (`apps/app/kit`: `ui/`, `theme/`). The app builds on both, and the kit on the data
-crate only for what it shows of it; neither knows of the app's pages or areas.
+`gitto-app-kit` (`apps/app/kit`: `ui/`, `theme/`). The app builds on both; the kit builds on GPUI
+Kit (and `serde_json`) alone, not the data crate: it's given what to show (an error's message, say).
+Neither knows of the app's pages or areas.
 
 - `views/`: the pages (`routes/`) and the window around them. `views/repository.rs` lays out a
   repository's areas and wires them together: the selection, the file on show, the watcher.
@@ -81,18 +83,19 @@ Dev builds optimize the dependencies (`[profile.dev.package."*"]` in the root `C
 is many times slower without, so the first build takes longer, and the app's speed is only judged
 in such a build or a `--release` one.
 
-Building the app on Linux takes libxkbcommon, Wayland and fontconfig's headers
-(`libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libfontconfig-dev`). To run it headless,
-start a display with `Xvfb :99 -screen 0 1400x900x24 &`, and run `cargo run -p app` with
-`DISPLAY=:99` and `GITTO_USER_DATA_DIR` set to a folder of its own. There's no folder picker
+Building the app on Linux takes libxkbcommon, Wayland, fontconfig and FreeType's headers
+(`libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libfontconfig-dev libfreetype-dev`). To run
+it headless, start a display with `Xvfb :99 -screen 0 1400x900x24 &`, and run `cargo run -p app`
+with `DISPLAY=:99` and `GITTO_USER_DATA_DIR` set to a folder of its own. There's no folder picker
 without a desktop portal, so add repositories as rows of that folder's `gitto-app.db`
 (`repositories`: a UUIDv7 `id`, `name`, `path` and `position`), e.g. one
-`.claude/skills/run-app/make-demo-repo.sh` made. Screenshot with `import -window root shot.png` and drive it with `xdotool`. Software
-rendering needs Mesa's Vulkan driver (lavapipe).
+`.claude/skills/run-app/make-demo-repo.sh` made. Screenshot with `import -window root shot.png` and
+drive it with `xdotool`. Software rendering needs Mesa's Vulkan driver (lavapipe).
 
 Porting a TS file: keep its behavior, including error messages, and the reasoning in its doc
 comments, which say why as much as what. Port its tests one for one, as `#[cfg(test)] mod tests`
-in the same file, named after the TS test (`it("rejects unknown repositories")` →
+in the same file, or, once they're many, in a `tests.rs` beside it (`commit_form.rs`'s in
+`commit_form/tests.rs`), named after the TS test (`it("rejects unknown repositories")` →
 `fn rejects_unknown_repositories`). Async tests are plain `#[test]` functions that run
 `smol::block_on`. Async code doesn't use tokio: GPUI has its own executor.
 

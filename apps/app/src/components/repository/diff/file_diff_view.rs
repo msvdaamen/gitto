@@ -644,14 +644,18 @@ impl Render for FileDiffView {
             .child(self.render_header(window, cx))
             .children(self.render_editing_banner(cx))
             .when_some(staging_error, |this, message| {
-                this.child(Notice::new(message).alert().icon(IconName::TriangleAlert))
+                this.child(
+                    Notice::new("staging-error", message)
+                        .alert()
+                        .icon(IconName::TriangleAlert),
+                )
             })
             .when(self.view.conflicted(), |this| {
                 let resolution = self.resolution.clone();
                 this.children(resolution.read(cx).render_banners(&resolution))
             })
             .when_some(files_error, |this, message| {
-                this.child(Notice::new(message))
+                this.child(Notice::new("files-error", message))
             })
             .child(
                 div()

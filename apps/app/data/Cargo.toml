@@ -22,6 +22,7 @@ gitto-ui-logic.workspace = true
 
 anyhow.workspace = true
 async-fs.workspace = true
+chrono.workspace = true
 futures.workspace = true
 log.workspace = true
 serde.workspace = true

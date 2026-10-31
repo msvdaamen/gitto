@@ -471,7 +471,7 @@ impl FileDiffView {
             match self.editing.autosave.read(cx).state().clone() {
                 SaveState::ChangedOnDisk(message) => {
                     banners.push(
-                        Notice::new(message)
+                        Notice::new("changed-on-disk", message)
                             .child(
                                 Button::new("reload-edits")
                                     .ghost()
@@ -498,7 +498,7 @@ impl FileDiffView {
                     )
                 }
                 SaveState::Failed(message) => banners.push(
-                    Notice::new(message)
+                    Notice::new("save-failed", message)
                         .child(
                             Button::new("retry-save")
                                 .ghost()
@@ -518,8 +518,10 @@ impl FileDiffView {
             }
         }
         if let Some(message) = &self.editing.start_error {
-            banners
-                .push(Notice::new(format!("Couldn't edit the file: {message}")).into_any_element());
+            banners.push(
+                Notice::new("edit-failed", format!("Couldn't edit the file: {message}"))
+                    .into_any_element(),
+            );
         }
         banners
     }

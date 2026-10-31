@@ -5,7 +5,7 @@ use super::rows::{HistoryRow, WIP_MESSAGE};
 
 /// Lowercases and trims what was typed in the history search; empty means no search.
 pub fn search_needle(search: &str) -> String {
-    search.trim().to_lowercase()
+    search.trim().chars().flat_map(lowercase).collect()
 }
 
 /// Whether a history row matches `needle` (see [`search_needle`]): a commit by its message, author,
@@ -29,13 +29,14 @@ pub fn matches_search(row: &HistoryRow, needle: &str) -> bool {
     }
 }
 
-/// Whether the text `haystack`, lowercased, contains `needle`, which is lowercase. The text isn't
-/// lowercased into a string of its own: the search runs on every row at each keystroke.
+/// Whether the text `haystack`, lowercased, contains `needle`, which is lowercase (as
+/// [`search_needle`] makes it). The text isn't lowercased into a string of its own: the search runs
+/// on every row at each keystroke.
 pub(crate) fn contains_lowercase<I>(haystack: I, needle: &str) -> bool
 where
     I: Iterator<Item = char> + Clone,
 {
-    let mut rest = haystack.flat_map(char::to_lowercase);
+    let mut rest = haystack.flat_map(lowercase);
     loop {
         let mut candidate = rest.clone();
         if needle.chars().all(|c| candidate.next() == Some(c)) {
@@ -45,6 +46,13 @@ where
             return false;
         }
     }
+}
+
+/// `c` lowercased one character at a time, as the needle and the text both are, with a word's
+/// final sigma (`ς`) as any other (`σ`): lowercasing a whole string makes a final `Σ` a `ς`, one
+/// at a time it's a `σ`, and either should find the other.
+fn lowercase(c: char) -> impl Iterator<Item = char> + Clone {
+    c.to_lowercase().map(|c| if c == 'ς' { 'σ' } else { c })
 }
 
 #[cfg(test)]
@@ -134,5 +142,14 @@ mod tests {
         assert!(contains_lowercase("".chars(), ""));
         assert!(!contains_lowercase("".chars(), "a"));
         assert!(!contains_lowercase("Parse".chars(), "parser"));
+    }
+
+    #[test]
+    fn finds_a_word_ending_in_a_capital_sigma_however_its_typed() {
+        let text = "ΟΔΟΣ ΚΑΙ ΠΟΛΗ";
+        assert!(contains_lowercase(text.chars(), &search_needle("ΟΔΟΣ")));
+        assert!(contains_lowercase(text.chars(), &search_needle("οδος")));
+        assert!(contains_lowercase(text.chars(), &search_needle("οδοσ")));
+        assert!(contains_lowercase("οδος".chars(), &search_needle("ΟΔΟΣ")));
     }
 }

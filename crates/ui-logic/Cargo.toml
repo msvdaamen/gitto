@@ -10,11 +10,16 @@ publish = false
 name = "gitto_ui_logic"
 
 [dependencies]
+fixed_decimal.workspace = true
 gitto-git.workspace = true
+# Relative times in the system's language (see `format::RelativeTimes`).
+icu_experimental.workspace = true
+icu_locale_core.workspace = true
 indexmap.workspace = true
 memchr.workspace = true
 # Diffs: their patches' headers, and the diff of two whole files.
 regex.workspace = true
 similar.workspace = true
+sys-locale.workspace = true
 thiserror.workspace = true
 url.workspace = true

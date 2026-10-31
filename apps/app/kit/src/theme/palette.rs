@@ -6,7 +6,7 @@
 use gpui_kit::Hsla;
 use gpui_kit::component::Colorize as _;
 
-use super::AppTheme;
+use super::{AppTheme, mixed};
 
 /// A color from a hex string in this file, which the tests check all parse.
 fn hex(value: &str) -> Hsla {
@@ -170,8 +170,8 @@ impl Palette {
             coral: hex("#ef7b80"),
             coral_soft: tint("#ef7b80", 0.12),
             shadow: tint("#040207", 0.3),
-            header: bg_soft.mix_oklab(primary, 0.92),
-            footer: bg_soft.mix_oklab(primary, 0.94),
+            header: mixed(bg_soft, 0.92, primary),
+            footer: mixed(bg_soft, 0.94, primary),
             overlay: tint("#0a060e", 0.55),
             ..Palette::shared()
         }
@@ -206,8 +206,8 @@ impl Palette {
             coral: hex("#c24f58"),
             coral_soft: tint("#c24f58", 0.09),
             shadow: tint("#2e213a", 0.12),
-            header: bg_soft.mix_oklab(primary, 0.92),
-            footer: bg_soft.mix_oklab(primary, 0.94),
+            header: mixed(bg_soft, 0.92, primary),
+            footer: mixed(bg_soft, 0.94, primary),
             overlay: tint("#0a060e", 0.35),
             ..Palette::shared()
         }
@@ -259,6 +259,8 @@ impl Palette {
 
 #[cfg(test)]
 mod tests {
+    use gpui_kit::Rgba;
+
     use super::*;
 
     #[test]
@@ -268,6 +270,19 @@ mod tests {
             assert_ne!(palette.bg, Hsla::default());
             assert!(palette.primary_soft.a < 0.2);
         }
+    }
+
+    #[test]
+    fn mixes_the_header_and_footer_tints_in_srgb_as_the_css_does() {
+        // `color-mix(in srgb, #1a151f 92%, #a879df)`, channel by channel.
+        let header = Rgba::from(Palette::dark().header);
+        let expected = |bg: f32, primary: f32| (bg * 0.92 + primary * 0.08) / 255.;
+        assert!((header.r - expected(26., 168.)).abs() < 1e-3);
+        assert!((header.g - expected(21., 121.)).abs() < 1e-3);
+        assert!((header.b - expected(31., 223.)).abs() < 1e-3);
+        let footer = Rgba::from(Palette::light().footer);
+        // `#eeebf1 94%, #7d4fba`.
+        assert!((footer.r - (238. * 0.94 + 125. * 0.06) / 255.).abs() < 1e-3);
     }
 
     #[test]

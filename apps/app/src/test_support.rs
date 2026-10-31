@@ -13,10 +13,12 @@ use gitto_app_data::state::router::Route;
 /// ones; the folder they keep their files in lives as long as what's returned.
 ///
 /// Motion is reduced: dialogs and popovers then open where they end up at once, rather than after
-/// an animation timed by the wall clock, which a test's clicks could land in the middle of.
+/// an animation timed by the wall clock, which a test's clicks could land in the middle of. Times
+/// are told in English ("3 minutes ago"), whatever the system's language.
 pub fn init(cx: &mut TestAppContext, configure: impl FnOnce(Services) -> Services) -> TempDir {
     cx.update(gpui_kit::init);
     cx.update(|cx| cx.set_reduce_motion(true));
+    gitto_ui_logic::format::tell_relative_times_in("en");
     let dir = tempfile::tempdir().expect("a temporary folder");
     let services = configure(Services::in_memory(dir.path()).expect("in-memory services"));
     cx.update(|cx| crate::app::init(services, Route::Home, cx));

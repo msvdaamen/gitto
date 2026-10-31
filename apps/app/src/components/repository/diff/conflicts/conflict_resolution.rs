@@ -702,7 +702,7 @@ impl ConflictResolutionView {
                 .unwrap_or_else(|| describe_conflict(&conflict.sides).to_owned());
             let (ours, theirs) = ((this.clone(), conflict.clone()), (this.clone(), conflict));
             banners.push(
-                Notice::new(message)
+                Notice::new("conflict", message)
                     .icon(IconName::GitMergeConflict)
                     .child(
                         Button::new("keep-all-ours")
@@ -733,7 +733,7 @@ impl ConflictResolutionView {
         }
         if let Some(message) = self.error() {
             banners.push(
-                Notice::new(message.to_owned())
+                Notice::new("conflict-error", message.to_owned())
                     .alert()
                     .icon(IconName::TriangleAlert)
                     .into_any_element(),
