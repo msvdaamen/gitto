@@ -1,5 +1,5 @@
 //! For the repository area's tests: the app's globals, made-up repositories, and what their
-//! entities hold. GPUI tests can't run git (see `gitto_app_data::data`), so all a view shows of a
+//! entities hold. GPUI tests don't run git (see `gitto_app_data::data`), so all a view shows of a
 //! repository is given to its entity first, and stays fresh: what's given isn't asked of git
 //! again, and its git, `NoGit`, panics if it's asked anything.
 

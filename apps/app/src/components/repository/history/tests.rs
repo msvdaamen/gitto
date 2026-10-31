@@ -1,7 +1,7 @@
 //! The history's UI tests, ported from its `*.test.tsx`: `history-keyboard`, `history-paging`,
 //! `history-branches`, `commit-menu` and `history-graph`, and what of `commit-selection` is the
 //! history's. Each renders the real table, with the page's part played by [`Host`]: it takes the
-//! selection the table asks for. GPUI tests can't run git, so the repository's is made up
+//! selection the table asks for. GPUI tests don't run git, so the repository's is made up
 //! ([`Calls`]), and what the table shows is given its data first.
 
 use std::cell::RefCell;

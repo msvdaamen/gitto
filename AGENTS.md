@@ -72,8 +72,10 @@ Neither knows of the app's pages or areas.
 - `state/` (what outlives a view, and the hooks GPUI needs as state), `services/` (what's started
   at launch, in the `Services` global), and `theme/` (`index.css`).
 
-GPUI tests can't run git: a view's test gives the repository's entity what it shows first
-(`components/repository/test_support.rs`), and fakes what changes it with a `RepositoryGit`.
+GPUI tests don't run git, as their scheduler doesn't wait for its processes unless a test lets it
+(`allow_parking`), which only a few of the data layer's do: a view's test gives the repository's
+entity what it shows first (`components/repository/test_support.rs`), and fakes what changes it
+with a `RepositoryGit`.
 
 The app's binary is `gitto`, and the OS knows it by the id and name in `apps/app/src/identity.rs`:
 Windows takes its icon and name from the .exe (`apps/app/build.rs`), and on Linux a build that isn't

@@ -1,6 +1,6 @@
 //! What a [`Repository`](super::repository::Repository) asks git: [`RepositoryGit`], a method
 //! for each thing, which the app answers with gitto-git's [`GitRepo`](gitto_git::GitRepo) and a
-//! test with what it makes up. GPUI tests can't run git (see `crate::data`), so this is where they
+//! test with what it makes up. GPUI tests don't run git (see `crate::data`), so this is where they
 //! step in: a test's implements what its view asks for, and asking it for the rest panics, so a
 //! test can't pass with a part of its view failing to load unnoticed.
 
