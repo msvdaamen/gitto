@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use super::schema::{ConflictKind, Head, Status, StatusConflict, StatusFile};
+use crate::core::trace::TARGET;
 use crate::schema::FileStatus;
 
 /// `git status --porcelain=v2 -z --branch`; see "Porcelain Format Version 2" in git-status(1).
@@ -28,7 +29,8 @@ fn code(letter: Option<char>) -> Option<FileStatus> {
 }
 
 /// The status `git status` printed (see `STATUS_ARGS`). A record git wouldn't print, e.g. one
-/// that's cut short, is left out.
+/// that's cut short, is left out; but a conflicted file is kept, if it can't be told how it
+/// conflicts, so it can't look resolved.
 pub fn parse_status(output: &str) -> Status {
     // `# <key> <value>` lines, e.g. `branch.head` → `main`.
     let mut headers: HashMap<&str, &str> = HashMap::new();
@@ -59,19 +61,15 @@ pub fn parse_status(output: &str) -> Status {
                     })
             }
             // Unmerged: u <XY> <sub> <m1> <m2> <m3> <mW> <h1> <h2> <h3> <path>
-            Some(b'u') => fields::<11>(record).and_then(|fields| {
+            Some(b'u') => fields::<11>(record).map(|fields| {
                 let [_, xy, _, _, ours, theirs, .., path] = fields;
-                Some(StatusFile {
+                StatusFile {
                     path: path.to_owned(),
                     orig_path: None,
                     staged: Some(FileStatus::Conflicted),
                     unstaged: Some(FileStatus::Conflicted),
-                    conflict: Some(StatusConflict {
-                        kind: ConflictKind::from_xy(xy)?,
-                        ours: ours.parse().ok()?,
-                        theirs: theirs.parse().ok()?,
-                    }),
-                })
+                    conflict: conflict(xy, ours, theirs, path),
+                }
             }),
             Some(b'?') => record
                 .strip_prefix("? ")
@@ -133,6 +131,21 @@ fn to_head(oid: &str, name: &str) -> Head {
     Head::Branch {
         name: name.to_owned(),
         sha: oid.to_owned(),
+    }
+}
+
+/// How the conflicted file at `path` conflicts, from its record's `XY` and the modes ours and
+/// theirs have; `None`, warned of, for what git wouldn't print.
+fn conflict(xy: &str, ours: &str, theirs: &str, path: &str) -> Option<StatusConflict> {
+    match (ConflictKind::from_xy(xy), ours.parse(), theirs.parse()) {
+        (Some(kind), Ok(ours), Ok(theirs)) => Some(StatusConflict { kind, ours, theirs }),
+        _ => {
+            log::warn!(
+                target: TARGET,
+                "Not a conflict git would print, for {path:?}: {xy} {ours} {theirs}"
+            );
+            None
+        }
     }
 }
 
@@ -289,8 +302,6 @@ mod tests {
             "#",
             "1 .M N... 100644",
             "u UU N... 100644 100644 100644 100644 ddd eee fff",
-            "u XX N... 100644 100644 100644 100644 ddd eee fff odd.ts",
-            "u UU N... 100644 040000 100644 100644 ddd eee fff tree.ts",
             "? ",
             "1 .M N... 100644 100644 100644 aaa aaa kept.ts",
             // Cut short: without its previous path.
@@ -313,6 +324,36 @@ mod tests {
                 name: "main".into(),
                 sha: String::new()
             }
+        );
+    }
+
+    #[test]
+    fn keeps_a_conflicted_file_it_cant_tell_how_it_conflicts() {
+        let logged = crate::test_support::logged_warnings();
+        let output = [
+            "u XX N... 100644 100644 100644 100644 ddd eee fff odd.ts",
+            "u UU N... 100644 040000 100644 100644 ddd eee fff tree.ts",
+            "",
+        ]
+        .join("\0");
+        use FileStatus::Conflicted;
+        assert_eq!(
+            parse_status(&output).files,
+            [
+                status_file("odd.ts", None, Some(Conflicted), Some(Conflicted)),
+                status_file("tree.ts", None, Some(Conflicted), Some(Conflicted)),
+            ]
+        );
+        let warned: Vec<String> = logged()
+            .into_iter()
+            .filter(|warning| warning.contains("odd.ts") || warning.contains("tree.ts"))
+            .collect();
+        assert_eq!(
+            warned,
+            [
+                r#"Not a conflict git would print, for "odd.ts": XX 100644 100644"#,
+                r#"Not a conflict git would print, for "tree.ts": UU 040000 100644"#,
+            ]
         );
     }
 }

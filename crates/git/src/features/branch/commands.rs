@@ -59,7 +59,9 @@ pub async fn create_branch(repo: &Repo, name: &BranchName, from: Option<&BranchR
     branch_target(from)?;
     let root = repo.path().to_owned();
     // One write, so nothing else changes the branches, the stashes or the working tree halfway.
-    repo.exclusive(|run| async move {
+    let (from, name) = (from.to_owned(), name.to_owned());
+    repo.exclusive(move |run| async move {
+        let (from, name) = (from.as_str(), name.as_str());
         // That ref itself, rather than git reading `from` as a revision, like `refs/heads/main~3`.
         if !is_ref(&run, from).await? {
             return Err(not_a_branch(from));
@@ -120,7 +122,9 @@ pub async fn switch_branch(repo: &Repo, reference: &BranchRef) -> Result<()> {
     let target = branch_target(reference)?;
     let root = repo.path().to_owned();
     // One write, so nothing else changes the branches, the stashes or the working tree halfway.
-    repo.exclusive(|run| async move {
+    let reference = reference.to_owned();
+    repo.exclusive(move |run| async move {
+        let reference = reference.as_str();
         let args = switch_args(&run, reference, &target).await?;
         switch_taking_changes(&run, &root, args, &target.name, RunOptions::default()).await
     })

@@ -1,7 +1,6 @@
 //! Reading the log. Ported from `history/parse.ts`.
 
 use super::schema::{Commit, CommitRef, CommitRefKind};
-use crate::core::errors::{Error, Result};
 use crate::core::trace::TARGET;
 use crate::features::refs::parse::parse_ref_name;
 
@@ -13,14 +12,17 @@ const FIELDS: usize = 9;
 /// [`FIELDS`] entries make up one commit. None of the fields can contain NUL.
 pub const LOG_FORMAT: &str = "--format=%H%x00%P%x00%an%x00%ae%x00%at%x00%ct%x00%D%x00%s%x00%b";
 
-/// Seconds since the epoch, as git prints them, in milliseconds; `Error::Bug` for anything else,
-/// which git doesn't print.
-pub(crate) fn millis(seconds: &str) -> Result<i64> {
-    let parsed: i64 = seconds
-        .trim()
-        .parse()
-        .map_err(|_| Error::Bug(format!("Not a time from git: {seconds:?}")))?;
-    Ok(parsed.saturating_mul(1000))
+/// Seconds since the epoch, as git prints them, in milliseconds. Anything else, which git doesn't
+/// print, is warned of and read as the epoch: one bad date shouldn't fail all that's read with it
+/// (a page of the log, say), and a commit left out would break the graph of the ones around it.
+pub(crate) fn millis(seconds: &str) -> i64 {
+    match seconds.trim().parse::<i64>() {
+        Ok(parsed) => parsed.saturating_mul(1000),
+        Err(_) => {
+            log::warn!(target: TARGET, "Not a time from git: {seconds:?}");
+            0
+        }
+    }
 }
 
 /// Warns of `rest`, the fields at the end of `what` git printed (e.g. `log`) that make up no entry
@@ -31,9 +33,8 @@ pub(crate) fn warn_of_fields_left(what: &str, rest: &[&str]) {
     }
 }
 
-/// The commits in the output of `log -z` with [`LOG_FORMAT`]; `Error::Bug` for a date git wouldn't
-/// print.
-pub fn parse_log(output: &str) -> Result<Vec<Commit>> {
+/// The commits in the output of `log -z` with [`LOG_FORMAT`].
+pub fn parse_log(output: &str) -> Vec<Commit> {
     let fields: Vec<&str> = output.split('\0').collect();
     let (commits, rest) = fields.as_chunks::<FIELDS>();
     warn_of_fields_left("log", rest);
@@ -50,22 +51,20 @@ pub fn parse_log(output: &str) -> Result<Vec<Commit>> {
                 refs,
                 subject,
                 body,
-            ]| {
-                Ok(Commit {
-                    sha: sha.trim().to_owned(),
-                    parents: if parents.is_empty() {
-                        Vec::new()
-                    } else {
-                        parents.split(' ').map(str::to_owned).collect()
-                    },
-                    author_name: (*author_name).to_owned(),
-                    author_email: (*author_email).to_owned(),
-                    authored_at: millis(authored_at)?,
-                    committed_at: millis(committed_at)?,
-                    refs: parse_decorations(refs),
-                    subject: (*subject).to_owned(),
-                    body: body.trim().to_owned(),
-                })
+            ]| Commit {
+                sha: sha.trim().to_owned(),
+                parents: if parents.is_empty() {
+                    Vec::new()
+                } else {
+                    parents.split(' ').map(str::to_owned).collect()
+                },
+                author_name: (*author_name).to_owned(),
+                author_email: (*author_email).to_owned(),
+                authored_at: millis(authored_at),
+                committed_at: millis(committed_at),
+                refs: parse_decorations(refs),
+                subject: (*subject).to_owned(),
+                body: body.trim().to_owned(),
             },
         )
         .collect()
@@ -158,7 +157,7 @@ mod tests {
         let output = commits.concat().join("\0");
 
         assert_eq!(
-            parse_log(&output).unwrap(),
+            parse_log(&output),
             [
                 Commit {
                     sha: "bbb".into(),
@@ -217,7 +216,7 @@ mod tests {
         ];
 
         assert_eq!(
-            parse_log(&output.join("\0")).unwrap()[0].refs,
+            parse_log(&output.join("\0"))[0].refs,
             [
                 commit_ref(CommitRefKind::Head, "HEAD", "HEAD", false),
                 commit_ref(CommitRefKind::Local, "main", "refs/heads/main", false),
@@ -227,7 +226,7 @@ mod tests {
 
     #[test]
     fn returns_nothing_for_an_empty_log() {
-        assert_eq!(parse_log("").unwrap(), []);
+        assert_eq!(parse_log(""), []);
     }
 
     #[test]
@@ -242,9 +241,9 @@ mod tests {
         };
         let commit = ["aaa", "", "Ada", "ada@example.com", "1", "1", "", "S", ""];
         let mut output = commit.join("\0") + "\0";
-        assert_eq!(parse_log(&output).unwrap().len(), 1);
+        assert_eq!(parse_log(&output).len(), 1);
         output += "bbb\0cut off";
-        assert_eq!(parse_log(&output).unwrap().len(), 1);
+        assert_eq!(parse_log(&output).len(), 1);
         assert_eq!(
             cut_off(),
             [r#"log ended in fields that make up no entry of it: ["bbb", "cut off"]"#]
@@ -252,11 +251,35 @@ mod tests {
     }
 
     #[test]
-    fn says_a_date_git_wouldnt_print_is_a_bug() {
-        let output = ["aaa", "", "Ada", "ada@example.com", "", "1", "", "S", ""];
-        let error = parse_log(&output.join("\0")).unwrap_err();
-        assert!(matches!(error, Error::Bug(_)), "{error:?}");
-        assert_eq!(millis(" 12\n").unwrap(), 12_000);
+    fn keeps_a_commit_with_a_date_git_wouldnt_print_at_the_epoch() {
+        let logged = crate::test_support::logged_warnings();
+        let commits = [
+            [
+                "aaa",
+                "",
+                "Ada",
+                "ada@example.com",
+                "soon",
+                "1",
+                "",
+                "S",
+                "",
+            ],
+            ["bbb", "", "Ada", "ada@example.com", "2", "2", "", "T", ""],
+        ];
+        let log = parse_log(&commits.concat().join("\0"));
+        assert_eq!(
+            log.iter()
+                .map(|commit| (commit.sha.as_str(), commit.authored_at, commit.committed_at))
+                .collect::<Vec<_>>(),
+            [("aaa", 0, 1000), ("bbb", 2000, 2000)]
+        );
+        assert!(
+            logged().contains(&r#"Not a time from git: "soon""#.to_owned()),
+            "{:?}",
+            logged()
+        );
+        assert_eq!(millis(" 12\n"), 12_000);
     }
 
     #[test]

@@ -1,4 +1,5 @@
-//! Watching a folder and what's in it, on `notify`: what TS's `@parcel/watcher` `subscribe` did.
+//! Watching a folder and what's in it: what TS's `@parcel/watcher` `subscribe` did. On Linux with
+//! inotify directly (see `super::linux`), elsewhere on `notify`.
 //!
 //! Like it, this leaves out the paths it's told to ignore: they're never walked or watched, and
 //! nothing is reported from them. On Linux (inotify), where each folder is watched on its own,
@@ -7,17 +8,17 @@
 //! from them.
 
 use std::collections::HashSet;
-use std::io;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
 use futures::future::BoxFuture;
-use notify::event::ModifyKind;
-use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::core::errors::{Error, Result};
 use crate::core::runner::{lock, spawn_detached};
+
+#[cfg(target_os = "linux")]
+pub(super) use super::linux::subscribe;
 
 /// What a subscription reports of one of its roots.
 #[derive(Debug)]
@@ -35,11 +36,22 @@ pub(super) enum Events {
 /// Told what a subscription reports of one of its roots, from the watcher's thread.
 pub(super) type OnEvents = Box<dyn FnMut(Events) + Send + 'static>;
 
+/// Asked which of the folders created in a root since it was watched (absolute paths) to leave
+/// out, with all that's in them, before they're walked and watched; from the watcher's thread,
+/// which waits for it. Only on Linux, where new folders are walked.
+pub(super) type LeaveOut = Box<dyn FnMut(&[PathBuf]) -> Vec<PathBuf> + Send + 'static>;
+
 /// A folder a subscription watches, and what's in it but `ignore` (absolute paths), telling
 /// `on_events` what changes in it: TS's `subscribe(dir, callback, { ignore })`.
 pub(super) struct Root {
     pub dir: PathBuf,
     pub ignore: Vec<PathBuf>,
+    /// The names of folders, anywhere in it, whose contents are left out as `ignore`'s are, e.g.
+    /// `.git` for nested repositories. The folder itself still counts.
+    pub ignore_in: &'static [&'static str],
+    /// Asked about new folders, if it's given (see `LeaveOut`).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub leave_out: Option<LeaveOut>,
     pub on_events: OnEvents,
     /// Whether the subscription goes without it if it isn't there, e.g. as it was deleted.
     pub optional: bool,
@@ -81,62 +93,73 @@ impl Drop for Subscription {
     }
 }
 
-/// `notify` watches a whole tree at once here, rather than each folder on its own.
-const WATCHES_TREES: bool = cfg!(any(target_os = "macos", target_os = "windows"));
-
-/// Watches `roots` with `notify` (see the module's docs): one watcher, so one inotify instance and
-/// one thread of notify's on Linux, however many roots.
-pub(super) fn subscribe(roots: Vec<Root>) -> BoxFuture<'static, Result<Subscription>> {
-    Box::pin(async move {
-        // Walking a big tree takes a while.
-        let tree = blocking::unblock(move || Tree::watch(roots)).await?;
-        Ok(Subscription::new(move || {
-            Box::pin(blocking::unblock(move || drop(tree)))
-        }))
-    })
-}
-
-/// The roots being watched; dropping it stops the watcher.
-struct Tree {
-    watcher: Arc<Mutex<Option<RecommendedWatcher>>>,
-}
-
-impl Drop for Tree {
-    fn drop(&mut self) {
-        let watcher = lock(&self.watcher).take();
-        drop(watcher);
-    }
-}
-
 /// A root's folder, and the paths it leaves out, with all that's in them.
-struct Ignored {
-    root: PathBuf,
+pub(super) struct Ignored {
+    pub root: PathBuf,
     paths: HashSet<PathBuf>,
+    /// New folders left out since it was watched (see `LeaveOut`).
+    left_out: Mutex<HashSet<PathBuf>>,
+    /// See `Root::ignore_in`.
+    ignore_in: &'static [&'static str],
 }
 
 impl Ignored {
-    fn contains(&self, path: &Path) -> bool {
-        for ancestor in path.ancestors() {
-            if self.paths.contains(ancestor) {
+    pub fn new(root: PathBuf, paths: Vec<PathBuf>, ignore_in: &'static [&'static str]) -> Self {
+        Ignored {
+            root,
+            paths: paths.into_iter().collect(),
+            left_out: Mutex::new(HashSet::new()),
+            ignore_in,
+        }
+    }
+
+    /// Whether `path` is left out: it's ignored, or in a folder that is, or in one whose contents
+    /// are (see `Root::ignore_in`).
+    pub fn contains(&self, path: &Path) -> bool {
+        let left_out = lock(&self.left_out);
+        for (depth, ancestor) in path.ancestors().enumerate() {
+            if self.paths.contains(ancestor) || left_out.contains(ancestor) {
                 return true;
             }
             if ancestor == self.root {
                 break;
             }
+            if depth > 0 && self.ignores_in(ancestor) {
+                return true;
+            }
         }
         false
+    }
+
+    /// Whether the folder `folder` isn't walked into: it's left out, or only its contents are.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn skips(&self, folder: &Path) -> bool {
+        self.contains(folder) || (folder != self.root && self.ignores_in(folder))
+    }
+
+    /// Leaves out the folders `folders`, new since it was watched, with all that's in them.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn leave_out(&self, folders: &[PathBuf]) {
+        lock(&self.left_out).extend(folders.iter().cloned());
+    }
+
+    fn ignores_in(&self, folder: &Path) -> bool {
+        let name = folder.file_name();
+        self.ignore_in
+            .iter()
+            .any(|ignored| name == Some(OsStr::new(ignored)))
     }
 }
 
 /// The roots of a subscription, to tell which one a change is in.
-struct Roots {
+pub(super) struct Roots {
     /// By the roots' index.
-    ignored: Vec<Ignored>,
+    pub ignored: Vec<Ignored>,
 }
 
 impl Roots {
     /// The index of the root `path` is in: the innermost, if it's in several.
-    fn of(&self, path: &Path) -> Option<usize> {
+    pub fn of(&self, path: &Path) -> Option<usize> {
         self.ignored
             .iter()
             .enumerate()
@@ -146,182 +169,136 @@ impl Roots {
     }
 }
 
-impl Tree {
-    fn watch(roots: Vec<Root>) -> Result<Tree> {
-        let mut ignored = Vec::with_capacity(roots.len());
-        let mut on_events = Vec::with_capacity(roots.len());
-        let mut optional = Vec::with_capacity(roots.len());
-        for root in roots {
-            ignored.push(Ignored {
-                root: root.dir,
-                paths: root.ignore.into_iter().collect(),
-            });
-            on_events.push(root.on_events);
-            optional.push(root.optional);
-        }
-        let roots = Arc::new(Roots { ignored });
-        let on_events = Arc::new(Mutex::new(on_events));
-        // New folders, to watch (from another thread: the watcher's waits for its event handler),
-        // with the index of the root they're in.
-        let (created, new_folders) = mpsc::channel::<(usize, PathBuf)>();
-        let handler = {
-            let (roots, on_events) = (Arc::clone(&roots), Arc::clone(&on_events));
-            move |event: notify::Result<notify::Event>| {
-                handle(event, &roots, &on_events, &created);
-            }
-        };
-        let mut watcher =
-            RecommendedWatcher::new(handler, notify::Config::default()).map_err(watch_error)?;
-        for (root, optional) in roots.ignored.iter().zip(optional) {
-            if optional && !root.root.is_dir() {
-                continue;
-            }
-            if WATCHES_TREES {
-                watcher
-                    .watch(&root.root, RecursiveMode::Recursive)
-                    .map_err(watch_error)?;
-            } else {
-                watch_folders(&mut watcher, &root.root, root, true)?;
-            }
-        }
-        let watcher = Arc::new(Mutex::new(Some(watcher)));
-        if !WATCHES_TREES {
-            let watcher = Arc::clone(&watcher);
-            std::thread::Builder::new()
-                .name("gitto-watch".into())
-                .spawn(move || {
-                    // Ends once the watcher is stopped: its handler, with `created`, is dropped.
-                    while let Ok((root, folder)) = new_folders.recv() {
-                        let mut watcher = lock(&watcher);
-                        let Some(watcher) = watcher.as_mut() else {
-                            break;
-                        };
-                        if let Err(error) =
-                            watch_folders(watcher, &folder, &roots.ignored[root], false)
-                        {
-                            tell_all(&on_events, &error);
-                            break;
-                        }
-                    }
-                })?;
-        }
-        Ok(Tree { watcher })
-    }
-}
-
 /// Tells every root `error`, which stops the watcher for all of them.
-fn tell_all(on_events: &Mutex<Vec<OnEvents>>, error: &Error) {
+pub(super) fn tell_all(on_events: &Mutex<Vec<OnEvents>>, error: &Error) {
     for on_events in lock(on_events).iter_mut() {
         on_events(Events::Failed(error.clone()));
     }
 }
 
-/// Reports what `event` says changed, to the roots it's in, but for what's ignored, and has new
-/// folders watched.
-fn handle(
-    event: notify::Result<notify::Event>,
-    roots: &Roots,
-    on_events: &Mutex<Vec<OnEvents>>,
-    created: &mpsc::Sender<(usize, PathBuf)>,
-) {
-    let event = match event {
-        Ok(event) => event,
-        Err(error) => return tell_all(on_events, &watch_error(error)),
-    };
-    // For the whole watcher, as notify reports it, without paths: every root's, then.
-    if event.need_rescan() {
-        let mut rescanned: Vec<usize> = event
-            .paths
-            .iter()
-            .filter_map(|path| roots.of(path))
-            .collect();
-        if rescanned.is_empty() {
-            rescanned = (0..roots.ignored.len()).collect();
+#[cfg(not(target_os = "linux"))]
+pub(super) use with_notify::subscribe;
+
+/// Watching each root as a whole tree, with `notify`: FSEvents on macOS, `ReadDirectoryChangesW`
+/// on Windows.
+#[cfg(not(target_os = "linux"))]
+mod with_notify {
+    use std::io;
+    use std::sync::{Arc, Mutex};
+
+    use futures::future::BoxFuture;
+    use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+
+    use super::{Events, Ignored, OnEvents, Root, Roots, Subscription, tell_all};
+    use crate::core::errors::{Error, Result};
+    use crate::core::runner::lock;
+
+    /// Watches `roots` with `notify` (see the module's docs): one watcher, however many roots.
+    pub(in super::super) fn subscribe(
+        roots: Vec<Root>,
+    ) -> BoxFuture<'static, Result<Subscription>> {
+        Box::pin(async move {
+            let tree = blocking::unblock(move || Tree::watch(roots)).await?;
+            Ok(Subscription::new(move || {
+                Box::pin(blocking::unblock(move || drop(tree)))
+            }))
+        })
+    }
+
+    /// The roots being watched; dropping it stops the watcher.
+    struct Tree {
+        _watcher: RecommendedWatcher,
+    }
+
+    impl Tree {
+        fn watch(roots: Vec<Root>) -> Result<Tree> {
+            let mut ignored = Vec::with_capacity(roots.len());
+            let mut on_events = Vec::with_capacity(roots.len());
+            let mut optional = Vec::with_capacity(roots.len());
+            for root in roots {
+                // New folders aren't walked, so there's nothing to ask about them.
+                ignored.push(Ignored::new(root.dir, root.ignore, root.ignore_in));
+                on_events.push(root.on_events);
+                optional.push(root.optional);
+            }
+            let roots = Arc::new(Roots { ignored });
+            let on_events = Arc::new(Mutex::new(on_events));
+            let handler = {
+                let roots = Arc::clone(&roots);
+                move |event: notify::Result<notify::Event>| handle(event, &roots, &on_events)
+            };
+            let mut watcher =
+                RecommendedWatcher::new(handler, notify::Config::default()).map_err(watch_error)?;
+            for (root, optional) in roots.ignored.iter().zip(optional) {
+                if optional && !root.root.is_dir() {
+                    continue;
+                }
+                watcher
+                    .watch(&root.root, RecursiveMode::Recursive)
+                    .map_err(watch_error)?;
+            }
+            Ok(Tree { _watcher: watcher })
         }
-        rescanned.sort_unstable();
-        rescanned.dedup();
+    }
+
+    /// Reports what `event` says changed, to the roots it's in, but for what's ignored.
+    pub(super) fn handle(
+        event: notify::Result<notify::Event>,
+        roots: &Roots,
+        on_events: &Mutex<Vec<OnEvents>>,
+    ) {
+        let event = match event {
+            Ok(event) => event,
+            Err(error) => return tell_all(on_events, &watch_error(error)),
+        };
+        // For the whole watcher, as notify reports it, without paths: every root's, then.
+        if event.need_rescan() {
+            let mut rescanned: Vec<usize> = event
+                .paths
+                .iter()
+                .filter_map(|path| roots.of(path))
+                .collect();
+            if rescanned.is_empty() {
+                rescanned = (0..roots.ignored.len()).collect();
+            }
+            rescanned.sort_unstable();
+            rescanned.dedup();
+            let mut on_events = lock(on_events);
+            for root in rescanned {
+                on_events[root](Events::Rescan);
+            }
+            return;
+        }
+        // Files being opened, read and closed, as git does all the time, change nothing.
+        if matches!(event.kind, EventKind::Access(_) | EventKind::Other) {
+            return;
+        }
+        let mut changed: Vec<Vec<_>> = vec![Vec::new(); roots.ignored.len()];
+        for path in event.paths {
+            let Some(root) = roots.of(&path) else {
+                continue;
+            };
+            if roots.ignored[root].contains(&path) {
+                continue;
+            }
+            changed[root].push(path);
+        }
         let mut on_events = lock(on_events);
-        for root in rescanned {
-            if !WATCHES_TREES {
-                let _ = created.send((root, roots.ignored[root].root.clone()));
+        for (paths, on_events) in changed.into_iter().zip(on_events.iter_mut()) {
+            if !paths.is_empty() {
+                on_events(Events::Changed(paths));
             }
-            on_events[root](Events::Rescan);
-        }
-        return;
-    }
-    // Files being opened, read and closed, as git does all the time, change nothing.
-    if matches!(event.kind, EventKind::Access(_) | EventKind::Other) {
-        return;
-    }
-    let new = matches!(
-        event.kind,
-        EventKind::Create(_) | EventKind::Modify(ModifyKind::Name(_))
-    );
-    let mut changed: Vec<Vec<PathBuf>> = vec![Vec::new(); roots.ignored.len()];
-    for path in event.paths {
-        let Some(root) = roots.of(&path) else {
-            continue;
-        };
-        if roots.ignored[root].contains(&path) {
-            continue;
-        }
-        if new
-            && !WATCHES_TREES
-            && std::fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_dir())
-        {
-            let _ = created.send((root, path.clone()));
-        }
-        changed[root].push(path);
-    }
-    let mut on_events = lock(on_events);
-    for (paths, on_events) in changed.into_iter().zip(on_events.iter_mut()) {
-        if !paths.is_empty() {
-            on_events(Events::Changed(paths));
         }
     }
-}
 
-/// Watches `folder` and the folders in it, each on its own, but what `ignored` leaves out. Fails
-/// if there are no watches left, or if `folder` can't be watched and it's the `root`; others that
-/// can't, like one that's gone since, are left out.
-fn watch_folders(
-    watcher: &mut RecommendedWatcher,
-    folder: &Path,
-    ignored: &Ignored,
-    root: bool,
-) -> Result<()> {
-    let mut folders = vec![(folder.to_owned(), root)];
-    while let Some((folder, root)) = folders.pop() {
-        if !root && ignored.contains(&folder) {
-            continue;
+    /// A watcher's failure: running out of watches, which the UI can explain, or else a file
+    /// system one (TS's errors from `@parcel/watcher`, uncaught).
+    pub(super) fn watch_error(error: notify::Error) -> Error {
+        match error.kind {
+            notify::ErrorKind::MaxFilesWatch => Error::WatchLimitReached,
+            notify::ErrorKind::Io(error) => Error::from(error),
+            _ => Error::from(io::Error::other(error.to_string())),
         }
-        match watcher.watch(&folder, RecursiveMode::NonRecursive) {
-            Ok(()) => {}
-            Err(error) if root || matches!(error.kind, notify::ErrorKind::MaxFilesWatch) => {
-                return Err(watch_error(error));
-            }
-            Err(_) => continue,
-        }
-        let Ok(entries) = std::fs::read_dir(&folder) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            // Not following links, as the watcher doesn't.
-            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-                folders.push((entry.path(), false));
-            }
-        }
-    }
-    Ok(())
-}
-
-/// A watcher's failure: running out of watches, which the UI can explain, or else a file system
-/// one (TS's errors from `@parcel/watcher`, uncaught).
-fn watch_error(error: notify::Error) -> Error {
-    match error.kind {
-        notify::ErrorKind::MaxFilesWatch => Error::WatchLimitReached,
-        notify::ErrorKind::Io(error) => Error::from(error),
-        _ => Error::from(io::Error::other(error.to_string())),
     }
 }
 
@@ -342,6 +319,8 @@ mod tests {
         let root = Root {
             dir: dir.to_owned(),
             ignore,
+            ignore_in: &[],
+            leave_out: None,
             on_events: Box::new(move |events| match events {
                 Events::Changed(paths) => lock(&told).extend(paths),
                 events => panic!("{events:?}"),
@@ -433,21 +412,80 @@ mod tests {
     }
 
     #[test]
+    fn leaves_out_what_is_in_folders_by_the_names_its_told() {
+        let dir = tempfile::tempdir().unwrap();
+        let root_dir = dunce::canonicalize(dir.path()).unwrap();
+        // A nested repository's.
+        let nested = root_dir.join("nested").join(".git");
+        fs::create_dir_all(nested.join("objects")).unwrap();
+        let (watched, seen) = root(&root_dir, Vec::new());
+        let watched = Root {
+            ignore_in: &[".git"],
+            ..watched
+        };
+        smol::block_on(async {
+            let subscription = subscribe(vec![watched]).await.unwrap();
+            fs::write(nested.join("HEAD"), "x").unwrap();
+            fs::write(nested.join("objects").join("a"), "x").unwrap();
+            // After those, so they'd be seen first.
+            let file = root_dir.join("nested").join("a");
+            fs::write(&file, "x").unwrap();
+            wait_for(Duration::from_secs(5), || lock(&seen).contains(&file)).await;
+
+            subscription.unsubscribe().await;
+            assert!(
+                !lock(&seen)
+                    .iter()
+                    .any(|path| path.starts_with(&nested) && *path != nested),
+                "{:?}",
+                lock(&seen)
+            );
+        });
+    }
+
+    #[test]
+    fn hears_nothing_while_git_reads_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let root_dir = dunce::canonicalize(dir.path()).unwrap();
+        crate::test_support::git(&root_dir, ["init", "-q"]);
+        for folder in ["a/b/c", "d/e", "f"] {
+            fs::create_dir_all(root_dir.join(folder)).unwrap();
+            fs::write(root_dir.join(folder).join("file"), "x").unwrap();
+        }
+        // `root` panics when it's told to rescan.
+        let (watched, seen) = root(&root_dir, vec![root_dir.join(".git")]);
+        smol::block_on(async {
+            let subscription = subscribe(vec![watched]).await.unwrap();
+            for _ in 0..3 {
+                crate::test_support::git(&root_dir, ["status", "--untracked-files=all"]);
+            }
+            fs::write(root_dir.join("last"), "x").unwrap();
+            let last = root_dir.join("last");
+            wait_for(Duration::from_secs(5), || lock(&seen).contains(&last)).await;
+            subscription.unsubscribe().await;
+            assert!(
+                lock(&seen).iter().all(|path| *path == last),
+                "{:?}",
+                lock(&seen)
+            );
+        });
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
     fn running_out_of_watches_is_an_error_of_its_own() {
-        let error = watch_error(notify::Error::new(notify::ErrorKind::MaxFilesWatch));
+        let error = with_notify::watch_error(notify::Error::new(notify::ErrorKind::MaxFilesWatch));
         assert!(matches!(error, Error::WatchLimitReached), "{error:?}");
         assert!(!error.api().is_bug());
     }
 
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn tells_every_root_to_rescan_when_changes_went_unreported() {
         let roots = Roots {
             ignored: ["/a", "/b"]
                 .into_iter()
-                .map(|root| Ignored {
-                    root: PathBuf::from(root),
-                    paths: HashSet::new(),
-                })
+                .map(|root| Ignored::new(PathBuf::from(root), Vec::new(), &[]))
                 .collect(),
         };
         let told = Arc::new(Mutex::new(Vec::new()));
@@ -460,22 +498,12 @@ mod tests {
             })
             .collect();
         let on_events = Mutex::new(on_events);
-        let (created, folders) = mpsc::channel();
-        // As inotify reports `IN_Q_OVERFLOW`.
-        let overflow = notify::Event::new(EventKind::Other).set_flag(notify::event::Flag::Rescan);
-        handle(Ok(overflow), &roots, &on_events, &created);
+        let overflow =
+            notify::Event::new(notify::EventKind::Other).set_flag(notify::event::Flag::Rescan);
+        with_notify::handle(Ok(overflow), &roots, &on_events);
         assert_eq!(
             *lock(&told),
             [(0, "Rescan".to_owned()), (1, "Rescan".to_owned())]
         );
-        let rewalked: Vec<_> = folders.try_iter().collect();
-        if WATCHES_TREES {
-            assert!(rewalked.is_empty());
-        } else {
-            assert_eq!(
-                rewalked,
-                [(0, PathBuf::from("/a")), (1, PathBuf::from("/b"))]
-            );
-        }
     }
 }

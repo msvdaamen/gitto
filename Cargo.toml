@@ -4,6 +4,8 @@ members = ["apps/app", "crates/*"]
 
 [workspace.package]
 edition = "2024"
+# As rust-toolchain.toml has it.
+rust-version = "1.97"
 
 [workspace.dependencies]
 gpui-kit = { version = "0.8.0", features = ["gpui-fast"] }
@@ -19,6 +21,8 @@ event-listener = "5.4.2"
 # Without the executor and its thread pool: tasks run on smol's, or the caller's.
 futures = { version = "0.3.34", default-features = false, features = ["std", "async-await"] }
 futures-lite = "2.6.1"
+# Without its tokio stream: read on a thread of its own.
+inotify = { version = "0.11.5", default-features = false }
 libc = "0.2.191"
 log = { version = "0.4.34", features = ["std"] }
 memchr = "2.8.3"
@@ -31,6 +35,13 @@ smol = "2.0.2"
 tempfile = "3.27.0"
 thiserror = "2.0.21"
 uuid = { version = "1.28.0", features = ["v4", "v7"] }
+# Windows only: running git without a console window, in a job object that stops what it started.
+windows-sys = { version = "0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+] }
 
 # crates/db: Gitto's SQLite database, and where it's kept.
 dirs = "6.0.0"
