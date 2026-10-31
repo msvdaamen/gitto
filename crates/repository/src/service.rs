@@ -147,7 +147,7 @@ mod tests {
 
     fn fixture() -> Fixture {
         let dir = tempfile::tempdir().unwrap();
-        let db = Db::open(dir.path().join("gitto.db")).unwrap();
+        let db = Db::open(dir.path().join("gitto-app.db")).unwrap();
         Fixture {
             service: RepositoryService::new(RepositoryStore::new(db.clone())),
             db,
@@ -429,7 +429,7 @@ mod tests {
         let one = f.add(f.folder("one", true)).unwrap();
         let path = f.folder("two", true);
         // Another connection that holds the write lock, as the Electron app might.
-        let other = rusqlite::Connection::open(f.dir.path().join("gitto.db")).unwrap();
+        let other = rusqlite::Connection::open(f.dir.path().join("gitto-app.db")).unwrap();
         other.execute_batch("BEGIN IMMEDIATE").unwrap();
 
         let locked = "Gitto couldn't update its list of repositories: database is locked.";
