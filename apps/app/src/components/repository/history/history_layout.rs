@@ -197,10 +197,10 @@ impl HistoryLayout {
     }
 
     pub fn get(&self, ix: usize) -> Option<&HistoryRow> {
-        if let Some(wip) = &self.wip {
-            if ix == 0 {
-                return Some(wip);
-            }
+        if let Some(wip) = &self.wip
+            && ix == 0
+        {
+            return Some(wip);
         }
         let part = self
             .starts
