@@ -240,14 +240,7 @@ impl Repository {
             is_uncommitted(&key.source) && kept.as_ref().is_none_or(|kept| kept != key)
         });
         for key in patches {
-            let file = self
-                .patches
-                .get(&key)
-                .and_then(Loaded::data)
-                .map(|patch| patch.file.clone());
-            if let Some(file) = file {
-                waits.extend(self.load_patch(key.source, file, cx));
-            }
+            waits.extend(self.load_patch(key, cx));
         }
         for path in self.conflicts.held_and_drop_rest(|_| true) {
             waits.extend(self.load_conflict(path, cx));

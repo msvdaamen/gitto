@@ -10,7 +10,7 @@ use gitto_git::input::{FullSha, RepoPath, Sha};
 use gitto_git::schema::FileStatus;
 use gpui_kit::{Context, Task};
 
-use super::{Part, Repository, failed, loaded_result};
+use super::{Part, PatchKey, Repository, failed, loaded_result};
 use crate::data::diff::{ChangedFiles, FilesOf};
 use crate::data::error::DataError;
 use crate::data::file_diff::FilePatch;
@@ -61,7 +61,8 @@ impl Repository {
     }
 
     /// Holds the patch of `file` in `source`, loading it unless it's loaded or loading, and
-    /// loading it again as the uncommitted changes change, if it's of those, while it's held.
+    /// loading it again as the uncommitted changes change, if it's of those, while it's held; or as
+    /// `file` changes in a way that has git read it otherwise (see [`ask_patch`](Self::ask_patch)).
     pub fn hold_patch(
         &mut self,
         source: &DiffSource,
@@ -70,9 +71,8 @@ impl Repository {
     ) -> Hold {
         let key = DiffFileKey::new(source, &file.path);
         let hold = self.patches.hold(key.clone());
-        let loaded = self.patches.entry(key);
-        if loaded.wants_load() {
-            drop(self.load_patch(source.clone(), file.clone(), cx));
+        if self.ask_patch(&key, file) || self.patches.entry(key.clone()).wants_load() {
+            drop(self.load_patch(key, cx));
         }
         hold
     }
@@ -86,15 +86,10 @@ impl Repository {
         cx: &mut Context<Self>,
     ) -> Task<Result<FilePatch, DataError>> {
         let key = DiffFileKey::new(source, &file.path);
-        let wait = {
-            let loaded = self.patches.entry(key.clone());
-            if loaded.wants_load() {
-                self.load_patch(source.clone(), file.clone(), cx)
-            } else if loaded.is_fetching() {
-                loaded.wait()
-            } else {
-                None
-            }
+        let wait = if self.ask_patch(&key, file) || self.patches.entry(key.clone()).wants_load() {
+            self.load_patch(key.clone(), cx)
+        } else {
+            self.patches.entry(key.clone()).wait()
         };
         cx.spawn(async move |this, cx| {
             if let Some(wait) = wait {
@@ -104,18 +99,40 @@ impl Repository {
         })
     }
 
+    /// Has the patch at `key` loaded for `file` from now on: as its list has it now, which a view
+    /// shows it for. Whether that has git read it otherwise than before, as its status or the path
+    /// it was renamed from changed (an untracked file whose lines were staged, say): what's loaded,
+    /// or loading, for the file as it was is then out of date, and the load under way is dropped.
+    fn ask_patch(&mut self, key: &PatchKey, file: &ChangedFile) -> bool {
+        let read_otherwise = self
+            .patches
+            .ask(key.clone(), file.clone())
+            .is_some_and(|before| {
+                before.status != file.status || before.orig_path != file.orig_path
+            });
+        if read_otherwise {
+            let loaded = self.patches.entry(key.clone());
+            loaded.drop_load();
+            loaded.mark_stale();
+        }
+        read_otherwise
+    }
+
+    /// Loads the patch at `key`, of the file it was last asked for.
     pub(super) fn load_patch(
         &mut self,
-        source: DiffSource,
-        file: ChangedFile,
+        key: PatchKey,
         cx: &mut Context<Self>,
     ) -> Option<oneshot::Receiver<()>> {
-        let key = DiffFileKey::new(&source, &file.path);
         self.patches.entry(key.clone());
+        let at = key.clone();
         self.start(
             Part::Patches,
-            move |repo| repo.patches.get_mut(&key),
-            move |repo, _| repo.fetch_file_patch(&source, &file),
+            move |repo| repo.patches.get_mut(&at),
+            move |repo, _| match repo.patches.asked(&key) {
+                Some(file) => repo.fetch_file_patch(&key.source, file),
+                None => failed(DataError::msg("No file was asked for.")),
+            },
             cx,
         )
     }

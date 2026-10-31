@@ -25,6 +25,7 @@ use futures::channel::oneshot;
 use futures::future::{BoxFuture, join_all};
 use gitto_git::Page;
 use gitto_git::features::conflicts::schema::Conflict;
+use gitto_git::features::diff::schema::ChangedFile;
 use gitto_git::features::history::schema::Commit;
 use gitto_git::features::operation::schema::Operation;
 use gitto_git::features::overview::schema::Overview;
@@ -204,7 +205,9 @@ pub struct Repository {
     push_target: Loaded<PushTarget>,
     overview: Loaded<Overview>,
     pushed_to: Keyed<String, Option<String>>,
-    patches: Keyed<PatchKey, FilePatch>,
+    /// Each with the file it's of, as the view last asked for it: its status and the path it was
+    /// renamed from say how git reads it.
+    patches: Keyed<PatchKey, FilePatch, ChangedFile>,
     conflicts: Keyed<String, Conflict>,
     /// Files' contents at a version, by their object id, which never change. Only a few are kept:
     /// one can be megabytes, it's only read to fill in a patch, which keeps what it needs of it,
@@ -375,9 +378,11 @@ impl Repository {
     }
 
     /// Puts `patch` in place of the patch of the file at `path` in `source`, and of a load of it
-    /// under way, keeping what it says of the file; whether there was one to replace.
+    /// under way, as of the file as it was last asked for; whether there was one to replace.
     pub(crate) fn replace_patch(&mut self, source: &DiffSource, path: &str, patch: &str) -> bool {
-        let Some(loaded) = self.patches.get_mut(&DiffFileKey::new(source, path)) else {
+        let key = DiffFileKey::new(source, path);
+        let file = self.patches.asked(&key).cloned();
+        let Some(loaded) = self.patches.get_mut(&key) else {
             return false;
         };
         let Some(last) = loaded.data().cloned() else {
@@ -385,6 +390,7 @@ impl Repository {
         };
         loaded.cancel();
         loaded.set(FilePatch {
+            file: file.unwrap_or(last.file),
             patch: Arc::from(patch),
             ..last
         });
@@ -393,8 +399,9 @@ impl Repository {
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_patch(&mut self, source: &DiffSource, patch: FilePatch, cx: &mut Context<Self>) {
-        self.patches
-            .set(DiffFileKey::new(source, &patch.file.path), patch);
+        let key = DiffFileKey::new(source, &patch.file.path);
+        self.patches.ask(key.clone(), patch.file.clone());
+        self.patches.set(key, patch);
         self.changed(Part::Patches, cx);
     }
 
@@ -590,6 +597,8 @@ fn loaded_result<T: Clone>(loaded: Option<&Loaded<T>>) -> Result<T, DataError> {
 mod tests {
     use std::cell::{Cell, RefCell};
 
+    use gitto_git::PatchVersion;
+    use gitto_git::features::staging::schema::LineSelection;
     use gitto_git::features::status::schema::{
         Head, StatusCounts, StatusReply, StatusSummary, Unchanged, WorkingTreeFiles,
     };
@@ -599,6 +608,7 @@ mod tests {
     use super::*;
     use crate::data::changes::{Scope, Then};
     use crate::data::history::NEXT_PAGE;
+    use crate::data::staging::StageAction;
 
     fn repository_id() -> RepositoryId {
         RepositoryId::parse("01890a5d-ac96-774b-bcce-b302099a8057").unwrap()
@@ -987,6 +997,79 @@ mod tests {
         cx.run_until_parked();
         let patch = opened.now_or_never().unwrap().unwrap();
         assert_eq!(&*patch.patch, "after");
+    }
+
+    #[gpui_kit::test]
+    fn loads_a_held_patch_as_git_reads_the_file_now_once_its_status_changed(
+        cx: &mut TestAppContext,
+    ) {
+        /// Answers each unstaged patch at once, and stages lines; says whether it was asked for
+        /// each as of an untracked file.
+        #[derive(Default)]
+        struct Patches(RefCell<Vec<bool>>);
+
+        impl RepositoryGit for Patches {
+            fn unstaged_file_patch(&self, _: FileInput, untracked: bool) -> GitTask<String> {
+                self.0.borrow_mut().push(untracked);
+                async { Ok("diff\n@@ -1 +1 @@\n-a\n+b\n".to_owned()) }.boxed()
+            }
+
+            fn stage_lines(
+                &self,
+                _: FileInput,
+                untracked: bool,
+                _: PatchVersion,
+                _: LineSelection,
+            ) -> GitTask<String> {
+                self.0.borrow_mut().push(untracked);
+                async { Ok("diff\n@@ -1 +1 @@\n-a\n+c\n".to_owned()) }.boxed()
+            }
+        }
+
+        let git = Rc::new(Patches::default());
+        let shared: Rc<dyn RepositoryGit> = git.clone();
+        let repository = cx.new(|_| Repository::new(repository_id(), shared));
+        let file = |status: &str| -> ChangedFile {
+            serde_json::from_value(serde_json::json!({
+                "path": "a.txt",
+                "status": status,
+                "origPath": null,
+                "additions": 1,
+                "deletions": 0,
+            }))
+            .unwrap()
+        };
+        let _untracked = repository.update(cx, |repository, cx| {
+            repository.hold_patch(&DiffSource::Unstaged, &file("untracked"), cx)
+        });
+        cx.run_until_parked();
+        // Some of its lines were staged: it's in the index, and its list says it's modified.
+        let _modified = repository.update(cx, |repository, cx| {
+            repository.hold_patch(&DiffSource::Unstaged, &file("modified"), cx)
+        });
+        cx.run_until_parked();
+        repository.update(cx, |repository, cx| drop(repository.reload_uncommitted(cx)));
+        cx.run_until_parked();
+        assert_eq!(*git.0.borrow(), [true, false, false]);
+
+        let staged = repository.update(cx, |repository, cx| {
+            let patch = repository.patch(&DiffSource::Unstaged, "a.txt").unwrap();
+            let version = PatchVersion::of(&patch.data().unwrap().patch);
+            let lines = LineSelection {
+                deletions: vec![],
+                additions: vec![],
+            };
+            repository.stage_lines(StageAction::Stage, file("modified"), version, lines, cx)
+        });
+        cx.run_until_parked();
+        assert!(staged.now_or_never().unwrap().is_ok());
+        assert_eq!(*git.0.borrow(), [true, false, false, false]);
+        let shown = repository.read_with(cx, |repository, _| {
+            let patch = repository.patch(&DiffSource::Unstaged, "a.txt").unwrap();
+            patch.data().cloned().unwrap()
+        });
+        assert!(shown.patch.ends_with("+c\n"));
+        assert_eq!(shown.file, file("modified"));
     }
 
     // `git/queries/history.test.ts`.

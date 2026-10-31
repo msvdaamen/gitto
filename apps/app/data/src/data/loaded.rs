@@ -151,6 +151,13 @@ impl<T> Loaded<T> {
         self.again = true;
     }
 
+    /// Drops the load under way, if any, for one of something else to start in its place: what
+    /// waits for it waits for that one.
+    pub(crate) fn drop_load(&mut self) {
+        self.load = None;
+        self.again = false;
+    }
+
     /// A receiver told once the load under way is done; `None` if none is.
     pub fn wait(&mut self) -> Option<oneshot::Receiver<()>> {
         self.load.as_ref()?;

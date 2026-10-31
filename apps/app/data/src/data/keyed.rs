@@ -16,28 +16,31 @@ pub struct Hold {
     _alive: Rc<()>,
 }
 
-struct Entry<T> {
+struct Entry<T, A> {
     loaded: Loaded<T>,
+    /// What it was last asked for with (see [`Keyed::ask`]).
+    asked: Option<A>,
     holds: Vec<Weak<()>>,
     /// When it was last asked for, to drop the least recently used first.
     used: u64,
 }
 
-impl<T> Entry<T> {
+impl<T, A> Entry<T, A> {
     fn is_held(&self) -> bool {
         self.holds.iter().any(|hold| hold.strong_count() > 0)
     }
 }
 
-/// Loaded data by key (see the module's doc).
-pub struct Keyed<K, T> {
-    entries: HashMap<K, Entry<T>>,
+/// Loaded data by key (see the module's doc), and what each was asked for with, `A`, if it's
+/// loaded from more than its key: a file's patch from the file as its list has it, say.
+pub struct Keyed<K, T, A = ()> {
+    entries: HashMap<K, Entry<T, A>>,
     /// How many that nothing holds are kept.
     unheld: usize,
     clock: u64,
 }
 
-impl<K: Clone + Eq + Hash, T> Keyed<K, T> {
+impl<K: Clone + Eq + Hash, T, A> Keyed<K, T, A> {
     /// Keeping `unheld` entries that nothing holds.
     pub fn new(unheld: usize) -> Self {
         Keyed {
@@ -65,11 +68,25 @@ impl<K: Clone + Eq + Hash, T> Keyed<K, T> {
         }
         let entry = self.entries.entry(key).or_insert_with(|| Entry {
             loaded: Loaded::default(),
+            asked: None,
             holds: Vec::new(),
             used: clock,
         });
         entry.used = clock;
         &mut entry.loaded
+    }
+
+    /// What `key`'s entry was last asked for with, which it's loaded from.
+    pub fn asked(&self, key: &K) -> Option<&A> {
+        self.entries.get(key)?.asked.as_ref()
+    }
+
+    /// Has `key`'s entry, made if there's none, loaded from `asked` from now on; what it was asked
+    /// for with before.
+    pub fn ask(&mut self, key: K, asked: A) -> Option<A> {
+        self.entry(key.clone());
+        let entry = self.entries.get_mut(&key).expect("just made");
+        entry.asked.replace(asked)
     }
 
     /// Holds `key`'s entry, made if there's none (see [`Hold`]).
@@ -169,6 +186,15 @@ mod tests {
         drop(held);
         keyed.set("e", 5);
         assert!(keyed.get(&"a").is_none());
+    }
+
+    #[test]
+    fn keeps_what_each_was_asked_for_with() {
+        let mut keyed = Keyed::<&str, i32, &str>::new(8);
+        assert_eq!(keyed.ask("a", "first"), None);
+        assert_eq!(keyed.ask("a", "then"), Some("first"));
+        assert_eq!(keyed.asked(&"a"), Some(&"then"));
+        assert_eq!(keyed.asked(&"b"), None);
     }
 
     #[test]
