@@ -72,6 +72,9 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy -p gitto-git --all-targets --locked -- -D warnings
+      # Without the tests, and the features their dev-dependencies turn on (`test-support`), as
+      # the app is built: code that only builds with those fails here.
+      - run: cargo clippy -p gitto-git --locked -- -D warnings
 
   rust-test:
     name: Rust test
