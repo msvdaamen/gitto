@@ -4,7 +4,7 @@
 //! and passes as a git argument (`AsRef<OsStr>`).
 //!
 //! TS's `RepositoryInput` (a procedure's `repositoryId`) is [`RepositoryId`]: the features take
-//! the `Repo` it opens (`GitRepos::open`) instead.
+//! the `Repo` it opens (`GitRepos::open`) instead. `commit/contract.ts`'s message is [`Message`].
 
 use std::ffi::OsStr;
 use std::fmt;
@@ -26,10 +26,11 @@ macro_rules! checked_string {
             pub fn parse(value: impl Into<String>) -> Result<Self> {
                 let value = value.into();
                 let valid: fn(&str) -> bool = $valid;
+                let message: fn(&str) -> String = $message;
                 if valid(&value) {
                     Ok($name(value))
                 } else {
-                    Err(Error::InvalidInput(format!("{} ({value:?})", $message)))
+                    Err(Error::InvalidInput(message(&value)))
                 }
             }
 
@@ -96,7 +97,7 @@ checked_string!(
     /// A repository's id in Gitto: a UUIDv7, hyphenated.
     RepositoryId,
     is_uuid_v7,
-    "Not a repository id."
+    |value| format!("Not a repository id. ({value:?})")
 );
 
 checked_string!(
@@ -107,22 +108,40 @@ checked_string!(
             .iter()
             .any(|prefix| value.strip_prefix(prefix).is_some_and(|name| !name.is_empty()))
     },
-    "Not a branch."
+    |value| format!("Not a branch. ({value:?})")
 );
 
 checked_string!(
     /// A full or abbreviated commit SHA: 4 to 64 lowercase hex digits.
     Sha,
     |value| (4..=64).contains(&value.len()) && is_lower_hex(value),
-    "Not a commit SHA."
+    |value| format!("Not a commit SHA. ({value:?})")
 );
 
 checked_string!(
     /// A full commit SHA: SHA-1 (40 hex digits), or SHA-256 (64).
     FullSha,
     |value| matches!(value.len(), 40 | 64) && is_lower_hex(value),
-    "Not a full commit SHA."
+    |value| format!("Not a full commit SHA. ({value:?})")
 );
+
+checked_string!(
+    /// A commit's message: anything but only whitespace. Not trimmed: an amend, or a reword,
+    /// commits it exactly as it's sent, ending in a newline or not.
+    Message,
+    has_non_space,
+    |_| "The message is empty.".to_owned()
+);
+
+/// Whether `value` has a character JS's `\S` matches: one that isn't whitespace as JS's `\s` has
+/// it, which is Unicode's but for the next line control (U+0085), and has the byte order mark.
+fn has_non_space(value: &str) -> bool {
+    value.chars().any(|c| match c {
+        '\u{85}' => true,
+        '\u{feff}' => false,
+        c => !c.is_whitespace(),
+    })
+}
 
 fn is_lower_hex(value: &str) -> bool {
     value
@@ -159,6 +178,9 @@ mod tests {
         assert!(Sha::parse("abcd").is_ok());
         assert!(Sha::parse("abc").is_err());
         assert!(Sha::parse("ABCD").is_err());
+        assert!(Sha::parse("HEAD").is_err());
+        // Never read by git as an option.
+        assert!(Sha::parse("--output=/tmp/x").is_err());
         assert!(FullSha::parse("a".repeat(40)).is_ok());
         assert!(FullSha::parse("a".repeat(64)).is_ok());
         assert!(FullSha::parse("a".repeat(41)).is_err());
@@ -173,6 +195,14 @@ mod tests {
             BranchRef::parse("refs/tags/v1").unwrap_err().to_string(),
             "Not a branch. (\"refs/tags/v1\")"
         );
+    }
+
+    #[test]
+    fn messages_have_a_character_that_isnt_whitespace_as_js_has_it() {
+        assert!(Message::parse("Fix").is_ok());
+        assert!(Message::parse(" \t\n\r\u{a0}\u{2028}\u{3000}").is_err());
+        assert!(Message::parse("\u{feff}").is_err());
+        assert!(Message::parse("\u{85}").is_ok());
     }
 
     #[test]

@@ -15,6 +15,7 @@ use std::process::Command;
 use std::sync::{Arc, LazyLock, Mutex, Once};
 use std::time::{Duration, Instant};
 
+use crate::core::errors::Error;
 use crate::core::git_dirs::real_path;
 use crate::core::repo::{GitRepos, Repo};
 use crate::core::runner::{REPOSITORY_ENV, lock};
@@ -194,6 +195,13 @@ where
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+/// `value` as the checked input a feature takes (see `crate::input`), e.g. a `BranchRef`; panics
+/// if it isn't valid. TS's tests passed the features plain strings.
+pub fn valid<T: TryFrom<String, Error = Error>>(value: impl Into<String>) -> T {
+    let value = value.into();
+    T::try_from(value.clone()).unwrap_or_else(|error| panic!("{value:?} isn't valid: {error}"))
 }
 
 /// Records the warnings the crate logs (see `crate::core::trace::TARGET`) from now on: the function
