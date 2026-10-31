@@ -10,14 +10,16 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError};
 
+use futures::FutureExt as _;
 use gitto_git::features::history::schema::Commit;
 use gitto_git::features::stash::schema::Stash;
 use gitto_git::features::status::schema::StatusSummary;
 use gitto_git::features::worktree::schema::Worktree;
 use gitto_git::input::RepositoryId;
 
+use super::git::{GitTask, RepositoryGit};
 use super::loaded::Loaded;
-use super::repository::{Part, Repository};
+use super::repository::{Part, Repository, log_commits};
 use super::status::head_sha;
 use gitto_ui_logic::git::status::has_uncommitted_changes;
 
@@ -27,11 +29,9 @@ pub const FIRST_PAGE: u32 = 200;
 /// How many more it loads at a time as the end of what's loaded comes into view.
 pub const NEXT_PAGE: u32 = 1000;
 
-/// The most commits the history reloads as the repository changes, which is the most the log
-/// hands over at once (see `history::commands::MAX_PAGE`). Past that, it starts over from the
-/// first page: the graph has to be laid out again, and the commits sent over, for every one of
-/// them.
-pub const RELOAD_LIMIT: usize = 10_000;
+/// The most commits the log hands over at once (see `history::commands::MAX_PAGE`): what the
+/// history reloads at a time.
+const MAX_PAGE: u32 = 10_000;
 
 /// A repository's log, as `Repository::log` has it: its newest commits, and those loaded after
 /// them. Shared: a reload equal to what was there keeps it, so one that brings nothing new (the
@@ -163,15 +163,45 @@ impl fmt::Debug for LogCommits {
 }
 
 /// How many commits a reload of the log asks for, when `loaded` are: as many as were loaded, so
-/// the history keeps its place, but at least the first page, and only that past `RELOAD_LIMIT`.
-/// Git walks the whole history to sort it anyway, so that takes little longer than the first page
-/// (220ms for 6,200 commits of vscode, against 150ms for 200).
+/// the history keeps its place (the commit selected, and how far it's scrolled), but at least the
+/// first page. Git walks the whole history to sort it anyway, so that takes little longer than the
+/// first page (220ms for 6,200 commits of vscode, against 150ms for 200).
 pub fn reload_limit(loaded: usize) -> u32 {
-    if loaded > RELOAD_LIMIT {
-        FIRST_PAGE
-    } else {
-        FIRST_PAGE.max(loaded as u32)
+    FIRST_PAGE.max(u32::try_from(loaded).unwrap_or(u32::MAX))
+}
+
+/// Reads the log of the repository `id` again, as many commits as `loaded` (see
+/// [`reload_limit`]): a page of up to [`MAX_PAGE`] at a time.
+pub(crate) fn reload_log(
+    git: &dyn RepositoryGit,
+    id: &RepositoryId,
+    loaded: usize,
+) -> GitTask<Log> {
+    let limit = reload_limit(loaded);
+    let pages: Vec<(u32, GitTask<Vec<Commit>>)> = (0..limit)
+        .step_by(MAX_PAGE as usize)
+        .map(|skip| {
+            let page = (limit - skip).min(MAX_PAGE);
+            (page, log_commits(git, skip, page))
+        })
+        .collect();
+    let mut log = Log {
+        repository_id: id.clone(),
+        commits: LogCommits::default(),
+        complete: false,
+    };
+    async move {
+        for (limit, page) in pages {
+            let commits = page.await?;
+            let complete = commits.len() < limit as usize;
+            log = followed_by(&log, commits, complete);
+            if complete {
+                break;
+            }
+        }
+        Ok(log)
     }
+    .boxed()
 }
 
 /// `log` with `commits` after it. Each commit only once: the history may have moved since the
@@ -298,12 +328,11 @@ mod tests {
     }
 
     #[test]
-    fn reloads_as_many_as_were_loaded_up_to_the_limit() {
+    fn reloads_as_many_as_were_loaded() {
         assert_eq!(reload_limit(0), FIRST_PAGE);
         assert_eq!(reload_limit(150), FIRST_PAGE);
         assert_eq!(reload_limit(1200), 1200);
-        assert_eq!(reload_limit(RELOAD_LIMIT), RELOAD_LIMIT as u32);
-        assert_eq!(reload_limit(RELOAD_LIMIT + 1), FIRST_PAGE);
+        assert_eq!(reload_limit(25_000), 25_000);
     }
 
     fn commit(sha: &str) -> Commit {

@@ -828,7 +828,9 @@ fn reloads_all_it_has_loaded_at_once_keeping_its_place(cx: &mut TestAppContext) 
 }
 
 #[gpui_kit::test]
-fn starts_over_from_the_first_page_when_its_reloaded_past_10000_commits(cx: &mut TestAppContext) {
+fn reloads_all_it_has_loaded_past_10000_commits_keeping_the_selection_and_its_place(
+    cx: &mut TestAppContext,
+) {
     let history = paged(12_000, cx);
     let mut loaded = 200;
     while loaded <= 10_000 {
@@ -836,13 +838,27 @@ fn starts_over_from_the_first_page_when_its_reloaded_past_10000_commits(cx: &mut
         assert_eq!(history.rows(cx), loaded + 1000);
         loaded += 1000;
     }
+    history.table.update(cx, |table, cx| {
+        table.set_selection(Some(commit_id("c9500")), None, cx)
+    });
+    history.scroll_to(9400, cx);
+    let loaded = history.rows(cx);
+    let told = history.selections(cx).len();
 
-    history.scroll_to(0, cx);
     let id = history.id.clone();
     reload_log(&id, cx);
     cx.run_until_parked();
-    assert_eq!(history.pages().last(), Some(&(0, 200)));
-    assert_eq!(history.rows(cx), 200);
+    // A page of up to 10,000 at a time, the most git hands over at once.
+    let pages = history.pages();
+    assert_eq!(
+        pages[pages.len() - 2..],
+        [(0, 10_000), (10_000, loaded as u32 - 10_000)]
+    );
+    assert_eq!(history.rows(cx), loaded);
+    assert_eq!(history.selected(cx), Some(commit_id("c9500")));
+    assert_eq!(history.selections(cx).len(), told);
+    history.render_frame(cx);
+    assert_eq!(history.top_row(cx), 9400);
 }
 
 #[gpui_kit::test]
