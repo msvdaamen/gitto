@@ -89,10 +89,13 @@ macro_rules! repository_git {
             $(
                 fn $name(&self $(, $arg: $ty)*) -> GitTask<$out> {
                     let task = self.git.$name($($arg),*);
-                    if writes(stringify!($name)) {
-                        self.after_the_writes(task)
-                    } else {
+                    let method = stringify!($name);
+                    if !writes(method) {
                         task
+                    } else if goes_to_a_remote(method) {
+                        self.after_the_writes_before(task)
+                    } else {
+                        self.after_the_writes(task)
                     }
                 }
             )*
@@ -144,11 +147,20 @@ fn writes(method: &str) -> bool {
     )
 }
 
+/// Whether `GitRepo`'s method `method` can wait on a remote: a pull, a push, or deleting a branch,
+/// which may be a remote's. Such a write waits for the writes asked for before it, as any does,
+/// but those asked for after it don't wait for the network, as gitto-git's don't either (see
+/// `Repo::fetch`): a commit made while a push is under way isn't held up until it's done.
+fn goes_to_a_remote(method: &str) -> bool {
+    matches!(method, "pull" | "push" | "delete_branch")
+}
+
 /// A repository's git, `git`, whose writes reach git in the order they're asked for: each starts
 /// once those asked for before it are done, or dropped. gitto-git's take their place in the
 /// repository's line of writes only when they get to it, once the repository's open, say, not when
 /// they're asked for: a push asked for after a commit could otherwise run first, and push without
-/// it. What reads the repository, and fetching, doesn't wait.
+/// it. What reads the repository, and fetching, doesn't wait; nor does a write for what goes to a
+/// remote.
 pub struct InOrder {
     git: Rc<dyn RepositoryGit>,
     /// Done once the last write asked for is, and every one before it.
@@ -166,8 +178,8 @@ impl InOrder {
     /// `write`, once the writes asked for before it are done.
     fn after_the_writes<T: Send + 'static>(&self, write: GitTask<T>) -> GitTask<T> {
         let before = self.last_write.borrow().clone();
-        // `done` is dropped once `write` is done, or dropped: the writes after it wait for that, and
-        // for those before it, should it be dropped before they're done.
+        // `done` is dropped once `write` is done, or dropped: the writes after it wait for that,
+        // and for those before it, should it be dropped before they're done.
         let (done, dropped) = oneshot::channel::<()>();
         let earlier = before.clone();
         *self.last_write.borrow_mut() = async move {
@@ -178,6 +190,17 @@ impl InOrder {
         .shared();
         async move {
             let _done = done;
+            before.await;
+            write.await
+        }
+        .boxed()
+    }
+
+    /// `write`, once the writes asked for before it are done, without holding up those asked for
+    /// after it (see [`goes_to_a_remote`]).
+    fn after_the_writes_before<T: Send + 'static>(&self, write: GitTask<T>) -> GitTask<T> {
+        let before = self.last_write.borrow().clone();
+        async move {
             before.await;
             write.await
         }
@@ -395,6 +418,30 @@ mod tests {
         cx.run_until_parked();
         assert!(smol::block_on(stage).is_ok());
         assert!(smol::block_on(push).is_ok());
+    }
+
+    #[gpui_kit::test]
+    fn doesnt_hold_a_write_up_for_a_push_asked_for_before_it(cx: &mut TestAppContext) {
+        let gated = Rc::new(Gated::default());
+        let git = InOrder::new(gated.clone());
+        let stage = cx.executor().spawn(git.stage_all());
+        let push = cx.executor().spawn(git.push(false));
+        let discard = cx.executor().spawn(git.discard_all());
+        cx.run_until_parked();
+        assert_eq!(gated.reached(), ["stage_all"]);
+
+        // The push waits for the stage, but the discard doesn't wait for the push.
+        gated.answer("stage_all", Ok(()));
+        cx.run_until_parked();
+        let mut reached = gated.reached();
+        reached.sort();
+        assert_eq!(reached, ["discard_all", "push", "stage_all"]);
+        gated.answer("discard_all", Ok(()));
+        gated.answer("push", Ok(()));
+        cx.run_until_parked();
+        assert!(smol::block_on(stage).is_ok());
+        assert!(smol::block_on(push).is_ok());
+        assert!(smol::block_on(discard).is_ok());
     }
 
     #[test]
