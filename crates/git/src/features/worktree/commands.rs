@@ -510,9 +510,10 @@ mod tests {
                 .await
                 .unwrap_err();
             assert!(
-                error
-                    .to_string()
-                    .contains(&format!("fatal: '{}' already exists", s(&path))),
+                error.to_string().contains(&format!(
+                    "fatal: '{}' already exists",
+                    s(&path).replace('\\', "/")
+                )),
                 "{error}"
             );
             let x = fx.root().join("refused-x");
