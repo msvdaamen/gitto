@@ -317,72 +317,8 @@ mod tests {
     use super::*;
     use crate::core::repo::{How, Observed};
     use crate::schema::FileStatus;
+    use crate::test_support::status::{rows, status_files};
     use crate::test_support::{Fixture, git};
-
-    fn code(letter: Option<char>) -> Option<&'static str> {
-        Some(match letter? {
-            'M' => "modified",
-            'A' => "added",
-            'D' => "deleted",
-            'R' => "renamed",
-            'C' => "copied",
-            'T' => "typechange",
-            _ => return None,
-        })
-    }
-
-    type Row = (String, Option<&'static str>, Option<&'static str>);
-
-    /// Each changed file, with how it changed in the index and the working tree, as the status
-    /// feature's `parseStatus` reads `STATUS_ARGS`. A stand-in for it until it's ported.
-    async fn status_files(repo: &Repo) -> Vec<Row> {
-        let output = repo
-            .read([
-                "status",
-                "--porcelain=v2",
-                "-z",
-                "--branch",
-                "--untracked-files=all",
-            ])
-            .await
-            .unwrap();
-        let mut records = output.split('\0');
-        let mut files = Vec::new();
-        while let Some(record) = records.next() {
-            let fields = |count| record.splitn(count, ' ').collect::<Vec<_>>();
-            let (path, xy) = match record.chars().next() {
-                Some('1') => {
-                    let fields = fields(9);
-                    (fields[8], fields[1])
-                }
-                Some('2') => {
-                    let fields = fields(10);
-                    records.next();
-                    (fields[9], fields[1])
-                }
-                Some('u') => {
-                    let fields = fields(11);
-                    let conflicted = Some("conflicted");
-                    files.push((fields[10].to_owned(), conflicted, conflicted));
-                    continue;
-                }
-                Some('?') => {
-                    files.push((record[2..].to_owned(), None, Some("untracked")));
-                    continue;
-                }
-                _ => continue,
-            };
-            let mut xy = xy.chars();
-            files.push((path.to_owned(), code(xy.next()), code(xy.next())));
-        }
-        files
-    }
-
-    fn rows(rows: &[(&str, Option<&'static str>, Option<&'static str>)]) -> Vec<Row> {
-        rows.iter()
-            .map(|(path, staged, unstaged)| (path.to_string(), *staged, *unstaged))
-            .collect()
-    }
 
     /// A repository with `a.txt` and `b.txt` committed, which `repos` opens as `name`.
     fn create_committed_repo(fx: &Fixture, name: &str) -> PathBuf {
@@ -544,7 +480,7 @@ mod tests {
             );
             assert_eq!(
                 status_files(&repo).await,
-                rows(&[("b.txt", None, Some("modified"))])
+                rows(&[("b.txt", None, Some(FileStatus::Modified))])
             );
 
             drop_stash(&repo, &newer.sha).await.unwrap();
@@ -641,8 +577,8 @@ mod tests {
             assert_eq!(
                 status_files(&repo).await,
                 rows(&[
-                    ("a.txt", None, Some("modified")),
-                    ("other.txt", Some("added"), None),
+                    ("a.txt", None, Some(FileStatus::Modified)),
+                    ("other.txt", Some(FileStatus::Added), None),
                 ])
             );
             assert_eq!(list_stashes(&repo).await.unwrap(), []);
@@ -670,8 +606,8 @@ mod tests {
             assert_eq!(
                 status_files(&repo).await,
                 rows(&[
-                    ("a.txt", None, Some("modified")),
-                    ("new.txt", None, Some("untracked")),
+                    ("a.txt", None, Some(FileStatus::Modified)),
+                    ("new.txt", None, Some(FileStatus::Untracked)),
                 ])
             );
             assert_eq!(read(&path.join("a.txt")), "1\nstashed\n3\ncommitted\n5\n");
@@ -695,7 +631,11 @@ mod tests {
             assert!(matches!(error, Error::StashConflict(_)), "{error:?}");
             assert_eq!(
                 status_files(&repo).await,
-                rows(&[("a.txt", Some("conflicted"), Some("conflicted"))])
+                rows(&[(
+                    "a.txt",
+                    Some(FileStatus::Conflicted),
+                    Some(FileStatus::Conflicted)
+                )])
             );
             assert_eq!(newest(&repo).await, sha);
 

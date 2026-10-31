@@ -9,6 +9,7 @@ mod caches;
 pub mod errors;
 pub mod git_dirs;
 mod queue;
+pub mod records;
 pub mod repo;
 pub mod runner;
 pub mod shell_path;

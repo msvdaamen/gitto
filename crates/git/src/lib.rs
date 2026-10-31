@@ -12,6 +12,8 @@ pub mod input;
 pub mod schema;
 
 #[cfg(test)]
+mod api_tests;
+#[cfg(test)]
 pub(crate) mod test_support;
 
 pub use crate::core::errors::{

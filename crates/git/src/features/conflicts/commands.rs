@@ -445,7 +445,12 @@ mod tests {
 
     use super::*;
     use crate::features::diff::working_tree::{SaveExpectation, save_working_tree_file};
+    use crate::features::staging;
+    use crate::features::staging::commands::stage_all;
+    use crate::features::status::commands::get_status;
+    use crate::schema::FileStatus;
     use crate::test_support::conflicts::{Files, Sides, files, text_conflict, try_git};
+    use crate::test_support::status::{rows, status_files};
     use crate::test_support::{Fixture, git};
 
     /// The app runs staging on a thread of its own, so refusing markers, which staging awaits, has
@@ -459,155 +464,15 @@ mod tests {
         refuse_conflict_markers(repo, run, paths)
     }
 
-    /// `git status --porcelain=v2 -z --branch --untracked-files=all`, as the status feature reads
-    /// it (`STATUS_ARGS`).
-    const STATUS_ARGS: [&str; 5] = [
-        "status",
-        "--porcelain=v2",
-        "-z",
-        "--branch",
-        "--untracked-files=all",
-    ];
-
-    /// A changed file in the status: its path, how it changed in the index and the working tree,
-    /// and, if it's conflicted, its `XY` and the modes of ours and theirs.
-    struct StatusFile {
-        path: String,
-        staged: Option<&'static str>,
-        unstaged: Option<&'static str>,
-        conflict: Option<(String, String, String)>,
-    }
-
-    fn code(letter: Option<char>) -> Option<&'static str> {
-        Some(match letter? {
-            'M' => "modified",
-            'A' => "added",
-            'D' => "deleted",
-            'R' => "renamed",
-            'C' => "copied",
-            'T' => "typechange",
-            _ => return None,
-        })
-    }
-
-    /// The changed files in the status, as the status feature's `parseStatus` has them. A stand-in
-    /// for it until the status feature is ported.
-    async fn status(repo: &Repo) -> Vec<StatusFile> {
-        let output = repo.read(STATUS_ARGS).await.unwrap();
-        let mut records = output.split('\0');
-        let mut files = Vec::new();
-        while let Some(record) = records.next() {
-            let fields = |count| record.splitn(count, ' ').collect::<Vec<_>>();
-            match record.chars().next() {
-                Some('1') => {
-                    let fields = fields(9);
-                    let mut xy = fields[1].chars();
-                    files.push(StatusFile {
-                        path: fields[8].to_owned(),
-                        staged: code(xy.next()),
-                        unstaged: code(xy.next()),
-                        conflict: None,
-                    });
-                }
-                Some('2') => {
-                    let fields = fields(10);
-                    records.next();
-                    let mut xy = fields[1].chars();
-                    files.push(StatusFile {
-                        path: fields[9].to_owned(),
-                        staged: code(xy.next()),
-                        unstaged: code(xy.next()),
-                        conflict: None,
-                    });
-                }
-                Some('u') => {
-                    let fields = fields(11);
-                    files.push(StatusFile {
-                        path: fields[10].to_owned(),
-                        staged: Some("conflicted"),
-                        unstaged: Some("conflicted"),
-                        conflict: Some((
-                            fields[1].to_owned(),
-                            fields[4].to_owned(),
-                            fields[5].to_owned(),
-                        )),
-                    });
-                }
-                Some('?') => files.push(StatusFile {
-                    path: record[2..].to_owned(),
-                    staged: None,
-                    unstaged: Some("untracked"),
-                    conflict: None,
-                }),
-                _ => {}
-            }
-        }
-        files
-    }
-
-    type Row = (String, Option<&'static str>, Option<&'static str>);
-
-    /// Each changed file, with how it changed in the index and the working tree.
-    async fn status_files(repo: &Repo) -> Vec<Row> {
-        status(repo)
-            .await
-            .into_iter()
-            .map(|file| (file.path, file.staged, file.unstaged))
-            .collect()
-    }
-
-    fn rows(rows: &[(&str, Option<&'static str>, Option<&'static str>)]) -> Vec<Row> {
-        rows.iter()
-            .map(|(path, staged, unstaged)| (path.to_string(), *staged, *unstaged))
-            .collect()
-    }
-
-    /// `getStatus(repo).changes.markerFree`: the conflicted text files with no markers left, as
-    /// the status feature asks `marker_free` for them. A stand-in until it's ported.
+    /// `getStatus(repo).changes.markerFree`.
     async fn status_marker_free(repo: &Repo) -> Vec<String> {
-        let regular = |mode: &str| mode == "100644" || mode == "100755";
-        let text: Vec<String> = status(repo)
-            .await
-            .into_iter()
-            .filter(|file| {
-                file.conflict.as_ref().is_some_and(|(xy, ours, theirs)| {
-                    (xy == "UU" || xy == "AA") && regular(ours) && regular(theirs)
-                })
-            })
-            .map(|file| file.path)
-            .collect();
-        if text.is_empty() || text.len() > 200 {
-            return Vec::new();
-        }
-        marker_free(repo, &text).await
+        get_status(repo).await.unwrap().changes.marker_free
     }
 
-    /// The staging feature's `stage`, until it's ported: refuses conflict markers, then stages.
+    /// The staging feature's `stage`, given the paths as the TS tests give them.
     async fn stage(repo: &Repo, paths: &[&str]) -> Result<()> {
         let paths: Vec<String> = paths.iter().map(|path| path.to_string()).collect();
-        let owned = repo.clone();
-        repo.exclusive(move |run| async move {
-            refuse_conflict_markers(&owned, &run, Some(&paths)).await?;
-            let stdin: String = paths.iter().map(|path| format!("{path}\0")).collect();
-            run.run_with(
-                ["add", "--pathspec-from-file=-", "--pathspec-file-nul"],
-                RunOptions::default().stdin(stdin),
-            )
-            .await?;
-            Ok(())
-        })
-        .await
-    }
-
-    /// The staging feature's `stageAll`, until it's ported.
-    async fn stage_all(repo: &Repo) -> Result<()> {
-        let owned = repo.clone();
-        repo.exclusive(move |run| async move {
-            refuse_conflict_markers(&owned, &run, None).await?;
-            run.run(["add", "-A"]).await?;
-            Ok(())
-        })
-        .await
+        staging::commands::stage(repo, &paths).await
     }
 
     /// What the user saw of `conflict`, to resolve it by.
@@ -716,7 +581,11 @@ mod tests {
             assert_eq!(status_marker_free(&repo).await, ["f.txt"]);
             assert_eq!(
                 status_files(&repo).await,
-                rows(&[("f.txt", Some("conflicted"), Some("conflicted"))])
+                rows(&[(
+                    "f.txt",
+                    Some(FileStatus::Conflicted),
+                    Some(FileStatus::Conflicted)
+                )])
             );
 
             mark_resolved(&repo, "f.txt", Some(&version), false)
@@ -724,7 +593,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 status_files(&repo).await,
-                rows(&[("f.txt", Some("modified"), None)])
+                rows(&[("f.txt", Some(FileStatus::Modified), None)])
             );
             assert_eq!(git(&path, ["show", ":f.txt"]), "one\nours\ntheirs\nthree");
             // Marking it again, once it isn't conflicted, does nothing.
@@ -747,7 +616,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 status_files(&repo).await,
-                rows(&[("f.txt", Some("modified"), None)])
+                rows(&[("f.txt", Some(FileStatus::Modified), None)])
             );
             assert!(git(&path, ["show", ":f.txt"]).contains("<<<<<<< HEAD"));
         });
@@ -789,7 +658,11 @@ mod tests {
             );
             assert_eq!(
                 status_files(&repo).await,
-                rows(&[("f.txt", Some("conflicted"), Some("conflicted"))])
+                rows(&[(
+                    "f.txt",
+                    Some(FileStatus::Conflicted),
+                    Some(FileStatus::Conflicted)
+                )])
             );
         });
     }
@@ -814,8 +687,12 @@ mod tests {
             assert_eq!(
                 status_files(&repo).await,
                 rows(&[
-                    ("README", None, Some("modified")),
-                    ("f.txt", Some("conflicted"), Some("conflicted")),
+                    ("README", None, Some(FileStatus::Modified)),
+                    (
+                        "f.txt",
+                        Some(FileStatus::Conflicted),
+                        Some(FileStatus::Conflicted)
+                    ),
                 ])
             );
 
@@ -824,8 +701,12 @@ mod tests {
             assert_eq!(
                 status_files(&repo).await,
                 rows(&[
-                    ("README", Some("modified"), None),
-                    ("f.txt", Some("conflicted"), Some("conflicted")),
+                    ("README", Some(FileStatus::Modified), None),
+                    (
+                        "f.txt",
+                        Some(FileStatus::Conflicted),
+                        Some(FileStatus::Conflicted)
+                    ),
                 ])
             );
         });
@@ -842,7 +723,7 @@ mod tests {
             stage_all(&repo).await.unwrap();
             assert_eq!(
                 status_files(&repo).await,
-                rows(&[("f.txt", Some("modified"), None)])
+                rows(&[("f.txt", Some(FileStatus::Modified), None)])
             );
         });
     }
@@ -861,7 +742,7 @@ mod tests {
             assert_eq!(read(&path.join("f.txt")), "one\ntheirs\nthree\n");
             assert_eq!(
                 status_files(&repo).await,
-                rows(&[("f.txt", Some("modified"), None)])
+                rows(&[("f.txt", Some(FileStatus::Modified), None)])
             );
         });
     }
@@ -933,7 +814,7 @@ mod tests {
             assert!(!path.join("f.txt").exists());
             assert_eq!(
                 status_files(&repo).await,
-                rows(&[("f.txt", Some("deleted"), None)])
+                rows(&[("f.txt", Some(FileStatus::Deleted), None)])
             );
 
             fx.create_merge_conflict("modify-kept", None, &deleted_by_them());
@@ -970,7 +851,7 @@ mod tests {
             assert_eq!(read(&path.join("f.txt")), "one\ntheirs\n");
             assert_eq!(
                 status_files(&repo).await,
-                rows(&[("f.txt", Some("added"), None)])
+                rows(&[("f.txt", Some(FileStatus::Added), None)])
             );
         });
     }
@@ -1039,7 +920,7 @@ mod tests {
             assert_eq!(fs::read(path.join("b.bin")).unwrap(), [0, 1, 4]);
             assert_eq!(
                 status_files(&repo).await,
-                rows(&[("b.bin", Some("modified"), None)])
+                rows(&[("b.bin", Some(FileStatus::Modified), None)])
             );
         });
     }
@@ -1164,7 +1045,7 @@ mod tests {
             );
             assert_eq!(
                 status_files(&repo).await,
-                rows(&[("config", Some("modified"), None)])
+                rows(&[("config", Some(FileStatus::Modified), None)])
             );
         });
     }

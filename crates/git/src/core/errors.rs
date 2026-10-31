@@ -106,7 +106,9 @@ pub struct GitError {
     pub exit_code: Option<i32>,
     pub stderr: String,
     /// What it printed on stdout, for a command whose output still says something when it fails.
-    pub stdout: String,
+    /// As git printed it, for output that's handed back to git: a patch of a file that isn't
+    /// UTF-8, say (TS read such output as Latin-1, which keeps every byte). See `stdout_text`.
+    pub stdout: Vec<u8>,
 }
 
 impl GitError {
@@ -123,8 +125,13 @@ impl GitError {
             args,
             exit_code,
             stderr: stderr.into(),
-            stdout: String::new(),
+            stdout: Vec::new(),
         }
+    }
+
+    /// `stdout`, lossily UTF-8: for messages and matching.
+    pub fn stdout_text(&self) -> std::borrow::Cow<'_, str> {
+        String::from_utf8_lossy(&self.stdout)
     }
 
     /// How it reaches the UI: as a bug, unless its kind knows better.
@@ -709,7 +716,28 @@ impl From<io::Error> for Error {
 }
 
 /// The most specific error for a command that exited with `exit_code`, going by what git printed.
+/// It keeps `stdout` as git printed it (see `GitError::stdout`).
 pub(crate) fn command_error(
+    cwd: &str,
+    args: &[String],
+    exit_code: Option<i32>,
+    stdout: &[u8],
+    stderr: &str,
+) -> GitError {
+    GitError {
+        stdout: stdout.to_vec(),
+        ..specific_error(
+            cwd,
+            args,
+            exit_code,
+            &String::from_utf8_lossy(stdout),
+            stderr,
+        )
+    }
+}
+
+/// `command_error`, but for `stdout`, which it reads lossily as UTF-8 for the message.
+fn specific_error(
     cwd: &str,
     args: &[String],
     exit_code: Option<i32>,
@@ -754,10 +782,7 @@ pub(crate) fn command_error(
         ("", stdout) => stdout.to_owned(),
         (stderr, _) => stderr.to_owned(),
     };
-    GitError {
-        stdout: stdout.to_owned(),
-        ..GitError::new(message, args.to_vec(), exit_code, stderr)
-    }
+    GitError::new(message, args.to_vec(), exit_code, stderr)
 }
 
 fn no_operation_message(expected: OperationKind, current: Option<OperationKind>) -> String {
@@ -821,7 +846,7 @@ mod tests {
             "/repo",
             &args(&["status"]),
             Some(128),
-            "",
+            b"",
             "fatal: not a git repository (or any of the parent directories): .git\n",
         );
         assert_eq!(error.kind, GitErrorKind::NotARepository);
@@ -832,7 +857,7 @@ mod tests {
             "/repo",
             &args(&["add", "a"]),
             Some(128),
-            "",
+            b"",
             "fatal: Unable to create '/repo/.git/index.lock': File exists.",
         );
         assert_eq!(error.kind, GitErrorKind::IndexLocked);
@@ -842,18 +867,18 @@ mod tests {
             "/repo",
             &args(&["commit"]),
             Some(1),
-            "nothing to commit\n",
+            b"nothing to commit\n",
             "",
         );
         assert_eq!(error.message, "nothing to commit");
-        assert_eq!(error.stdout, "nothing to commit\n");
+        assert_eq!(error.stdout_text(), "nothing to commit\n");
         assert_eq!(error.api(), ApiCode::InternalServerError);
 
-        let error = command_error("/repo", &args(&["diff"]), None, "", "");
+        let error = command_error("/repo", &args(&["diff"]), None, b"", "");
         assert_eq!(error.message, "git diff was stopped by a signal");
-        let error = command_error("/repo", &args(&["diff"]), Some(3), "", "");
+        let error = command_error("/repo", &args(&["diff"]), Some(3), b"", "");
         assert_eq!(error.message, "git diff exited with code 3");
-        let error = command_error("/repo", &[], Some(1), "", "");
+        let error = command_error("/repo", &[], Some(1), b"", "");
         assert_eq!(error.message, "git exited with code 1");
     }
 

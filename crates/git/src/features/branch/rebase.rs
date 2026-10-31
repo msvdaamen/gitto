@@ -1,12 +1,11 @@
 //! Rebasing the checked-out branch onto another. Ported from `rebase.ts`.
 
 use super::preflight::{self, Checked, preflight};
-use super::refusal::{
-    RefusalKind, Wording, list, nul_separated, parse_refusal, refusal_message, staged_files,
-};
+use super::refusal::{RefusalKind, Wording, list, parse_refusal, refusal_message, staged_files};
 use super::schema::RebaseOutcome;
 use crate::core::errors::{Error, GitError, Integration, IntegrationBlocker, Result};
 use crate::core::git_dirs::git_dirs;
+use crate::core::records::split_nul;
 use crate::core::repo::{GitCommand, Repo, has_conflicts, resolve_ref};
 use crate::core::runner::RunOptions;
 use crate::features::operation::commands::rebase_state;
@@ -146,7 +145,7 @@ async fn why_refused(
         // Git doesn't name them: it checks the working tree first, then the index.
         let (files, what, to) = match changes {
             Uncommitted::Unstaged => (
-                nul_separated(&run.run(["diff", "--name-only", "-z"]).await?),
+                split_nul(&run.run(["diff", "--name-only", "-z"]).await?),
                 "there are uncommitted changes",
                 " to",
             ),

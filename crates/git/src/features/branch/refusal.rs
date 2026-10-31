@@ -7,6 +7,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use crate::core::errors::Result;
+use crate::core::records::split_nul;
 use crate::core::repo::GitCommand;
 
 /// Why git refused to merge over uncommitted changes or untracked files, and the files it named.
@@ -146,19 +147,10 @@ pub fn refusal_message(kind: RefusalKind, files: &[String], wording: &Wording) -
 
 /// The files with staged changes, for a refusal over them (see `parse_refusal`).
 pub async fn staged_files(run: &GitCommand) -> Result<Vec<String>> {
-    Ok(nul_separated(
+    Ok(split_nul(
         &run.run(["diff", "--cached", "--name-only", "-z", "HEAD"])
             .await?,
     ))
-}
-
-/// The NUL-separated names in `output`.
-pub(crate) fn nul_separated(output: &str) -> Vec<String> {
-    output
-        .split('\0')
-        .filter(|name| !name.is_empty())
-        .map(str::to_owned)
-        .collect()
 }
 
 /// `files` in a sentence: "a.txt", "a.txt and b.txt", or "a.txt and 3 other files".

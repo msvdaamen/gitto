@@ -778,7 +778,7 @@ async fn run(cwd: PathBuf, args: Vec<OsString>, options: RunOptions) -> Result<V
         &cwd.to_string_lossy(),
         &shown_args,
         code,
-        &String::from_utf8_lossy(&out),
+        &out,
         &String::from_utf8_lossy(&err),
     )))
 }

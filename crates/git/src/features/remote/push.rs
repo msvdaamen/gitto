@@ -167,7 +167,7 @@ pub async fn push(repo: &Repo, force: bool) -> Result<()> {
         let Error::Git(failure) = error else {
             return Err(error);
         };
-        let rejected = match rejection(&failure.stdout, &local) {
+        let rejected = match rejection(&failure.stdout_text(), &local) {
             Some(reason) => rejected_error(&repo.git(), &plan, &reason).await?,
             None => None,
         };
