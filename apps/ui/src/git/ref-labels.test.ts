@@ -202,6 +202,20 @@ describe("toRefLabels with other worktrees", () => {
     ]);
   });
 
+  it("marks a worktree whose folder is gone", () => {
+    const gone = checkouts([
+      worktree("repo-gone", "refs/heads/feature", "e5", {
+        prunable: "gitdir file points elsewhere",
+      }),
+    ]);
+    expect(gone.branches.get("refs/heads/feature")).toEqual({
+      name: "repo-gone",
+      path: "/w/repo-gone",
+      gone: true,
+    });
+    expect(OTHERS.branches.get("refs/heads/feature")).not.toHaveProperty("gone");
+  });
+
   it("matches and describes them", () => {
     const [, feature, check] = toRefLabels(
       [

@@ -1310,6 +1310,24 @@ describe("worktrees from the branch menu", () => {
     );
   });
 
+  it("switches to a branch checked out in a worktree whose folder is gone, for git to say why it won't", async () => {
+    const user = userEvent.setup();
+    rpc.git.worktree.list.mockResolvedValue([
+      WORKTREES[0]!,
+      worktree("/w/repo-feature", "refs/heads/feature", {
+        prunable: "gitdir file points to non-existent location",
+      }),
+    ]);
+    renderSidebar();
+
+    await user.dblClick(await branchRow("feature"));
+    expect(rpc.repository.add).not.toHaveBeenCalled();
+    expect(rpc.git.branch.switch).toHaveBeenCalledWith({
+      repositoryId: "a",
+      ref: "refs/heads/feature",
+    });
+  });
+
   it("says beside the worktrees why one couldn't be opened from a branch's menu", async () => {
     const user = userEvent.setup();
     renderSidebar();

@@ -111,14 +111,17 @@ function RefPill(props: { label: RefLabel; onSwitch: (ref: string) => void }) {
     const label = branch();
     const described = describeRefLabel(props.label);
     if (!label || label.current) return described;
+    if (label.worktree?.gone) return `${described}\nThat worktree's folder is gone`;
     if (label.worktree) return `${described}\nDouble-click to open that worktree`;
     return `${described}\nDouble-click to switch to it`;
   };
 
+  // A branch checked out in a worktree whose folder is gone is switched to, which git refuses,
+  // saying why (the toolbar shows it), rather than opening a worktree that isn't there.
   function onDblClick() {
     const label = branch();
     if (!label) return;
-    if (label.worktree) openWorktree(label.worktree.path);
+    if (label.worktree && !label.worktree.gone) openWorktree(label.worktree.path);
     else props.onSwitch(label.ref);
   }
 

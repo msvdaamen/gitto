@@ -367,6 +367,32 @@ describe("worktrees in the history", () => {
     );
   });
 
+  it("switches to a branch whose worktree's folder is gone when its label is double-clicked, for git to say why it won't", async () => {
+    const user = userEvent.setup();
+    rpc.git.worktree.list.mockResolvedValue([
+      worktree("/w/repo", "refs/heads/main", { main: true, current: true }),
+      worktree("/w/repo-feature", "refs/heads/feature", {
+        prunable: "gitdir file points to non-existent location",
+      }),
+    ]);
+    await renderHistory();
+
+    await user.hover(await screen.findByText(/^\+\d$/));
+    const feature = (await screen.findByText("feature")).closest("[data-branch]")!;
+    await vi.waitFor(() =>
+      expect(feature).toHaveAttribute(
+        "title",
+        "feature (local; checked out in repo-feature)\nThat worktree's folder is gone",
+      ),
+    );
+    await user.dblClick(feature);
+    expect(rpc.repository.add).not.toHaveBeenCalled();
+    expect(rpc.git.branch.switch).toHaveBeenCalledWith({
+      repositoryId: "repo",
+      ref: "refs/heads/feature",
+    });
+  });
+
   it("opens the worktree a branch is checked out in from its menu", async () => {
     const user = userEvent.setup();
     await renderHistory();

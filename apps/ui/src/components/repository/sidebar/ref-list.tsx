@@ -143,11 +143,12 @@ export function RefList(props: { repositoryId: string }) {
               : undefined
         }
         // The toolbar shows a switch running, and why it failed; the worktrees' section, opening
-        // the worktree.
+        // the worktree. One that can't be opened (its folder is gone, say) still has the branch
+        // checked out, as far as git's concerned: switching says so, rather than nothing happening.
         onDblClick={() => {
           const there = worktree();
-          if (!there) switchBranch.run(branch().fullName);
-          else if (canOpenWorktree(there)) openWorktree(there.path);
+          if (there && canOpenWorktree(there)) openWorktree(there.path);
+          else switchBranch.run(branch().fullName);
         }}
       />
     );
