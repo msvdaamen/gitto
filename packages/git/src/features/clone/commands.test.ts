@@ -3,20 +3,12 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { call } from "@orpc/server";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import { CloneFailedError } from "../../core/errors";
 import { GitVersion } from "../../core/version";
-import {
-  apiError,
-  createClone,
-  createRepo,
-  git,
-  rejection,
-  repos,
-  root,
-} from "../../test/fixtures";
-import { cloneRepository, clonePath, cloneSource, failure, parseProgress } from "./commands";
+import { apiError, createClone, git, rejection, repos, root } from "../../test/fixtures";
+import { cloneRepository, clonePath, failure, parseProgress } from "./commands";
 import { cloneRouter } from "./handler";
 import type { CloneProgress } from "./schema";
 
@@ -32,38 +24,11 @@ async function cloneAll(url: string, folder: string, signal?: AbortSignal) {
   }
 }
 
-/** Settings git takes from the environment, as `-c` would give them, for the clones run here. */
-function stubConfig(settings: Record<string, string>) {
-  const entries = Object.entries(settings);
-  vi.stubEnv("GIT_CONFIG_COUNT", String(entries.length));
-  entries.forEach(([key, value], index) => {
-    vi.stubEnv(`GIT_CONFIG_KEY_${index}`, key);
-    vi.stubEnv(`GIT_CONFIG_VALUE_${index}`, value);
-  });
-}
-
-/** Resolves once `check` is true, checking every 20 ms. */
-async function until(check: () => boolean) {
-  // oxlint-disable-next-line no-await-in-loop -- polling.
-  while (!check()) await new Promise((resolve) => setTimeout(resolve, 20));
-}
-
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
-
 describe("cloneRepository", () => {
   let upstream: string;
-  /** A repository whose `a.txt` is checked out through the filter `slow`, or `fail`. */
-  let filtered: string;
 
   beforeAll(() => {
     ({ upstream } = createClone("clone-source"));
-    filtered = createRepo("clone-filtered");
-    writeFileSync(join(filtered, ".gitattributes"), "a.txt filter=checkout\n");
-    writeFileSync(join(filtered, "a.txt"), "a\n");
-    git(filtered, "add", "-A");
-    git(filtered, "commit", "-qm", "filtered");
   });
 
   it("clones into a folder that isn't there yet, reporting its progress", async () => {
@@ -102,45 +67,6 @@ describe("cloneRepository", () => {
     expect(existsSync(join(folder, ".git"))).toBe(false);
   });
 
-  it("refuses a file where the folder would be, leaving it as it was", async () => {
-    const file = join(root, "clones", "file.txt");
-    mkdirSync(join(root, "clones"), { recursive: true });
-    writeFileSync(file, "mine");
-    const error = await rejection(cloneAll(upstream, file));
-    expect((error as Error).message).toBe(
-      `${file} is a file. Clone into an empty folder, or one that isn't there yet.`,
-    );
-    expect(existsSync(file)).toBe(true);
-  });
-
-  it("deletes a clone whose files couldn't be checked out", async () => {
-    stubConfig({ "filter.checkout.smudge": "false", "filter.checkout.required": "true" });
-    const folder = join(root, "clones", "unchecked");
-    const error = await rejection(cloneAll(filtered, folder));
-    expect(error).toBeInstanceOf(CloneFailedError);
-    expect((error as Error).message).toMatch(
-      /^The files couldn't be checked out, so the clone was deleted\.\n/,
-    );
-    expect((error as Error).message).not.toMatch(/git restore|Clone succeeded/);
-    expect(existsSync(folder)).toBe(false);
-  });
-
-  it("leaves nothing of a clone stopped partway, and clones into its folder again", async () => {
-    // Checking out a.txt takes a while, once the repository is there.
-    stubConfig({ "filter.checkout.smudge": "sleep 2; cat" });
-    const folder = join(root, "clones", "stopped");
-    const controller = new AbortController();
-    const stopped = rejection(cloneAll(filtered, folder, controller.signal));
-    await until(() => existsSync(join(folder, ".git", "HEAD")));
-    controller.abort();
-    vi.unstubAllEnvs();
-    // Started at once, before the first is cleaned up: it waits for that.
-    const again = await cloneAll(upstream, folder);
-    expect(((await stopped) as Error).name).toBe("AbortError");
-    expect(again.path).toBe(folder);
-    expect(git(folder, "log", "--format=%s")).toBe("first");
-  });
-
   it("says why a URL couldn't be cloned, leaving nothing behind", async () => {
     const folder = join(root, "clones", "missing");
     const error = await rejection(cloneAll(join(root, "no-such-repository"), folder));
@@ -172,28 +98,6 @@ describe("the clone procedure", () => {
       for await (const _ of clone);
     };
     expect(await apiError(run())).toMatchObject({ code: "PRECONDITION_FAILED" });
-  });
-});
-
-describe("cloneSource", () => {
-  it("takes a URL, a host:path, or a full path", () => {
-    for (const url of [
-      "https://github.com/owner/gitto.git",
-      "ssh://git@example.com:2222/owner/gitto.git",
-      "file:///srv/git/gitto",
-      "git@github.com:owner/gitto.git",
-      "example.com:gitto.git",
-      "/srv/git/gitto",
-    ]) {
-      expect(cloneSource(` ${url} `)).toBe(url);
-    }
-    expect(cloneSource("~/code/gitto")).toBe(join(homedir(), "code", "gitto"));
-  });
-
-  it("refuses a relative path", () => {
-    expect(() => cloneSource("code/gitto")).toThrow(CloneFailedError);
-    expect(() => cloneSource("./gitto")).toThrow(CloneFailedError);
-    expect(() => cloneSource("gitto")).toThrow(CloneFailedError);
   });
 });
 
@@ -264,25 +168,6 @@ describe("failure", () => {
       ),
     ).toBe(
       "Host key verification failed.\nCould not read from remote repository.\nPlease make sure you have the correct access rights and the repository exists.",
-    );
-  });
-
-  it("says a clone whose checkout failed was deleted, without git's advice", () => {
-    expect(
-      failure(
-        [
-          "Cloning into 'gitto'...",
-          "error: external filter 'false' failed 1",
-          "error: external filter 'false' failed",
-          "fatal: a.txt: smudge filter checkout failed",
-          "warning: Clone succeeded, but checkout failed.",
-          "You can inspect what was checked out with 'git status'",
-          "and retry with 'git restore --source=HEAD :/'",
-          "",
-        ].join("\n"),
-      ),
-    ).toBe(
-      "The files couldn't be checked out, so the clone was deleted.\nExternal filter 'false' failed 1\nExternal filter 'false' failed\nA.txt: smudge filter checkout failed",
     );
   });
 

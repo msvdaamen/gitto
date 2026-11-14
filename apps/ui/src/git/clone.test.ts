@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { inFolder, overallProgress, parentFolder, repositoryName } from "./clone";
+import { inFolder, parentFolder, repositoryName } from "./clone";
 
 describe("repositoryName", () => {
   it("names the repository after the end of its URL, without .git", () => {
@@ -43,46 +43,5 @@ describe("inFolder", () => {
     expect(inFolder("/home/me/code/", "gitto")).toBe("/home/me/code/gitto");
     expect(inFolder("/", "gitto")).toBe("/gitto");
     expect(inFolder("C:\\code", "gitto")).toBe("C:\\code\\gitto");
-  });
-});
-
-describe("overallProgress", () => {
-  it("is how much of the whole clone is done, through git's phases", () => {
-    expect(overallProgress(null, { phase: "Counting objects", percent: 100 })).toEqual({
-      phase: "Counting objects",
-      percent: 4,
-    });
-    const receiving = { phase: "Receiving objects", percent: 50 };
-    expect(overallProgress({ phase: "Counting objects", percent: 4 }, receiving)).toEqual({
-      phase: "Receiving objects",
-      percent: 44,
-    });
-    expect(
-      overallProgress(
-        { phase: "Receiving objects", percent: 80 },
-        { phase: "Resolving deltas", percent: 0 },
-      ),
-    ).toEqual({ phase: "Resolving deltas", percent: 80 });
-    expect(
-      overallProgress(
-        { phase: "Resolving deltas", percent: 92 },
-        { phase: "Updating files", percent: 100 },
-      ),
-    ).toEqual({ phase: "Updating files", percent: 100 });
-  });
-
-  it("never goes back", () => {
-    expect(
-      overallProgress(
-        { phase: "Receiving objects", percent: 60 },
-        { phase: "Counting objects", percent: 10 },
-      ),
-    ).toEqual({ phase: "Counting objects", percent: 60 });
-    expect(
-      overallProgress(
-        { phase: "Receiving objects", percent: 60 },
-        { phase: "Checking connectivity", percent: 5 },
-      ),
-    ).toEqual({ phase: "Checking connectivity", percent: 60 });
   });
 });

@@ -26,20 +26,6 @@ export function createRpcHandler({
   reportError,
 }: { reportError?: (error: unknown, path: string) => void } = {}) {
   return new RPCHandler(router, {
-    // Errors of a procedure that emits events (a clone's progress, a watch) can come once it's
-    // returned its event iterator, as it's read: past the interceptors below, which see only how
-    // the call went up to then.
-    clientInterceptors: [
-      async ({ next, path, signal }) => {
-        const output = await next();
-        if (!isAsyncIterator(output)) return output;
-        return reportingErrors(output, (error) => {
-          if (signal?.aborted) return;
-          console.error("[rpc]", error);
-          if (isBug(error)) reportError?.(error, `/${path.join("/")}`);
-        });
-      },
-    ],
     interceptors: [
       async ({ next, request }) => {
         if (!tracing) return next();
@@ -59,29 +45,6 @@ export function createRpcHandler({
       }),
     ],
   });
-}
-
-function isAsyncIterator(value: unknown): value is AsyncIterator<unknown, unknown> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as Partial<AsyncIterator<unknown>>).next === "function" &&
-    Symbol.asyncIterator in value
-  );
-}
-
-/** `iterator`'s events, and what it returns, with each error it throws told to `report` too. */
-async function* reportingErrors<T, R>(
-  iterator: AsyncIterator<T, R>,
-  report: (error: unknown) => void,
-): AsyncGenerator<T, R> {
-  try {
-    // Stopping this (as the renderer does when it's no longer read) stops `iterator` too.
-    return yield* { [Symbol.asyncIterator]: () => iterator };
-  } catch (error) {
-    report(error);
-    throw error;
-  }
 }
 
 /**

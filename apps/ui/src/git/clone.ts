@@ -1,6 +1,4 @@
-// Where to suggest cloning a repository to, from its URL, and how far a clone has got.
-
-import type { CloneProgress } from "@gitto/git/types";
+// Where to suggest cloning a repository to, from its URL.
 
 /**
  * The name of the repository at `url`, as `git clone` names its folder: the last part of its
@@ -40,35 +38,4 @@ export function parentFolder(path: string): string | undefined {
 export function inFolder(parent: string, name: string): string {
   const separator = separatorOf(parent);
   return parent.endsWith(separator) ? parent + name : `${parent}${separator}${name}`;
-}
-
-/**
- * The part of a whole clone each phase git reports is, from and to which percent: most of the time
- * goes to receiving the objects.
- */
-const PHASES: Record<string, readonly [number, number]> = {
-  "Counting objects": [0, 4],
-  "Compressing objects": [4, 8],
-  "Receiving objects": [8, 80],
-  "Resolving deltas": [80, 92],
-  "Updating files": [92, 100],
-  // Git LFS, as the files are checked out.
-  "Filtering content": [92, 100],
-};
-
-/**
- * How far a clone has got, as of `reported` (by git, for its phase), after `last`: the phase, and
- * how much of the whole clone is done, which only goes up. A phase git reports that's not known
- * here keeps the percent where it was.
- */
-export function overallProgress(
-  last: CloneProgress | null,
-  reported: CloneProgress,
-): CloneProgress {
-  const before = last?.percent ?? 0;
-  const span = PHASES[reported.phase];
-  if (!span) return { phase: reported.phase, percent: before };
-  const [from, to] = span;
-  const percent = Math.round(from + ((to - from) * reported.percent) / 100);
-  return { phase: reported.phase, percent: Math.max(before, percent) };
 }

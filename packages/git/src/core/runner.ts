@@ -43,11 +43,6 @@ export interface RunOptions {
    */
   maxOutput?: { bytes: number; error: () => Error };
   /**
-   * Rejects only once git has exited, also when it's cancelled: for a command that cleans up after
-   * itself when it's stopped, like a clone, so what it leaves is known by then.
-   */
-  waitForExit?: boolean;
-  /**
    * Told what git writes to stderr as it comes, e.g. the progress `--progress` reports; it's
    * still collected, for the error if git fails.
    */
@@ -82,10 +77,10 @@ const ENV = {
   GIT_PAGER: "cat",
 };
 
-/** How to stop each command to stop when Gitto exits (see `RunOptions.stopOnExit`). */
-const stopOnExit = new Set<() => void>();
+/** The process groups of the commands to stop when Gitto exits (see `RunOptions.stopOnExit`). */
+const stopOnExit = new Set<number>();
 process.on("exit", () => {
-  for (const stop of stopOnExit) stop();
+  for (const group of stopOnExit) stopGroup(group);
 });
 
 /** Stops the process group `group`, if it's still there. */
@@ -126,15 +121,15 @@ export function runGit(cwd: string, args: string[], options: RunOptions = {}): P
     });
     // Its own session is its own process group too, numbered after it.
     const group = process.platform !== "win32" ? child.pid : undefined;
-    // On Windows, where it's no group of its own, only git itself.
-    const stop = group ? () => stopGroup(group) : () => void child.kill();
-    if (options.stopOnExit) stopOnExit.add(stop);
-    // On exit rather than close: what git started (ssh, say) can hold its output open.
-    child.on("exit", () => {
-      stopOnExit.delete(stop);
-      // Cancelling only stops git: what it started is stopped with its group.
-      if (group && options.signal?.aborted) stopGroup(group);
-    });
+    if (group) {
+      if (options.stopOnExit) stopOnExit.add(group);
+      // On exit rather than close: what git started (ssh, say) can hold its output open.
+      child.on("exit", () => {
+        stopOnExit.delete(group);
+        // Cancelling only stops git: what it started is stopped with its group.
+        if (options.signal?.aborted) stopGroup(group);
+      });
+    }
 
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
@@ -163,9 +158,7 @@ export function runGit(cwd: string, args: string[], options: RunOptions = {}): P
     child.on("error", (error: NodeJS.ErrnoException) => {
       // Cancelled (e.g. the renderer no longer needs the result); that's not a git failure.
       if (error.name === "AbortError") {
-        const exited = child.exitCode !== null || child.signalCode !== null;
-        if (options.waitForExit && !exited) child.once("exit", () => reject(error));
-        else reject(error);
+        reject(error);
         return;
       }
       const message =
