@@ -27,6 +27,8 @@ export interface BranchLabel {
 export interface WorktreeAt {
   name: string;
   path: string;
+  /** Its folder is gone, so it can't be opened, though git still counts it as checked out. */
+  gone?: true;
 }
 
 /** A label in the history's branch / tag column. */
@@ -57,7 +59,11 @@ export function checkouts(worktrees: readonly Worktree[]): Checkouts {
   const detached = new Map<string, WorktreeAt[]>();
   for (const worktree of worktrees) {
     if (worktree.current || worktree.bare) continue;
-    const at = { name: worktree.name, path: worktree.path };
+    const at: WorktreeAt = {
+      name: worktree.name,
+      path: worktree.path,
+      ...(worktree.prunable === null ? {} : { gone: true as const }),
+    };
     if (worktree.branch) branches.set(worktree.branch, at);
     else if (worktree.head) {
       const there = detached.get(worktree.head);
