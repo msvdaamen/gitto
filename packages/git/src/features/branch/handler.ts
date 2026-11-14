@@ -1,7 +1,7 @@
 import { implement } from "@orpc/server";
 
 import { withRepo, type GitContext } from "../../core/middleware";
-import { createBranch, switchBranch } from "./commands";
+import { checkoutCommit, createBranch, switchBranch } from "./commands";
 import { BranchContract } from "./contract";
 import { deleteBranch } from "./delete";
 import { mergeBranch } from "./merge";
@@ -16,6 +16,9 @@ export const branchRouter = os.router({
   switch: os.switch
     .use(withRepo)
     .handler(({ context, input }) => switchBranch(context.repo, input.ref)),
+  detach: os.detach
+    .use(withRepo)
+    .handler(({ context, input }) => checkoutCommit(context.repo, input.sha)),
   delete: os.delete
     .use(withRepo)
     .handler(({ context, input }) => deleteBranch(context.repo, input.ref)),

@@ -249,9 +249,7 @@ describe("branches in the history", () => {
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
-  it("opens the selected row's branch's menu with a key, if the commit has none", async () => {
-    const user = userEvent.setup();
-    // Only the last commit of the checked-out branch has a menu of its own (see `CommitMenu`).
+  it("opens the selected commit's own menu with a key, with HEAD detached too", async () => {
     rpc.git.status.get.mockResolvedValue({
       ...(await rpc.git.status.get()),
       head: { kind: "detached", sha: "e5" },
@@ -260,8 +258,8 @@ describe("branches in the history", () => {
 
     // What Shift+F10 or the Menu key fires, at what has the focus.
     fireEvent.contextMenu(list);
-    await user.click(await screen.findByRole("menuitem", { name: "Create branch…" }));
-    expect(await screen.findByText("From main.")).toBeInTheDocument();
+    await screen.findByRole("menuitem", { name: "Create branch here…" });
+    expect(screen.queryByRole("menuitem", { name: "Create branch…" })).not.toBeInTheDocument();
   });
 
   it("opens the commit's menu, not a branch's, at a long press off a branch", async () => {

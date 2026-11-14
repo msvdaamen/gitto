@@ -22,8 +22,8 @@ export const ADD_WORKTREE = "add-worktree";
 
 /**
  * Whether one of the operations that change the branches is running: creating one at HEAD, a
- * switch of branches (`useSwitchBranch`, `useCreateBranchFrom`), a merge, a rebase, deleting one,
- * or adding a worktree, which checks one out.
+ * switch of branches (`useSwitchBranch`, `useCreateBranchFrom`, `useCheckoutCommit`), a merge, a
+ * rebase, deleting one, or adding a worktree, which checks one out.
  */
 export function useBranchesChanging(repositoryId: () => string): () => boolean {
   const states = [CREATE, SWITCH, MERGE, REBASE, DELETE, ADD_WORKTREE].map((name) =>
@@ -87,9 +87,9 @@ export function useSwitchBranch(repositoryId: () => string) {
 }
 
 /**
- * Creates a branch at the branch `from`, by its full ref name, and switches to it, taking the
- * uncommitted changes along, or keeping them in the stash when they conflict with it. That's a
- * switch of branches, like `useSwitchBranch`'s: it's shown as one. It counts as running until the
+ * Creates a branch at `from`, a branch by its full ref name or a commit by its full SHA, and
+ * switches to it, taking the uncommitted changes along, or keeping them in the stash when they
+ * conflict with it. That's a switch of branches, like `useSwitchBranch`'s: it's shown as one. It counts as running until the
  * repository has reloaded, also after a failure: it may have switched and stashed. Not while
  * another change of the branches runs.
  */
@@ -112,8 +112,31 @@ export function useCreateBranchFrom(repositoryId: () => string) {
 }
 
 /**
- * Whether a switch of branches (see `useSwitchBranch` and `useCreateBranchFrom`) is running, and
- * why it last failed.
+ * Checks out a commit, by its full SHA, detaching HEAD at it, taking the uncommitted changes along,
+ * or keeping them in the stash when they conflict with it. That's a switch, like
+ * `useSwitchBranch`'s: it's shown as one. It counts as running until the repository has reloaded,
+ * also after a failure: it may have switched and stashed. Checking out the commit HEAD is detached
+ * at already does nothing. Not while another change of the branches runs.
+ */
+export function useCheckoutCommit(repositoryId: () => string) {
+  const queryClient = useQueryClient();
+  return oneBranchChangeAtATime(
+    repositoryId,
+    useRepositoryOperation(SWITCH, repositoryId, async (id, sha: string) => {
+      const head = queryClient.getQueryData<Uncommitted>(gitKeys.status(id))?.head;
+      if (head?.kind === "detached" && head.sha === sha) return;
+      try {
+        await rpc.git.branch.detach({ repositoryId: id, sha });
+      } finally {
+        await queryClient.invalidateQueries({ queryKey: gitKeys.repository(id) });
+      }
+    }),
+  );
+}
+
+/**
+ * Whether a switch of branches (see `useSwitchBranch` and `useCreateBranchFrom`), or to a commit
+ * (`useCheckoutCommit`), is running, and why it last failed.
  */
 export function useSwitchBranchState(repositoryId: () => string) {
   return useRepositoryOperationState(SWITCH, repositoryId);

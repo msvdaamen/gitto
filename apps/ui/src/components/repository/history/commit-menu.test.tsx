@@ -35,7 +35,7 @@ const rpc = vi.hoisted(() => ({
     diff: { commitFiles: async () => [] },
     stash: { list: async () => [] },
     refs: { list: async () => [] },
-    branch: { switch: vi.fn() },
+    branch: { switch: vi.fn(), detach: vi.fn(), create: vi.fn() },
     operation: { get: vi.fn() },
     worktree: { list: async () => [] },
     commit: { message: vi.fn(), pushedTo: vi.fn(), reword: vi.fn() },
@@ -100,12 +100,6 @@ async function renderHistory() {
   await screen.findByRole("listbox", { name: "Commit history" });
   await vi.waitFor(() => expect(selectedId()).toBe("e5"));
   return { selectedId };
-}
-
-/** Waits a moment for a menu to open, if one did. */
-async function aMoment() {
-  // oxlint-disable-next-line no-promise-executor-return -- a moment for it to open, if it did.
-  await new Promise((resolve) => setTimeout(resolve, 50));
 }
 
 /** Right-clicks the commit `subject`, and chooses Edit message in its menu once it can be. */
@@ -206,23 +200,63 @@ describe("the commit menu", () => {
     expect(summary).toHaveValue("Commit e5!");
   });
 
-  it("is only the last commit of the checked-out branch's", async () => {
+  it("only edits the message of the last commit of the checked-out branch", async () => {
     const user = userEvent.setup();
     await renderHistory();
 
     await user.pointer({ keys: "[MouseRight]", target: await screen.findByText("Commit d4") });
-    await aMoment();
-    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    await screen.findByRole("menuitem", { name: "Check out this commit" });
+    expect(screen.queryByRole("menuitem", { name: "Edit message…" })).not.toBeInTheDocument();
   });
 
-  it("isn't there with HEAD detached", async () => {
+  it("doesn't edit the message with HEAD detached, nor check out the commit it's at", async () => {
     const user = userEvent.setup();
     head = { kind: "detached", sha: "e5" };
     await renderHistory();
 
     await user.pointer({ keys: "[MouseRight]", target: await screen.findByText("Commit e5") });
-    await aMoment();
-    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    const checkout = await screen.findByRole("menuitem", { name: "Check out this commit" });
+    expect(checkout).toHaveAttribute("aria-disabled", "true");
+    expect(screen.queryByRole("menuitem", { name: "Edit message…" })).not.toBeInTheDocument();
+  });
+
+  it("checks out a commit", async () => {
+    const user = userEvent.setup();
+    rpc.git.branch.detach.mockResolvedValue(undefined);
+    await renderHistory();
+
+    await user.pointer({ keys: "[MouseRight]", target: await screen.findByText("Commit d4") });
+    await user.click(await screen.findByRole("menuitem", { name: "Check out this commit" }));
+    await vi.waitFor(() =>
+      expect(rpc.git.branch.detach).toHaveBeenCalledWith({ repositoryId: "repo", sha: "d4" }),
+    );
+  });
+
+  it("creates a branch at a commit, asking for its name", async () => {
+    const user = userEvent.setup();
+    rpc.git.branch.create.mockResolvedValue(undefined);
+    await renderHistory();
+
+    await user.pointer({ keys: "[MouseRight]", target: await screen.findByText("Commit d4") });
+    await user.click(await screen.findByRole("menuitem", { name: "Create branch here…" }));
+    expect(await screen.findByText("From commit d4.")).toBeInTheDocument();
+    await user.type(screen.getByRole("textbox", { name: "Name" }), "topic{Enter}");
+    await vi.waitFor(() =>
+      expect(rpc.git.branch.create).toHaveBeenCalledWith({
+        repositoryId: "repo",
+        name: "topic",
+        from: "d4",
+      }),
+    );
+  });
+
+  it("copies a commit's SHA", async () => {
+    const user = userEvent.setup();
+    await renderHistory();
+
+    await user.pointer({ keys: "[MouseRight]", target: await screen.findByText("Commit d4") });
+    await user.click(await screen.findByRole("menuitem", { name: "Copy SHA" }));
+    await vi.waitFor(async () => expect(await navigator.clipboard.readText()).toBe("d4"));
   });
 
   it("can't edit the message while an operation is under way", async () => {
