@@ -4,6 +4,7 @@ import { commitRouter } from "./features/commit/handler";
 import { conflictsRouter } from "./features/conflicts/handler";
 import { diffRouter } from "./features/diff/handler";
 import { historyRouter } from "./features/history/handler";
+import { initRouter } from "./features/init/handler";
 import { operationRouter } from "./features/operation/handler";
 import { overviewRouter } from "./features/overview/handler";
 import { refsRouter } from "./features/refs/handler";
@@ -35,4 +36,5 @@ export const gitRouter = {
   version: versionRouter,
   user: userRouter,
   clone: cloneRouter,
+  init: initRouter,
 };

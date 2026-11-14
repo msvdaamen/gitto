@@ -1,15 +1,15 @@
 import { Dialog } from "@kobalte/core/dialog";
 import { cn } from "cn";
 import FolderDown from "lucide-solid/icons/folder-down";
-import FolderOpen from "lucide-solid/icons/folder-open";
-import { createMemo, createSignal, Show } from "solid-js";
+import { createSignal, Show } from "solid-js";
 
 import { Button } from "@/components/ui/button";
 import { DIALOG_BOX, DialogPortal } from "@/components/ui/dialog";
 import { FormField } from "@/components/ui/form-field";
-import { inFolder, parentFolder, repositoryName } from "@/git/clone";
-import { useCloneRepository, useRepositories } from "@/hooks/repositories";
-import { rpc } from "@/lib/rpc";
+import { inFolder, repositoryName } from "@/git/clone";
+import { useCloneRepository } from "@/hooks/repositories";
+
+import { LocationField, useLocation } from "./location-field";
 
 /**
  * Clones a repository from its URL, adds it, and opens it; open while `open`. It goes in a new
@@ -19,27 +19,18 @@ import { rpc } from "@/lib/rpc";
  * and the folder kept to fix.
  */
 export function CloneDialog(props: { open: boolean; onClose: () => void }) {
-  const repositories = useRepositories();
   const cloning = useCloneRepository();
+  const location = useLocation();
   const [url, setUrl] = createSignal("");
-  /** The folder chosen with the picker, which clones go in from then on. */
-  const [chosen, setChosen] = createSignal<string>();
-  const parent = createMemo(() => {
-    const last = repositories.data?.at(-1);
-    return chosen() ?? (last && parentFolder(last.path));
-  });
   const name = () => repositoryName(url());
   /** The folder it's cloned into, once there's a URL to name it after and a folder to put it in. */
   const destination = () => {
-    const into = parent();
+    const into = location.parent();
     return into && name() ? inFolder(into, name()) : undefined;
   };
 
   async function choose() {
-    const folder = await rpc.system.selectFolder();
-    if (!folder) return;
-    setChosen(folder);
-    cloning.dismiss();
+    if (await location.choose()) cloning.dismiss();
   }
 
   function submit(event: Event) {
@@ -80,38 +71,15 @@ export function CloneDialog(props: { open: boolean; onClose: () => void }) {
               }}
               readOnly={cloning.running()}
             />
-            <div class="mb-2.5 flex flex-col gap-[5px] text-[11.5px] text-muted">
-              <span id="clone-location" class="flex justify-between">
-                Clone into
-                <small class="text-faint">A new folder, named after the repository</small>
-              </span>
-              <button
-                type="button"
-                aria-labelledby="clone-location"
-                disabled={cloning.running()}
-                title={destination() ?? parent()}
-                class="flex w-full cursor-pointer items-center gap-2 rounded-md border border-border bg-bg px-[9px] py-2 text-left text-[12px] text-text outline-0 focus-visible:border-primary focus-visible:shadow-[0_0_0_3px_var(--primary-soft)] enabled:hover:border-[color-mix(in_srgb,var(--primary)_45%,var(--border))] disabled:cursor-default disabled:opacity-60"
-                onClick={() => void choose()}
-              >
-                <FolderOpen size={14} class="shrink-0 text-muted" />
-                <span class="min-w-0 flex-1 truncate">
-                  <Show
-                    when={parent()}
-                    fallback={<span class="text-faint">Choose a folder to clone into</span>}
-                  >
-                    {(into) => (
-                      <>
-                        <span class={name() ? "text-muted" : undefined}>
-                          {name() ? inFolder(into(), "") : into()}
-                        </span>
-                        {name()}
-                      </>
-                    )}
-                  </Show>
-                </span>
-                <span class="shrink-0 text-primary-strong">Choose…</span>
-              </button>
-            </div>
+            <LocationField
+              label="Clone into"
+              hint="A new folder, named after the repository"
+              placeholder="Choose a folder to clone into"
+              parent={location.parent()}
+              name={name()}
+              disabled={cloning.running()}
+              onChoose={() => void choose()}
+            />
             <Show when={cloning.running()}>
               <div class="mb-2.5 flex flex-col gap-[5px] text-[11.5px] text-muted" role="status">
                 <div class="flex justify-between">
