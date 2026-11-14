@@ -1,6 +1,7 @@
+import type { CloneProgress } from "@gitto/git/types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/solid-query";
 import { useNavigate } from "@tanstack/solid-router";
-import { createMemo } from "solid-js";
+import { createMemo, createSignal, onCleanup } from "solid-js";
 
 import { rpc } from "@/lib/rpc";
 
@@ -62,6 +63,66 @@ export function useOpenRepository() {
     error: () => addRepository.error,
     /** Forgets why it last failed. */
     dismiss: () => addRepository.reset(),
+  };
+}
+
+/**
+ * Clones a repository into a folder, adds it to Gitto, and opens it: how far the clone has got
+ * while it runs, and why it last failed, until that's dismissed or it's run again. Cancelling it
+ * (or leaving the page that started it) stops git, which leaves nothing of the clone behind.
+ */
+export function useCloneRepository() {
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const [running, setRunning] = createSignal(false);
+  const [progress, setProgress] = createSignal<CloneProgress | null>(null);
+  const [error, setError] = createSignal<Error | null>(null);
+  let controller: AbortController | undefined;
+  onCleanup(() => controller?.abort());
+
+  /** Clones `url` into the folder `path`; `onCloned` runs once it's added, before it's opened. */
+  async function clone(url: string, path: string, onCloned?: () => void) {
+    if (running()) return;
+    const current = (controller = new AbortController());
+    setRunning(true);
+    setProgress(null);
+    setError(null);
+    try {
+      const steps = await rpc.git.clone.run({ url, path }, { signal: current.signal });
+      let step = await steps.next();
+      while (!step.done) {
+        setProgress(step.value);
+        // oxlint-disable-next-line no-await-in-loop -- each step comes after the last.
+        step = await steps.next();
+      }
+      // The folder as git cloned into it, with `~` for the home folder spelled out.
+      const repository = await rpc.repository.add({ path: step.value });
+      await queryClient.invalidateQueries({ queryKey: REPOSITORIES_KEY });
+      onCloned?.();
+      void navigate({ to: "/$repoId", params: { repoId: repository.id } });
+    } catch (failure) {
+      // Cancelled: that's not a failure to show.
+      if (current.signal.aborted) return;
+      // The UI shows only the message; the stack and cause are for whoever looks into it.
+      console.error("Couldn't clone the repository", failure);
+      setError(failure instanceof Error ? failure : new Error(String(failure)));
+    } finally {
+      if (controller === current) controller = undefined;
+      setRunning(false);
+      setProgress(null);
+    }
+  }
+
+  return {
+    clone,
+    /** Stops the clone that's running, if any. */
+    cancel: () => controller?.abort(),
+    running,
+    /** How far the running clone has got, once git has said. */
+    progress,
+    error,
+    /** Forgets why it last failed. */
+    dismiss: () => setError(null),
   };
 }
 

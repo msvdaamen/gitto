@@ -299,6 +299,12 @@ export class WorktreeRemovalBlockedError extends messageError(PRECONDITION_FAILE
  */
 export class BranchDeletionBlockedError extends messageError(PRECONDITION_FAILED) {}
 
+/**
+ * A repository that couldn't be cloned: the URL is wrong, git couldn't sign in, or the folder is
+ * in use. Nothing is left of it.
+ */
+export class CloneFailedError extends messageError(PRECONDITION_FAILED) {}
+
 /** What's asked of git needs an editor for a message, which Gitto can't open: a rebase's reword. */
 export class EditorNeededError extends messageError(PRECONDITION_FAILED) {}
 

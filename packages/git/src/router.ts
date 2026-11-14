@@ -1,4 +1,5 @@
 import { branchRouter } from "./features/branch/handler";
+import { cloneRouter } from "./features/clone/handler";
 import { commitRouter } from "./features/commit/handler";
 import { conflictsRouter } from "./features/conflicts/handler";
 import { diffRouter } from "./features/diff/handler";
@@ -33,4 +34,5 @@ export const gitRouter = {
   watch: watchRouter,
   version: versionRouter,
   user: userRouter,
+  clone: cloneRouter,
 };

@@ -4,12 +4,13 @@ import Copy from "lucide-solid/icons/copy";
 import Folder from "lucide-solid/icons/folder";
 import Plus from "lucide-solid/icons/plus";
 import Sparkles from "lucide-solid/icons/sparkles";
-import { createMemo, Show } from "solid-js";
+import { createMemo, createSignal, Show } from "solid-js";
 
 import { Button } from "@/components/ui/button";
 import { FailurePopover } from "@/components/ui/failure-popover";
 import { useRelativeTime } from "@/hooks/relative-time";
 
+import { CloneDialog } from "./clone-dialog";
 import { demoAction } from "./demo-action";
 import type { RepositorySummary } from "./summaries";
 
@@ -25,6 +26,7 @@ export function WelcomeHero(props: {
 }) {
   // The first of their names, the way people are greeted.
   const firstName = () => props.userName?.trim().split(/\s+/)[0];
+  const [cloning, setCloning] = createSignal(false);
 
   return (
     <section class="relative mx-auto mb-5.5 flex min-h-52.5 max-w-322.5 items-center overflow-hidden rounded-[13px] border border-[color-mix(in_srgb,var(--primary)_30%,var(--border))] bg-[linear-gradient(122deg,color-mix(in_srgb,var(--panel)_90%,var(--primary)_10%),var(--panel))] px-9.5 py-8 shadow-app after:pointer-events-none after:absolute after:inset-0 after:bg-[radial-gradient(color-mix(in_srgb,var(--primary)_55%,transparent)_.65px,transparent_.65px)] after:bg-size-[17px_17px] after:opacity-[.18] after:mask-[linear-gradient(90deg,transparent,#000)] after:content-[''] max-sm:min-h-57.5 max-sm:p-6.5">
@@ -54,10 +56,7 @@ export function WelcomeHero(props: {
               Open repository
             </Button>
           </FailurePopover>
-          <Button
-            icon={Copy}
-            onClick={demoAction("Clone repository is ready for Git integration.")}
-          >
+          <Button icon={Copy} onClick={() => setCloning(true)}>
             Clone from URL
           </Button>
           <Button
@@ -70,6 +69,7 @@ export function WelcomeHero(props: {
         </div>
       </div>
       <SyncStatus summaries={props.summaries} />
+      <CloneDialog open={cloning()} onClose={() => setCloning(false)} />
     </section>
   );
 }
