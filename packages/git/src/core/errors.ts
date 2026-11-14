@@ -305,6 +305,11 @@ export class BranchDeletionBlockedError extends messageError(PRECONDITION_FAILED
  */
 export class CloneFailedError extends messageError(PRECONDITION_FAILED) {}
 
+/**
+ * A repository that couldn't be created: the folder is one already, or git couldn't make it there.
+ */
+export class InitFailedError extends messageError(PRECONDITION_FAILED) {}
+
 /** What's asked of git needs an editor for a message, which Gitto can't open: a rebase's reword. */
 export class EditorNeededError extends messageError(PRECONDITION_FAILED) {}
 

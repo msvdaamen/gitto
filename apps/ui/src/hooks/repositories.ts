@@ -126,6 +126,28 @@ export function useCloneRepository() {
   };
 }
 
+/**
+ * Creates an empty repository in a folder (made if it isn't there), adds it to Gitto, and opens
+ * it; with why that last failed, until it's dismissed or run again.
+ */
+export function useInitRepository() {
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  return useMutation(() => ({
+    mutationFn: async (path: string) => {
+      // The folder as git created it in, with `~` for the home folder spelled out.
+      const created = await rpc.git.init.run({ path });
+      return rpc.repository.add({ path: created });
+    },
+    onSuccess: async (repository) => {
+      await queryClient.invalidateQueries({ queryKey: REPOSITORIES_KEY });
+      void navigate({ to: "/$repoId", params: { repoId: repository.id } });
+    },
+    // The UI shows only the message; the stack and cause are for whoever looks into it.
+    onError: (error) => console.error("Couldn't create the repository", error),
+  }));
+}
+
 /** Removes a repository from Gitto; the folder on disk is left untouched. */
 export function useRemoveRepository() {
   const queryClient = useQueryClient();

@@ -4,6 +4,7 @@ import { CommitContract } from "./features/commit/contract";
 import { ConflictsContract } from "./features/conflicts/contract";
 import { DiffContract } from "./features/diff/contract";
 import { HistoryContract } from "./features/history/contract";
+import { InitContract } from "./features/init/contract";
 import { OperationContract } from "./features/operation/contract";
 import { OverviewContract } from "./features/overview/contract";
 import { RefsContract } from "./features/refs/contract";
@@ -35,4 +36,5 @@ export const GitContract = {
   version: VersionContract,
   user: UserContract,
   clone: CloneContract,
+  init: InitContract,
 };
