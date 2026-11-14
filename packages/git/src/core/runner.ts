@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
+import { StringDecoder } from "node:string_decoder";
 
 import { commandError, GitError } from "./errors";
 import { trace, tracing } from "./trace";
@@ -41,6 +42,11 @@ export interface RunOptions {
    * the renderer whole, like a file's patch, which can be of a file of any size.
    */
   maxOutput?: { bytes: number; error: () => Error };
+  /**
+   * Told what git writes to stderr as it comes, e.g. the progress `--progress` reports; it's
+   * still collected, for the error if git fails.
+   */
+  onStderr?: (text: string) => void;
 }
 
 // Settings that keep git's output stable and machine-readable, whatever the user's config says.
@@ -142,7 +148,12 @@ export function runGit(cwd: string, args: string[], options: RunOptions = {}): P
       }
       stdout.push(chunk);
     });
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    // Decoded as it comes, without splitting a character across two chunks.
+    const decoder = options.onStderr && new StringDecoder("utf8");
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr.push(chunk);
+      if (decoder) options.onStderr!(decoder.write(chunk));
+    });
 
     child.on("error", (error: NodeJS.ErrnoException) => {
       // Cancelled (e.g. the renderer no longer needs the result); that's not a git failure.

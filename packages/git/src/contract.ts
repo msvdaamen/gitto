@@ -1,4 +1,5 @@
 import { BranchContract } from "./features/branch/contract";
+import { CloneContract } from "./features/clone/contract";
 import { CommitContract } from "./features/commit/contract";
 import { ConflictsContract } from "./features/conflicts/contract";
 import { DiffContract } from "./features/diff/contract";
@@ -33,4 +34,5 @@ export const GitContract = {
   watch: WatchContract,
   version: VersionContract,
   user: UserContract,
+  clone: CloneContract,
 };

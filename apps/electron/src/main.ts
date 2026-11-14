@@ -111,7 +111,8 @@ function openChangelog() {
 async function selectFolder() {
   // The picker is opened from a click, so the focused window is the one that asked.
   const win = BrowserWindow.getFocusedWindow();
-  const options: Electron.OpenDialogOptions = { properties: ["openDirectory"] };
+  // A new folder can be made in it, e.g. to clone into (macOS only shows that when asked).
+  const options: Electron.OpenDialogOptions = { properties: ["openDirectory", "createDirectory"] };
   const result = await (win ? dialog.showOpenDialog(win, options) : dialog.showOpenDialog(options));
   return result.canceled ? null : (result.filePaths[0] ?? null);
 }

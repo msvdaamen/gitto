@@ -26,10 +26,24 @@ export const withRepo = os
   });
 
 /**
+ * For a procedure that runs git outside of a repository, like a clone: turns the git package's
+ * errors into ones the renderer can show, and runs nothing with a git Gitto doesn't support. Not
+ * for errors an event iterator throws as it's read, which `toApiError` is for.
+ */
+export const withGit = os.$context<GitContext>().middleware(async ({ context, next }) => {
+  try {
+    await context.gitVersion.require();
+    return await next();
+  } catch (error) {
+    throw toApiError(error);
+  }
+});
+
+/**
  * The error as it reaches the renderer: with the code the git package's error says (see `ApiCode`
  * in `errors.ts`). Any other error is a bug, which oRPC reports as such.
  */
-function toApiError(error: unknown): unknown {
+export function toApiError(error: unknown): unknown {
   if (!isApiFailure(error)) return error;
   const { code, status } = error.api;
   return new ORPCError(code, {
