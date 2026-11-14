@@ -8,13 +8,24 @@ import { Button } from "@/components/ui/button";
 import { DIALOG_BOX, DialogPortal } from "@/components/ui/dialog";
 import { FormField } from "@/components/ui/form-field";
 import { inFolder, parentFolder, repositoryName } from "@/git/clone";
-import { useCloneRepository, useRepositories } from "@/hooks/repositories";
+import { useCloneRepository, useRepositories, type Repository } from "@/hooks/repositories";
 import { rpc } from "@/lib/rpc";
+
+/** Where the folder last chosen to clone into is kept, so it's the one clones go in after a restart. */
+const CHOSEN_KEY = "gitto-clone-folder";
+
+function loadChosen(): string | undefined {
+  try {
+    return localStorage.getItem(CHOSEN_KEY) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Clones a repository from its URL, adds it, and opens it; open while `open`. It goes in a new
- * folder named after it, in the folder chosen with the folder picker: at first the one the last
- * repository is in, and the one last chosen from then on. While it clones, the dialog says how far
+ * folder named after it, in the folder chosen with the folder picker: the one last chosen, or until
+ * one is, the one the repository added last is in. While it clones, the dialog says how far
  * it's got, and stays open until it's done or cancelled. Why it failed is said in it, with the URL
  * and the folder kept to fix.
  */
@@ -23,10 +34,14 @@ export function CloneDialog(props: { open: boolean; onClose: () => void }) {
   const cloning = useCloneRepository();
   const [url, setUrl] = createSignal("");
   /** The folder chosen with the picker, which clones go in from then on. */
-  const [chosen, setChosen] = createSignal<string>();
+  const [chosen, setChosen] = createSignal(loadChosen());
   const parent = createMemo(() => {
-    const last = repositories.data?.at(-1);
-    return chosen() ?? (last && parentFolder(last.path));
+    // Ids are UUIDv7s, which sort by when they were made: the greatest is the one added last.
+    const newest = repositories.data?.reduce<Repository | undefined>(
+      (latest, repository) => (!latest || repository.id > latest.id ? repository : latest),
+      undefined,
+    );
+    return chosen() ?? (newest && parentFolder(newest.path));
   });
   const name = () => repositoryName(url());
   /** The folder it's cloned into, once there's a URL to name it after and a folder to put it in. */
@@ -39,6 +54,11 @@ export function CloneDialog(props: { open: boolean; onClose: () => void }) {
     const folder = await rpc.system.selectFolder();
     if (!folder) return;
     setChosen(folder);
+    try {
+      localStorage.setItem(CHOSEN_KEY, folder);
+    } catch {
+      // Unavailable: it's still used until Gitto closes.
+    }
     cloning.dismiss();
   }
 
@@ -115,7 +135,12 @@ export function CloneDialog(props: { open: boolean; onClose: () => void }) {
             <Show when={cloning.running()}>
               <div class="mb-2.5 flex flex-col gap-[5px] text-[11.5px] text-muted" role="status">
                 <div class="flex justify-between">
-                  <span>{cloning.progress()?.phase ?? "Connecting"}…</span>
+                  <span>
+                    {cloning.cancellable()
+                      ? (cloning.progress()?.phase ?? "Connecting")
+                      : "Opening"}
+                    …
+                  </span>
                   <Show when={cloning.progress()}>
                     <span class="tabular-nums">{percent()}%</span>
                   </Show>
@@ -151,6 +176,7 @@ export function CloneDialog(props: { open: boolean; onClose: () => void }) {
                   type="button"
                   variant="secondary"
                   class="h-8 shrink-0 rounded-[7px] text-[12.5px] shadow-none"
+                  disabled={!cloning.cancellable()}
                   onClick={cloning.cancel}
                 >
                   Cancel
