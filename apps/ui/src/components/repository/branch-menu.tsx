@@ -34,7 +34,10 @@ import { RowMenu } from "./row-menu";
 
 /** What the branch menus share, from their `BranchMenuProvider`. */
 interface BranchActions {
-  /** Begins creating a branch from another, by its full ref name, asking for the new one's name. */
+  /**
+   * Begins creating a branch from another, by its full ref name, or from a commit, by its full SHA,
+   * asking for the new one's name.
+   */
   createFrom: (from: string) => void;
   /** Merges a branch, by its full ref name, into the checked-out one, `into`. */
   merge: (ref: string, into: string) => void;
@@ -91,7 +94,8 @@ export function BranchMenuProvider(props: {
   const pullingHead = usePull(() => props.repositoryId);
   // The toolbar shows it running, and why it failed, as for a merge.
   const pullingBranch = usePullBranch(() => props.repositoryId);
-  // The branch a new one is being named to be created from, by its full ref name.
+  // The branch a new one is being named to be created from, by its full ref name, or the commit,
+  // by its full SHA.
   const [from, setFrom] = createSignal<string>();
   // The branch a worktree is being placed for, by its full ref name.
   const [worktreeFor, setWorktreeFor] = createSignal<string>();
@@ -181,6 +185,15 @@ export function useBranchMenuOpenFor() {
 export function useOpenWorktreeFromBranch(): (path: string) => void {
   const actions = useContext(BranchActions);
   return (path) => actions?.openWorktree(path);
+}
+
+/**
+ * Begins creating a branch from a commit, by its full SHA, from a `BranchMenuProvider`, asking for
+ * its name in the dialog the branch menus share: for the commit menu (see `CommitMenu`).
+ */
+export function useCreateBranchAt(): (sha: string) => void {
+  const actions = useContext(BranchActions);
+  return (sha) => actions?.createFrom(sha);
 }
 
 /**

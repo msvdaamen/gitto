@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import { cloneRepo, createRepo, git, repos } from "../../test/fixtures";
-import { createBranch, switchBranch } from "./commands";
+import { checkoutCommit, createBranch, switchBranch } from "./commands";
 
 /** A repository with `a.txt` committed on `main`, which `repos` opens as `name`. */
 function createCommittedRepo(name: string): string {
@@ -367,5 +367,92 @@ describe("creating a branch from another", () => {
     }
     expect(git(path, "symbolic-ref", "--short", "HEAD")).toBe("main");
     expect(git(path, "branch", "--format=%(refname:short)")).toBe("main\nother");
+  });
+});
+
+describe("creating a branch at a commit", () => {
+  it("switches to a new branch at it, taking the changes along", async () => {
+    const path = createBranchedRepo("create-at");
+    const sha = git(path, "rev-parse", "main~1");
+    writeFileSync(join(path, "a.txt"), "mine\n");
+    writeFileSync(join(path, "new.txt"), "new\n");
+    const before = git(path, "status", "--porcelain");
+
+    await createBranch(await repos.open("create-at"), "topic", sha);
+    expect(git(path, "symbolic-ref", "--short", "HEAD")).toBe("topic");
+    expect(git(path, "rev-parse", "topic")).toBe(sha);
+    expect(git(path, "status", "--porcelain")).toBe(before);
+  });
+
+  it("keeps the changes in the stash when they conflict with it", async () => {
+    const path = createBranchedRepo("create-at-conflict");
+    const sha = git(path, "rev-parse", "other");
+    writeFileSync(join(path, "a.txt"), "mine\n");
+
+    await expect(
+      createBranch(await repos.open("create-at-conflict"), "topic", sha),
+    ).rejects.toThrow(
+      "Switched to topic, but your uncommitted changes conflict with it, so they're kept in the stash.",
+    );
+    expect(git(path, "rev-parse", "topic")).toBe(sha);
+    expect(git(path, "stash", "list")).toBe(
+      "stash@{0}: On main: Uncommitted changes when switching to topic",
+    );
+  });
+
+  it("refuses a SHA that isn't a commit's", async () => {
+    const path = createBranchedRepo("create-at-missing");
+    const tree = git(path, "rev-parse", "main^{tree}");
+    const repo = await repos.open("create-at-missing");
+
+    for (const sha of [tree, "0".repeat(40)]) {
+      // oxlint-disable-next-line no-await-in-loop -- one at a time, on purpose.
+      await expect(createBranch(repo, "topic", sha)).rejects.toThrow(
+        `There's no commit ${sha.slice(0, 7)} in this repository.`,
+      );
+    }
+    expect(git(path, "branch", "--format=%(refname:short)")).toBe("main\nother");
+  });
+});
+
+describe("checking out a commit", () => {
+  it("detaches HEAD at it, taking the changes along", async () => {
+    const path = createBranchedRepo("detach");
+    const sha = git(path, "rev-parse", "main~1");
+    writeFileSync(join(path, "a.txt"), "mine\n");
+    writeFileSync(join(path, "new.txt"), "new\n");
+    const before = git(path, "status", "--porcelain");
+
+    await checkoutCommit(await repos.open("detach"), sha);
+    expect(() => git(path, "symbolic-ref", "-q", "HEAD")).toThrow();
+    expect(git(path, "rev-parse", "HEAD")).toBe(sha);
+    expect(git(path, "status", "--porcelain")).toBe(before);
+    // The branch it was on stays where it was.
+    expect(git(path, "rev-parse", "main")).not.toBe(sha);
+  });
+
+  it("keeps the changes in the stash when they conflict with it", async () => {
+    const path = createBranchedRepo("detach-conflict");
+    const sha = git(path, "rev-parse", "other");
+    writeFileSync(join(path, "a.txt"), "mine\n");
+
+    await expect(checkoutCommit(await repos.open("detach-conflict"), sha)).rejects.toThrow(
+      `Switched to commit ${sha.slice(0, 7)}, but your uncommitted changes conflict with it, so they're kept in the stash.`,
+    );
+    expect(git(path, "rev-parse", "HEAD")).toBe(sha);
+    expect(git(path, "status", "--porcelain")).toBe("");
+    expect(git(path, "stash", "list")).toBe(
+      `stash@{0}: On main: Uncommitted changes when switching to commit ${sha.slice(0, 7)}`,
+    );
+  });
+
+  it("refuses a SHA that isn't a commit's", async () => {
+    const path = createBranchedRepo("detach-missing");
+    const tree = git(path, "rev-parse", "main^{tree}");
+
+    await expect(checkoutCommit(await repos.open("detach-missing"), tree)).rejects.toThrow(
+      `There's no commit ${tree.slice(0, 7)} in this repository.`,
+    );
+    expect(git(path, "symbolic-ref", "--short", "HEAD")).toBe("main");
   });
 });

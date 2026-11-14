@@ -11,10 +11,10 @@ import { remoteOf } from "../remote/remote-name";
 import { popNewest, stashChanges } from "../stash/commands";
 
 /**
- * Creates the branch `name` and switches to it: at HEAD, or at the branch `from` (a full ref name),
- * which must be there.
+ * Creates the branch `name` and switches to it: at HEAD, or at the branch `from` (a full ref name)
+ * or the commit `from` (a full SHA), which must be there.
  * At HEAD, it stays on the same commit, so every uncommitted change, staged or not, comes along to
- * the new branch as it is; from a branch, they come along as when switching to it (see
+ * the new branch as it is; from a branch or a commit, they come along as when switching to it (see
  * `switchBranch`), through the stash if need be. It doesn't track the branch it was made from, so
  * pulling it doesn't pull that one's commits into it. Git refuses a name that's taken or not a valid
  * branch name, and to switch in the middle of a merge or rebase, saying so.
@@ -27,6 +27,13 @@ export async function createBranch(repo: Repo, name: string, from?: string): Pro
     await repo.write(args, options);
     return;
   }
+  if (FULL_SHA.test(from)) {
+    await repo.exclusive(async (run) => {
+      await mustBeCommit(run, from);
+      await switchTakingChanges(run, repo.path, [...args, "--", from], name, options);
+    });
+    return;
+  }
   const target = parseRefName(from);
   if (!target || target.kind === "tag") throw new Error(`${from} isn't a branch.`);
   // One write, so nothing else changes the branches, the stashes or the working tree halfway.
@@ -34,6 +41,36 @@ export async function createBranch(repo: Repo, name: string, from?: string): Pro
     // That ref itself, rather than git reading `from` as a revision, like `refs/heads/main~3`.
     if (!(await isRef(run, from))) throw new Error(`${from} isn't a branch.`);
     await switchTakingChanges(run, repo.path, [...args, "--", from], name, options);
+  });
+}
+
+/** A full commit SHA: SHA-1, or SHA-256. */
+const FULL_SHA = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
+
+/** Rejects unless the full SHA `sha` is a commit that's there. */
+async function mustBeCommit(run: GitCommand, sha: string): Promise<void> {
+  // A blob or tree by that SHA isn't one; nor is a tag, which `^{commit}` would peel.
+  if ((await resolveRef(run, sha)) !== sha) {
+    throw new Error(`There's no commit ${sha.slice(0, 7)} in this repository.`);
+  }
+}
+
+/**
+ * Checks out the commit `sha` (a full SHA), detaching HEAD at it, and taking the uncommitted
+ * changes along, staged or not, as when switching branches (see `switchBranch`): through the stash
+ * if need be, kept there if they conflict with it. Git refuses to switch in the middle of a merge
+ * or rebase, saying so.
+ */
+export async function checkoutCommit(repo: Repo, sha: string): Promise<void> {
+  // One write, so nothing else changes the branches, the stashes or the working tree halfway.
+  await repo.exclusive(async (run) => {
+    await mustBeCommit(run, sha);
+    await switchTakingChanges(
+      run,
+      repo.path,
+      ["switch", "--detach", "--", sha],
+      `commit ${sha.slice(0, 7)}`,
+    );
   });
 }
 
@@ -71,10 +108,11 @@ export async function switchBranch(repo: Repo, ref: string): Promise<void> {
 }
 
 /**
- * Runs the `git switch` `args`, to the branch `name`, taking the uncommitted changes along: when
- * git won't, as the branch changes the files they're in, they're stashed, it's switched, and the
- * stash popped there; if it wouldn't pop without conflicts, it's kept, and that's thrown as a
- * `ChangesStashedError`. For a repository at `root`, in a write of its own (`Repo.exclusive`).
+ * Runs the `git switch` `args`, to `name` (a branch, or the commit it detaches HEAD at), taking
+ * the uncommitted changes along: when git won't, as the branch changes the files they're in,
+ * they're stashed, it's switched, and the stash popped there; if it wouldn't pop without
+ * conflicts, it's kept, and that's thrown as a `ChangesStashedError`. For a repository at `root`,
+ * in a write of its own (`Repo.exclusive`).
  */
 async function switchTakingChanges(
   run: GitCommand,
@@ -111,7 +149,7 @@ async function switchTakingChanges(
   }
   if (!(await popsCleanly(run, root, stash))) {
     throw new ChangesStashedError(
-      `Switched to ${(await currentBranch(run)) ?? "the branch"}, but your uncommitted changes conflict with it, so they're kept in the stash.`,
+      `Switched to ${(await currentBranch(run)) ?? name}, but your uncommitted changes conflict with it, so they're kept in the stash.`,
     );
   }
   await popNewest(run);
