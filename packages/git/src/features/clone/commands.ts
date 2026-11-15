@@ -1,8 +1,8 @@
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, resolve } from "node:path";
 
 import { CloneFailedError, GitError } from "../../core/errors";
+import { fullPath } from "../../core/paths";
 import { runGit } from "../../core/runner";
 import type { CloneProgress } from "./schema";
 
@@ -72,14 +72,13 @@ export async function* cloneRepository(
 
 /** `folder` as a full path, with `~` for the home folder; rejects one that isn't a full path. */
 export function clonePath(folder: string): string {
-  const trimmed = folder.trim();
-  const expanded = /^~(?=$|[\\/])/.test(trimmed) ? homedir() + trimmed.slice(1) : trimmed;
-  if (!isAbsolute(expanded)) {
+  const path = fullPath(folder);
+  if (!path) {
     throw new CloneFailedError(
-      `${trimmed} isn't a full path. Choose the folder to clone into, or type its full path.`,
+      `${folder.trim()} isn't a full path. Choose the folder to clone into, or type its full path.`,
     );
   }
-  return resolve(expanded);
+  return path;
 }
 
 /**

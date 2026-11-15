@@ -11,7 +11,7 @@ import { FailurePopover } from "@/components/ui/failure-popover";
 import { useRelativeTime } from "@/hooks/relative-time";
 
 import { CloneDialog } from "./clone-dialog";
-import { demoAction } from "./demo-action";
+import { InitDialog } from "./init-dialog";
 import type { RepositorySummary } from "./summaries";
 
 /** The home page banner: a greeting, a way to open a repository, and whether all are in sync. */
@@ -27,6 +27,7 @@ export function WelcomeHero(props: {
   // The first of their names, the way people are greeted.
   const firstName = () => props.userName?.trim().split(/\s+/)[0];
   const [cloning, setCloning] = createSignal(false);
+  const [creating, setCreating] = createSignal(false);
 
   return (
     <section class="relative mx-auto mb-5.5 flex min-h-52.5 max-w-322.5 items-center overflow-hidden rounded-[13px] border border-[color-mix(in_srgb,var(--primary)_30%,var(--border))] bg-[linear-gradient(122deg,color-mix(in_srgb,var(--panel)_90%,var(--primary)_10%),var(--panel))] px-9.5 py-8 shadow-app after:pointer-events-none after:absolute after:inset-0 after:bg-[radial-gradient(color-mix(in_srgb,var(--primary)_55%,transparent)_.65px,transparent_.65px)] after:bg-size-[17px_17px] after:opacity-[.18] after:mask-[linear-gradient(90deg,transparent,#000)] after:content-[''] max-sm:min-h-57.5 max-sm:p-6.5">
@@ -59,17 +60,14 @@ export function WelcomeHero(props: {
           <Button icon={Copy} onClick={() => setCloning(true)}>
             Clone from URL
           </Button>
-          <Button
-            variant="ghost"
-            icon={Plus}
-            onClick={demoAction("Initialize repository is a demo action.")}
-          >
+          <Button variant="ghost" icon={Plus} onClick={() => setCreating(true)}>
             New repository
           </Button>
         </div>
       </div>
       <SyncStatus summaries={props.summaries} />
       <CloneDialog open={cloning()} onClose={() => setCloning(false)} />
+      <InitDialog open={creating()} onClose={() => setCreating(false)} />
     </section>
   );
 }
