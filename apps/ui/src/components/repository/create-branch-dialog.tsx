@@ -5,17 +5,20 @@ import { createEffect, createSignal, on } from "solid-js";
 import { DIALOG_BOX, DialogPortal } from "@/components/ui/dialog";
 import { useCreateBranchFrom } from "@/git/queries/branch";
 import { useStatus } from "@/git/queries/status";
-import { branchName, hasUncommittedChanges, isCheckedOut } from "@/git/status";
+import { branchName, hasUncommittedChanges, headSha, isCheckedOut } from "@/git/status";
 import { useLingering } from "@/hooks/lingering";
 import { useResetOn } from "@/hooks/reset-on";
 
 import { BranchForm } from "./branch-form";
 
+/** Whether `from`, what a branch is made from, is a branch's full ref name, rather than a SHA. */
+const isRefName = (from: string) => from.startsWith("refs/");
+
 /**
- * Names a branch to create from the branch `from`, by its full ref name, and switches to it, taking the uncommitted
- * changes along; open while there's a `from`. That's a switch of branches: the current branch, in
- * the toolbar, shows it running, and why it failed. It can't be created while another switch, or a
- * merge, is running.
+ * Names a branch to create from `from`, a branch by its full ref name or a commit by its full SHA,
+ * and switches to it, taking the uncommitted changes along; open while there's a `from`. That's a
+ * switch of branches: the current branch, in the toolbar, shows it running, and why it failed. It
+ * can't be created while another switch, or a merge, is running.
  */
 export function CreateBranchDialog(props: {
   repositoryId: string;
@@ -31,7 +34,11 @@ export function CreateBranchDialog(props: {
   const changes = () => {
     if (!hasUncommittedChanges(status.data)) return ".";
     const head = status.data?.head;
-    if (head && isCheckedOut(head, from() ?? "")) return ", with your uncommitted changes.";
+    const source = from() ?? "";
+    const atHead = isRefName(source)
+      ? !!head && isCheckedOut(head, source)
+      : !!head && headSha(head) === source;
+    if (atHead) return ", with your uncommitted changes.";
     return ", with your uncommitted changes, unless they conflict with it: then they're kept in the stash.";
   };
 
@@ -65,7 +72,7 @@ export function CreateBranchDialog(props: {
           <BranchForm
             title={Dialog.Title}
             description={Dialog.Description}
-            summary={`From ${branchName(from() ?? "")}${changes()}`}
+            summary={`From ${sourceLabel(from() ?? "")}${changes()}`}
             // `run` does nothing while a switch or a merge is running.
             disabled={create.isBlocked()}
             name={name()}
@@ -76,4 +83,9 @@ export function CreateBranchDialog(props: {
       </DialogPortal>
     </Dialog>
   );
+}
+
+/** What a branch is made from, `from`, as the dialog names it: `main`, or `commit 1a2b3c4`. */
+function sourceLabel(from: string): string {
+  return isRefName(from) ? branchName(from) : `commit ${from.slice(0, 7)}`;
 }

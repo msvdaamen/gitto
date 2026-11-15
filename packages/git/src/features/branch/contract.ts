@@ -1,20 +1,20 @@
 import { oc } from "@orpc/contract";
 import * as z from "zod";
 
-import { BranchRef, RepositoryInput } from "../../input";
+import { BranchRef, FullSha, RepositoryInput } from "../../input";
 import { MergeOutcomeSchema, RebaseOutcomeSchema } from "./schema";
 
 export const BranchContract = {
   /**
-   * Creates a branch and switches to it, taking the uncommitted changes along: at HEAD, or at the
-   * branch `from`, by its full ref name. Fails if the name is taken or isn't a valid branch name.
-   * When the changes conflict with `from`, it's switched to anyway, and fails saying they're kept
-   * in the stash.
+   * Creates a branch and switches to it, taking the uncommitted changes along: at HEAD, or at
+   * `from`, a branch by its full ref name or a commit by its full SHA. Fails if the name is taken
+   * or isn't a valid branch name. When the changes conflict with `from`, it's switched to anyway,
+   * and fails saying they're kept in the stash.
    */
   create: oc.input(
     RepositoryInput.extend({
       name: z.string().regex(/\S/, "The name is empty."),
-      from: BranchRef.optional(),
+      from: z.union([BranchRef, FullSha]).optional(),
     }),
   ),
   /**
@@ -23,6 +23,12 @@ export const BranchContract = {
    * with it, it's switched to anyway, and fails saying they're kept in the stash.
    */
   switch: oc.input(RepositoryInput.extend({ ref: BranchRef })),
+  /**
+   * Checks out a commit, by its full SHA, detaching HEAD at it, and taking the uncommitted changes
+   * along. When they conflict with it, it's checked out anyway, and fails saying they're kept in
+   * the stash.
+   */
+  detach: oc.input(RepositoryInput.extend({ sha: FullSha })),
   /**
    * Deletes a branch, by its full ref name, with the commits only it has. A local branch is deleted
    * here only. A remote branch is deleted on its remote (or only here, if the remote's gone), and so
