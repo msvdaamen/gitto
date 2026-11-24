@@ -1,10 +1,12 @@
 import type { Stash } from "@gitto/git/types";
-import ArchiveRestore from "lucide-solid/icons/archive-restore";
-import Trash from "lucide-solid/icons/trash";
-import { createSignal, type JSX } from "solid-js";
+import ArchiveRestore from "@lucide/solid/icons/archive-arrow-up";
+import Trash from "@lucide/solid/icons/trash";
+import type { JSX } from "@solidjs/web";
+import { createSignal } from "solid-js";
 
 import { ContextMenuItem } from "@/components/ui/context-menu";
 import { FailurePopover } from "@/components/ui/failure-popover";
+import { loadedData } from "@/git/queries/loaded";
 import { useStashActions, useStashes } from "@/git/queries/stash";
 import { useStatus } from "@/git/queries/status";
 import { canPop } from "@/git/stash";
@@ -56,14 +58,14 @@ export function StashMenu(props: {
       <RowMenu
         repositoryId={props.repositoryId}
         attribute="stash"
-        item={(sha) => stashes.data?.find((stash) => stash.sha === sha)}
+        item={(sha) => loadedData(stashes)?.find((stash) => stash.sha === sha)}
         onOpenFor={(sha) => props.onOpenFor(sha)}
         actions={(stash) => (
           <>
             <ContextMenuItem
               icon={ArchiveRestore}
               label="Pop stash"
-              disabled={!canPop(status.data, stashes.data) || isPending()}
+              disabled={!canPop(loadedData(status), loadedData(stashes)) || isPending()}
               onSelect={() => popPicked.run(stash().sha)}
             />
             <ContextMenuItem

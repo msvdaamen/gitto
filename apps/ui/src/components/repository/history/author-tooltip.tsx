@@ -1,7 +1,6 @@
-import { Popper } from "@kobalte/core/popper";
+import type { JSX } from "@solidjs/web";
+import { Tooltip, TooltipArrow, TooltipContent } from "@ui-sdk/solid/tooltip";
 import { createContext, createEffect, createSignal, onCleanup, Show, useContext } from "solid-js";
-import type { JSX } from "solid-js";
-import { Portal } from "solid-js/web";
 
 import { Avatar } from "@/components/ui/avatar";
 
@@ -22,9 +21,9 @@ interface AuthorTooltip {
   hide: (node: Element) => void;
 }
 
-const AuthorTooltipContext = createContext<AuthorTooltip>();
+const AuthorTooltipContext = createContext<AuthorTooltip | null>(null);
 
-/** The tooltip the graph's nodes show their author in; `undefined` outside an `AuthorTooltipProvider`. */
+/** The tooltip the graph's nodes show their author in; `null` outside an `AuthorTooltipProvider`. */
 export function useAuthorTooltip() {
   return useContext(AuthorTooltipContext);
 }
@@ -36,7 +35,6 @@ export function useAuthorTooltip() {
  */
 export function AuthorTooltipProvider(props: { children: JSX.Element }) {
   const [shown, setShown] = createSignal<{ node: Element; author: GraphAuthor }>();
-  const [content, setContent] = createSignal<HTMLElement>();
   // The node whose tooltip is shown, or about to be.
   let hovered: Element | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -58,49 +56,46 @@ export function AuthorTooltipProvider(props: { children: JSX.Element }) {
   };
   onCleanup(() => clearTimeout(timer));
 
-  createEffect(() => {
-    if (!shown()) return;
-    const onKeyDown = (event: KeyboardEvent) => event.key === "Escape" && close();
-    // Scrolling moves the node away from under the pointer, without the pointer leaving it.
-    window.addEventListener("scroll", close, { capture: true, passive: true });
-    window.addEventListener("pointerdown", close, { capture: true });
-    window.addEventListener("keydown", onKeyDown);
-    onCleanup(() => {
-      window.removeEventListener("scroll", close, { capture: true });
-      window.removeEventListener("pointerdown", close, { capture: true });
-      window.removeEventListener("keydown", onKeyDown);
-    });
-  });
+  createEffect(
+    () => !!shown(),
+    (isShown) => {
+      if (!isShown) return;
+      const onKeyDown = (event: KeyboardEvent) => event.key === "Escape" && close();
+      // Scrolling moves the node away from under the pointer, without the pointer leaving it.
+      window.addEventListener("scroll", close, { capture: true, passive: true });
+      window.addEventListener("pointerdown", close, { capture: true });
+      window.addEventListener("keydown", onKeyDown);
+      return () => {
+        window.removeEventListener("scroll", close, { capture: true });
+        window.removeEventListener("pointerdown", close, { capture: true });
+        window.removeEventListener("keydown", onKeyDown);
+      };
+    },
+  );
 
   return (
-    <AuthorTooltipContext.Provider value={tooltip}>
+    <AuthorTooltipContext value={tooltip}>
       {props.children}
-      <Popper
-        // An SVG element, which is positioned against like any other.
-        anchorRef={() => shown()?.node as HTMLElement | undefined}
-        contentRef={content}
-        placement="top"
-        gutter={6}
-      >
-        <Show when={shown()}>
-          {(current) => (
-            // At the end of the page, so scroll areas don't clip it.
-            <Portal>
-              <Popper.Positioner class="pointer-events-none z-50">
-                <div
-                  ref={setContent}
-                  role="tooltip"
-                  class="relative flex max-w-[280px] animate-tooltip-in items-center gap-2 rounded-md border border-border bg-panel-hover py-1 pr-2.5 pl-1 text-[12px] text-text shadow-app motion-reduce:animate-none"
-                >
-                  <Popper.Arrow size={12} />
-                  <Avatar initials={current().author.initials} color={current().author.color} />
-                  <span class="truncate font-[600]">{current().author.name}</span>
-                </div>
-              </Popper.Positioner>
-            </Portal>
-          )}
-        </Show>
-      </Popper>
-    </AuthorTooltipContext.Provider>
+      {/* Opened and closed by the nodes, rather than by a trigger of its own. */}
+      <Tooltip open={!!shown()} onOpenChange={(open) => !open && close()}>
+        <TooltipContent
+          // An SVG element, which is positioned against like any other.
+          anchor={shown()?.node ?? null}
+          side="top"
+          sideOffset={6}
+          class="pointer-events-none z-50 flex max-w-[280px] animate-tooltip-in items-center gap-2 rounded-md border border-border bg-panel-hover py-1 pr-2.5 pl-1 text-[12px] text-text shadow-app motion-reduce:animate-none"
+        >
+          <TooltipArrow class="absolute left-[calc(var(--arrow-offset)-5px)] size-2.5 rotate-45 border-border bg-panel-hover data-[side=bottom]:-top-[6px] data-[side=bottom]:border-t data-[side=bottom]:border-l data-[side=top]:-bottom-[6px] data-[side=top]:border-r data-[side=top]:border-b" />
+          <Show when={shown()}>
+            {(current) => (
+              <>
+                <Avatar initials={current().author.initials} color={current().author.color} />
+                <span class="truncate font-[600]">{current().author.name}</span>
+              </>
+            )}
+          </Show>
+        </TooltipContent>
+      </Tooltip>
+    </AuthorTooltipContext>
   );
 }

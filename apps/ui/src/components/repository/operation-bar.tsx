@@ -1,8 +1,8 @@
 import type { ChangedFile, Operation } from "@gitto/git/types";
+import GitMergeConflict from "@lucide/solid/icons/git-merge-conflict";
+import TriangleAlert from "@lucide/solid/icons/triangle-exclamation-point";
 import { useQueryClient } from "@tanstack/solid-query";
 import { cn } from "cn";
-import GitMergeConflict from "lucide-solid/icons/git-merge-conflict";
-import TriangleAlert from "lucide-solid/icons/triangle-alert";
 import { createSignal, Show } from "solid-js";
 
 import { Button } from "@/components/ui/button";

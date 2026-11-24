@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@solidjs/testing-library";
 import userEvent from "@testing-library/user-event";
+import { flush } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { usePanelWidth } from "@/hooks/panel-width";
@@ -65,14 +66,19 @@ describe("ResizeHandle", () => {
     HTMLElement.prototype.releasePointerCapture = () => undefined;
     const { panel, handle } = renderHandle("start");
 
+    // Each event is a task of its own in a browser, with Solid's updates applied in between.
     fireEvent.pointerDown(handle, { button: 0, clientX: 0, pointerId: 1 });
+    flush();
     fireEvent.pointerMove(handle, { clientX: 300, pointerId: 1 });
+    flush();
     expect(panel.width()).toBe(300);
     expect(saved()).toBeNull();
     fireEvent.pointerMove(handle, { clientX: 320, pointerId: 1 });
+    flush();
     expect(saved()).toBeNull();
 
     fireEvent.pointerUp(handle, { pointerId: 1 });
+    flush();
     expect(panel.width()).toBe(320);
     expect(saved()).toBe("320");
   });
@@ -80,8 +86,11 @@ describe("ResizeHandle", () => {
   it("resets the width on double-click", () => {
     const { panel, handle } = renderHandle("start");
     panel.setWidth(400);
+    flush();
+    expect(panel.width()).toBe(400);
 
     fireEvent.dblClick(handle);
+    flush();
     expect(panel.width()).toBe(220);
   });
 });

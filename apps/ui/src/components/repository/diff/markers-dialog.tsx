@@ -1,4 +1,4 @@
-import TriangleAlert from "lucide-solid/icons/triangle-alert";
+import TriangleAlert from "@lucide/solid/icons/triangle-exclamation-point";
 
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";

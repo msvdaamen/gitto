@@ -1,22 +1,20 @@
-import { ContextMenu } from "@kobalte/core/context-menu";
-import type { LucideIcon } from "lucide-solid";
-import type { JSX } from "solid-js";
+import type { LucideIcon } from "@lucide/solid";
+import type { JSX } from "@solidjs/web";
+import { MenuContent, MenuItem } from "@ui-sdk/solid/menu";
 
 /** A context menu's list of actions, opened where it was right-clicked. */
 export function ContextMenuContent(props: {
-  /** Called as it closes, to move focus elsewhere than its trigger, preventing the event. */
-  onCloseAutoFocus?: (event: Event) => void;
+  /** What takes the focus as it closes, rather than its trigger; that, if it's left out. */
+  finalFocus?: () => HTMLElement | undefined;
   children: JSX.Element;
 }) {
   return (
-    <ContextMenu.Portal>
-      <ContextMenu.Content
-        onCloseAutoFocus={(event) => props.onCloseAutoFocus?.(event)}
-        class="z-50 min-w-[180px] animate-toast-in rounded-lg border border-border bg-panel-raised p-1 text-text shadow-app outline-none motion-reduce:animate-none"
-      >
-        {props.children}
-      </ContextMenu.Content>
-    </ContextMenu.Portal>
+    <MenuContent
+      finalFocus={props.finalFocus}
+      class="z-50 min-w-[180px] animate-toast-in rounded-lg border border-border bg-panel-raised p-1 text-text shadow-app outline-none motion-reduce:animate-none"
+    >
+      {props.children}
+    </MenuContent>
   );
 }
 
@@ -28,14 +26,14 @@ export function ContextMenuItem(props: {
   onSelect: () => void;
 }) {
   return (
-    <ContextMenu.Item
+    <MenuItem
       class="flex h-7 cursor-pointer items-center gap-2 rounded-[5px] px-2 text-[12.5px] text-text-soft outline-none data-disabled:cursor-default data-disabled:opacity-50 data-highlighted:bg-panel-hover data-highlighted:text-text"
       disabled={props.disabled}
-      // Read on each choice: Kobalte binds a handler once.
+      // Read on each choice: a handler is bound once.
       onSelect={() => props.onSelect()}
     >
       <props.icon size={13} class="shrink-0" />
-      <ContextMenu.ItemLabel class="truncate">{props.label}</ContextMenu.ItemLabel>
-    </ContextMenu.Item>
+      <span class="truncate">{props.label}</span>
+    </MenuItem>
   );
 }

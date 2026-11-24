@@ -1,23 +1,16 @@
+import LoaderCircle from "@lucide/solid/icons/loader-circle";
+import Search from "@lucide/solid/icons/search";
+import TriangleAlert from "@lucide/solid/icons/triangle-exclamation-point";
+import type { JSX } from "@solidjs/web";
 import { cn } from "cn";
-import LoaderCircle from "lucide-solid/icons/loader-circle";
-import Search from "lucide-solid/icons/search";
-import TriangleAlert from "lucide-solid/icons/triangle-alert";
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  Match,
-  Show,
-  Suspense,
-  Switch,
-  type JSX,
-} from "solid-js";
+import { createEffect, createMemo, createSignal, Match, Show, Loading, Switch } from "solid-js";
 
 import { EmptyState } from "@/components/ui/empty-state";
 import { UpdatingIndicator } from "@/components/ui/updating-indicator";
 import { VirtualRows } from "@/components/ui/virtual-list";
 import { useSwitchBranch } from "@/git/queries/branch";
 import { useHistory } from "@/git/queries/history";
+import { isFetching, isRefetching } from "@/git/queries/loaded";
 import type { CommitRow, StashRow, WipRow } from "@/git/rows";
 import { matchesSearch, searchNeedle } from "@/git/search";
 import { useDelayed } from "@/hooks/delayed";
@@ -55,7 +48,7 @@ export function HistoryTable(props: {
       class="min-h-0 min-w-0 overflow-auto bg-bg"
       style={{ "--graph-width": `${graphWidth(1)}px` }}
     >
-      <Suspense
+      <Loading
         fallback={
           <>
             <HistoryHeader />
@@ -66,7 +59,7 @@ export function HistoryTable(props: {
         <AuthorTooltipProvider>
           <HistoryRows {...props} scrollElement={scrollElement()} />
         </AuthorTooltipProvider>
-      </Suspense>
+      </Loading>
     </main>
   );
 }
@@ -131,13 +124,19 @@ function HistoryRows(props: {
   let fellBack: { from: string | undefined; to: string } | undefined;
   // Nothing selected yet, or the selected row is gone (e.g. the uncommitted changes, once
   // committed): report the row the table falls back to, so the details show it too.
-  createEffect(() => {
-    const row = history.selected();
-    if (row && row.repositoryId === props.repositoryId && row.id !== props.selectedId) {
-      fellBack = { from: props.selectedId, to: row.id };
-      props.onSelect(row.id);
-    }
-  });
+  createEffect(
+    () => {
+      const row = history.selected();
+      return row && row.repositoryId === props.repositoryId && row.id !== props.selectedId
+        ? { from: props.selectedId, to: row.id }
+        : undefined;
+    },
+    (fallback) => {
+      if (!fallback) return;
+      fellBack = fallback;
+      props.onSelect(fallback.to);
+    },
+  );
   /**
    * Selects the commit `to` in place of `from` if that one's selected: it was rewritten as `to`,
    * e.g. reworded. Also once the table has fallen back from `from` to another row, which it does as
@@ -152,7 +151,7 @@ function HistoryRows(props: {
   // The toolbar shows a switch running, and why it failed.
   const switchBranch = useSwitchBranch(() => props.repositoryId);
   // The log is reloaded whenever a branch or tag changes, which takes a while in a big repository.
-  const updating = useDelayed(() => history.log.isRefetching);
+  const updating = useDelayed(() => isRefetching(history.log));
   const lanes = createMemo(() =>
     Math.max(1, ...history.rows().map((row) => row.graph?.width ?? 1)),
   );
@@ -166,9 +165,19 @@ function HistoryRows(props: {
   // load page after page. A page that couldn't be loaded isn't tried again until the history is
   // reloaded.
   const [nearEnd, setNearEnd] = createSignal(false);
-  createEffect(() => {
-    if (nearEnd() && !needle() && !history.more.isError) history.loadMore();
-  });
+  // Also tried again once what `loadMore` waits for is done: the log reloading, or the last page.
+  createEffect(
+    () =>
+      nearEnd() &&
+      !needle() &&
+      !history.more.isError &&
+      history.hasMore() &&
+      !isFetching(history.log) &&
+      !history.more.isPending,
+    (load) => {
+      if (load) history.loadMore();
+    },
+  );
   const loadingMore = useDelayed(() => history.more.isPending);
 
   let header: HTMLDivElement | undefined;
@@ -225,7 +234,7 @@ function HistoryRows(props: {
             role="listbox"
             aria-label="Commit history"
             aria-activedescendant={selectedIndex() === -1 ? undefined : optionId(selectedIndex())}
-            tabIndex={0}
+            tabindex={0}
             class="group/history outline-none"
             onKeyDown={onKeyDown}
             // A clicked row hands the focus to the list, which is what the keyboard moves through:
@@ -255,7 +264,7 @@ function HistoryRows(props: {
                   rowHeight={ROW_HEIGHT}
                   scrollElement={props.scrollElement}
                   nearEnd={LOAD_AHEAD}
-                  onNearEndChange={setNearEnd}
+                  onNearEndChange={(near) => void setNearEnd(near)}
                 >
                   {(row, index) => {
                     // The row as each kind; the last one of that kind while the row turns into

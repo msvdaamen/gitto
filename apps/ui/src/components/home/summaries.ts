@@ -20,7 +20,7 @@ export interface RepositorySummary {
 
 /**
  * The status and overview of every repository, kept up to date while the home page shows them (see
- * `UNWATCHED`). Read without Suspense: each repository shows what it has as it loads, and a refetch
+ * `UNWATCHED`). Read without Loading: each repository shows what it has as it loads, and a refetch
  * doesn't take the page away meanwhile.
  */
 export function useRepositorySummaries(

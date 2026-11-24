@@ -1,5 +1,5 @@
 import type { Worktree } from "@gitto/git/types";
-import FolderX from "lucide-solid/icons/folder-x";
+import FolderX from "@lucide/solid/icons/folder-x";
 
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";

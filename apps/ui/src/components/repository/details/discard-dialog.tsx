@@ -1,4 +1,4 @@
-import Undo2 from "lucide-solid/icons/undo-2";
+import Undo2 from "@lucide/solid/icons/undo-2";
 
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";

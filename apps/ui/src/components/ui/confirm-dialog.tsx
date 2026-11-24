@@ -1,10 +1,15 @@
-import { AlertDialog } from "@kobalte/core/alert-dialog";
+import type { LucideIcon } from "@lucide/solid";
+import { Dynamic, type JSX } from "@solidjs/web";
+import {
+  AlertDialog,
+  AlertDialogBackdrop,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogTitle,
+} from "@ui-sdk/solid/alert-dialog";
 import { cn } from "cn";
-import type { LucideIcon } from "lucide-solid";
-import type { JSX } from "solid-js";
-import { Dynamic } from "solid-js/web";
 
-import { DIALOG_BOX, DialogPortal } from "./dialog";
+import { DIALOG_BACKDROP, DIALOG_BOX } from "./dialog";
 import { toneClasses, type Tone } from "./tone";
 
 /**
@@ -26,32 +31,29 @@ export function ConfirmDialog(props: {
     <AlertDialog
       open={props.open}
       onOpenChange={(open) => !open && props.onCancel()}
-      modal
-      preventScroll
+      // An alert dialog stays open at a click outside, which cancels this one all the same.
+      onDismissAttempt={(details) => details.reason === "outside-press" && props.onCancel()}
     >
-      <DialogPortal>
-        <AlertDialog.Content class={cn(DIALOG_BOX, "max-w-[440px] p-5")}>
-          <div class="flex items-start gap-3">
-            <span
-              class={cn(
-                "grid size-9 shrink-0 place-items-center rounded-[9px]",
-                toneClasses[props.tone],
-              )}
-            >
-              <Dynamic component={props.icon} size={18} strokeWidth={1.9} />
-            </span>
-            <div class="min-w-0">
-              <AlertDialog.Title class="m-0 text-[15px] font-[680]">
-                {props.title}
-              </AlertDialog.Title>
-              <AlertDialog.Description class="m-0 mt-2 text-[12.5px] leading-[1.55] break-words text-text-soft">
-                {props.description}
-              </AlertDialog.Description>
-            </div>
+      <AlertDialogBackdrop class={DIALOG_BACKDROP} />
+      <AlertDialogContent class={cn(DIALOG_BOX, "max-w-[440px] p-5")}>
+        <div class="flex items-start gap-3">
+          <span
+            class={cn(
+              "grid size-9 shrink-0 place-items-center rounded-[9px]",
+              toneClasses[props.tone],
+            )}
+          >
+            <Dynamic component={props.icon} size={18} strokeWidth={1.9} />
+          </span>
+          <div class="min-w-0">
+            <AlertDialogTitle class="m-0 text-[15px] font-[680]">{props.title}</AlertDialogTitle>
+            <AlertDialogDescription class="m-0 mt-2 text-[12.5px] leading-[1.55] break-words text-text-soft">
+              {props.description}
+            </AlertDialogDescription>
           </div>
-          <div class="mt-5 flex justify-end gap-2">{props.children}</div>
-        </AlertDialog.Content>
-      </DialogPortal>
+        </div>
+        <div class="mt-5 flex justify-end gap-2">{props.children}</div>
+      </AlertDialogContent>
     </AlertDialog>
   );
 }

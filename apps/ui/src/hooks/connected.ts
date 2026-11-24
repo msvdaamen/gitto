@@ -1,20 +1,20 @@
-import { createSignal, onCleanup, onMount } from "solid-js";
+import { createSignal, onSettled } from "solid-js";
 
 /**
  * Whether `element` is on the page. The virtualizer takes the window to observe from the scroll
  * container's document when it first gets one, so it's only handed over once it's on the page: on
- * mount it can still be detached, being rendered inside a `Suspense` boundary.
+ * mount it can still be detached, being rendered inside a `Loading` boundary.
  */
 export function useConnected(element: () => HTMLElement | undefined) {
   const [connected, setConnected] = createSignal(false);
-  onMount(() => {
+  onSettled(() => {
     let frame = 0;
     const check = () => {
       if (element()?.isConnected) setConnected(true);
       else frame = requestAnimationFrame(check);
     };
     check();
-    onCleanup(() => cancelAnimationFrame(frame));
+    return () => cancelAnimationFrame(frame);
   });
   return connected;
 }

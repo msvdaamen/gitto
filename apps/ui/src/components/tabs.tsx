@@ -1,20 +1,12 @@
+import GitBranch from "@lucide/solid/icons/git-branch";
+import Plus from "@lucide/solid/icons/plus";
+import X from "@lucide/solid/icons/x";
+import type { JSX } from "@solidjs/web";
 import { Link, useLocation, useNavigate, useParams } from "@tanstack/solid-router";
 import { cn } from "cn";
-import GitBranch from "lucide-solid/icons/git-branch";
-import Plus from "lucide-solid/icons/plus";
-import X from "lucide-solid/icons/x";
-import {
-  batch,
-  createEffect,
-  createSignal,
-  For,
-  onCleanup,
-  Show,
-  splitProps,
-  Suspense,
-  type JSX,
-} from "solid-js";
+import { createEffect, createSignal, For, Loading, omit, onCleanup, Show } from "solid-js";
 
+import { loadedData } from "@/git/queries/loaded";
 import {
   type Repository,
   useOpenRepository,
@@ -60,7 +52,7 @@ export function Tabs() {
   const reorderRepositories = useReorderRepositories();
   const selectedTab = () => params().repoId ?? (location().pathname === "/" ? HOME_TAB : undefined);
 
-  const savedOrder = () => repositories.data?.map((repository) => repository.id) ?? [];
+  const savedOrder = () => loadedData(repositories)?.map((repository) => repository.id) ?? [];
   /** The tabs' order while one is dragged, and once it's dropped until that's saved. */
   const [movedOrder, setMovedOrder] = createSignal<string[]>();
   /**
@@ -72,51 +64,68 @@ export function Tabs() {
   const [dragged, setDragged] = createSignal<{ id: string; shift: number }>();
 
   // The tabs show the saved order again once the order they were moved into is read back.
-  createEffect(() => {
-    const order = movedOrder();
-    if (order && !dragged() && sameOrder(order, savedOrder())) {
-      setMovedOrder(undefined);
-    }
-  });
+  createEffect(
+    () => {
+      const order = movedOrder();
+      return !!order && !dragged() && sameOrder(order, savedOrder());
+    },
+    (saved) => {
+      if (saved) setMovedOrder(undefined);
+    },
+  );
 
   // Measure the selected tab so the underline can slide to it.
   const tabElements = new Map<string, HTMLElement>();
   const [underline, setUnderline] = createSignal<{ left: number; width: number }>();
 
-  function updateUnderline() {
-    const selected = selectedTab();
+  function updateUnderline(
+    selected: string | undefined,
+    dragging: { id: string; shift: number } | undefined,
+  ) {
     const el = selected && tabElements.get(selected);
-    // Tabs move in the order while one is dragged, and the dragged one with the pointer.
-    movedOrder();
-    const dragging = dragged();
     const shift = dragging && dragging.id === selected ? dragging.shift : 0;
     setUnderline(el ? { left: el.offsetLeft + shift, width: el.offsetWidth } : undefined);
   }
 
   // Tabs resize at breakpoints, so remeasure whenever any of them changes size.
-  const resizeObserver = new ResizeObserver(updateUnderline);
+  const resizeObserver = new ResizeObserver(() => updateUnderline(selectedTab(), dragged()));
   onCleanup(() => resizeObserver.disconnect());
 
-  function registerTab(id: string, el: HTMLElement) {
-    tabElements.set(id, el);
-    resizeObserver.observe(el);
+  /**
+   * The ref of the tab `id`'s element, which is measured while it's there: called where the element
+   * is made, so it's let go of with it.
+   */
+  function registerTab(id: string) {
+    let tabElement: HTMLElement | undefined;
     onCleanup(() => {
-      resizeObserver.unobserve(el);
-      tabElements.delete(id);
+      if (tabElement) resizeObserver.unobserve(tabElement);
+      if (tabElements.get(id) === tabElement) tabElements.delete(id);
     });
+    return (el: HTMLElement) => {
+      tabElement = el;
+      tabElements.set(id, el);
+      resizeObserver.observe(el);
+    };
   }
+  const homeTabRef = registerTab(HOME_TAB);
 
-  createEffect(updateUnderline);
+  createEffect(
+    // Tabs move in the order while one is dragged, and the dragged one with the pointer.
+    () => ({ selected: selectedTab(), order: movedOrder(), dragging: dragged() }),
+    ({ selected, dragging }) => updateUnderline(selected, dragging),
+  );
 
   /** The repository whose tab's close button was clicked, asked about before it's removed. */
   const [removing, setRemoving] = createSignal<Repository>();
 
-  function remove(id: string) {
-    removeRepository.mutate(id, {
-      onSuccess: () => {
-        if (selectedTab() === id) void navigate({ to: "/" });
-      },
-    });
+  async function remove(id: string) {
+    try {
+      await removeRepository.mutate(id);
+    } catch {
+      // Kept as the mutation's error, to show.
+      return;
+    }
+    if (selectedTab() === id) void navigate({ to: "/" });
   }
   /** Why the repository `id` couldn't be removed, if it's the last one that was tried. */
   const removeError = (id: string) =>
@@ -131,7 +140,7 @@ export function Tabs() {
     setMovedOrder(order);
     if (sameOrder(order, savedOrder())) return;
     setMoved(id);
-    reorderRepositories.mutate(order, { onError: () => setMovedOrder(undefined) });
+    reorderRepositories.mutate(order).catch(() => setMovedOrder(undefined));
   }
 
   /** Moves the tab `id` one place left (`-1`) or right (`1`), keeping it focused. */
@@ -141,10 +150,18 @@ export function Tabs() {
     const to = from + by;
     if (to < 0 || to >= order.length) return;
     order.splice(to, 0, ...order.splice(from, 1));
+    refocusing = id;
     reorder(id, order);
-    // Moving the tab's element took the focus off it.
-    tabElements.get(id)?.querySelector("a")?.focus();
   }
+
+  /** The tab moved with the keyboard, focused again once it's moved (see `move`). */
+  let refocusing: string | undefined;
+  // Moving the tab's element takes the focus off it. The order it's moved into is rendered later
+  // than it's written, held with saving it, so it's focused once that's rendered.
+  createEffect(ordered, () => {
+    if (refocusing) tabElements.get(refocusing)?.querySelector("a")?.focus();
+    refocusing = undefined;
+  });
 
   /** The tab pressed, until the pointer's let go of: dragged once it's moved far enough. */
   let pressed: { id: string; pointerId: number; x: number; grabOffset: number } | undefined;
@@ -172,10 +189,8 @@ export function Tabs() {
       if (Math.abs(event.clientX - press.x) < DRAG_THRESHOLD) return;
       event.currentTarget.setPointerCapture(event.pointerId);
       setPageDragging(true);
-      batch(() => {
-        setMovedOrder(ordered());
-        setDragged({ id: press.id, shift: 0 });
-      });
+      setMovedOrder(ordered());
+      setDragged({ id: press.id, shift: 0 });
     }
     const order = ordered();
     const width = event.currentTarget.offsetWidth;
@@ -223,41 +238,44 @@ export function Tabs() {
 
   return (
     <div ref={(el) => (container = el)} class="relative flex">
-      <HomeTab ref={(el) => registerTab(HOME_TAB, el)} active={selectedTab() === HOME_TAB} />
+      <HomeTab ref={homeTabRef} active={selectedTab() === HOME_TAB} />
       {/* The home tab shows straight away; the repositories' tabs once they're loaded. */}
-      <Suspense>
+      <Loading>
         <For each={ordered()}>
           {(id) => (
-            <Show when={repositories.data?.find((repository) => repository.id === id)}>
-              {(repository) => (
-                <FailurePopover
-                  title={`${moveError(id) ? "Move" : "Remove"} ${repository().name}`}
-                  error={moveError(id) ?? removeError(id)}
-                  onDismiss={() => {
-                    reorderRepositories.reset();
-                    removeRepository.reset();
-                  }}
-                >
-                  <RepositoryTab
-                    ref={(el) => registerTab(id, el)}
-                    id={id}
-                    name={repository().name}
-                    active={selectedTab() === id}
-                    shift={dragged()?.id === id ? dragged()!.shift : undefined}
-                    onRemove={() => setRemoving(repository())}
-                    onMove={(by) => move(id, by)}
-                    onPointerDown={(event) => startPress(id, event)}
-                    onPointerMove={drag}
-                    onPointerUp={(event) => drop(event, false)}
-                    onPointerCancel={(event) => drop(event, true)}
-                    onClick={(event) => dropped && event.preventDefault()}
-                  />
-                </FailurePopover>
-              )}
+            <Show when={loadedData(repositories)?.find((repository) => repository.id === id)}>
+              {(repository) => {
+                const tabRef = registerTab(id);
+                return (
+                  <FailurePopover
+                    title={`${moveError(id) ? "Move" : "Remove"} ${repository().name}`}
+                    error={moveError(id) ?? removeError(id)}
+                    onDismiss={() => {
+                      reorderRepositories.reset();
+                      removeRepository.reset();
+                    }}
+                  >
+                    <RepositoryTab
+                      ref={tabRef}
+                      id={id}
+                      name={repository().name}
+                      active={selectedTab() === id}
+                      shift={dragged()?.id === id ? dragged()!.shift : undefined}
+                      onRemove={() => setRemoving(repository())}
+                      onMove={(by) => move(id, by)}
+                      onPointerDown={(event) => startPress(id, event)}
+                      onPointerMove={drag}
+                      onPointerUp={(event) => drop(event, false)}
+                      onPointerCancel={(event) => drop(event, true)}
+                      onClick={(event) => dropped && event.preventDefault()}
+                    />
+                  </FailurePopover>
+                );
+              }}
             </Show>
           )}
         </For>
-      </Suspense>
+      </Loading>
       <FailurePopover
         title="Open repository"
         error={openRepository.error()}
@@ -286,7 +304,7 @@ export function Tabs() {
         onCancel={() => setRemoving(undefined)}
         onRemove={(repository) => {
           setRemoving(undefined);
-          remove(repository.id);
+          void remove(repository.id);
         }}
       />
     </div>
@@ -391,14 +409,14 @@ function TabFrame(
     class: string;
   },
 ) {
-  const [local, rest] = splitProps(props, ["active", "class"]);
+  const rest = omit(props, "active", "class");
   return (
     <div
       {...rest}
       class={cn(
         "flex h-12 items-center",
-        local.active ? "bg-bg" : "hover:bg-panel-hover",
-        local.class,
+        props.active ? "bg-bg" : "hover:bg-panel-hover",
+        props.class,
       )}
     />
   );

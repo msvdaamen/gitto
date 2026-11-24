@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
+import { flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 
 import type { GraphRow } from "@/git/graph";
@@ -41,6 +42,7 @@ describe("HistoryGraph", () => {
     expect(await screen.findByRole("tooltip")).toBeInTheDocument();
 
     fireEvent.scroll(container);
+    flush();
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 

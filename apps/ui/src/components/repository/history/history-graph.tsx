@@ -1,4 +1,4 @@
-import { Index, Match, onCleanup, Show, Switch } from "solid-js";
+import { For, Match, onCleanup, Show, Switch } from "solid-js";
 
 import type { GraphEdge, GraphRow } from "@/git/graph";
 
@@ -97,17 +97,17 @@ export function HistoryGraph(props: {
       stroke-width="2"
     >
       <Show when={!props.nodeOnly}>
-        {/* By position: the edges are new objects whenever the history is refetched, and `<For>`
-            would re-create every path for them. */}
-        <Index each={props.row.through}>
+        {/* By position: the edges are new objects whenever the history is refetched, and a keyed
+            `<For>` would re-create every path for them. */}
+        <For each={props.row.through} keyed={false}>
           {(edge) => <Line d={throughPath(edge())} edge={edge()} lane={edge().from} />}
-        </Index>
-        <Index each={props.row.top}>
+        </For>
+        <For each={props.row.top} keyed={false}>
           {(edge) => <Line d={topPath(edge())} edge={edge()} lane={edge().from} />}
-        </Index>
-        <Index each={props.row.bottom}>
+        </For>
+        <For each={props.row.bottom} keyed={false}>
           {(edge) => <Line d={bottomPath(edge())} edge={edge()} lane={edge().to} />}
-        </Index>
+        </For>
       </Show>
       <Switch
         fallback={

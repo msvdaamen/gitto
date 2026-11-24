@@ -1,3 +1,4 @@
+import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createAutosave } from "./autosave";
@@ -16,6 +17,7 @@ describe("autosave", () => {
 
     autosave.change("a");
     autosave.change("ab");
+    flush();
     expect(autosave.state()).toEqual({ kind: "pending" });
     await vi.advanceTimersByTimeAsync(100);
     expect(save).toHaveBeenCalledExactlyOnceWith("ab", "v0", false);

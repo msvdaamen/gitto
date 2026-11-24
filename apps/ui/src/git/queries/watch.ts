@@ -1,6 +1,6 @@
 import type { GitDirChange } from "@gitto/git/types";
 import { useQueryClient } from "@tanstack/solid-query";
-import { createEffect, createMemo, onCleanup } from "solid-js";
+import { createEffect, createMemo } from "solid-js";
 
 import { useWindowFocus } from "@/hooks/window-focus";
 import { rpc } from "@/lib/rpc";
@@ -38,70 +38,85 @@ export function useRepositoryWatcher(repositoryId: () => string) {
     return Date.now();
   });
 
-  createEffect(() => {
-    const id = repositoryId();
-    const since = shownAt();
-    const refetchAll = () =>
-      void queryClient.invalidateQueries({ queryKey: gitKeys.repository(id) });
-    const refetchUncommitted = () =>
-      void queryClient.invalidateQueries({ queryKey: gitKeys.uncommitted(id) });
-
-    const gitDir = new Watch("the git directory", (signal) =>
-      rpc.git.watch.gitDir({ repositoryId: id }, { signal }),
-    );
-    const workingTree = new Watch("the working tree", (signal) =>
-      rpc.git.watch.workingTree({ repositoryId: id }, { signal }),
-    );
-    // Whether the working tree changed while the window didn't have focus.
-    let changed = false;
-    let unwatchTimer: ReturnType<typeof setTimeout> | undefined;
-
-    const watchGitDir = () =>
-      gitDir.start((changes: GitDirChange[]) => {
-        if (changes.includes("refs")) refetchAll();
-        else refetchUncommitted();
-      });
-    const watchWorkingTree = () =>
-      workingTree.start(() => {
-        if (focused()) refetchUncommitted();
-        else changed = true;
-      });
-
-    // Nothing watched the repository until now, so what was loaded from it before (when it was last
-    // on show) may be out of date. What's loading for the first time isn't loaded twice, nor what
-    // was loaded since it came on show.
-    void queryClient.invalidateQueries({
-      queryKey: gitKeys.repository(id),
-      predicate: (query) => query.state.dataUpdatedAt < since,
-    });
-    watchGitDir();
-
-    createEffect((wasFocused: boolean | undefined) => {
-      if (!focused()) {
-        unwatchTimer = setTimeout(() => workingTree.stop(), UNWATCH_AFTER_MS);
-        return false;
-      }
-      clearTimeout(unwatchTimer);
-
-      if (!gitDir.running) {
-        // A commit or a checkout might have been missed, so everything's refetched.
-        refetchAll();
-        watchGitDir();
-      } else if (workingTree.running ? changed : wasFocused === false) {
-        // Without a working tree watch, anything might have changed; with one, only if it did.
-        refetchUncommitted();
-      }
-      changed = false;
-      if (!workingTree.running) watchWorkingTree();
-      return true;
-    });
-
-    onCleanup(() => {
-      clearTimeout(unwatchTimer);
-      gitDir.stop();
-      workingTree.stop();
-    });
+  // Whether the window has focus, as the effects below last saw it, and what the repository on show
+  // does when that changes. This one's first, so the repository's sees it as it is.
+  let windowFocused = false;
+  let onFocus: ((focused: boolean) => void) | undefined;
+  createEffect(focused, (isFocused) => {
+    windowFocused = isFocused;
+    onFocus?.(isFocused);
   });
+
+  createEffect(
+    () => [repositoryId(), shownAt()] as const,
+    ([id, since]) => {
+      const refetchAll = () =>
+        void queryClient.invalidateQueries({ queryKey: gitKeys.repository(id) });
+      const refetchUncommitted = () =>
+        void queryClient.invalidateQueries({ queryKey: gitKeys.uncommitted(id) });
+
+      const gitDir = new Watch("the git directory", (signal) =>
+        rpc.git.watch.gitDir({ repositoryId: id }, { signal }),
+      );
+      const workingTree = new Watch("the working tree", (signal) =>
+        rpc.git.watch.workingTree({ repositoryId: id }, { signal }),
+      );
+      // Whether the working tree changed while the window didn't have focus.
+      let changed = false;
+      let unwatchTimer: ReturnType<typeof setTimeout> | undefined;
+      // Whether the window had focus, as this repository last saw it.
+      let wasFocused: boolean | undefined;
+
+      const watchGitDir = () =>
+        gitDir.start((changes: GitDirChange[]) => {
+          if (changes.includes("refs")) refetchAll();
+          else refetchUncommitted();
+        });
+      const watchWorkingTree = () =>
+        workingTree.start(() => {
+          if (windowFocused) refetchUncommitted();
+          else changed = true;
+        });
+
+      // Nothing watched the repository until now, so what was loaded from it before (when it was
+      // last on show) may be out of date. What's loading for the first time isn't loaded twice, nor
+      // what was loaded since it came on show.
+      void queryClient.invalidateQueries({
+        queryKey: gitKeys.repository(id),
+        predicate: (query) => query.state.dataUpdatedAt < since,
+      });
+      watchGitDir();
+
+      onFocus = (isFocused) => {
+        const was = wasFocused;
+        wasFocused = isFocused;
+        if (!isFocused) {
+          unwatchTimer = setTimeout(() => workingTree.stop(), UNWATCH_AFTER_MS);
+          return;
+        }
+        clearTimeout(unwatchTimer);
+
+        if (!gitDir.running) {
+          // A commit or a checkout might have been missed, so everything's refetched.
+          refetchAll();
+          watchGitDir();
+        } else if (workingTree.running ? changed : was === false) {
+          // Without a working tree watch, anything might have changed; with one, only if it did.
+          refetchUncommitted();
+        }
+        changed = false;
+        if (!workingTree.running) watchWorkingTree();
+      };
+      onFocus(windowFocused);
+
+      return () => {
+        onFocus = undefined;
+        clearTimeout(unwatchTimer);
+        gitDir.stop();
+        workingTree.stop();
+      };
+    },
+  );
 }
 
 /** A watch stream that can be started and stopped, and knows whether it's still running. */

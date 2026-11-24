@@ -1,7 +1,14 @@
-import { Popover } from "@kobalte/core/popover";
+import X from "@lucide/solid/icons/x";
+import type { JSX } from "@solidjs/web";
+import {
+  Popover,
+  PopoverClose,
+  PopoverContent,
+  PopoverDescription,
+  PopoverTitle,
+} from "@ui-sdk/solid/popover";
 import { cn } from "cn";
-import X from "lucide-solid/icons/x";
-import { Show, type JSX } from "solid-js";
+import { Show } from "solid-js";
 
 /**
  * A button (or anything else that starts an action), with a popover under it that says why the
@@ -21,40 +28,48 @@ export function FailurePopover(props: {
   anchor?: () => HTMLElement | undefined;
   children?: JSX.Element;
 }) {
+  let around: HTMLDivElement | undefined;
+
   return (
-    <Popover
-      open={!!props.error}
-      onOpenChange={(open) => !open && props.onDismiss()}
-      placement={props.placement ?? "bottom-start"}
-      gutter={6}
-      anchorRef={props.anchor}
-    >
+    <>
       <Show when={!props.anchor}>
-        <Popover.Anchor class={cn("flex", props.class)}>{props.children}</Popover.Anchor>
+        <div ref={(el) => (around = el)} class={cn("flex", props.class)}>
+          {props.children}
+        </div>
       </Show>
-      <Popover.Portal>
-        <Popover.Content
-          // Not focused: the action can fail while the user is typing elsewhere.
-          onOpenAutoFocus={(event) => event.preventDefault()}
-          // Nor closed when focus moves elsewhere, e.g. back to the button from a popover it
+      <Popover
+        open={!!props.error}
+        onOpenChange={(open, details) => {
+          // Not closed when focus moves elsewhere, e.g. back to the button from a popover it
           // opened: only by clicking outside, Escape, or dismissing it.
-          onFocusOutside={(event) => event.preventDefault()}
+          if (!open && details.reason !== "focus-out" && details.reason !== "window-blur") {
+            props.onDismiss();
+          }
+        }}
+      >
+        <PopoverContent
+          anchor={(props.anchor ? props.anchor() : around) ?? null}
+          side={props.placement === "right-start" ? "right" : "bottom"}
+          align="start"
+          sideOffset={6}
+          // Not focused: the action can fail while the user is typing elsewhere.
+          initialFocus="none"
           class="z-50 flex max-w-[360px] animate-toast-in items-start gap-2 rounded-lg border border-[color-mix(in_srgb,var(--coral)_30%,var(--border))] bg-panel-raised p-3 text-text shadow-app motion-reduce:animate-none"
         >
           <div class="min-w-0">
-            <Popover.Title class="m-0 text-[12.5px] font-[680]">{props.title}</Popover.Title>
-            <Popover.Description class="m-0 mt-1 text-[11.5px] break-words whitespace-pre-wrap text-coral">
+            <PopoverTitle class="m-0 text-[12.5px] font-[680]">{props.title}</PopoverTitle>
+            <PopoverDescription class="m-0 mt-1 text-[11.5px] break-words whitespace-pre-wrap text-coral">
               {props.error?.message}
-            </Popover.Description>
+            </PopoverDescription>
           </div>
-          <Popover.CloseButton
+          <PopoverClose
             class="grid size-5 shrink-0 cursor-pointer place-items-center rounded border-0 bg-transparent p-0 text-muted hover:bg-panel-hover hover:text-text focus-ring"
             aria-label="Dismiss"
           >
             <X size={13} />
-          </Popover.CloseButton>
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover>
+          </PopoverClose>
+        </PopoverContent>
+      </Popover>
+    </>
   );
 }

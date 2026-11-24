@@ -1,6 +1,6 @@
 import type { ChangedFile } from "@gitto/git/types";
-import File from "lucide-solid/icons/file";
-import TriangleAlert from "lucide-solid/icons/triangle-alert";
+import File from "@lucide/solid/icons/file";
+import TriangleAlert from "@lucide/solid/icons/triangle-exclamation-point";
 import { Show } from "solid-js";
 
 import { EmptyState } from "@/components/ui/empty-state";

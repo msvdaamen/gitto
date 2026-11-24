@@ -203,7 +203,7 @@ describe("branches in the history", () => {
       target: await fromTheRest(user, "origin/release"),
     });
     const item = await screen.findByRole("menuitem", { name: "Merge origin/release into main" });
-    await vi.waitFor(() => expect(item).toHaveAttribute("aria-disabled", "false"));
+    await vi.waitFor(() => expect(item).not.toHaveAttribute("aria-disabled", "true"));
     await user.click(item);
     expect(rpc.git.branch.merge).toHaveBeenCalledWith({
       repositoryId: "repo",
@@ -221,7 +221,7 @@ describe("branches in the history", () => {
       target: await fromTheRest(user, "origin/release"),
     });
     const item = await screen.findByRole("menuitem", { name: "Rebase main onto origin/release" });
-    await vi.waitFor(() => expect(item).toHaveAttribute("aria-disabled", "false"));
+    await vi.waitFor(() => expect(item).not.toHaveAttribute("aria-disabled", "true"));
     await user.click(item);
     expect(rpc.git.branch.rebase).toHaveBeenCalledWith({
       repositoryId: "repo",
@@ -266,7 +266,10 @@ describe("branches in the history", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       await renderHistory();
-      fireEvent.pointerDown(screen.getByText("Commit e5"), { pointerType: "touch" });
+      fireEvent.pointerDown(screen.getByText("Commit e5"), {
+        pointerType: "touch",
+        isPrimary: true,
+      });
       await vi.advanceTimersByTimeAsync(1000);
       expect(screen.getAllByRole("menu")).toHaveLength(1);
       expect(screen.getByRole("menuitem", { name: "Edit message…" })).toBeInTheDocument();

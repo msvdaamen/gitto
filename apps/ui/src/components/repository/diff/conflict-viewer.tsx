@@ -6,7 +6,7 @@ import {
   type FileDiffMetadata,
   type UnresolvedFileOptions,
 } from "@pierre/diffs";
-import { createEffect, on, onCleanup, untrack } from "solid-js";
+import { createEffect } from "solid-js";
 
 import { useConnected } from "@/hooks/connected";
 import { useTheme } from "@/hooks/theme";
@@ -142,11 +142,43 @@ export default function ConflictViewer(props: {
   let fileWrapper: HTMLDivElement | undefined;
 
   const connected = useConnected(() => scroller);
-  createEffect(() => {
-    if (!connected() || !scroller || !conflictsWrapper || !fileWrapper) return;
-    untrack(() => setUp(scroller!, conflictsWrapper!, fileWrapper!));
+  /** The library's view, once it's set up, with the page. */
+  let viewer: ReturnType<typeof setUp> | undefined;
+  createEffect(connected, (on) => {
+    if (!on || !scroller || !conflictsWrapper || !fileWrapper) return;
+    const shown = setUp(scroller, conflictsWrapper, fileWrapper);
+    viewer = shown;
+    shown.want(props.fileKey, props.disk);
+    return () => {
+      viewer = undefined;
+      shown.dispose();
+    };
   });
+  createEffect(
+    () => [props.fileKey, props.disk] as const,
+    ([fileKey, disk]) => {
+      viewer?.want(fileKey, disk);
+    },
+  );
+  createEffect(
+    () => props.editing,
+    (edit) => {
+      viewer?.edit(edit);
+    },
+    { defer: true },
+  );
+  createEffect(
+    theme,
+    (type) => {
+      viewer?.setThemeType(type);
+    },
+    { defer: true },
+  );
 
+  /**
+   * Sets the library's view up in the page; its effects, and what it's told by the props, are
+   * the component's (see above): it's set up once the scroller's on the page.
+   */
   function setUp(root: HTMLDivElement, wrapper: HTMLDivElement, wholeWrapper: HTMLDivElement) {
     const highlights = new ViewHighlights();
     /** The file on show. */
@@ -439,49 +471,39 @@ export default function ConflictViewer(props: {
       void run();
     };
 
-    createEffect(
-      on(
-        () => [props.fileKey, props.disk] as const,
-        ([fileKey, disk]) => {
-          wanted = disk && { fileKey, disk };
-          if (disk) void run();
-        },
-      ),
-    );
-    createEffect(
-      on(
-        () => props.editing,
-        (edit) => void (edit ? startEditing() : stopEditing(false)),
-        { defer: true },
-      ),
-    );
-    createEffect(
-      on(
-        theme,
-        (type) => {
-          conflicts.setThemeType(type);
-          whole.setThemeType(type);
-        },
-        { defer: true },
-      ),
-    );
+    /** The disk file last wanted shown, so the same one isn't asked for again. */
+    let lastWanted: { fileKey: string; disk: DiskFile | undefined } | undefined;
 
-    onCleanup(() => {
-      disposed = true;
-      props.onCommands(undefined);
-      // Edits not saved yet are saved all the same (see `useFileEditing`).
-      if (editing && whole.stopEditing(false) !== undefined) props.onEditing(undefined);
-      whole.hide();
-      conflicts.cleanUp();
-      highlights.drop();
-    });
+    return {
+      /** Shows `disk`, the file as it was read from disk, once what's under way is done. */
+      want: (fileKey: string, disk: DiskFile | undefined) => {
+        if (lastWanted?.fileKey === fileKey && lastWanted.disk === disk) return;
+        lastWanted = { fileKey, disk };
+        wanted = disk && { fileKey, disk };
+        if (disk) void run();
+      },
+      edit: (edit: boolean) => void (edit ? startEditing() : stopEditing(false)),
+      setThemeType: (type: ReturnType<typeof theme>) => {
+        conflicts.setThemeType(type);
+        whole.setThemeType(type);
+      },
+      dispose: () => {
+        disposed = true;
+        props.onCommands(undefined);
+        // Edits not saved yet are saved all the same (see `useFileEditing`).
+        if (editing && whole.stopEditing(false) !== undefined) props.onEditing(undefined);
+        whole.hide();
+        conflicts.cleanUp();
+        highlights.drop();
+      },
+    };
   }
 
   return (
     <div
       ref={(el) => (scroller = el)}
       // Focusable, to scroll it with the keyboard, and step through the conflicts with it.
-      tabIndex={0}
+      tabindex={0}
       aria-label="Conflicts"
       aria-keyshortcuts="[ ] O T B"
       class="group h-full min-h-0 overflow-auto bg-bg outline-none [--diffs-font-size:12px] [--diffs-line-height:20px] focus-visible:shadow-[inset_0_0_0_1px_var(--primary)]"

@@ -13,7 +13,7 @@ export const Route = createFileRoute("/(main)/")({
 });
 
 function HomeComponent() {
-  // Read without Suspense, like the repositories' summaries: the page shows straight away, and
+  // Read without Loading, like the repositories' summaries: the page shows straight away, and
   // fills in as they load.
   const repositories = useUnsuspendedData(useRepositories());
   const summaries = useRepositorySummaries(() => repositories() ?? []);

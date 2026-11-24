@@ -1,5 +1,5 @@
-import FolderOpen from "lucide-solid/icons/folder-open";
-import Search from "lucide-solid/icons/search";
+import FolderOpen from "@lucide/solid/icons/folder-open";
+import Search from "@lucide/solid/icons/search";
 import { createMemo, createSignal, For, Show } from "solid-js";
 
 import { Button } from "@/components/ui/button";

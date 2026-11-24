@@ -1,12 +1,12 @@
+import GitBranch from "@lucide/solid/icons/git-branch";
+import LoaderCircle from "@lucide/solid/icons/loader-circle";
+import PanelLeft from "@lucide/solid/icons/panel-left";
+import PanelRight from "@lucide/solid/icons/panel-right";
+import Redo2 from "@lucide/solid/icons/redo-2";
+import RefreshCw from "@lucide/solid/icons/refresh-cw";
+import Undo2 from "@lucide/solid/icons/undo-2";
 import { cn } from "cn";
-import GitBranch from "lucide-solid/icons/git-branch";
-import LoaderCircle from "lucide-solid/icons/loader-circle";
-import PanelLeft from "lucide-solid/icons/panel-left";
-import PanelRight from "lucide-solid/icons/panel-right";
-import Redo2 from "lucide-solid/icons/redo-2";
-import RefreshCw from "lucide-solid/icons/refresh-cw";
-import Undo2 from "lucide-solid/icons/undo-2";
-import { createEffect, createSignal, on, Suspense } from "solid-js";
+import { createEffect, createSignal, Errored, Loading } from "solid-js";
 
 import { IconButton } from "@/components/ui/button";
 import { Divider } from "@/components/ui/divider";
@@ -127,13 +127,14 @@ function CurrentBranch(props: { repositoryId: string }) {
   // Which failed, the last first: each can have failed, one after the other, and they're shown
   // one at a time.
   const [order, setOrder] = createSignal<Failed[]>(["merge", "rebase", "switch", "delete", "pull"]);
-  const failed = (name: Failed) => (error: Error | null) =>
-    error && setOrder((names) => [name, ...names.filter((other) => other !== name)]);
-  createEffect(on(merging.error, failed("merge")));
-  createEffect(on(rebasing.error, failed("rebase")));
-  createEffect(on(switching.error, failed("switch")));
-  createEffect(on(deleting.error, failed("delete")));
-  createEffect(on(pulling.error, failed("pull")));
+  const failed = (name: Failed) => (error: Error | null) => {
+    if (error) setOrder((names) => [name, ...names.filter((other) => other !== name)]);
+  };
+  createEffect(merging.error, failed("merge"));
+  createEffect(rebasing.error, failed("rebase"));
+  createEffect(switching.error, failed("switch"));
+  createEffect(deleting.error, failed("delete"));
+  createEffect(pulling.error, failed("pull"));
   const failure = () => {
     const shown = failures[order().find((name) => failures[name].error()) ?? "merge"];
     return { title: shown.title, error: shown.error(), dismiss: shown.dismiss };
@@ -146,7 +147,7 @@ function CurrentBranch(props: { repositoryId: string }) {
       onDismiss={() => failure().dismiss()}
       class="min-w-0"
     >
-      <div class="flex min-w-0 items-center gap-2" aria-busy={busy()}>
+      <div class="flex min-w-0 items-center gap-2" aria-busy={busy() ? "true" : undefined}>
         <span class="grid size-[27px] shrink-0 place-items-center rounded-[7px] bg-primary-soft text-primary-strong">
           {busy() ? (
             <LoaderCircle size={15} class="animate-spin motion-reduce:animate-none" />
@@ -155,9 +156,9 @@ function CurrentBranch(props: { repositoryId: string }) {
           )}
         </span>
         <div class="flex min-w-0 flex-col gap-px max-md:hidden">
-          <Suspense>
+          <Loading>
             <RepositoryName repositoryId={props.repositoryId} />
-          </Suspense>
+          </Loading>
         </div>
       </div>
     </FailurePopover>
@@ -172,7 +173,8 @@ function RepositoryName(props: { repositoryId: string }) {
     <>
       <strong class="truncate text-[13.5px]">{repository()?.name}</strong>
       <span class="truncate text-[11px] text-faint">
-        {status.data ? headLabel(status.data.head) : ""}
+        {/* No branch to name if the status couldn't be loaded: the buttons say why. */}
+        <Errored fallback="">{status.data ? headLabel(status.data.head) : ""}</Errored>
       </span>
     </>
   );

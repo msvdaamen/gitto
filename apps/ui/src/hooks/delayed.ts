@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup } from "solid-js";
+import { createEffect, createSignal } from "solid-js";
 
 /**
  * `value`, but only true once it's been true for `ms`: for showing that something's in progress
@@ -6,13 +6,13 @@ import { createEffect, createSignal, onCleanup } from "solid-js";
  */
 export function useDelayed(value: () => boolean, ms = 300) {
   const [delayed, setDelayed] = createSignal(false);
-  createEffect(() => {
-    if (!value()) {
+  createEffect(value, (on) => {
+    if (!on) {
       setDelayed(false);
       return;
     }
     const timer = setTimeout(() => setDelayed(true), ms);
-    onCleanup(() => clearTimeout(timer));
+    return () => clearTimeout(timer);
   });
   return delayed;
 }

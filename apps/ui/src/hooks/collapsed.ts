@@ -20,18 +20,22 @@ function load(repositoryId: string): CollapsedState {
  * survives restarts. Ids without a saved state fall back to `defaults`, then to expanded.
  */
 export function useCollapsed(repositoryId: () => string, defaults: CollapsedState = {}) {
-  // A fresh signal per repository, so switching repositories loads that repository's state.
+  // A fresh signal per repository, so switching repositories loads that repository's state. Toggled
+  // from what was last saved, which a signal only shows once it's updated: toggling twice at once
+  // keeps both.
   const state = createMemo(() => {
     const id = repositoryId();
-    const [get, set] = createSignal(load(id));
-    return { id, get, set };
+    const saved = { current: load(id) };
+    const [get, set] = createSignal(saved.current);
+    return { id, saved, get, set };
   });
 
   const isCollapsed = (id: string) => state().get()[id] ?? defaults[id] ?? false;
 
   const toggle = (id: string) => {
-    const { id: repository, get, set } = state();
-    const next = { ...get(), [id]: !isCollapsed(id) };
+    const { id: repository, saved, set } = state();
+    const next = { ...saved.current, [id]: !(saved.current[id] ?? defaults[id] ?? false) };
+    saved.current = next;
     set(next);
     try {
       localStorage.setItem(storageKey(repository), JSON.stringify(next));

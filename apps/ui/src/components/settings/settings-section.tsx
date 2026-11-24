@@ -1,6 +1,5 @@
-import type { LucideIcon } from "lucide-solid";
-import type { JSX } from "solid-js";
-import { Dynamic } from "solid-js/web";
+import type { LucideIcon } from "@lucide/solid";
+import { Dynamic, type JSX } from "@solidjs/web";
 
 /**
  * A group of settings on the settings page, like Privacy: its title, what it's about, and its

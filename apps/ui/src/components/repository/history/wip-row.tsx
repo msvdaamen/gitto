@@ -1,8 +1,10 @@
+import PencilLine from "@lucide/solid/icons/pencil-line";
+import type { JSX } from "@solidjs/web";
 import { cn } from "cn";
-import PencilLine from "lucide-solid/icons/pencil-line";
-import { Show, type JSX } from "solid-js";
+import { Show } from "solid-js";
 
 import { toneClasses, type Tone } from "@/components/ui/tone";
+import { loadedData } from "@/git/queries/loaded";
 import { useStatus } from "@/git/queries/status";
 import { WIP_MESSAGE, type WipRow } from "@/git/rows";
 import { headLabel } from "@/git/status";
@@ -22,11 +24,11 @@ export function HistoryWipRow(
   },
 ) {
   const status = useStatus(() => props.row.repositoryId);
-  const counts = () => status.data?.counts ?? { staged: 0, unstaged: 0, conflicted: 0 };
+  const counts = () => loadedData(status)?.counts ?? { staged: 0, unstaged: 0, conflicted: 0 };
   // Read once: in JSX, `status.data && headLabel(status.data.head)` would check a memo of whether
   // there's data, which a transition (switching repositories) can leave behind the data itself.
   const branch = () => {
-    const head = status.data?.head;
+    const head = loadedData(status)?.head;
     return head && headLabel(head);
   };
 

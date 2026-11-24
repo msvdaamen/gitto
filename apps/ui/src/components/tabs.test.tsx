@@ -8,6 +8,7 @@ import {
   RouterProvider,
 } from "@tanstack/solid-router";
 import userEvent from "@testing-library/user-event";
+import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { queryClient } from "@/lib/query-client";
@@ -99,6 +100,19 @@ describe("Tabs", () => {
     expect(screen.getByRole("link", { name: "repo-a" })).toHaveFocus();
   });
 
+  it("keeps a tab focused as it's moved left, which moves its own element", async () => {
+    const user = userEvent.setup();
+    renderTabs();
+
+    (await screen.findByRole("link", { name: "repo-c" })).focus();
+    await user.keyboard("{Alt>}{Shift>}{ArrowLeft}{/Shift}{/Alt}");
+
+    expect(tabNames()).toEqual(["repo-a", "repo-c", "repo-b"]);
+    expect(screen.getByRole("link", { name: "repo-c" })).toHaveFocus();
+    await vi.waitFor(() => expect(rpc.repository.list).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("link", { name: "repo-c" })).toHaveFocus();
+  });
+
   it("moves a dragged tab past the middle of each tab it's dragged over", async () => {
     // jsdom has no layout or pointer capture: each tab is 100px wide, the home tab first.
     HTMLElement.prototype.setPointerCapture = () => undefined;
@@ -117,11 +131,15 @@ describe("Tabs", () => {
     renderTabs();
 
     // Grabbed in its middle, and dragged until its middle's just past the next tab's.
+    // Each event is a task of its own in a browser, with Solid's updates applied in between.
     const a = await tab("repo-a");
     fireEvent.pointerDown(a, { button: 0, clientX: 150, pointerId: 1 });
+    flush();
     fireEvent.pointerMove(a, { clientX: 240, pointerId: 1 });
+    flush();
     expect(tabNames()).toEqual(["repo-a", "repo-b", "repo-c"]);
     fireEvent.pointerMove(a, { clientX: 260, pointerId: 1 });
+    flush();
     expect(tabNames()).toEqual(["repo-b", "repo-a", "repo-c"]);
     expect(rpc.repository.reorder).not.toHaveBeenCalled();
 

@@ -1,5 +1,5 @@
+import type { JSX } from "@solidjs/web";
 import { cn } from "cn";
-import type { JSX } from "solid-js";
 
 import { toneClasses, type Tone } from "./tone";
 

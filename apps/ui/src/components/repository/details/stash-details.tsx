@@ -1,8 +1,9 @@
-import Archive from "lucide-solid/icons/archive";
+import Archive from "@lucide/solid/icons/archive";
 import { createMemo, Show } from "solid-js";
 
 import { Badge } from "@/components/ui/badge";
 import type { FileOpener } from "@/git/diff-source";
+import { loadedData } from "@/git/queries/loaded";
 import { useStashes, useStashFiles } from "@/git/queries/stash";
 import { useRelativeTime } from "@/hooks/relative-time";
 
@@ -24,7 +25,9 @@ export function StashDetails(props: {
   // The stash whose files are on show, so the summary never names another one while its files
   // load. Gone once it's popped; the history then selects another row.
   const ago = useRelativeTime();
-  const shown = createMemo(() => stashes.data?.find((stash) => stash.sha === changes.shownSha()));
+  const shown = createMemo(() =>
+    loadedData(stashes)?.find((stash) => stash.sha === changes.shownSha()),
+  );
 
   // One element, so the file list sees it change size when the summary above the files loads.
   return (

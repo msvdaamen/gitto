@@ -1,6 +1,12 @@
-import { Popover } from "@kobalte/core/popover";
-import GitBranch from "lucide-solid/icons/git-branch";
-import { createSignal, Suspense } from "solid-js";
+import GitBranch from "@lucide/solid/icons/git-branch";
+import {
+  Popover,
+  PopoverContent,
+  PopoverDescription,
+  PopoverTitle,
+  PopoverTrigger,
+} from "@ui-sdk/solid/popover";
+import { createSignal, Errored, Loading } from "solid-js";
 
 import { FailurePopover } from "@/components/ui/failure-popover";
 import { useCreateBranch } from "@/git/queries/branch";
@@ -17,9 +23,21 @@ import { ToolbarButton } from "./toolbar-button";
  */
 export function BranchButton(props: { repositoryId: string }) {
   return (
-    <Suspense fallback={<ToolbarButton icon={GitBranch} label="Branch" hideBelow="sm" disabled />}>
-      <Branch repositoryId={props.repositoryId} />
-    </Suspense>
+    <Loading fallback={<ToolbarButton icon={GitBranch} label="Branch" hideBelow="sm" disabled />}>
+      <Errored
+        fallback={(error) => (
+          <ToolbarButton
+            icon={GitBranch}
+            label="Branch"
+            hideBelow="sm"
+            title={`Couldn't load the repository: ${(error() as Error).message}`}
+            disabled
+          />
+        )}
+      >
+        <Branch repositoryId={props.repositoryId} />
+      </Errored>
+    </Loading>
   );
 }
 
@@ -58,28 +76,36 @@ function Branch(props: { repositoryId: string }) {
 
   return (
     <FailurePopover title="Branch" error={create.error()} onDismiss={() => create.dismiss()}>
-      <Popover open={open()} onOpenChange={toggle} placement="bottom-start" gutter={6}>
-        <Popover.Trigger
-          as={ToolbarButton}
-          icon={GitBranch}
-          label="Branch"
-          hideBelow="sm"
-          title={`Create a branch from ${source()}`}
+      <Popover open={open()} onOpenChange={(isOpen) => toggle(isOpen)}>
+        <PopoverTrigger
           disabled={!status.data || create.isBlocked()}
-          busy={create.isPending()}
-        />
-        <Popover.Portal>
-          <Popover.Content class="z-50 w-[280px] animate-toast-in rounded-lg border border-border bg-panel-raised p-3 text-text shadow-app outline-none motion-reduce:animate-none">
-            <BranchForm
-              title={Popover.Title}
-              description={Popover.Description}
-              summary={`From ${source()}${changes()}`}
-              name={name()}
-              onNameChange={setName}
-              onSubmit={submit}
+          render={(trigger) => (
+            <ToolbarButton
+              {...trigger}
+              icon={GitBranch}
+              label="Branch"
+              hideBelow="sm"
+              title={`Create a branch from ${source()}`}
+              disabled={!status.data || create.isBlocked()}
+              busy={create.isPending()}
             />
-          </Popover.Content>
-        </Popover.Portal>
+          )}
+        />
+        <PopoverContent
+          side="bottom"
+          align="start"
+          sideOffset={6}
+          class="z-50 w-[280px] animate-toast-in rounded-lg border border-border bg-panel-raised p-3 text-text shadow-app outline-none motion-reduce:animate-none"
+        >
+          <BranchForm
+            title={PopoverTitle}
+            description={PopoverDescription}
+            summary={`From ${source()}${changes()}`}
+            name={name()}
+            onNameChange={setName}
+            onSubmit={submit}
+          />
+        </PopoverContent>
       </Popover>
     </FailurePopover>
   );

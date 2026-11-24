@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/solid-query";
 import { useNavigate } from "@tanstack/solid-router";
 import { createMemo, createSignal, onCleanup } from "solid-js";
 
+import { loadedData } from "@/git/queries/loaded";
 import { rpc } from "@/lib/rpc";
 
 export const REPOSITORIES_KEY = ["repositories"] as const;
@@ -25,7 +26,7 @@ export function useRepositories() {
 export function useRepository(repositoryId: () => string) {
   const repositories = useRepositories();
   return createMemo(() =>
-    repositories.data?.find((repository) => repository.id === repositoryId()),
+    loadedData(repositories)?.find((repository) => repository.id === repositoryId()),
   );
 }
 
@@ -54,12 +55,11 @@ export function useOpenRepository() {
   const navigate = useNavigate();
   const addRepository = useAddRepository();
   return {
-    open: () =>
-      addRepository.mutate(undefined, {
-        onSuccess: (repository) => {
-          if (repository) void navigate({ to: "/$repoId", params: { repoId: repository.id } });
-        },
-      }),
+    open: async () => {
+      // Why it failed is kept in `error`, to show.
+      const repository = await addRepository.mutate().catch(() => null);
+      if (repository) void navigate({ to: "/$repoId", params: { repoId: repository.id } });
+    },
     error: () => addRepository.error,
     /** Forgets why it last failed. */
     dismiss: () => addRepository.reset(),

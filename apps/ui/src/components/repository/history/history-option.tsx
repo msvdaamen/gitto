@@ -1,6 +1,6 @@
+import type { LucideIcon } from "@lucide/solid";
+import type { JSX } from "@solidjs/web";
 import { cn } from "cn";
-import type { LucideIcon } from "lucide-solid";
-import type { JSX } from "solid-js";
 
 import { LineStats } from "@/components/ui/line-stats";
 import { toneClasses } from "@/components/ui/tone";
@@ -53,7 +53,7 @@ export function HistoryOption(
       id={optionId(props.position.index)}
       data-commit={props["data-commit"]}
       role="option"
-      tabIndex={-1}
+      tabindex={-1}
       aria-selected={props.selected ? "true" : "false"}
       aria-posinset={props.position.index + 1}
       aria-setsize={props.position.count}

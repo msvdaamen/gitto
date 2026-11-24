@@ -12,10 +12,14 @@ function load(): Theme {
   }
 }
 
-const [theme, setThemeSignal] = createSignal<Theme>(load());
+// What it was last set to, which the signal only shows once it's updated: toggling twice at once
+// goes back to where it was.
+let current = load();
+const [theme, setThemeSignal] = createSignal<Theme>(current);
 
 // Sync the DOM and storage directly instead of via a module-level effect, which Solid can't dispose.
 function applyTheme(next: Theme) {
+  current = next;
   document.documentElement.dataset.theme = next;
   try {
     localStorage.setItem(STORAGE_KEY, next);
@@ -25,9 +29,9 @@ function applyTheme(next: Theme) {
   setThemeSignal(next);
 }
 
-applyTheme(theme());
+applyTheme(current);
 
-const toggleTheme = () => applyTheme(theme() === "dark" ? "light" : "dark");
+const toggleTheme = () => applyTheme(current === "dark" ? "light" : "dark");
 
 /** The app's theme, saved in `localStorage` so it survives restarts. */
 export const useTheme = () => ({ theme, toggleTheme });

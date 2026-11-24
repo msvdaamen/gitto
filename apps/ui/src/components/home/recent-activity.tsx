@@ -1,20 +1,20 @@
 import type { ActivityKind } from "@gitto/git/types";
+import type { LucideIcon } from "@lucide/solid";
+import ArrowDownToLine from "@lucide/solid/icons/arrow-down-to-line";
+import Cherry from "@lucide/solid/icons/cherry";
+import Clock from "@lucide/solid/icons/clock";
+import FolderDown from "@lucide/solid/icons/folder-down";
+import GitBranch from "@lucide/solid/icons/git-branch";
+import GitCommitHorizontal from "@lucide/solid/icons/git-commit-horizontal";
+import GitMerge from "@lucide/solid/icons/git-merge";
+import PencilLine from "@lucide/solid/icons/pencil-line";
+import RotateCcw from "@lucide/solid/icons/rotate-ccw";
+import RotateCcwClock from "@lucide/solid/icons/rotate-ccw-clock";
+import Undo2 from "@lucide/solid/icons/undo-2";
+import { Dynamic } from "@solidjs/web";
 import { Link } from "@tanstack/solid-router";
 import { cn } from "cn";
-import type { LucideIcon } from "lucide-solid";
-import ArrowDownToLine from "lucide-solid/icons/arrow-down-to-line";
-import Cherry from "lucide-solid/icons/cherry";
-import Clock from "lucide-solid/icons/clock";
-import FolderDown from "lucide-solid/icons/folder-down";
-import GitBranch from "lucide-solid/icons/git-branch";
-import GitCommitHorizontal from "lucide-solid/icons/git-commit-horizontal";
-import GitMerge from "lucide-solid/icons/git-merge";
-import PencilLine from "lucide-solid/icons/pencil-line";
-import RotateCcw from "lucide-solid/icons/rotate-ccw";
-import RotateCcwClock from "lucide-solid/icons/rotate-ccw-clock";
-import Undo2 from "lucide-solid/icons/undo-2";
 import { createMemo, For, Show } from "solid-js";
-import { Dynamic } from "solid-js/web";
 
 import { Card } from "@/components/ui/card";
 import { toneClasses, type Tone } from "@/components/ui/tone";
@@ -91,7 +91,7 @@ export function RecentActivity(props: { summaries: RepositorySummary[] }) {
                   </div>
                   <time
                     class="text-[11px] whitespace-nowrap text-faint"
-                    dateTime={new Date(activity.at).toISOString()}
+                    datetime={new Date(activity.at).toISOString()}
                   >
                     {relativeTime(activity.at)}
                   </time>

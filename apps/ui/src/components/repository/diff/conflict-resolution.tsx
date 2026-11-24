@@ -1,22 +1,21 @@
 import type { ChangedFile, Conflict } from "@gitto/git/types";
+import Check from "@lucide/solid/icons/check";
+import ChevronDown from "@lucide/solid/icons/chevron-down";
+import ChevronUp from "@lucide/solid/icons/chevron-up";
+import FileCheck from "@lucide/solid/icons/file-check";
+import GitMergeConflict from "@lucide/solid/icons/git-merge-conflict";
+import SkipForward from "@lucide/solid/icons/skip-forward";
+import TriangleAlert from "@lucide/solid/icons/triangle-exclamation-point";
 import { useQueryClient, type QueryClient } from "@tanstack/solid-query";
-import Check from "lucide-solid/icons/check";
-import ChevronDown from "lucide-solid/icons/chevron-down";
-import ChevronUp from "lucide-solid/icons/chevron-up";
-import FileCheck from "lucide-solid/icons/file-check";
-import GitMergeConflict from "lucide-solid/icons/git-merge-conflict";
-import SkipForward from "lucide-solid/icons/skip-forward";
-import TriangleAlert from "lucide-solid/icons/triangle-alert";
 import {
   createEffect,
   createMemo,
   createSignal,
-  ErrorBoundary,
+  Errored,
   lazy,
+  Loading,
   Match,
-  on,
   Show,
-  Suspense,
   Switch,
 } from "solid-js";
 
@@ -98,7 +97,7 @@ export function useConflictResolution(
   const active = view.conflicted;
   const path = () => view.file().path;
   const query = useConflict(props.repositoryId, path, active);
-  // Without Suspense: it's refetched while it's on show (see `useUnsuspendedData`).
+  // Without Loading: it's refetched while it's on show (see `useUnsuspendedData`).
   const data = useUnsuspendedData(query);
   const kind = createMemo(() => {
     const conflict = data();
@@ -109,15 +108,13 @@ export function useConflictResolution(
   // saved so far, not the last.
   const [readSince, setReadSince] = createSignal(0);
   createEffect(
-    on(
-      view.editing,
-      (now, was) => {
-        if (!was || now) return;
-        setReadSince(Date.now());
-        void query.refetch();
-      },
-      { defer: true },
-    ),
+    view.editing,
+    (now, was) => {
+      if (!was || now) return;
+      setReadSince(Date.now());
+      void query.refetch();
+    },
+    { defer: true },
   );
   // Not the last file's, still on show while this one's loads: the viewer would take it for this
   // one's.
@@ -187,7 +184,7 @@ export function useConflictResolution(
       const target = nextConflicted();
       setError(undefined);
       try {
-        await resolveFile.mutateAsync({
+        await resolveFile.mutate({
           repositoryId: props.repositoryId(),
           path: file.path,
           resolution,
@@ -384,19 +381,19 @@ export function useConflictResolution(
             )}
           </Match>
           <Match when={kind()?.kind === "text"}>
-            <ErrorBoundary
-              fallback={(reason: Error) => (
+            <Errored
+              fallback={(reason) => (
                 <EmptyState
                   icon={TriangleAlert}
                   title="Couldn't show the conflicts"
                   tone="error"
                   class="h-full"
                 >
-                  {reason.message}
+                  {(reason() as Error).message}
                 </EmptyState>
               )}
             >
-              <Suspense fallback={<LoadingState title="Loading the conflict…" class="h-full" />}>
+              <Loading fallback={<LoadingState title="Loading the conflict…" class="h-full" />}>
                 <ConflictViewer
                   fileKey={view.fileKey()}
                   path={path()}
@@ -413,8 +410,8 @@ export function useConflictResolution(
                   }
                   onShown={props.onShown}
                 />
-              </Suspense>
-            </ErrorBoundary>
+              </Loading>
+            </Errored>
           </Match>
         </Switch>
       );

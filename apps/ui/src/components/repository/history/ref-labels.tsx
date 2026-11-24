@@ -1,10 +1,10 @@
-import { Popover } from "@kobalte/core/popover";
+import Check from "@lucide/solid/icons/check";
+import Cloud from "@lucide/solid/icons/cloud";
+import FolderGit2 from "@lucide/solid/icons/folder-git-2";
+import Laptop from "@lucide/solid/icons/laptop";
+import Tag from "@lucide/solid/icons/tag";
+import { Popover, PopoverContent } from "@ui-sdk/solid/popover";
 import { cn } from "cn";
-import Check from "lucide-solid/icons/check";
-import Cloud from "lucide-solid/icons/cloud";
-import FolderGit2 from "lucide-solid/icons/folder-git-2";
-import Laptop from "lucide-solid/icons/laptop";
-import Tag from "lucide-solid/icons/tag";
 import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 
 import { describeRefLabel, refLabelMatches, type RefLabel } from "@/git/ref-labels";
@@ -70,24 +70,34 @@ function MoreLabels(props: { labels: RefLabel[]; color: string; onSwitch: (ref: 
   };
   onCleanup(() => clearTimeout(timer));
 
+  let count: HTMLSpanElement | undefined;
+
   return (
-    <Popover open={open()} onOpenChange={setOpen} placement="bottom-start" gutter={4}>
-      <Popover.Anchor
-        as="span"
+    <>
+      <span
+        ref={(el) => (count = el)}
         class={cn(PILL, "shrink-0 px-[4px] font-[680]")}
         onPointerEnter={openSoon}
         onPointerLeave={closeSoon}
       >
         +{props.labels.length}
-      </Popover.Anchor>
-      <Popover.Portal>
-        <Popover.Content
-          // Neither takes the focus from the history, nor hands it back: it's only hovered. Nor
-          // closes as the history takes the focus back from it once it's clicked, which would be
-          // before a double-click lands.
-          onOpenAutoFocus={(event) => event.preventDefault()}
-          onCloseAutoFocus={(event) => event.preventDefault()}
-          onFocusOutside={(event) => event.preventDefault()}
+      </span>
+      <Popover
+        open={open()}
+        onOpenChange={(isOpen, details) => {
+          // Nor closes as the history takes the focus back from it once it's clicked, which would
+          // be before a double-click lands.
+          if (details.reason !== "focus-out") setOpen(isOpen);
+        }}
+      >
+        <PopoverContent
+          anchor={count ?? null}
+          side="bottom"
+          align="start"
+          sideOffset={4}
+          // Neither takes the focus from the history, nor hands it back: it's only hovered.
+          initialFocus="none"
+          finalFocus="none"
           onPointerEnter={() => clearTimeout(timer)}
           onPointerLeave={closeSoon}
           class="z-50 flex max-w-[320px] flex-col items-start gap-1 rounded-md border border-border bg-panel-raised p-1.5 shadow-app outline-none"
@@ -96,9 +106,9 @@ function MoreLabels(props: { labels: RefLabel[]; color: string; onSwitch: (ref: 
           <For each={props.labels}>
             {(label) => <RefPill label={label} onSwitch={props.onSwitch} />}
           </For>
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover>
+        </PopoverContent>
+      </Popover>
+    </>
   );
 }
 

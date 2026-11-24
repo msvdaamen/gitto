@@ -1,4 +1,4 @@
-import { createRoot, createSignal } from "solid-js";
+import { createRoot, createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useSettled } from "./settled";
@@ -7,7 +7,7 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 function mount<T>(initial: T) {
-  const [value, setValue] = createSignal(initial);
+  const [value, setValue] = createSignal<T>(initial as Exclude<T, Function>);
   const [settled, dispose] = createRoot((disposeRoot) => [useSettled(value, 100), disposeRoot]);
   return { setValue, settled, dispose };
 }
@@ -18,6 +18,7 @@ describe("useSettled", () => {
     await vi.advanceTimersByTimeAsync(500);
 
     setValue("b");
+    flush();
     expect(settled()).toBe("b");
     dispose();
   });
@@ -31,6 +32,7 @@ describe("useSettled", () => {
     setValue("c");
     await vi.advanceTimersByTimeAsync(30);
     setValue("d");
+    flush();
     expect(settled()).toBe("b");
     await vi.advanceTimersByTimeAsync(99);
     expect(settled()).toBe("b");
@@ -44,9 +46,12 @@ describe("useSettled", () => {
     await vi.advanceTimersByTimeAsync(500);
 
     setValue("b");
+    flush();
     setValue(undefined);
+    flush();
     expect(settled()).toBeUndefined();
     setValue("c");
+    flush();
     expect(settled()).toBe("c");
     dispose();
   });

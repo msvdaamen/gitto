@@ -1,7 +1,7 @@
+import ListTree from "@lucide/solid/icons/list-tree";
+import Settings from "@lucide/solid/icons/settings";
 import { cn } from "cn";
-import ListTree from "lucide-solid/icons/list-tree";
-import Settings from "lucide-solid/icons/settings";
-import { createSignal, For, Show, Suspense } from "solid-js";
+import { createSignal, For, Show, Loading } from "solid-js";
 
 import { SegmentedControl } from "@/components/ui/segmented-control";
 
@@ -37,9 +37,9 @@ export function RefsSidebar(props: { repositoryId: string; open: boolean }) {
           aria-label="Repository references"
         >
           {/* The list shows the branches loading itself, rather than suspending (see `RefList`). */}
-          <Suspense>
+          <Loading>
             <RefList repositoryId={props.repositoryId} />
-          </Suspense>
+          </Loading>
         </nav>
       </Show>
       <button class="absolute right-0 bottom-0 left-0 flex h-[34px] cursor-pointer items-center gap-[7px] border-0 border-t border-border-soft bg-panel px-3 text-[11.5px] text-faint hover:text-text-soft max-md:justify-center max-md:px-0 max-md:[&>span]:hidden">
@@ -68,7 +68,7 @@ function RailModeSwitch(props: { value: string; onChange: (value: string) => voi
             )}
             title={option.label}
             aria-label={option.label}
-            aria-pressed={props.value === option.label}
+            aria-pressed={props.value === option.label ? "true" : "false"}
             onClick={() => props.onChange(option.label)}
           >
             <option.icon size={16} />

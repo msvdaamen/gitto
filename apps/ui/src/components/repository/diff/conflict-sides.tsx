@@ -1,5 +1,5 @@
 import type { Conflict } from "@gitto/git/types";
-import GitMergeConflict from "lucide-solid/icons/git-merge-conflict";
+import GitMergeConflict from "@lucide/solid/icons/git-merge-conflict";
 import { Show } from "solid-js";
 
 import { Button } from "@/components/ui/button";

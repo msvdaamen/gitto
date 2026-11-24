@@ -1,5 +1,5 @@
+import type { JSX } from "@solidjs/web";
 import { cn } from "cn";
-import type { JSX } from "solid-js";
 
 /** A keyboard shortcut, like `⌘ K`. */
 export function Kbd(props: { children: JSX.Element; class?: string }) {

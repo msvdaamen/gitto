@@ -1,11 +1,18 @@
-import { Dialog } from "@kobalte/core/dialog";
+import FolderPlus from "@lucide/solid/icons/folder-plus";
+import {
+  Dialog,
+  DialogBackdrop,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@ui-sdk/solid/dialog";
 import { cn } from "cn";
-import FolderPlus from "lucide-solid/icons/folder-plus";
-import { createEffect, createSignal, on, Show } from "solid-js";
+import { createEffect, createSignal, Show } from "solid-js";
 
 import { Button } from "@/components/ui/button";
-import { DIALOG_BOX, DialogPortal } from "@/components/ui/dialog";
+import { DIALOG_BACKDROP, DIALOG_BOX } from "@/components/ui/dialog";
 import { FormField } from "@/components/ui/form-field";
+import { loadedData } from "@/git/queries/loaded";
 import { useRefs } from "@/git/queries/refs";
 import { useWorktreeActions, useWorktrees } from "@/git/queries/worktree";
 import { branchName } from "@/git/status";
@@ -41,7 +48,7 @@ export function AddWorktreeDialog(props: {
    * Where the branch (for a remote one, the local branch tracking it) is checked out already, if
    * anywhere: then a new branch has to be made.
    */
-  const clash = () => checkedOutIn(worktrees.data, refs.data, branch() ?? "");
+  const clash = () => checkedOutIn(loadedData(worktrees), loadedData(refs), branch() ?? "");
   const needsNewBranch = () => clash() !== undefined;
   const summary = () => {
     const where = clash();
@@ -70,18 +77,16 @@ export function AddWorktreeDialog(props: {
   let suggested = "";
   // Suggested afresh for each branch, unless one was typed and kept after a failure.
   createEffect(
-    on(
-      () => props.branch,
-      (open) => {
-        if (!open) return;
-        // Out of the way of the folder and name, which are kept after a failure to fix them.
-        add.dismiss();
-        if ((!folder() || folder() === suggested) && repository()) {
-          suggested = suggestWorktreeFolder(repository()!.path, branchName(open));
-          setFolder(suggested);
-        }
-      },
-    ),
+    () => props.branch,
+    (open) => {
+      if (!open) return;
+      // Out of the way of the folder and name, which are kept after a failure to fix them.
+      add.dismiss();
+      if ((!folder() || folder() === suggested) && repository()) {
+        suggested = suggestWorktreeFolder(repository()!.path, branchName(open));
+        setFolder(suggested);
+      }
+    },
   );
 
   const valid = () => !!folder().trim() && (!needsNewBranch() || !!newBranch().trim());
@@ -111,51 +116,50 @@ export function AddWorktreeDialog(props: {
   }
 
   return (
-    <Dialog open={!!props.branch} onOpenChange={(open) => !open && props.onClose()} modal>
-      <DialogPortal>
-        <Dialog.Content class={cn(DIALOG_BOX, "max-w-[400px] p-4")}>
-          <form onSubmit={submit}>
-            <Dialog.Title class="m-0 text-[12.5px] font-[680]">New worktree</Dialog.Title>
-            <Dialog.Description class="m-0 mt-1 mb-2.5 text-[11.5px] leading-[1.45] text-muted">
-              {summary()}
-            </Dialog.Description>
-            <FormField
-              label="Folder"
-              hint="Empty, or not there yet"
-              placeholder="/path/to/folder"
-              value={folder()}
-              onChange={setFolder}
-            />
-            <FormField
-              label={needsNewBranch() ? "New branch" : "New branch (optional)"}
-              placeholder={needsNewBranch() ? "feature/my-change" : `Keep ${name()}`}
-              value={newBranch()}
-              onChange={setNewBranch}
-            />
-            <div class="flex gap-2">
-              <Button
-                type="button"
-                variant="secondary"
-                class="h-8 shrink-0 rounded-[7px] text-[12.5px] shadow-none"
-                onClick={() => void browse()}
-              >
-                Browse…
-              </Button>
-              <Button
-                type="submit"
-                variant="primary"
-                icon={FolderPlus}
-                disabled={!valid() || add.isBlocked()}
-                class="h-8 flex-1 gap-[7px] rounded-[7px] text-[12.5px] font-[680] shadow-none"
-              >
-                <Show when={newBranch().trim()} fallback="Add worktree">
-                  Add worktree with new branch
-                </Show>
-              </Button>
-            </div>
-          </form>
-        </Dialog.Content>
-      </DialogPortal>
+    <Dialog open={!!props.branch} onOpenChange={(open) => !open && props.onClose()}>
+      <DialogBackdrop class={DIALOG_BACKDROP} />
+      <DialogContent class={cn(DIALOG_BOX, "max-w-[400px] p-4")}>
+        <form onSubmit={submit}>
+          <DialogTitle class="m-0 text-[12.5px] font-[680]">New worktree</DialogTitle>
+          <DialogDescription class="m-0 mt-1 mb-2.5 text-[11.5px] leading-[1.45] text-muted">
+            {summary()}
+          </DialogDescription>
+          <FormField
+            label="Folder"
+            hint="Empty, or not there yet"
+            placeholder="/path/to/folder"
+            value={folder()}
+            onChange={setFolder}
+          />
+          <FormField
+            label={needsNewBranch() ? "New branch" : "New branch (optional)"}
+            placeholder={needsNewBranch() ? "feature/my-change" : `Keep ${name()}`}
+            value={newBranch()}
+            onChange={setNewBranch}
+          />
+          <div class="flex gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              class="h-8 shrink-0 rounded-[7px] text-[12.5px] shadow-none"
+              onClick={() => void browse()}
+            >
+              Browse…
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              icon={FolderPlus}
+              disabled={!valid() || add.isBlocked()}
+              class="h-8 flex-1 gap-[7px] rounded-[7px] text-[12.5px] font-[680] shadow-none"
+            >
+              <Show when={newBranch().trim()} fallback="Add worktree">
+                Add worktree with new branch
+              </Show>
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
     </Dialog>
   );
 }

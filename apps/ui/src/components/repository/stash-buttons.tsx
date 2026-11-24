@@ -1,6 +1,6 @@
-import Archive from "lucide-solid/icons/archive";
-import ArchiveRestore from "lucide-solid/icons/archive-restore";
-import { Suspense } from "solid-js";
+import Archive from "@lucide/solid/icons/archive";
+import ArchiveRestore from "@lucide/solid/icons/archive-arrow-up";
+import { Errored, Loading } from "solid-js";
 
 import { FailurePopover } from "@/components/ui/failure-popover";
 import { useStashActions, useStashes } from "@/git/queries/stash";
@@ -16,7 +16,7 @@ import { ToolbarButton } from "./toolbar-button";
  */
 export function StashButtons(props: { repositoryId: string }) {
   return (
-    <Suspense
+    <Loading
       fallback={
         <>
           <ToolbarButton icon={Archive} label="Stash" hideBelow="lg" disabled />
@@ -24,8 +24,23 @@ export function StashButtons(props: { repositoryId: string }) {
         </>
       }
     >
-      <Stash repositoryId={props.repositoryId} />
-    </Suspense>
+      <Errored
+        fallback={(error) => (
+          <>
+            <ToolbarButton
+              icon={Archive}
+              label="Stash"
+              hideBelow="lg"
+              title={`Couldn't load the repository: ${(error() as Error).message}`}
+              disabled
+            />
+            <ToolbarButton icon={ArchiveRestore} label="Pop" hideBelow="lg" disabled />
+          </>
+        )}
+      >
+        <Stash repositoryId={props.repositoryId} />
+      </Errored>
+    </Loading>
   );
 }
 
@@ -48,25 +63,35 @@ function Stash(props: { repositoryId: string }) {
         />
       </FailurePopover>
       <FailurePopover title="Pop" error={pop.error()} onDismiss={() => pop.dismiss()}>
-        <ToolbarButton
-          icon={ArchiveRestore}
-          label="Pop"
-          hideBelow="lg"
-          title={
-            status.data && stashes.data
-              ? popTitle(status.data, stashes.data)
-              : stashes.error
-                ? `Couldn't load the stashes: ${stashes.error.message}`
-                : "Pop"
-          }
-          disabled={!canPop(status.data, stashes.data) || isPending()}
-          busy={pop.isPending()}
-          count={stashes.data?.length}
-          onClick={() => {
-            const newest = stashes.data?.[0];
-            if (newest) pop.run(newest.sha);
-          }}
-        />
+        <Errored
+          fallback={(error) => (
+            <ToolbarButton
+              icon={ArchiveRestore}
+              label="Pop"
+              hideBelow="lg"
+              title={
+                stashes.error
+                  ? `Couldn't load the stashes: ${stashes.error.message}`
+                  : (error() as Error).message
+              }
+              disabled
+            />
+          )}
+        >
+          <ToolbarButton
+            icon={ArchiveRestore}
+            label="Pop"
+            hideBelow="lg"
+            title={status.data && stashes.data ? popTitle(status.data, stashes.data) : "Pop"}
+            disabled={!canPop(status.data, stashes.data) || isPending()}
+            busy={pop.isPending()}
+            count={stashes.data?.length}
+            onClick={() => {
+              const newest = stashes.data?.[0];
+              if (newest) pop.run(newest.sha);
+            }}
+          />
+        </Errored>
       </FailurePopover>
     </>
   );

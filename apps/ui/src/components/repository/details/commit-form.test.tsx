@@ -1,7 +1,7 @@
 import { render, screen } from "@solidjs/testing-library";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import userEvent from "@testing-library/user-event";
-import { createSignal, Suspense } from "solid-js";
+import { createSignal, flush, Loading } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CommitForm } from "./commit-form";
@@ -25,13 +25,13 @@ function renderForm(props: { stagedCount?: number; lastCommit?: string | null } 
   );
   render(() => (
     <QueryClientProvider client={client}>
-      <Suspense fallback="Suspended">
+      <Loading fallback="Suspended">
         <CommitForm
           repositoryId="repo"
           stagedCount={props.stagedCount ?? 0}
           lastCommit={lastCommit()}
         />
-      </Suspense>
+      </Loading>
     </QueryClientProvider>
   ));
   return {
@@ -129,6 +129,7 @@ describe("amending the last commit", () => {
 
     // Made in a terminal, say.
     setLastCommit("b2");
+    flush();
     expect(amend).not.toBeChecked();
     expect(summary).toHaveValue("Draft");
     expect(rpc.git.commit.message).not.toHaveBeenCalledWith(
@@ -147,6 +148,7 @@ describe("amending the last commit", () => {
     expect(screen.getByLabelText("Commit message")).toHaveAttribute("readonly");
 
     setLastCommit("b2");
+    flush();
     finish();
     expect(amend).not.toBeChecked();
     expect(rpc.git.commit.message).toHaveBeenCalledTimes(1);
@@ -158,12 +160,14 @@ describe("amending the last commit", () => {
     await screen.findByDisplayValue("Commit a1");
 
     setLastCommit(undefined);
+    flush();
     expect(amend).not.toBeChecked();
     expect(amend).toBeDisabled();
     await userEvent.type(summary, "First commit");
     expect(screen.getByRole("button", { name: /Commit 1 file/ })).toBeEnabled();
 
     setLastCommit("c3");
+    flush();
     expect(amend).not.toBeChecked();
     expect(screen.getByRole("button", { name: /Commit 1 file/ })).toBeEnabled();
   });
@@ -180,8 +184,11 @@ describe("amending the last commit", () => {
     await userEvent.click(amend);
     await screen.findByDisplayValue("Commit a1");
 
+    // HEAD moves away and back in separate updates, as it does in git.
     setLastCommit("b2");
+    flush();
     setLastCommit("a1");
+    flush();
     expect(amend).not.toBeChecked();
     expect(summary).toHaveValue("");
   });
@@ -237,6 +244,7 @@ describe("amending the last commit", () => {
     await screen.findByDisplayValue("Commit a1");
 
     setRepositoryId("other worktree");
+    flush();
     expect(amend).not.toBeChecked();
     expect(screen.getByLabelText("Commit message")).toHaveValue("");
   });

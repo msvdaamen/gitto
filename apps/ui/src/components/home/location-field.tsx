@@ -1,7 +1,8 @@
-import FolderOpen from "lucide-solid/icons/folder-open";
+import FolderOpen from "@lucide/solid/icons/folder-open";
 import { createMemo, createSignal, createUniqueId, Show } from "solid-js";
 
 import { inFolder, parentFolder } from "@/git/clone";
+import { loadedData } from "@/git/queries/loaded";
 import { useRepositories } from "@/hooks/repositories";
 import { rpc } from "@/lib/rpc";
 
@@ -14,7 +15,7 @@ export function useLocation() {
   /** The folder chosen with the picker, which new repositories go in from then on. */
   const [chosen, setChosen] = createSignal<string>();
   const parent = createMemo(() => {
-    const last = repositories.data?.at(-1);
+    const last = loadedData(repositories)?.at(-1);
     return chosen() ?? (last && parentFolder(last.path));
   });
   return {

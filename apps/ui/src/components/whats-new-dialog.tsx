@@ -1,14 +1,20 @@
 import { capitalize } from "@gitto/release/changelog";
 import { channelOf } from "@gitto/release/version";
 import type { Change, VersionChanges } from "@gitto/system/types";
-import { Dialog } from "@kobalte/core/dialog";
+import Sparkles from "@lucide/solid/icons/sparkles";
+import {
+  Dialog,
+  DialogBackdrop,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@ui-sdk/solid/dialog";
 import { cn } from "cn";
-import Sparkles from "lucide-solid/icons/sparkles";
-import { For, onMount, Show } from "solid-js";
+import { For, onSettled, Show } from "solid-js";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { DIALOG_BOX, DialogPortal } from "@/components/ui/dialog";
+import { DIALOG_BACKDROP, DIALOG_BOX } from "@/components/ui/dialog";
 import type { Tone } from "@/components/ui/tone";
 import { whatsNew } from "@/hooks/whats-new";
 
@@ -39,51 +45,50 @@ function formatDate(date: string) {
  * once Gitto has updated, and from its version in the footer. Closing it marks them as seen.
  */
 export function WhatsNewDialog() {
-  onMount(() => void whatsNew.showUnseen());
+  onSettled(() => void whatsNew.showUnseen());
 
   return (
-    <Dialog open={!!whatsNew.shown()} onOpenChange={(open) => !open && whatsNew.close()} modal>
-      <DialogPortal>
-        <Dialog.Content
-          class={cn(DIALOG_BOX, "flex max-h-[80vh] max-w-[520px] flex-col p-5 outline-none")}
-        >
-          <div class="flex items-start gap-3">
-            <span class="grid size-9 shrink-0 place-items-center rounded-[9px] bg-primary-soft text-primary-strong">
-              <Sparkles size={18} strokeWidth={1.9} />
-            </span>
-            <div class="min-w-0">
-              <Dialog.Title class="m-0 text-[15px] font-[680]">What's new in Gitto</Dialog.Title>
-              <Dialog.Description class="m-0 mt-1 text-[12.5px] leading-[1.55] text-text-soft">
-                <Show
-                  when={whatsNew.shown()?.unseen}
-                  fallback="What changed in each version, the newest first."
-                >
-                  Gitto has updated. Here's what changed since you last looked.
-                </Show>
-              </Dialog.Description>
-            </div>
+    <Dialog open={!!whatsNew.shown()} onOpenChange={(open) => !open && whatsNew.close()}>
+      <DialogBackdrop class={DIALOG_BACKDROP} />
+      <DialogContent
+        class={cn(DIALOG_BOX, "flex max-h-[80vh] max-w-[520px] flex-col p-5 outline-none")}
+      >
+        <div class="flex items-start gap-3">
+          <span class="grid size-9 shrink-0 place-items-center rounded-[9px] bg-primary-soft text-primary-strong">
+            <Sparkles size={18} strokeWidth={1.9} />
+          </span>
+          <div class="min-w-0">
+            <DialogTitle class="m-0 text-[15px] font-[680]">What's new in Gitto</DialogTitle>
+            <DialogDescription class="m-0 mt-1 text-[12.5px] leading-[1.55] text-text-soft">
+              <Show
+                when={whatsNew.shown()?.unseen}
+                fallback="What changed in each version, the newest first."
+              >
+                Gitto has updated. Here's what changed since you last looked.
+              </Show>
+            </DialogDescription>
           </div>
+        </div>
 
-          <div class="-mx-5 mt-4 min-h-0 flex-1 overflow-y-auto border-y border-border px-5 py-1">
-            <For
-              each={whatsNew.shown()?.versions}
-              fallback={
-                <p class="my-4 text-[12.5px] text-muted">
-                  Nothing to show: this build was made without a changelog.
-                </p>
-              }
-            >
-              {(version) => <VersionSection version={version} />}
-            </For>
-          </div>
+        <div class="-mx-5 mt-4 min-h-0 flex-1 overflow-y-auto border-y border-border px-5 py-1">
+          <For
+            each={whatsNew.shown()?.versions}
+            fallback={
+              <p class="my-4 text-[12.5px] text-muted">
+                Nothing to show: this build was made without a changelog.
+              </p>
+            }
+          >
+            {(version) => <VersionSection version={version} />}
+          </For>
+        </div>
 
-          <div class="mt-4 flex justify-end">
-            <Button variant="primary" onClick={() => whatsNew.close()}>
-              Got it
-            </Button>
-          </div>
-        </Dialog.Content>
-      </DialogPortal>
+        <div class="mt-4 flex justify-end">
+          <Button variant="primary" onClick={() => whatsNew.close()}>
+            Got it
+          </Button>
+        </div>
+      </DialogContent>
     </Dialog>
   );
 }

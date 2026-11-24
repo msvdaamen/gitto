@@ -1,8 +1,8 @@
+import type { LucideIcon } from "@lucide/solid";
+import FileWarning from "@lucide/solid/icons/file-exclamation-point";
+import { Dynamic, type JSX } from "@solidjs/web";
 import { cn } from "cn";
-import type { LucideIcon } from "lucide-solid";
-import FileWarning from "lucide-solid/icons/file-exclamation-point";
-import { children, type JSX } from "solid-js";
-import { Dynamic } from "solid-js/web";
+import { children } from "solid-js";
 
 /**
  * A line under a header about something that went wrong, like a file's edits that couldn't be

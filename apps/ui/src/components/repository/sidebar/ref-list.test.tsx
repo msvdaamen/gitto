@@ -3,7 +3,7 @@ import { fireEvent, render, screen, within } from "@solidjs/testing-library";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import type * as SolidRouter from "@tanstack/solid-router";
 import userEvent from "@testing-library/user-event";
-import { createSignal, Suspense } from "solid-js";
+import { createSignal, Loading } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { gitKeys } from "@/git/queries/keys";
@@ -96,10 +96,10 @@ function renderSidebar(
           detailsOpen
           onToggleDetails={() => undefined}
         />
-        {/* In a Suspense boundary, as in the sidebar. */}
-        <Suspense>
+        {/* In a Loading boundary, as in the sidebar. */}
+        <Loading>
           <RefList repositoryId={repositoryId()} />
-        </Suspense>
+        </Loading>
       </BranchMenuProvider>
     </QueryClientProvider>
   ));
@@ -403,7 +403,7 @@ async function menuItem(user: ReturnType<typeof userEvent.setup>, name: string, 
 async function mergeFrom(user: ReturnType<typeof userEvent.setup>, name: string) {
   const item = await menuItem(user, name, `Merge ${name} into main`);
   // Enabled once the operation under way, if any, has loaded.
-  await vi.waitFor(() => expect(item).toHaveAttribute("aria-disabled", "false"));
+  await vi.waitFor(() => expect(item).not.toHaveAttribute("aria-disabled", "true"));
   await user.click(item);
 }
 
@@ -527,8 +527,8 @@ describe("merging from the branch menu", () => {
     // this stands for a merge begun some other way.
     fireEvent.contextMenu(await row("feature"));
     const merge = await screen.findByRole("menuitem", { name: "Merge feature into main" });
-    await vi.waitFor(() => expect(merge).toHaveAttribute("aria-disabled", "false"));
-    fireEvent.keyDown(merge, { key: "Enter" });
+    await vi.waitFor(() => expect(merge).not.toHaveAttribute("aria-disabled", "true"));
+    fireEvent.click(merge);
     await vi.waitFor(() => expect(busy()).toBeInTheDocument());
     const create = await screen.findByRole("button", { name: "Create branch", hidden: true });
     expect(create).toBeDisabled();
@@ -604,7 +604,7 @@ describe("merging from the branch menu", () => {
 async function rebaseOnto(user: ReturnType<typeof userEvent.setup>, name: string) {
   const item = await menuItem(user, name, `Rebase main onto ${name}`);
   // Enabled once the operation under way, if any, has loaded.
-  await vi.waitFor(() => expect(item).toHaveAttribute("aria-disabled", "false"));
+  await vi.waitFor(() => expect(item).not.toHaveAttribute("aria-disabled", "true"));
   await user.click(item);
 }
 
@@ -1469,7 +1469,7 @@ describe("worktrees from the branch menu", () => {
 async function deleteFrom(user: ReturnType<typeof userEvent.setup>, name: string) {
   const item = await menuItem(user, name, `Delete ${name}…`);
   // Enabled once the status and the refs have loaded.
-  await vi.waitFor(() => expect(item).toHaveAttribute("aria-disabled", "false"));
+  await vi.waitFor(() => expect(item).not.toHaveAttribute("aria-disabled", "true"));
   await user.click(item);
 }
 
@@ -1630,12 +1630,12 @@ describe("deleting from the branch menu", () => {
     await vi.waitFor(() =>
       expect(
         screen.getByRole("menuitem", { name: "Merge origin/feature into main" }),
-      ).toHaveAttribute("aria-disabled", "false"),
+      ).not.toHaveAttribute("aria-disabled", "true"),
     );
     expect(item).toHaveAttribute("aria-disabled", "true");
 
     loadWorktrees([]);
-    await vi.waitFor(() => expect(item).toHaveAttribute("aria-disabled", "false"));
+    await vi.waitFor(() => expect(item).not.toHaveAttribute("aria-disabled", "true"));
   });
 
   it("doesn't run while a worktree is being added, which checks out a branch, nor that while it runs", async () => {
@@ -1707,7 +1707,7 @@ describe("deleting from the branch menu", () => {
 
     // Enabled for another, once everything has loaded.
     const topic = await menuItem(user, "topic", "Delete topic…");
-    await vi.waitFor(() => expect(topic).toHaveAttribute("aria-disabled", "false"));
+    await vi.waitFor(() => expect(topic).not.toHaveAttribute("aria-disabled", "true"));
     await user.keyboard("{Escape}");
     for (const name of ["main", "origin/main", "origin/feature"]) {
       // oxlint-disable-next-line no-await-in-loop -- one menu at a time.

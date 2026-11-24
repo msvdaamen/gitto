@@ -1,9 +1,9 @@
 import { resolve } from "node:path";
 
+import solid from "@solidjs/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import { defineConfig } from "vite";
-import solid from "vite-plugin-solid";
 
 export default defineConfig({
   plugins: [

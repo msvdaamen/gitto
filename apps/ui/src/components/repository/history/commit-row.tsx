@@ -1,5 +1,5 @@
 import { cn } from "cn";
-import { Show, Suspense } from "solid-js";
+import { Show, Loading } from "solid-js";
 
 import type { CommitRow } from "@/git/rows";
 import { useRelativeTime } from "@/hooks/relative-time";
@@ -63,13 +63,13 @@ export function HistoryCommitRow(
         {/* The author is otherwise only in the graph's tooltip, which assistive tech skips. */}
         <span class="sr-only">{`, by ${props.commit.author}`}</span>
         <Show when={props.selected && props.detailed}>
-          <Suspense>
+          <Loading>
             <RowTotals
               repositoryId={props.commit.repositoryId}
               sha={props.commit.id}
               kind="commit"
             />
-          </Suspense>
+          </Loading>
         </Show>
       </span>
       <span class="truncate text-[11.5px]">{ago(props.commit.committedAt)}</span>
