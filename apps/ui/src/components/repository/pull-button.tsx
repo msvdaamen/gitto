@@ -1,5 +1,5 @@
 import Download from "@lucide/solid/icons/download";
-import { Loading } from "solid-js";
+import { Errored, Loading } from "solid-js";
 
 import { FailurePopover } from "@/components/ui/failure-popover";
 import { usePull } from "@/git/queries/remote";
@@ -12,7 +12,19 @@ import { ToolbarButton } from "./toolbar-button";
 export function PullButton(props: { repositoryId: string }) {
   return (
     <Loading fallback={<ToolbarButton icon={Download} label="Pull" accent disabled />}>
-      <Pull repositoryId={props.repositoryId} />
+      <Errored
+        fallback={(error) => (
+          <ToolbarButton
+            icon={Download}
+            label="Pull"
+            accent
+            title={`Couldn't load the repository: ${(error() as Error).message}`}
+            disabled
+          />
+        )}
+      >
+        <Pull repositoryId={props.repositoryId} />
+      </Errored>
     </Loading>
   );
 }

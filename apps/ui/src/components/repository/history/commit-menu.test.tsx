@@ -106,7 +106,7 @@ async function renderHistory() {
 async function editMessageOf(user: ReturnType<typeof userEvent.setup>, subject: string) {
   await user.pointer({ keys: "[MouseRight]", target: await screen.findByText(subject) });
   const item = await screen.findByRole("menuitem", { name: "Edit message…" });
-  await vi.waitFor(() => expect(item).toHaveAttribute("aria-disabled", "false"));
+  await vi.waitFor(() => expect(item).not.toHaveAttribute("aria-disabled", "true"));
   await user.click(item);
   // By its title: Kobalte gives every dialog the role of an alert dialog once one is loaded.
   return screen.findByText("Edit commit message");
@@ -282,7 +282,10 @@ describe("the commit menu", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       await renderHistory();
-      fireEvent.pointerDown(screen.getByText("Commit e5"), { pointerType: "touch" });
+      fireEvent.pointerDown(screen.getByText("Commit e5"), {
+        pointerType: "touch",
+        isPrimary: true,
+      });
       await vi.advanceTimersByTimeAsync(1000);
       expect(screen.getByRole("menuitem", { name: "Edit message…" })).toBeInTheDocument();
     } finally {

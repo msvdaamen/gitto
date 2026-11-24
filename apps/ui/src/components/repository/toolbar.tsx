@@ -6,7 +6,7 @@ import Redo2 from "@lucide/solid/icons/redo-2";
 import RefreshCw from "@lucide/solid/icons/refresh-cw";
 import Undo2 from "@lucide/solid/icons/undo-2";
 import { cn } from "cn";
-import { createEffect, createSignal, Loading } from "solid-js";
+import { createEffect, createSignal, Errored, Loading } from "solid-js";
 
 import { IconButton } from "@/components/ui/button";
 import { Divider } from "@/components/ui/divider";
@@ -173,7 +173,8 @@ function RepositoryName(props: { repositoryId: string }) {
     <>
       <strong class="truncate text-[13.5px]">{repository()?.name}</strong>
       <span class="truncate text-[11px] text-faint">
-        {status.data ? headLabel(status.data.head) : ""}
+        {/* No branch to name if the status couldn't be loaded: the buttons say why. */}
+        <Errored fallback="">{status.data ? headLabel(status.data.head) : ""}</Errored>
       </span>
     </>
   );

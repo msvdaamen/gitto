@@ -1,5 +1,5 @@
-import { useMutation, useQueryClient, type QueryClient } from "@tanstack/solid-query";
-import { createOptimisticStore, createStore, onFlush } from "solid-js";
+import { useQueryClient, type QueryClient } from "@tanstack/solid-query";
+import { createStore } from "solid-js";
 
 import { gitKeys } from "./keys";
 
@@ -7,10 +7,9 @@ import { gitKeys } from "./keys";
  * Each repository's operations (a pull, say), by query client: which are running, and why the last
  * of each failed, until that's dismissed or it's run again. Kept here rather than in a component,
  * so it outlives the toolbar showing it: switching repositories shows another one's, and the same
- * one's again when switching back. Set by the mutation's own callbacks, which run whatever is on
- * show. (Not in the mutation cache: `useMutationState` doesn't follow a change of repository.)
- * A mutation is a transition, whose writes only show once it's done: that it's running is an
- * optimistic write, shown at once and undone as it ends.
+ * one's again when switching back. Written as an operation starts and ends, whatever is on show.
+ * Not run as a query mutation: that's a transition, which holds whatever reads what it writes,
+ * like switching to another repository, which reads whether its own operations are running.
  */
 interface Operations {
   running: Record<string, true>;
@@ -19,7 +18,7 @@ interface Operations {
 
 function createOperations() {
   return {
-    running: createOptimisticStore<Operations["running"]>({}),
+    running: createStore<Operations["running"]>({}),
     errors: createStore<Operations["errors"]>({}),
   };
 }
@@ -46,21 +45,16 @@ export function useRepositoryOperation<T = void, R = unknown>(
   const [, setRunning] = operations.running;
   const [, setErrors] = operations.errors;
   const key = (id: string) => `${name}:${id}`;
-  const mutation = useMutation(() => ({
-    mutationFn: ({ id, input }: { id: string; input: T }) => run(id, input),
-    onMutate: ({ id }) => {
-      setRunning((all) => {
-        all[key(id)] = true;
-      });
-      setErrors((all) => {
-        delete all[key(id)];
-      });
-    },
-    onError: (error, { id }) =>
+  const settle = (id: string, error?: Error) => {
+    setRunning((all) => {
+      delete all[key(id)];
+    });
+    if (error) {
       setErrors((all) => {
         all[key(id)] = error;
-      }),
-  }));
+      });
+    }
+  };
 
   const state = useRepositoryOperationState(name, repositoryId);
   return {
@@ -71,15 +65,19 @@ export function useRepositoryOperation<T = void, R = unknown>(
     run(input: T, options?: { onSuccess?: (result: R) => void }) {
       if (state.isPending()) return;
       const id = repositoryId();
-      // Started once what the caller changed with it has landed, like a popover closing: a
-      // mutation holds every write made alongside it until it's done.
-      onFlush(() => {
-        void mutation.mutate({ id, input }).then(
-          (result) => options?.onSuccess?.(result),
-          // Kept as the operation's error, to show.
-          () => {},
-        );
+      setRunning((all) => {
+        all[key(id)] = true;
       });
+      setErrors((all) => {
+        delete all[key(id)];
+      });
+      run(id, input).then(
+        (result) => {
+          settle(id);
+          options?.onSuccess?.(result);
+        },
+        (error: unknown) => settle(id, error instanceof Error ? error : new Error(String(error))),
+      );
     },
     ...state,
   };

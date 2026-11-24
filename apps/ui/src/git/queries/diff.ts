@@ -1,16 +1,11 @@
 import type { ChangedFile, WorkingTreeFiles } from "@gitto/git/types";
-import {
-  keepPreviousData,
-  queryOptions,
-  useQuery,
-  type QueryClient,
-  type QueryKey,
-} from "@tanstack/solid-query";
+import { queryOptions, useQuery, type QueryClient, type QueryKey } from "@tanstack/solid-query";
 import { createMemo } from "solid-js";
 
 import { lineTotals } from "@/git/changes";
 import { rpc } from "@/lib/rpc";
 
+import { useDeferredData } from "./deferred";
 import { gitKeys } from "./keys";
 import { Opaque } from "./opaque";
 import { useUncommittedFiles } from "./status";
@@ -24,8 +19,8 @@ export type FilesFetcher = (
 
 /**
  * Loads the files the commit or stash `sha` changed, which never change, with `fetch` under
- * `queryKey`. While another one's load, the previous ones stay on show rather than suspending;
- * they come with the SHA they're of.
+ * `queryKey`. They come with the SHA they're of, so what shows them can tell whose they are while
+ * another one's load.
  */
 export function changedFilesQuery(
   repositoryId: string,
@@ -42,7 +37,6 @@ export function changedFilesQuery(
       files: new Opaque(await fetch({ repositoryId, sha }, { signal })),
     }),
     staleTime: Infinity,
-    placeholderData: keepPreviousData,
     enabled,
   });
 }
@@ -58,11 +52,13 @@ export function useChangedFiles(
   fetch: FilesFetcher,
 ) {
   const query = useQuery(() => changedFilesQuery(repositoryId(), sha(), queryKey, fetch));
+  // The previous one's stay on show while another's load (see `useDeferredData`).
+  const data = useDeferredData(query);
 
-  const files = createMemo(() => query.data?.files.value ?? []);
+  const files = createMemo(() => data()?.files.value ?? []);
   const totals = createMemo(() => lineTotals(files()));
   /** The SHA whose files are on show: the previous one's, while `sha`'s load. */
-  const shownSha = () => query.data?.sha;
+  const shownSha = () => data()?.sha;
 
   return { query, files, totals, shownSha };
 }

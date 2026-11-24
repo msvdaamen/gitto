@@ -1,7 +1,7 @@
 import TriangleAlert from "@lucide/solid/icons/triangle-exclamation-point";
 import Upload from "@lucide/solid/icons/upload";
 import { useQuery } from "@tanstack/solid-query";
-import { Show, Loading } from "solid-js";
+import { Errored, Loading, Show } from "solid-js";
 
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -33,11 +33,13 @@ function Push(props: { repositoryId: string }) {
   const pull = usePull(() => props.repositoryId);
   // Asked about in the dialog rather than shown as a failure.
   const rejection = () => pushRejection(push.error());
-  // Pulling only brings in the remote branch's commits if it's the one pulled from.
+  // Pulling only brings in the remote branch's commits if it's the one pulled from. Read once
+  // loaded, so neither waits on them nor fails with them: they only decide what's offered.
   const canPull = () =>
-    !!status.data &&
+    status.isSuccess &&
     !headPullBlocker(status.data) &&
-    target.data?.kind === "remote" &&
+    target.isSuccess &&
+    target.data.kind === "remote" &&
     target.data.pullsFrom;
 
   return (
@@ -47,21 +49,26 @@ function Push(props: { repositoryId: string }) {
         error={rejection() ? null : push.error()}
         onDismiss={() => push.dismiss()}
       >
-        <ToolbarButton
-          icon={Upload}
-          label="Push"
-          title={
-            target.data
-              ? pushTitle(target.data)
-              : target.error
-                ? `Couldn't tell where to push: ${target.error.message}`
-                : "Push"
-          }
-          disabled={target.data?.kind !== "remote" || push.isPending()}
-          busy={push.isPending()}
-          count={target.data?.kind === "remote" ? target.data.ahead : undefined}
-          onClick={() => push.push()}
-        />
+        <Errored
+          fallback={(error) => (
+            <ToolbarButton
+              icon={Upload}
+              label="Push"
+              title={`Couldn't tell where to push: ${(error() as Error).message}`}
+              disabled
+            />
+          )}
+        >
+          <ToolbarButton
+            icon={Upload}
+            label="Push"
+            title={target.data ? pushTitle(target.data) : "Push"}
+            disabled={target.data?.kind !== "remote" || push.isPending()}
+            busy={push.isPending()}
+            count={target.data?.kind === "remote" ? target.data.ahead : undefined}
+            onClick={() => push.push()}
+          />
+        </Errored>
       </FailurePopover>
       <PushRejectedDialog
         rejection={rejection() ? { kind: rejection()!, message: push.error()!.message } : undefined}

@@ -101,6 +101,10 @@ describe("the pull button", () => {
 
     // Another repository's pull button isn't busy with it…
     switchTo("other");
+    // Shown once the other repository has loaded, with the same title as this one's.
+    await vi.waitFor(() =>
+      expect(screen.getByRole("button", { name: "Pull" })).not.toHaveAttribute("aria-busy", "true"),
+    );
     const other = await loadedButton("Pull 2 commits from origin/main");
     expect(other).toBeEnabled();
     expect(other).not.toHaveAttribute("aria-busy", "true");

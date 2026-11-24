@@ -1,5 +1,5 @@
 import type { Commit } from "@gitto/git/types";
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/solid-query";
+import { replaceEqualDeep, useMutation, useQuery, useQueryClient } from "@tanstack/solid-query";
 import { createMemo } from "solid-js";
 
 import { checkouts } from "@/git/ref-labels";
@@ -8,7 +8,9 @@ import { hasUncommittedChanges } from "@/git/status";
 import { useResetOn } from "@/hooks/reset-on";
 import { rpc } from "@/lib/rpc";
 
+import { useDeferredData } from "./deferred";
 import { gitKeys } from "./keys";
+import { Opaque } from "./opaque";
 import { useStashes } from "./stash";
 import { useHeadSha, useStatus } from "./status";
 import { useWorktrees } from "./worktree";
@@ -29,9 +31,20 @@ const RELOAD_LIMIT = 10_000;
 /** A repository's log, as `useLog` loads it: its newest commits, and those loaded after them. */
 interface Log {
   repositoryId: string;
-  commits: Commit[];
+  /** Opaque: the history reads every field of every commit to lay it out (see `Opaque`). */
+  commits: Opaque<Commit[]>;
   /** Whether that's all of the history: the last page loaded was short of its limit. */
   complete: boolean;
+}
+
+/** `next`, or `previous` if it has the same commits; with `previous`'s commits if only they're the same. */
+function sameLog(previous: Log | undefined, next: Log): Log {
+  if (!previous) return next;
+  const commits = replaceEqualDeep(previous.commits.value, next.commits.value);
+  return replaceEqualDeep(previous, {
+    ...next,
+    commits: commits === previous.commits.value ? previous.commits : next.commits,
+  });
 }
 
 /**
@@ -49,14 +62,15 @@ export function useLog(repositoryId: () => string) {
       queryKey: gitKeys.log(id),
       // Tagged with its repository, so every row knows where its commit lives (see `toHistoryRows`).
       queryFn: async ({ signal }): Promise<Log> => {
-        const loaded = queryClient.getQueryData<Log>(gitKeys.log(id))?.commits.length ?? 0;
+        const loaded = queryClient.getQueryData<Log>(gitKeys.log(id))?.commits.value.length ?? 0;
         const limit = loaded > RELOAD_LIMIT ? FIRST_PAGE : Math.max(FIRST_PAGE, loaded);
         const commits = await rpc.git.history.log({ repositoryId: id, skip: 0, limit }, { signal });
-        return { repositoryId: id, commits, complete: commits.length < limit };
+        return { repositoryId: id, commits: new Opaque(commits), complete: commits.length < limit };
       },
-      // Merged into the previous log, commit by commit, so a refetch that brings nothing new
-      // (the refs changed elsewhere, say) doesn't lay out and render the history again.
-      reconcile: "sha",
+      // The previous log, if a refetch brings nothing new (the refs changed elsewhere, say), so
+      // the history isn't laid out and rendered again.
+      structuralSharing: (previous: unknown, next: unknown) =>
+        sameLog(previous as Log, next as Log),
     };
   });
 
@@ -65,20 +79,21 @@ export function useLog(repositoryId: () => string) {
       const key = gitKeys.log(id);
       const log = queryClient.getQueryData<Log>(key);
       if (!log || log.complete) return;
+      const loaded = log.commits.value;
       const updatedAt = queryClient.getQueryState(key)?.dataUpdatedAt;
       const commits = await rpc.git.history.log({
         repositoryId: id,
-        skip: log.commits.length,
+        skip: loaded.length,
         limit: NEXT_PAGE,
       });
       // Reloaded meanwhile: this one may not follow on from what was reloaded.
       if (queryClient.getQueryState(key)?.dataUpdatedAt !== updatedAt) return;
       // Each commit only once: the history may have moved since the commits before were loaded,
       // until the refetch that follows the move.
-      const listed = new Set(log.commits.map((commit) => commit.sha));
+      const listed = new Set(loaded.map((commit) => commit.sha));
       queryClient.setQueryData<Log>(key, {
         ...log,
-        commits: [...log.commits, ...commits.filter((commit) => !listed.has(commit.sha))],
+        commits: new Opaque([...loaded, ...commits.filter((commit) => !listed.has(commit.sha))]),
         complete: commits.length < NEXT_PAGE,
       });
     },
@@ -112,7 +127,7 @@ export function useHistory(repositoryId: () => string, selectedId: () => string 
   // Without the stashes until they've loaded, rather than holding up the history for them (reading
   // `data` before then would suspend it), and if they couldn't be: the Pop button says why.
   const entries = createMemo(() =>
-    log.data ? withStashes(log.data.commits, stashes.isSuccess ? stashes.data : []) : [],
+    log.data ? withStashes(log.data.commits.value, stashes.isSuccess ? stashes.data : []) : [],
   );
   const graph = createMemo(() => historyGraph(entries(), hasChanges(), head()));
   // Where the other worktrees are checked out, for the labels; without them until they've loaded,
@@ -152,14 +167,17 @@ export function useCommitDetails(repositoryId: () => string, sha: () => string) 
       initialData: () =>
         queryClient
           .getQueryData<Log>(gitKeys.log(id))
-          ?.commits.find((commit) => commit.sha === commitSha),
+          ?.commits.value.find((commit) => commit.sha === commitSha),
       staleTime: Infinity,
-      // Keep showing the previous selection while the next one loads, instead of suspending.
-      placeholderData: keepPreviousData,
     };
   });
+  // The previous selection's stays on show while the next one's loads (see `useDeferredData`).
+  const data = useDeferredData(query);
 
-  const commit = createMemo(() => query.data && toCommitRow(repositoryId(), query.data));
+  const commit = createMemo(() => {
+    const loaded = data();
+    return loaded && toCommitRow(repositoryId(), loaded);
+  });
 
   return { query, commit };
 }

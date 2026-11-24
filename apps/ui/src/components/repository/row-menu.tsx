@@ -1,14 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { Menu, MenuContextTrigger } from "@ui-sdk/solid/menu";
-import {
-  createContext,
-  createEffect,
-  createSignal,
-  flush,
-  onCleanup,
-  Show,
-  useContext,
-} from "solid-js";
+import { createContext, createSignal, flush, latest, onCleanup, Show, useContext } from "solid-js";
 
 import { ContextMenuContent } from "@/components/ui/context-menu";
 
@@ -48,10 +40,14 @@ function itemElement(
       const key = element.getAttribute(layer.attribute);
       return key !== null && layer.has(key);
     });
+  // What's in a popup, like the labels a row has no room for, is shown apart from the rows around
+  // it, and is none of theirs.
+  const popup = event.target.closest("[popover]");
   /** The innermost element that's an item, from `start` out. */
   const around = (start: Element) => {
     let element = start.closest<HTMLElement>(selector);
     while (element) {
+      if (popup && !popup.contains(element)) return undefined;
       const layer = owner(element);
       if (layer) return { element, layer };
       element = element.parentElement?.closest<HTMLElement>(selector) ?? null;
@@ -158,21 +154,16 @@ export function RowMenu<T>(props: {
     return { element: item === undefined ? undefined : element, taken: found !== undefined };
   };
 
-  const [open, setOpen] = createSignal(false);
-  // Another repository's item isn't one of this one's.
-  createEffect(
-    () => props.repositoryId,
-    () => {
-      setOpen(false);
-    },
-    { defer: true },
-  );
+  // The repository it's open in, if it is. It closes as soon as another is switched to, whose
+  // items aren't this one's, rather than once that one's loaded: `latest` is the repository being
+  // switched to.
+  const [openIn, setOpenIn] = createSignal<string>();
 
   return (
     <Menu
-      open={open()}
+      open={openIn() !== undefined && openIn() === latest(() => props.repositoryId)}
       onOpenChange={(isOpen) => {
-        setOpen(isOpen);
+        setOpenIn(isOpen ? props.repositoryId : undefined);
         props.onOpenFor(isOpen ? target()?.key : undefined);
       }}
     >
@@ -194,8 +185,17 @@ export function RowMenu<T>(props: {
           // outermost keeps the browser's own from opening.
           else if (!taken && nesting.around.length === 0) event.preventDefault();
         }}
-        // The menu opens at a long press of a finger or pen.
-        onPointerDown={(event) => event.pointerType !== "mouse" && aim(event)}
+        // The menu opens at a long press of a finger or pen. Aimed as the press goes down to what
+        // was pressed, before the menu reads whether it's enabled there.
+        ref={(element: HTMLElement) =>
+          element.addEventListener(
+            "pointerdown",
+            (event) => {
+              if (event.pointerType !== "mouse") aim(event);
+            },
+            { capture: true },
+          )
+        }
       >
         <Nesting value={{ around: [...nesting.around, self], join }}>{props.children}</Nesting>
       </MenuContextTrigger>

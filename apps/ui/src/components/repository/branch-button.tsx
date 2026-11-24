@@ -6,7 +6,7 @@ import {
   PopoverTitle,
   PopoverTrigger,
 } from "@ui-sdk/solid/popover";
-import { createSignal, Loading } from "solid-js";
+import { createSignal, Errored, Loading } from "solid-js";
 
 import { FailurePopover } from "@/components/ui/failure-popover";
 import { useCreateBranch } from "@/git/queries/branch";
@@ -24,7 +24,19 @@ import { ToolbarButton } from "./toolbar-button";
 export function BranchButton(props: { repositoryId: string }) {
   return (
     <Loading fallback={<ToolbarButton icon={GitBranch} label="Branch" hideBelow="sm" disabled />}>
-      <Branch repositoryId={props.repositoryId} />
+      <Errored
+        fallback={(error) => (
+          <ToolbarButton
+            icon={GitBranch}
+            label="Branch"
+            hideBelow="sm"
+            title={`Couldn't load the repository: ${(error() as Error).message}`}
+            disabled
+          />
+        )}
+      >
+        <Branch repositoryId={props.repositoryId} />
+      </Errored>
     </Loading>
   );
 }

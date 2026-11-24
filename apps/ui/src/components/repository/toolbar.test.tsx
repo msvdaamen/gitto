@@ -1,7 +1,7 @@
 import { render, screen } from "@solidjs/testing-library";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import userEvent from "@testing-library/user-event";
-import { createSignal } from "solid-js";
+import { createSignal, flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 
 import { RepositoryToolbar } from "./toolbar";
@@ -61,8 +61,10 @@ describe("the fetch button", () => {
 
     // Another repository's fetch is its own.
     setRepositoryId("b");
+    flush();
     expect(button()).toBeEnabled();
     setRepositoryId("a");
+    flush();
     expect(button()).toBeDisabled();
 
     rpc.settle(new Error("Could not resolve host: example.com"));
