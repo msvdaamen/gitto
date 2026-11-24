@@ -1,7 +1,7 @@
+import type { LucideIcon } from "@lucide/solid";
+import { Dynamic, type JSX } from "@solidjs/web";
 import { cn } from "cn";
-import type { LucideIcon } from "lucide-solid";
-import { Show, type JSX } from "solid-js";
-import { Dynamic } from "solid-js/web";
+import { Show } from "solid-js";
 
 import { Badge } from "./badge";
 

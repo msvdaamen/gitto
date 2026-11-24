@@ -2,7 +2,7 @@ import type { ChangedFile, Uncommitted } from "@gitto/git/types";
 import { fireEvent, render, screen } from "@solidjs/testing-library";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import userEvent from "@testing-library/user-event";
-import { createEffect, on } from "solid-js";
+import { createEffect } from "solid-js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DiffSource } from "@/git/diff-source";
@@ -37,18 +37,21 @@ vi.mock("./patch-viewer", () => ({
     onEditing?: (session: EditSession | undefined) => void;
     onEdit?: (text: string) => void;
   }) => {
-    createEffect(on(() => props.patch, props.onShown));
     createEffect(
-      on(
-        () => props.editing,
-        (editing) => {
-          viewer.onEdit = editing ? props.onEdit : undefined;
-          props.onEditing?.(
-            editing ? { version: "v0", discard, hasSelection: () => false } : undefined,
-          );
-        },
-        { defer: true },
-      ),
+      () => props.patch,
+      () => {
+        props.onShown();
+      },
+    );
+    createEffect(
+      () => props.editing,
+      (editing) => {
+        viewer.onEdit = editing ? props.onEdit : undefined;
+        props.onEditing?.(
+          editing ? { version: "v0", discard, hasSelection: () => false } : undefined,
+        );
+      },
+      { defer: true },
     );
     return <pre>{props.patch}</pre>;
   },

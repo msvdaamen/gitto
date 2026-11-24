@@ -63,7 +63,7 @@ export function ResizeHandle(props: {
       aria-valuenow={props.width}
       aria-valuemin={props.bounds.min}
       aria-valuemax={props.bounds.max}
-      tabIndex={0}
+      tabindex={0}
       class={cn(
         "group absolute top-0 bottom-0 z-20 w-2 cursor-col-resize touch-none outline-none",
         props.edge === "start" ? "-translate-x-1/2" : "translate-x-1/2",

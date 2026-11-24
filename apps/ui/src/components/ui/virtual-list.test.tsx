@@ -1,5 +1,5 @@
 import { render, screen } from "@solidjs/testing-library";
-import { createSignal } from "solid-js";
+import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { VirtualList, VirtualRows } from "./virtual-list";
@@ -100,6 +100,8 @@ describe("VirtualRows", () => {
     const scroller = renderRows();
     const row = await screen.findByText("Row 0");
     row.focus();
+    // Focusing and scrolling are separate tasks in a browser, with Solid's updates applied between.
+    flush();
 
     scrollTop = 500;
     scroller()!.dispatchEvent(new Event("scroll"));

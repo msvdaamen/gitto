@@ -1,10 +1,16 @@
-import { Dialog } from "@kobalte/core/dialog";
+import FolderPlus from "@lucide/solid/icons/folder-plus";
+import {
+  Dialog,
+  DialogBackdrop,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@ui-sdk/solid/dialog";
 import { cn } from "cn";
-import FolderPlus from "lucide-solid/icons/folder-plus";
 import { createSignal, Show } from "solid-js";
 
 import { Button } from "@/components/ui/button";
-import { DIALOG_BOX, DialogPortal } from "@/components/ui/dialog";
+import { DIALOG_BACKDROP, DIALOG_BOX } from "@/components/ui/dialog";
 import { FormField } from "@/components/ui/form-field";
 import { inFolder } from "@/git/clone";
 import { folderName } from "@/git/init";
@@ -33,16 +39,18 @@ export function InitDialog(props: { open: boolean; onClose: () => void }) {
     if (await location.choose()) init.reset();
   }
 
-  function submit(event: Event) {
+  async function submit(event: Event) {
     event.preventDefault();
     const path = destination();
     if (!path || init.isPending) return;
-    init.mutate(path, {
-      onSuccess: () => {
-        props.onClose();
-        setName("");
-      },
-    });
+    try {
+      await init.mutate(path);
+    } catch {
+      // Said in the dialog, which stays open.
+      return;
+    }
+    props.onClose();
+    setName("");
   }
 
   function close() {
@@ -51,56 +59,55 @@ export function InitDialog(props: { open: boolean; onClose: () => void }) {
   }
 
   return (
-    <Dialog open={props.open} onOpenChange={(open) => !open && close()} modal>
-      <DialogPortal>
-        <Dialog.Content class={cn(DIALOG_BOX, "max-w-[440px] p-4")}>
-          <form onSubmit={submit}>
-            <Dialog.Title class="m-0 text-[12.5px] font-[680]">New repository</Dialog.Title>
-            <Dialog.Description class="m-0 mt-1 mb-2.5 text-[11.5px] leading-[1.45] text-muted">
-              Creates an empty repository in a folder of its own, and opens it. In a folder that's
-              there already, what's in it is kept, ready to commit.
-            </Dialog.Description>
-            <FormField
-              label="Name"
-              placeholder="my-project"
-              value={name()}
-              onChange={(value) => {
-                setName(value);
-                init.reset();
-              }}
-              readOnly={init.isPending}
-            />
-            <LocationField
-              label="Create in"
-              hint="A folder named after the repository"
-              placeholder="Choose a folder to create it in"
-              parent={location.parent()}
-              name={folder()}
-              disabled={init.isPending}
-              onChoose={() => void choose()}
-            />
-            <Show when={init.error}>
-              {(error) => (
-                <p
-                  role="alert"
-                  class="m-0 mb-2.5 text-[11.5px] leading-[1.45] break-words whitespace-pre-line text-coral"
-                >
-                  {error().message}
-                </p>
-              )}
-            </Show>
-            <Button
-              type="submit"
-              variant="primary"
-              icon={FolderPlus}
-              disabled={!destination() || init.isPending}
-              class="h-8 w-full gap-[7px] rounded-[7px] text-[12.5px] font-[680] shadow-none"
-            >
-              {init.isPending ? "Creating…" : "Create repository"}
-            </Button>
-          </form>
-        </Dialog.Content>
-      </DialogPortal>
+    <Dialog open={props.open} onOpenChange={(open) => !open && close()}>
+      <DialogBackdrop class={DIALOG_BACKDROP} />
+      <DialogContent class={cn(DIALOG_BOX, "max-w-[440px] p-4")}>
+        <form onSubmit={(event) => void submit(event)}>
+          <DialogTitle class="m-0 text-[12.5px] font-[680]">New repository</DialogTitle>
+          <DialogDescription class="m-0 mt-1 mb-2.5 text-[11.5px] leading-[1.45] text-muted">
+            Creates an empty repository in a folder of its own, and opens it. In a folder that's
+            there already, what's in it is kept, ready to commit.
+          </DialogDescription>
+          <FormField
+            label="Name"
+            placeholder="my-project"
+            value={name()}
+            onChange={(value) => {
+              setName(value);
+              init.reset();
+            }}
+            readOnly={init.isPending}
+          />
+          <LocationField
+            label="Create in"
+            hint="A folder named after the repository"
+            placeholder="Choose a folder to create it in"
+            parent={location.parent()}
+            name={folder()}
+            disabled={init.isPending}
+            onChoose={() => void choose()}
+          />
+          <Show when={init.error}>
+            {(error) => (
+              <p
+                role="alert"
+                class="m-0 mb-2.5 text-[11.5px] leading-[1.45] break-words whitespace-pre-line text-coral"
+              >
+                {error().message}
+              </p>
+            )}
+          </Show>
+          <Button
+            type="submit"
+            variant="primary"
+            icon={FolderPlus}
+            disabled={!destination() || init.isPending}
+            class="h-8 w-full gap-[7px] rounded-[7px] text-[12.5px] font-[680] shadow-none"
+          >
+            {init.isPending ? "Creating…" : "Create repository"}
+          </Button>
+        </form>
+      </DialogContent>
     </Dialog>
   );
 }

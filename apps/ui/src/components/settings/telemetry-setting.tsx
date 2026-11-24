@@ -1,11 +1,12 @@
-import { createResource, createSignal, Show } from "solid-js";
+import { createSignal, Show } from "solid-js";
 
 import { Switch } from "@/components/ui/switch";
 import { rpc } from "@/lib/rpc";
 
 /** Whether Gitto sends error reports. */
 export function TelemetrySetting() {
-  const [state, { mutate }] = createResource(() => rpc.system.telemetry.get());
+  // Loaded once, then set to what saving it says.
+  const [state, setState] = createSignal(() => rpc.system.telemetry.get());
   const [saving, setSaving] = createSignal(false);
   const [failed, setFailed] = createSignal(false);
 
@@ -13,7 +14,7 @@ export function TelemetrySetting() {
     setSaving(true);
     setFailed(false);
     try {
-      mutate(await rpc.system.telemetry.set({ enabled }));
+      setState(await rpc.system.telemetry.set({ enabled }));
     } catch (error) {
       console.error("Couldn't change whether Gitto sends error reports", error);
       setFailed(true);

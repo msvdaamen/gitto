@@ -1,7 +1,6 @@
+import type { LucideIcon } from "@lucide/solid";
+import { Dynamic, type JSX } from "@solidjs/web";
 import { cn } from "cn";
-import type { LucideIcon } from "lucide-solid";
-import type { JSX } from "solid-js";
-import { Dynamic } from "solid-js/web";
 
 /** A small titled panel, with an optional action (like "View all") in its header. */
 export function Card(props: {

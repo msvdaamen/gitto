@@ -1,6 +1,6 @@
 // The diff viewer, from @pierre/diffs. Loaded on its own (see `FileDiffView`), as it brings Shiki.
 import { Virtualizer, type FileDiffMetadata, type FileDiffOptions } from "@pierre/diffs";
-import { createEffect, createMemo, onCleanup, on, untrack } from "solid-js";
+import { createEffect, createMemo, getOwner, runWithOwner } from "solid-js";
 
 import { useConnected } from "@/hooks/connected";
 import type { DiffStyle } from "@/hooks/diff-style";
@@ -86,7 +86,6 @@ export default function PatchViewer(props: {
       fileKey: props.fileKey,
       patch: props.patch,
     }),
-    undefined,
     { equals: (a, b) => a.diff === b.diff && a.fileKey === b.fileKey },
   );
   let scroller: HTMLDivElement | undefined;
@@ -154,13 +153,60 @@ export default function PatchViewer(props: {
   }
 
   // Set up once on the page, as the virtualizer measures and observes its scroll container from
-  // then on: inside a `Suspense` boundary, it can mount detached (see `useConnected`).
+  // then on: inside a `Loading` boundary, it can mount detached (see `useConnected`).
   const connected = useConnected(() => scroller);
-  createEffect(() => {
-    if (!connected() || !scroller || !content) return;
-    untrack(() => setUp(scroller!, content!));
+  /** What picking lines makes, its button and its state, is the component's, as is its cleanup. */
+  const owner = getOwner();
+  /** The library's view, once it's set up, with the page. */
+  let viewer: ReturnType<typeof setUp> | undefined;
+  createEffect(connected, (on) => {
+    if (!on || !scroller || !content) return;
+    const shown = setUp(scroller, content);
+    viewer = shown;
+    shown.want(nextPatch());
+    return () => {
+      viewer = undefined;
+      shown.dispose();
+    };
   });
+  createEffect(
+    () => !!props.editing,
+    (edit) => {
+      viewer?.edit(edit);
+    },
+    { defer: true },
+  );
+  createEffect(nextPatch, (patch) => {
+    viewer?.want(patch);
+  });
+  createEffect(
+    () => props.diffStyle,
+    () => {
+      rerender();
+    },
+    { defer: true },
+  );
+  // Lines can be picked, or no longer (as editing starts, say): the hunks' buttons, and selecting
+  // lines, come and go with that, on the patch on show.
+  createEffect(
+    pickable,
+    (can) => {
+      viewer?.pickable(can);
+    },
+    { defer: true },
+  );
+  createEffect(
+    theme,
+    (type) => {
+      instance?.setThemeType(type);
+    },
+    { defer: true },
+  );
 
+  /**
+   * Sets the library's view up in the page; its effects, and what it's told by the props, are
+   * the component's (see above): it's set up once the scroller's on the page.
+   */
   function setUp(root: HTMLDivElement, wrapper: HTMLDivElement) {
     /**
      * Whether the diff on show is the patch's, which lines are picked from: not while it's edited,
@@ -176,16 +222,18 @@ export default function PatchViewer(props: {
     const isLive = () => unedited && patchOnShow?.fileKey === props.fileKey;
 
     // Before the diff, whose options it adds to.
-    const picking = createLinePicker({
-      root,
-      diffs: () => diffs,
-      diffStyle: () => props.diffStyle,
-      staging: () => props.staging,
-      pickable,
-      isLive,
-      shownPatch: () => patchOnShow?.patch,
-      awaitingPatch: () => nextPatch() !== patchOnShow,
-    });
+    const picking = runWithOwner(owner, () =>
+      createLinePicker({
+        root,
+        diffs: () => diffs,
+        diffStyle: () => props.diffStyle,
+        staging: () => props.staging,
+        pickable,
+        isLive,
+        shownPatch: () => patchOnShow?.patch,
+        awaitingPatch: () => nextPatch() !== patchOnShow,
+      }),
+    );
     picker = picking;
     const virtualizer = new Virtualizer();
     virtualizer.setup(root, wrapper);
@@ -213,15 +261,6 @@ export default function PatchViewer(props: {
         if (nextPatch() !== patchOnShow) void show(nextPatch());
       },
     });
-    onCleanup(() => {
-      disposed = true;
-      instance = undefined;
-      editing.dispose();
-      diffs.cleanUp();
-      virtualizer.cleanUp();
-      highlights.drop();
-    });
-
     const show = async (patch: ReturnType<typeof nextPatch>) => {
       // Held while editing: the editor would take it for its text.
       if (editing.active()) return;
@@ -276,38 +315,41 @@ export default function PatchViewer(props: {
       }
     };
 
-    createEffect(
-      on(
-        () => props.editing,
-        (edit) => void (edit ? editing.start() : editing.stop(false)),
-        { defer: true },
-      ),
-    );
-    createEffect(on(nextPatch, (patch) => void show(patch)));
-    createEffect(on(() => props.diffStyle, rerender, { defer: true }));
-    // Lines can be picked, or no longer (as editing starts, say): the hunks' buttons, and selecting
-    // lines, come and go with that, on the patch on show.
-    createEffect(
-      on(
-        pickable,
-        (can) => {
-          // Another file's patch is on its way, with the buttons it has.
-          if (!shownDiff || !isLive()) return;
-          if (!can) diffs.setSelectedLines(null);
-          diffs.setLineAnnotations(picking.buttons(shownDiff));
-          rerender();
-        },
-        { defer: true },
-      ),
-    );
-    createEffect(on(theme, (type) => diffs.setThemeType(type), { defer: true }));
+    /** The patch last wanted shown, so the same one isn't shown again. */
+    let wanted: ReturnType<typeof nextPatch> | undefined;
+
+    return {
+      /** Shows `patch`, the last one given, in place of the one on show. */
+      want: (patch: ReturnType<typeof nextPatch>) => {
+        if (patch === wanted) return;
+        wanted = patch;
+        void show(patch);
+      },
+      edit: (edit: boolean) => void (edit ? editing.start() : editing.stop(false)),
+      /** Lines can be picked now, or no longer. */
+      pickable: (can: boolean) => {
+        // Another file's patch is on its way, with the buttons it has.
+        if (!shownDiff || !isLive()) return;
+        if (!can) diffs.setSelectedLines(null);
+        diffs.setLineAnnotations(picking.buttons(shownDiff));
+        rerender();
+      },
+      dispose: () => {
+        disposed = true;
+        instance = undefined;
+        editing.dispose();
+        diffs.cleanUp();
+        virtualizer.cleanUp();
+        highlights.drop();
+      },
+    };
   }
 
   return (
     <div
       ref={(el) => (scroller = el)}
       // Focusable, to scroll it with the keyboard, and pick lines to stage with it.
-      tabIndex={0}
+      tabindex={0}
       aria-label="Changed lines"
       aria-keyshortcuts={
         pickable() ? "ArrowUp ArrowDown Shift+ArrowUp Shift+ArrowDown [ ] Space" : undefined

@@ -1,9 +1,9 @@
+import Check from "@lucide/solid/icons/check";
+import ChevronRight from "@lucide/solid/icons/chevron-right";
+import FolderGit2 from "@lucide/solid/icons/folder-git-2";
+import GitBranch from "@lucide/solid/icons/git-branch";
+import TriangleAlert from "@lucide/solid/icons/triangle-exclamation-point";
 import { Link } from "@tanstack/solid-router";
-import Check from "lucide-solid/icons/check";
-import ChevronRight from "lucide-solid/icons/chevron-right";
-import FolderGit2 from "lucide-solid/icons/folder-git-2";
-import GitBranch from "lucide-solid/icons/git-branch";
-import TriangleAlert from "lucide-solid/icons/triangle-alert";
 import { Show } from "solid-js";
 
 import { Badge } from "@/components/ui/badge";

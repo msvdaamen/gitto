@@ -1,3 +1,4 @@
+import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The theme is read and applied when the module loads, so each test loads it anew.
@@ -16,6 +17,7 @@ describe("useTheme", () => {
     expect(theme()).toBe("light");
     expect(document.documentElement.dataset.theme).toBe("light");
     toggleTheme();
+    flush();
     expect(theme()).toBe("dark");
     expect(localStorage.getItem("gitto-theme")).toBe("dark");
   });
@@ -35,6 +37,7 @@ describe("useTheme", () => {
 
     expect(theme()).toBe("dark");
     expect(() => toggleTheme()).not.toThrow();
+    flush();
     expect(theme()).toBe("light");
     expect(document.documentElement.dataset.theme).toBe("light");
   });

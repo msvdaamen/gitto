@@ -1,5 +1,6 @@
+import type { JSX } from "@solidjs/web";
 import { cn } from "cn";
-import { createUniqueId, splitProps, type JSX } from "solid-js";
+import { createUniqueId, omit } from "solid-js";
 
 type GittoIconProps = JSX.SvgSVGAttributes<SVGSVGElement> & {
   title?: string;
@@ -7,20 +8,20 @@ type GittoIconProps = JSX.SvgSVGAttributes<SVGSVGElement> & {
 
 export function GittoIcon(props: GittoIconProps) {
   const gradientId = createUniqueId();
-  const [local, others] = splitProps(props, ["class", "height", "title", "width"]);
+  const others = omit(props, "class", "height", "title", "width");
 
   return (
     <svg
       {...others}
-      class={cn("block overflow-visible", local.class)}
-      width={local.width ?? "100%"}
-      height={local.height ?? "100%"}
+      class={cn("block overflow-visible", props.class)}
+      width={props.width ?? "100%"}
+      height={props.height ?? "100%"}
       viewBox="0 0 27 23"
       preserveAspectRatio="xMidYMid meet"
-      role={local.title ? "img" : undefined}
-      aria-hidden={local.title ? undefined : true}
+      role={props.title ? "img" : undefined}
+      aria-hidden={props.title ? undefined : "true"}
     >
-      {local.title && <title>{local.title}</title>}
+      {props.title && <title>{props.title}</title>}
       <defs>
         <linearGradient
           id={gradientId}

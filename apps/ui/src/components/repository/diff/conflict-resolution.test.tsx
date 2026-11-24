@@ -2,7 +2,7 @@ import type { ChangedFile, Conflict, Uncommitted } from "@gitto/git/types";
 import { fireEvent, render, screen } from "@solidjs/testing-library";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import userEvent from "@testing-library/user-event";
-import { createEffect, on } from "solid-js";
+import { createEffect, onSettled } from "solid-js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DiffSource } from "@/git/diff-source";
@@ -52,33 +52,32 @@ interface ViewerProps {
 vi.mock("./conflict-viewer", () => ({
   default: (props: ViewerProps) => {
     viewer.props = props;
-    props.onCommands(viewer.commands);
+    onSettled(() => {
+      props.onCommands(viewer.commands);
+    });
     createEffect(
-      on(
-        () => props.disk,
-        (disk) => {
-          if (!disk) return;
-          props.onProgress({
-            fileKey: props.fileKey,
-            left: viewer.left,
-            current: viewer.left ? 1 : undefined,
-            saving: false,
-            version: disk.version,
-            problem: undefined,
-          });
-          props.onShown();
-        },
-      ),
+      () => props.disk,
+      (disk) => {
+        if (!disk) return;
+        props.onProgress({
+          fileKey: props.fileKey,
+          left: viewer.left,
+          current: viewer.left ? 1 : undefined,
+          saving: false,
+          version: disk.version,
+          problem: undefined,
+        });
+        props.onShown();
+      },
     );
     createEffect(
-      on(
-        () => props.editing,
-        (editing) =>
-          props.onEditing(
-            editing ? { version: "v1", discard: () => {}, hasSelection: () => false } : undefined,
-          ),
-        { defer: true },
-      ),
+      () => props.editing,
+      (editing) => {
+        props.onEditing(
+          editing ? { version: "v1", discard: () => {}, hasSelection: () => false } : undefined,
+        );
+      },
+      { defer: true },
     );
     return <pre>{props.disk?.contents}</pre>;
   },

@@ -1,7 +1,8 @@
 import type { Stash } from "@gitto/git/types";
-import ArchiveRestore from "lucide-solid/icons/archive-restore";
-import Trash from "lucide-solid/icons/trash";
-import { createSignal, type JSX } from "solid-js";
+import ArchiveRestore from "@lucide/solid/icons/archive-arrow-up";
+import Trash from "@lucide/solid/icons/trash";
+import type { JSX } from "@solidjs/web";
+import { createSignal } from "solid-js";
 
 import { ContextMenuItem } from "@/components/ui/context-menu";
 import { FailurePopover } from "@/components/ui/failure-popover";

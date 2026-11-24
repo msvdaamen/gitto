@@ -2,7 +2,7 @@ import type { ChangedFile, Operation, Uncommitted } from "@gitto/git/types";
 import { render, screen } from "@solidjs/testing-library";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import userEvent from "@testing-library/user-event";
-import { Suspense } from "solid-js";
+import { Loading } from "solid-js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { gitKeys } from "@/git/queries/keys";
@@ -54,9 +54,9 @@ function renderDetails() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(() => (
     <QueryClientProvider client={client}>
-      <Suspense>
+      <Loading>
         <WorkingTreeDetails repositoryId="repo" />
-      </Suspense>
+      </Loading>
     </QueryClientProvider>
   ));
 }
@@ -95,9 +95,9 @@ describe("the uncommitted changes' details", () => {
     });
     render(() => (
       <QueryClientProvider client={client}>
-        <Suspense>
+        <Loading>
           <WorkingTreeDetails repositoryId="repo" />
-        </Suspense>
+        </Loading>
       </QueryClientProvider>
     ));
     await screen.findByText(/2 unstaged/);
@@ -297,9 +297,9 @@ describe("discarding changes", () => {
     setChanges([file("a.txt"), file("b.txt")]);
     render(() => (
       <QueryClientProvider client={client}>
-        <Suspense>
+        <Loading>
           <WorkingTreeDetails repositoryId="repo" />
-        </Suspense>
+        </Loading>
       </QueryClientProvider>
     ));
 

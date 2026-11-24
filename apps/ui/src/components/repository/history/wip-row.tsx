@@ -1,6 +1,7 @@
+import PencilLine from "@lucide/solid/icons/pencil-line";
+import type { JSX } from "@solidjs/web";
 import { cn } from "cn";
-import PencilLine from "lucide-solid/icons/pencil-line";
-import { Show, type JSX } from "solid-js";
+import { Show } from "solid-js";
 
 import { toneClasses, type Tone } from "@/components/ui/tone";
 import { useStatus } from "@/git/queries/status";

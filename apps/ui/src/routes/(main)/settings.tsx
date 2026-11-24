@@ -1,5 +1,5 @@
+import ShieldCheck from "@lucide/solid/icons/shield-check";
 import { createFileRoute } from "@tanstack/solid-router";
-import ShieldCheck from "lucide-solid/icons/shield-check";
 
 import { SettingsSection } from "@/components/settings/settings-section";
 import { TelemetrySetting } from "@/components/settings/telemetry-setting";

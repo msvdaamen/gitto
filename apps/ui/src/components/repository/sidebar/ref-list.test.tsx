@@ -3,7 +3,7 @@ import { fireEvent, render, screen, within } from "@solidjs/testing-library";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import type * as SolidRouter from "@tanstack/solid-router";
 import userEvent from "@testing-library/user-event";
-import { createSignal, Suspense } from "solid-js";
+import { createSignal, Loading } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { gitKeys } from "@/git/queries/keys";
@@ -96,10 +96,10 @@ function renderSidebar(
           detailsOpen
           onToggleDetails={() => undefined}
         />
-        {/* In a Suspense boundary, as in the sidebar. */}
-        <Suspense>
+        {/* In a Loading boundary, as in the sidebar. */}
+        <Loading>
           <RefList repositoryId={repositoryId()} />
-        </Suspense>
+        </Loading>
       </BranchMenuProvider>
     </QueryClientProvider>
   ));

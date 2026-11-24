@@ -1,5 +1,5 @@
+import LoaderCircle from "@lucide/solid/icons/loader-circle";
 import { cn } from "cn";
-import LoaderCircle from "lucide-solid/icons/loader-circle";
 
 /**
  * A spinner saying the data on show is being reloaded; it stays on show meanwhile. `label` says

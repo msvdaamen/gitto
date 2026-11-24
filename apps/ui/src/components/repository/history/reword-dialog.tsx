@@ -1,11 +1,17 @@
-import { Dialog } from "@kobalte/core/dialog";
+import PenLine from "@lucide/solid/icons/pen-line";
 import { useQuery } from "@tanstack/solid-query";
+import {
+  Dialog,
+  DialogBackdrop,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@ui-sdk/solid/dialog";
 import { cn } from "cn";
-import PenLine from "lucide-solid/icons/pen-line";
-import { createEffect, createMemo, createSignal, on, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, Show } from "solid-js";
 
 import { Button } from "@/components/ui/button";
-import { DIALOG_BOX, DialogPortal } from "@/components/ui/dialog";
+import { DIALOG_BACKDROP, DIALOG_BOX } from "@/components/ui/dialog";
 import { FormField } from "@/components/ui/form-field";
 import { editMessage, emptyMessage, splitMessage, type CommitMessage } from "@/git/message";
 import { commitMessageQuery, pushedToQuery, useRewordCommit } from "@/git/queries/commit";
@@ -39,14 +45,12 @@ export function RewordDialog(props: {
   const [edits, setEdits] = createSignal<CommitMessage>();
   // Each time it opens, it starts from the commit's message, with no failure from before.
   createEffect(
-    on(
-      () => props.sha,
-      (open) => {
-        if (!open) return;
-        setEdits(undefined);
-        reword.reset();
-      },
-    ),
+    () => props.sha,
+    (open) => {
+      if (!open) return;
+      setEdits(undefined);
+      reword.reset();
+    },
   );
 
   const message = () => edits() ?? loaded() ?? emptyMessage;
@@ -64,90 +68,87 @@ export function RewordDialog(props: {
     !pushedTo.isPending &&
     !reword.isPending;
 
-  function submit() {
+  async function submit() {
     const from = props.sha;
     const text = edited();
     if (!canSave() || !from || text === undefined) return;
-    reword.mutate(
-      { sha: from, message: text },
-      {
-        onSuccess: (to) => {
-          props.onReworded(from, to);
-          // Unless it's open for another commit by now.
-          if (props.sha === from) props.onClose();
-        },
-      },
-    );
+    let to: string;
+    try {
+      to = await reword.mutate({ sha: from, message: text });
+    } catch {
+      // Said in the dialog, which stays open with the edits.
+      return;
+    }
+    props.onReworded(from, to);
+    // Unless it's open for another commit by now.
+    if (props.sha === from) props.onClose();
   }
 
   return (
-    <Dialog open={!!props.sha} onOpenChange={(open) => !open && props.onClose()} modal>
-      <DialogPortal>
-        <Dialog.Content class={cn(DIALOG_BOX, "max-w-[440px] p-4")}>
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              submit();
-            }}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter" || !(event.metaKey || event.ctrlKey)) return;
-              // Else Enter in the summary would submit the form a second time.
-              event.preventDefault();
-              submit();
-            }}
-          >
-            <Dialog.Title class="m-0 text-[12.5px] font-[680]">Edit commit message</Dialog.Title>
-            <Dialog.Description class="m-0 mt-1 mb-2.5 text-[11.5px] leading-[1.45] text-muted">
-              Rewrites the last commit with the new message. What's staged isn't added to it.
-            </Dialog.Description>
-            <FormField
-              label="Commit message"
-              placeholder={original.isPending ? "Loading the message…" : "Summary of your changes"}
-              value={message().summary}
-              onChange={(summary) => edit({ summary })}
-              readOnly={locked()}
-            />
-            <FormField
-              label="Description"
-              hint="optional"
-              placeholder="Add more context…"
-              rows={5}
-              value={message().description}
-              onChange={(description) => edit({ description })}
-              readOnly={locked()}
-            />
-            <Show when={pushedTo.isSuccess && pushedTo.data}>
-              {(branch) => (
-                <p class="m-0 mb-2.5 text-[11.5px] leading-[1.45] text-amber">
-                  The commit is already on {branch()}; editing its message means force-pushing.
-                </p>
-              )}
-            </Show>
-            <Show when={pushedTo.isError}>
+    <Dialog open={!!props.sha} onOpenChange={(open) => !open && props.onClose()}>
+      <DialogBackdrop class={DIALOG_BACKDROP} />
+      <DialogContent class={cn(DIALOG_BOX, "max-w-[440px] p-4")}>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submit();
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" || !(event.metaKey || event.ctrlKey)) return;
+            // Else Enter in the summary would submit the form a second time.
+            event.preventDefault();
+            void submit();
+          }}
+        >
+          <DialogTitle class="m-0 text-[12.5px] font-[680]">Edit commit message</DialogTitle>
+          <DialogDescription class="m-0 mt-1 mb-2.5 text-[11.5px] leading-[1.45] text-muted">
+            Rewrites the last commit with the new message. What's staged isn't added to it.
+          </DialogDescription>
+          <FormField
+            label="Commit message"
+            placeholder={original.isPending ? "Loading the message…" : "Summary of your changes"}
+            value={message().summary}
+            onChange={(summary) => edit({ summary })}
+            readOnly={locked()}
+          />
+          <FormField
+            label="Description"
+            hint="optional"
+            placeholder="Add more context…"
+            rows={5}
+            value={message().description}
+            onChange={(description) => edit({ description })}
+            readOnly={locked()}
+          />
+          <Show when={pushedTo.isSuccess && pushedTo.data}>
+            {(branch) => (
               <p class="m-0 mb-2.5 text-[11.5px] leading-[1.45] text-amber">
-                Couldn't check whether the commit has been pushed; if it has, editing its message
-                means force-pushing.
+                The commit is already on {branch()}; editing its message means force-pushing.
               </p>
-            </Show>
-            {/* Not whether it's been pushed: that only decides the warning. */}
-            <Show when={reword.error ?? original.error} keyed>
-              {(error) => (
-                <p class="m-0 mb-2.5 text-[11.5px] whitespace-pre-wrap text-coral">
-                  {error.message}
-                </p>
-              )}
-            </Show>
-            <div class="mt-1 flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => props.onClose()}>
-                Cancel
-              </Button>
-              <Button type="submit" variant="primary" icon={PenLine} disabled={!canSave()}>
-                Save message
-              </Button>
-            </div>
-          </form>
-        </Dialog.Content>
-      </DialogPortal>
+            )}
+          </Show>
+          <Show when={pushedTo.isError}>
+            <p class="m-0 mb-2.5 text-[11.5px] leading-[1.45] text-amber">
+              Couldn't check whether the commit has been pushed; if it has, editing its message
+              means force-pushing.
+            </p>
+          </Show>
+          {/* Not whether it's been pushed: that only decides the warning. */}
+          <Show when={reword.error ?? original.error} keyed>
+            {(error) => (
+              <p class="m-0 mb-2.5 text-[11.5px] whitespace-pre-wrap text-coral">{error.message}</p>
+            )}
+          </Show>
+          <div class="mt-1 flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => props.onClose()}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary" icon={PenLine} disabled={!canSave()}>
+              Save message
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
     </Dialog>
   );
 }

@@ -1,31 +1,30 @@
 import type { ChangedFile } from "@gitto/git/types";
+import ArrowLeft from "@lucide/solid/icons/arrow-left";
+import ChevronDown from "@lucide/solid/icons/chevron-down";
+import ChevronUp from "@lucide/solid/icons/chevron-up";
+import Columns2 from "@lucide/solid/icons/columns-2";
+import FileCheck from "@lucide/solid/icons/file-check";
+import FileWarning from "@lucide/solid/icons/file-exclamation-point";
+import FolderGit from "@lucide/solid/icons/folder-git-2";
+import LoaderCircle from "@lucide/solid/icons/loader-circle";
+import Minus from "@lucide/solid/icons/minus";
+import Plus from "@lucide/solid/icons/plus";
+import Rows2 from "@lucide/solid/icons/rows-2";
+import TriangleAlert from "@lucide/solid/icons/triangle-exclamation-point";
+import type { JSX } from "@solidjs/web";
 import { useQueryClient, type QueryClient } from "@tanstack/solid-query";
-import ArrowLeft from "lucide-solid/icons/arrow-left";
-import ChevronDown from "lucide-solid/icons/chevron-down";
-import ChevronUp from "lucide-solid/icons/chevron-up";
-import Columns2 from "lucide-solid/icons/columns-2";
-import FileCheck from "lucide-solid/icons/file-check";
-import FileWarning from "lucide-solid/icons/file-exclamation-point";
-import FolderGit from "lucide-solid/icons/folder-git-2";
-import LoaderCircle from "lucide-solid/icons/loader-circle";
-import Minus from "lucide-solid/icons/minus";
-import Plus from "lucide-solid/icons/plus";
-import Rows2 from "lucide-solid/icons/rows-2";
-import TriangleAlert from "lucide-solid/icons/triangle-alert";
 import {
   children,
   createEffect,
   createMemo,
-  ErrorBoundary,
+  Errored,
   lazy,
+  Loading,
   Match,
-  on,
   onCleanup,
-  onMount,
+  onSettled,
   Show,
-  Suspense,
   Switch,
-  type JSX,
 } from "solid-js";
 
 import { Button, IconButton } from "@/components/ui/button";
@@ -154,16 +153,16 @@ export function FileDiffView(props: {
     event.preventDefault();
     props.onClose();
   };
-  onMount(() => {
+  onSettled(() => {
     // On the window, so it hears Esc after a popover, menu or dialog has (on the document): one
     // that closes on it marks it handled, and the changes stay open. So are the conflicts' keys,
     // wherever the focus is but in a field.
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keydown", conflict.onKeyDown);
-    onCleanup(() => {
+    return () => {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keydown", conflict.onKeyDown);
-    });
+    };
   });
   // The focus goes back to what opened the changes, like the file's row, once they close with it
   // inside: it would be lost to the page otherwise.
@@ -180,22 +179,20 @@ export function FileDiffView(props: {
   // them at once. Not again when the same one's patch is refetched, as an uncommitted file's is
   // whenever the working tree changes: theirs are refetched once they're opened.
   const shownKey = createMemo(() => view.shownPatch()?.key);
-  createEffect(
-    on(shownKey, (key) => {
-      if (!key) return;
-      for (const near of [previous(), next()]) {
-        if (near) {
-          prefetchFileDiff(
-            queryClient,
-            props.repositoryId,
-            props.source,
-            near,
-            view.lists.uncounted(),
-          );
-        }
+  createEffect(shownKey, (key) => {
+    if (!key) return;
+    for (const near of [previous(), next()]) {
+      if (near) {
+        prefetchFileDiff(
+          queryClient,
+          props.repositoryId,
+          props.source,
+          near,
+          view.lists.uncounted(),
+        );
       }
-    }),
-  );
+    }
+  });
 
   /** Reads one side of the file on show in full: an unstaged file's new side is on disk. */
   const loadFile = (path: string) => (side: "old" | "new", oid: string) =>
@@ -270,14 +267,20 @@ export function FileDiffView(props: {
             </EmptyState>
           </Match>
           <Match when={true}>
-            <ErrorBoundary
-              fallback={(error: Error, reset) => {
+            <Errored
+              fallback={(error, reset) => {
                 // Another file is tried afresh.
-                createEffect(on(fileKey, () => reset(), { defer: true }));
-                return <DiffError error={error} />;
+                createEffect(
+                  fileKey,
+                  () => {
+                    reset();
+                  },
+                  { defer: true },
+                );
+                return <DiffError error={error() as Error} />;
               }}
             >
-              <Suspense fallback={<LoadingState title="Loading changes…" class="h-full" />}>
+              <Loading fallback={<LoadingState title="Loading changes…" class="h-full" />}>
                 <Show
                   // Nor does an error take the editor's place: it's the last one's, from before.
                   // (`null` either way: this is keyed, so `false` would make the viewer anew.)
@@ -325,8 +328,8 @@ export function FileDiffView(props: {
                 >
                   {(error) => <DiffError error={error} />}
                 </Show>
-              </Suspense>
-            </ErrorBoundary>
+              </Loading>
+            </Errored>
           </Match>
         </Switch>
       </div>

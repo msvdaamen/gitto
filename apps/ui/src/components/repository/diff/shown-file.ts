@@ -60,7 +60,7 @@ export function createShownFile(props: {
   editing: () => boolean;
 }) {
   // The same source, as one object, for as long as it is: a list's is made anew whenever it's read.
-  const source = createMemo(() => props.source(), undefined, { equals: isSameSource });
+  const source = createMemo(() => props.source(), { equals: isSameSource });
   const lists = useDiffSourceFiles(props.repositoryId, source);
   const fileKey = () => diffFileKey(props.source(), props.file().path);
   const found = createMemo(() =>
@@ -68,14 +68,12 @@ export function createShownFile(props: {
   );
   // Where the file was in its list, after it's gone from it: the files around it stay a step away.
   // Only this file's place: another one opened that isn't in its list has none.
-  const lastPlace = createMemo(
-    (last: { key: string; index: number }) =>
-      found() !== -1
-        ? { key: fileKey(), index: found() }
-        : last.key === fileKey()
-          ? last
-          : { key: fileKey(), index: -1 },
-    { key: "", index: -1 },
+  const lastPlace = createMemo((last: { key: string; index: number } | undefined) =>
+    found() !== -1
+      ? { key: fileKey(), index: found() }
+      : last?.key === fileKey()
+        ? last
+        : { key: fileKey(), index: -1 },
   );
   const place = () => lastPlace().index;
   const previous = () => (place() > 0 ? lists.files()[place() - 1] : undefined);
@@ -104,14 +102,14 @@ export function createShownFile(props: {
   // What the patch's query is of, changing only when that does: an uncommitted file's list is
   // replaced whenever anything in the working tree changes, and the query's options are set again
   // (and its resource refetched) whenever they're read anew.
-  const patchFile = createMemo(file, undefined, {
+  const patchFile = createMemo(() => file(), {
     equals: (a, b) => a.path === b.path && a.origPath === b.origPath && a.status === b.status,
   });
   // Not refetched while it's edited, as each save would: the view keeps the patch editing started
   // from (see `file`), and gets the last one once editing stops.
   const patchEnabled = createMemo(() => !props.editing() && !gone() && fetches());
   const patchQuery = useFilePatch(props.repositoryId, source, patchFile, patchEnabled);
-  // Without Suspense: an uncommitted file's patch is refetched while it's on show.
+  // Without Loading: an uncommitted file's patch is refetched while it's on show.
   const livePatch = useUnsuspendedData(patchQuery);
   const patch = createMemo((last: FilePatch | undefined) =>
     props.editing() && last ? last : livePatch(),

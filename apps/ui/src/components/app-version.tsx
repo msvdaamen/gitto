@@ -1,4 +1,4 @@
-import RotateCw from "lucide-solid/icons/rotate-cw";
+import RotateCw from "@lucide/solid/icons/rotate-cw";
 import { Show } from "solid-js";
 
 import { useUpdate } from "@/hooks/update";

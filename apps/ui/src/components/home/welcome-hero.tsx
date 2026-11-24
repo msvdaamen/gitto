@@ -1,9 +1,9 @@
-import ArrowDownUp from "lucide-solid/icons/arrow-down-up";
-import Check from "lucide-solid/icons/check";
-import Copy from "lucide-solid/icons/copy";
-import Folder from "lucide-solid/icons/folder";
-import Plus from "lucide-solid/icons/plus";
-import Sparkles from "lucide-solid/icons/sparkles";
+import ArrowDownUp from "@lucide/solid/icons/arrow-down-up";
+import Check from "@lucide/solid/icons/check";
+import Copy from "@lucide/solid/icons/copy";
+import Folder from "@lucide/solid/icons/folder";
+import Plus from "@lucide/solid/icons/plus";
+import Sparkles from "@lucide/solid/icons/sparkles";
 import { createMemo, createSignal, Show } from "solid-js";
 
 import { Button } from "@/components/ui/button";

@@ -1,7 +1,7 @@
+import Cloud from "@lucide/solid/icons/cloud";
+import GitBranch from "@lucide/solid/icons/git-branch";
 import { useParams } from "@tanstack/solid-router";
-import Cloud from "lucide-solid/icons/cloud";
-import GitBranch from "lucide-solid/icons/git-branch";
-import { Show, Suspense } from "solid-js";
+import { Show, Loading } from "solid-js";
 
 import { useStatus } from "@/git/queries/status";
 import { headLabel, syncLabel } from "@/git/status";
@@ -22,9 +22,9 @@ export function Footer() {
         <span>Ready</span>
         <Show when={params().repoId} keyed>
           {(repositoryId) => (
-            <Suspense>
+            <Loading>
               <OpenRepositoryStatus repositoryId={repositoryId} />
-            </Suspense>
+            </Loading>
           )}
         </Show>
       </div>

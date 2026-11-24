@@ -1,11 +1,10 @@
-import { Popover } from "@kobalte/core/popover";
+import type { LucideIcon } from "@lucide/solid";
+import ChevronRight from "@lucide/solid/icons/chevron-right";
+import LoaderCircle from "@lucide/solid/icons/loader-circle";
+import { Dynamic, type JSX } from "@solidjs/web";
+import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@ui-sdk/solid/popover";
 import { cn } from "cn";
-import type { LucideIcon } from "lucide-solid";
-import ChevronRight from "lucide-solid/icons/chevron-right";
-import LoaderCircle from "lucide-solid/icons/loader-circle";
 import { Show } from "solid-js";
-import type { JSX } from "solid-js";
-import { Dynamic } from "solid-js/web";
 
 import { VirtualList } from "@/components/ui/virtual-list";
 import { compactCount } from "@/lib/format";
@@ -50,7 +49,7 @@ export function SidebarSection<T>(props: {
   return (
     <section
       ref={props.ref}
-      aria-busy={props.busy}
+      aria-busy={props.busy ? "true" : undefined}
       class={cn(
         // At least its top border and its header.
         "flex min-h-[calc(var(--header-height)+1px)] flex-col border-t border-border-soft max-md:min-h-0 max-md:flex-none max-md:border-0",
@@ -69,7 +68,7 @@ export function SidebarSection<T>(props: {
           !props.collapsed && "text-text-soft",
         )}
         aria-expanded={!props.collapsed ? "true" : "false"}
-        onClick={props.onToggle}
+        onClick={() => props.onToggle()}
       >
         <ChevronRight
           size={12}
@@ -143,9 +142,9 @@ function RailSection<T>(props: {
   children: (item: () => T) => JSX.Element;
 }) {
   return (
-    <Popover placement="right-start" gutter={10}>
-      <Popover.Trigger
-        class="relative hidden size-9 cursor-pointer place-items-center rounded-lg border-0 bg-transparent text-muted hover:bg-panel-hover hover:text-text focus-ring-inset data-expanded:bg-primary-soft data-expanded:text-primary-strong max-md:grid"
+    <Popover>
+      <PopoverTrigger
+        class="relative hidden size-9 cursor-pointer place-items-center rounded-lg border-0 bg-transparent text-muted hover:bg-panel-hover hover:text-text focus-ring-inset data-open:bg-primary-soft data-open:text-primary-strong max-md:grid"
         title={props.title}
         aria-label={`${props.title} (${props.count})`}
       >
@@ -155,34 +154,35 @@ function RailSection<T>(props: {
             {compactCount(props.count)}
           </span>
         </Show>
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Content class="z-50 flex w-[260px] flex-col overflow-hidden rounded-lg border border-border bg-panel shadow-app outline-none">
-          <Popover.Title
-            class="flex shrink-0 items-center gap-1.5 border-b border-border-soft bg-panel-raised px-2.5 text-text-soft"
-            // Outside the section, at the end of the page, so not through its `--header-height`.
-            style={{ height: `${HEADER_HEIGHT}px` }}
+      </PopoverTrigger>
+      <PopoverContent
+        side="right"
+        align="start"
+        sideOffset={10}
+        class="z-50 flex w-[260px] flex-col overflow-hidden rounded-lg border border-border bg-panel shadow-app outline-none"
+      >
+        <PopoverTitle
+          class="flex shrink-0 items-center gap-1.5 border-b border-border-soft bg-panel-raised px-2.5 text-text-soft"
+          // As tall as a section's header.
+          style={{ height: `${HEADER_HEIGHT}px` }}
+        >
+          <props.icon size={13} class="shrink-0" />
+          <SectionTitle title={props.title} count={props.count} />
+        </PopoverTitle>
+        <Show
+          when={props.items.length}
+          fallback={<p class="px-3 py-4 text-center text-[12.5px] text-faint">Nothing here yet</p>}
+        >
+          <VirtualList
+            items={props.items}
+            rowHeight={ROW_HEIGHT}
+            padding={LIST_PADDING}
+            class="max-h-[min(400px,70vh)] px-1.5"
           >
-            <props.icon size={13} class="shrink-0" />
-            <SectionTitle title={props.title} count={props.count} />
-          </Popover.Title>
-          <Show
-            when={props.items.length}
-            fallback={
-              <p class="px-3 py-4 text-center text-[12.5px] text-faint">Nothing here yet</p>
-            }
-          >
-            <VirtualList
-              items={props.items}
-              rowHeight={ROW_HEIGHT}
-              padding={LIST_PADDING}
-              class="max-h-[min(400px,70vh)] px-1.5"
-            >
-              {props.children}
-            </VirtualList>
-          </Show>
-        </Popover.Content>
-      </Popover.Portal>
+            {props.children}
+          </VirtualList>
+        </Show>
+      </PopoverContent>
     </Popover>
   );
 }

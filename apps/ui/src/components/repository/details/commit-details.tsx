@@ -1,10 +1,10 @@
 import type { ChangedFile } from "@gitto/git/types";
-import Check from "lucide-solid/icons/check";
-import Copy from "lucide-solid/icons/copy";
-import Ellipsis from "lucide-solid/icons/ellipsis";
-import GitCommitHorizontal from "lucide-solid/icons/git-commit-horizontal";
-import LoaderCircle from "lucide-solid/icons/loader-circle";
-import { createMemo, createSignal, Match, onCleanup, Show, Suspense, Switch } from "solid-js";
+import Check from "@lucide/solid/icons/check";
+import Copy from "@lucide/solid/icons/copy";
+import Ellipsis from "@lucide/solid/icons/ellipsis";
+import GitCommitHorizontal from "@lucide/solid/icons/git-commit-horizontal";
+import LoaderCircle from "@lucide/solid/icons/loader-circle";
+import { createMemo, createSignal, Match, onCleanup, Show, Loading, Switch } from "solid-js";
 
 import { Avatar } from "@/components/ui/avatar";
 import { IconButton } from "@/components/ui/button";
@@ -36,12 +36,10 @@ export function CommitDetails(props: {
   // The selected row and its repository, kept while the selection is briefly empty: switching
   // repositories clears it until the history picks a row, and effects in the details can still run
   // in between. Kept together, so they never ask one repository for another's commit.
-  const selected = createMemo(
-    (last: { repositoryId: string; id: string }) =>
-      props.selectedId === undefined
-        ? last
-        : { repositoryId: props.repositoryId, id: props.selectedId },
-    { repositoryId: props.repositoryId, id: "" },
+  const selected = createMemo((last: { repositoryId: string; id: string } | undefined) =>
+    props.selectedId === undefined
+      ? (last ?? { repositoryId: props.repositoryId, id: "" })
+      : { repositoryId: props.repositoryId, id: props.selectedId },
   );
   const selectedId = () => selected().id;
   const repositoryId = () => selected().repositoryId;
@@ -65,7 +63,7 @@ export function CommitDetails(props: {
           </span>
           <IconButton label="More commit actions" icon={Ellipsis} />
         </div>
-        <Suspense fallback={<EmptyState icon={LoaderCircle} loading title="Loading details…" />}>
+        <Loading fallback={<EmptyState icon={LoaderCircle} loading title="Loading details…" />}>
           <Switch
             fallback={
               <SelectedCommit
@@ -88,7 +86,7 @@ export function CommitDetails(props: {
               />
             </Match>
           </Switch>
-        </Suspense>
+        </Loading>
       </div>
     </Show>
   );
@@ -116,7 +114,7 @@ function SelectedCommit(props: {
     if (details.query.error || changes.query.error) return undefined;
     const commit = details.commit();
     return commit && commit.id === changes.shownSha() ? { commit, files: changes.files() } : last;
-  }, undefined);
+  });
   const files = () => shown()?.files ?? changes.files();
   const totals = createMemo(() => lineTotals(files()));
   const source = (): DiffSource => ({ kind: "commit", sha: props.sha });

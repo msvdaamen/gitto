@@ -54,12 +54,11 @@ export function useOpenRepository() {
   const navigate = useNavigate();
   const addRepository = useAddRepository();
   return {
-    open: () =>
-      addRepository.mutate(undefined, {
-        onSuccess: (repository) => {
-          if (repository) void navigate({ to: "/$repoId", params: { repoId: repository.id } });
-        },
-      }),
+    open: async () => {
+      // Why it failed is kept in `error`, to show.
+      const repository = await addRepository.mutate().catch(() => null);
+      if (repository) void navigate({ to: "/$repoId", params: { repoId: repository.id } });
+    },
     error: () => addRepository.error,
     /** Forgets why it last failed. */
     dismiss: () => addRepository.reset(),

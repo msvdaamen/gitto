@@ -1,10 +1,11 @@
+import type { LucideIcon } from "@lucide/solid";
+import ChevronDown from "@lucide/solid/icons/chevron-down";
+import ChevronRight from "@lucide/solid/icons/chevron-right";
+import Folder from "@lucide/solid/icons/folder";
+import FolderOpen from "@lucide/solid/icons/folder-open";
+import type { JSX } from "@solidjs/web";
 import { cn } from "cn";
-import type { LucideIcon } from "lucide-solid";
-import ChevronDown from "lucide-solid/icons/chevron-down";
-import ChevronRight from "lucide-solid/icons/chevron-right";
-import Folder from "lucide-solid/icons/folder";
-import FolderOpen from "lucide-solid/icons/folder-open";
-import { splitProps, type JSX } from "solid-js";
+import { omit } from "solid-js";
 
 import { toneClasses } from "@/components/ui/tone";
 
@@ -66,7 +67,8 @@ export function SidebarRow(
     onDblClick?: () => void;
   },
 ) {
-  const [local, others] = splitProps(props, [
+  const others = omit(
+    props,
     "icon",
     "label",
     "title",
@@ -78,7 +80,7 @@ export function SidebarRow(
     "meta",
     "faded",
     "onDblClick",
-  ]);
+  );
   return (
     <button
       {...others}
@@ -88,40 +90,40 @@ export function SidebarRow(
         // be long.
         "grid w-full cursor-pointer grid-cols-[16px_minmax(0,1fr)_auto_fit-content(50%)_auto] items-center gap-[5px] rounded-[5px] border-0 bg-transparent pr-[7px] text-left text-muted hover:bg-panel-hover hover:text-text-soft focus-ring-inset",
         // The active one stands out already.
-        local.active
+        props.active
           ? "bg-primary-soft text-text [&>svg]:text-primary-strong"
-          : local.highlighted && "bg-panel-hover text-text-soft",
-        local.faded && "opacity-60",
+          : props.highlighted && "bg-panel-hover text-text-soft",
+        props.faded && "opacity-60",
       )}
       style={{
         height: ROW_BOX,
-        "padding-left": `${25 + (local.depth ?? 0) * DEPTH_INDENT}px`,
+        "padding-left": `${25 + (props.depth ?? 0) * DEPTH_INDENT}px`,
       }}
-      title={local.title ?? local.label}
+      title={props.title ?? props.label}
       // Read on each double-click: Solid binds a handler once.
-      onDblClick={() => local.onDblClick?.()}
+      onDblClick={() => props.onDblClick?.()}
     >
-      <local.icon size={13} class="col-start-1" />
-      <span class="col-start-2 truncate text-[12.5px]">{local.label}</span>
-      {local.tag && (
-        <local.tag.icon
+      <props.icon size={13} class="col-start-1" />
+      <span class="col-start-2 truncate text-[12.5px]">{props.label}</span>
+      {props.tag && (
+        <props.tag.icon
           size={11}
           class="col-start-3 text-faint"
-          aria-label={local.tag.label}
+          aria-label={props.tag.label}
           role="img"
         />
       )}
-      {local.meta && (
-        <small class="col-start-4 truncate text-[10.5px] text-blue">{local.meta}</small>
+      {props.meta && (
+        <small class="col-start-4 truncate text-[10.5px] text-blue">{props.meta}</small>
       )}
-      {local.count !== undefined && (
+      {props.count !== undefined && (
         <em
           class={cn(
             "col-start-5 min-w-[17px] rounded-lg px-1 py-0.5 text-center text-[10.5px] not-italic",
             toneClasses.neutral,
           )}
         >
-          {local.count}
+          {props.count}
         </em>
       )}
     </button>

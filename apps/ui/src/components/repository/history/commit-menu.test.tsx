@@ -162,7 +162,7 @@ describe("the commit menu", () => {
       return "f6";
     });
     const selections: (string | undefined)[] = [];
-    createRoot(() => createEffect(() => selections.push(selectedId())));
+    createRoot(() => createEffect(selectedId, (id) => void selections.push(id)));
 
     await editMessageOf(user, "Commit e5");
     const summary = screen.getByRole("textbox", { name: "Commit message" });

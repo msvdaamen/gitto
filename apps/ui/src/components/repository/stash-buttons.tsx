@@ -1,6 +1,6 @@
-import Archive from "lucide-solid/icons/archive";
-import ArchiveRestore from "lucide-solid/icons/archive-restore";
-import { Suspense } from "solid-js";
+import Archive from "@lucide/solid/icons/archive";
+import ArchiveRestore from "@lucide/solid/icons/archive-arrow-up";
+import { Loading } from "solid-js";
 
 import { FailurePopover } from "@/components/ui/failure-popover";
 import { useStashActions, useStashes } from "@/git/queries/stash";
@@ -16,7 +16,7 @@ import { ToolbarButton } from "./toolbar-button";
  */
 export function StashButtons(props: { repositoryId: string }) {
   return (
-    <Suspense
+    <Loading
       fallback={
         <>
           <ToolbarButton icon={Archive} label="Stash" hideBelow="lg" disabled />
@@ -25,7 +25,7 @@ export function StashButtons(props: { repositoryId: string }) {
       }
     >
       <Stash repositoryId={props.repositoryId} />
-    </Suspense>
+    </Loading>
   );
 }
 

@@ -1,6 +1,7 @@
 import type { TelemetryState } from "@gitto/system/types";
 import { render, screen } from "@solidjs/testing-library";
 import userEvent from "@testing-library/user-event";
+import { Loading } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { TelemetrySetting } from "./telemetry-setting";
@@ -13,7 +14,12 @@ vi.mock("@/lib/rpc", () => ({ rpc }));
 
 function renderWith(state: TelemetryState) {
   rpc.system.telemetry.get.mockResolvedValue(state);
-  render(() => <TelemetrySetting />);
+  // In a boundary, like the page's, which waits for the setting to load.
+  render(() => (
+    <Loading>
+      <TelemetrySetting />
+    </Loading>
+  ));
 }
 
 afterEach(() => {

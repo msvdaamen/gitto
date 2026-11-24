@@ -1,5 +1,6 @@
-import GitBranch from "lucide-solid/icons/git-branch";
-import type { Component, JSX } from "solid-js";
+import GitBranch from "@lucide/solid/icons/git-branch";
+import type { JSX } from "@solidjs/web";
+import type { Component } from "solid-js";
 
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/ui/form-field";

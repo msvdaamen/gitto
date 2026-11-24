@@ -1,7 +1,7 @@
+import TriangleAlert from "@lucide/solid/icons/triangle-exclamation-point";
+import Upload from "@lucide/solid/icons/upload";
 import { useQuery } from "@tanstack/solid-query";
-import TriangleAlert from "lucide-solid/icons/triangle-alert";
-import Upload from "lucide-solid/icons/upload";
-import { Show, Suspense } from "solid-js";
+import { Show, Loading } from "solid-js";
 
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -20,9 +20,9 @@ import { ToolbarButton } from "./toolbar-button";
  */
 export function PushButton(props: { repositoryId: string }) {
   return (
-    <Suspense fallback={<ToolbarButton icon={Upload} label="Push" disabled />}>
+    <Loading fallback={<ToolbarButton icon={Upload} label="Push" disabled />}>
       <Push repositoryId={props.repositoryId} />
-    </Suspense>
+    </Loading>
   );
 }
 

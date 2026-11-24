@@ -2,10 +2,10 @@
 // them with the mouse or the keyboard, by line or a hunk at a time, and the buttons that stage
 // them. Which lines a selection picks, and the rows to move it between, is `line-staging.ts`'s.
 import type { LineSelection } from "@gitto/git/types";
+import Minus from "@lucide/solid/icons/minus";
+import Plus from "@lucide/solid/icons/plus";
 import type { FileDiffMetadata, FileDiffOptions, SelectedLineRange } from "@pierre/diffs";
 import { cn } from "cn";
-import Minus from "lucide-solid/icons/minus";
-import Plus from "lucide-solid/icons/plus";
 import { createSignal, onCleanup } from "solid-js";
 
 import type { DiffStyle } from "@/hooks/diff-style";
@@ -22,6 +22,11 @@ import {
   type RowOf,
 } from "./line-staging";
 import type { ViewerFileDiff } from "./viewer-runtime";
+
+/** Keeps a press on `button` from reaching the diff around it (see `stageButton`). */
+function stopPointerDown(button: HTMLButtonElement) {
+  button.addEventListener("pointerdown", (event) => event.stopPropagation());
+}
 
 /** Staging or unstaging lines of the patch on show, which can then be picked (see `PatchViewer`). */
 export interface LineStaging {
@@ -153,7 +158,7 @@ export function createLinePicker(deps: LinePickerDeps): LinePicker {
       )}
       // Not a click on the line it's on, which would select that line alone: heard on the button
       // itself, before the library does in the diff, rather than delegated to the document.
-      on:pointerdown={(event) => event.stopPropagation()}
+      ref={stopPointerDown}
       onClick={() => void stage(toStage(), false)}
     >
       {unstaging() ? <Minus size={14} strokeWidth={2.5} /> : <Plus size={14} strokeWidth={2.5} />}
@@ -168,7 +173,7 @@ export function createLinePicker(deps: LinePickerDeps): LinePicker {
         <button
           type="button"
           class="cursor-pointer rounded-md border border-border bg-panel-raised px-2 py-px text-[11px] font-[600] text-text-soft hover:bg-panel-hover hover:text-text focus-ring group-data-busy:cursor-default group-data-busy:opacity-50"
-          on:pointerdown={(event) => event.stopPropagation()}
+          ref={stopPointerDown}
           onClick={() =>
             void stage(
               lines.filter((line) => line.hunk === hunk),

@@ -1,18 +1,10 @@
-import { createVirtualizer, defaultRangeExtractor, type Range } from "@tanstack/solid-virtual";
+import type { JSX } from "@solidjs/web";
 import { cn } from "cn";
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  For,
-  onCleanup,
-  Show,
-  untrack,
-  type JSX,
-} from "solid-js";
+import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 
 import { useConnected } from "@/hooks/connected";
 import type { ScrollId } from "@/lib/scroll";
+import { createVirtualizer, defaultRangeExtractor, type Range } from "@/lib/virtualizer";
 
 /** Rows rendered past each edge of the viewport, so scrolling doesn't reveal blank space. */
 const OVERSCAN = 10;
@@ -111,8 +103,7 @@ export function VirtualRows<T>(props: {
   // Where the list starts in the scroll container's content, which moves when the content above it
   // changes size. That content is somewhere inside the list's ancestors, so they're the ones watched.
   const [offset, setOffset] = createSignal(0);
-  createEffect(() => {
-    const scroller = scrollElement();
+  createEffect(scrollElement, (scroller) => {
     if (!scroller || !list) return;
     const measure = () =>
       setOffset(
@@ -127,7 +118,7 @@ export function VirtualRows<T>(props: {
     for (let el = list.parentElement; el && el !== scroller; el = el.parentElement) {
       observer.observe(el);
     }
-    onCleanup(() => observer.disconnect());
+    return () => observer.disconnect();
   });
 
   // The row with focus, if any, by its index.
@@ -166,9 +157,8 @@ export function VirtualRows<T>(props: {
     const last = virtualizer.getVirtualItems().findLast((row) => row.index !== focused());
     return last !== undefined && last.index >= props.items.length - 1 - (props.nearEnd ?? 0);
   });
-  createEffect(() => {
-    const near = nearEnd();
-    untrack(() => props.onNearEndChange?.(near));
+  createEffect(nearEnd, (near) => {
+    props.onNearEndChange?.(near);
   });
 
   return (
@@ -182,7 +172,7 @@ export function VirtualRows<T>(props: {
       <For each={virtualizer.getVirtualItems()}>
         {(row) => {
           // The row's item; when the list shrinks past the row, the last one until the row is
-          // removed. Effects in the row can still run in between (e.g. ones a loading Suspense
+          // removed. Effects in the row can still run in between (e.g. ones a loading Loading
           // boundary held back), and reading a <Show>'s stale value there would throw.
           const item = createMemo<T | undefined>((last) => props.items[row.index] ?? last);
           return (

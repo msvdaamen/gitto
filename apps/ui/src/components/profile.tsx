@@ -1,10 +1,10 @@
-import { DropdownMenu } from "@kobalte/core/dropdown-menu";
+import type { LucideIcon } from "@lucide/solid";
+import Moon from "@lucide/solid/icons/moon";
+import Settings from "@lucide/solid/icons/settings";
+import Sun from "@lucide/solid/icons/sun";
+import { Dynamic } from "@solidjs/web";
 import { useNavigate } from "@tanstack/solid-router";
-import type { LucideIcon } from "lucide-solid";
-import Moon from "lucide-solid/icons/moon";
-import Settings from "lucide-solid/icons/settings";
-import Sun from "lucide-solid/icons/sun";
-import { Dynamic } from "solid-js/web";
+import { Menu, MenuContent, MenuItem, MenuTrigger } from "@ui-sdk/solid/menu";
 
 import { useTheme } from "@/hooks/theme";
 
@@ -14,42 +14,44 @@ export function Profile() {
   const { theme, toggleTheme } = useTheme();
 
   return (
-    <DropdownMenu>
-      <DropdownMenu.Trigger
+    <Menu>
+      <MenuTrigger
         class="size-7 cursor-pointer rounded-full border border-[color-mix(in_srgb,var(--primary)_45%,var(--border))] bg-[linear-gradient(145deg,#9770d1,#557fc8)] p-0.5 focus-ring"
         aria-label="Open profile"
       >
         <span class="grid size-full place-items-center rounded-full bg-[rgba(20,16,25,.35)] text-[11.5px] font-bold text-white">
           MV
         </span>
-      </DropdownMenu.Trigger>
-      <DropdownMenu.Portal>
-        <DropdownMenu.Content class="z-50 min-w-[180px] animate-toast-in rounded-lg border border-border bg-panel-raised p-1 text-text shadow-app outline-none motion-reduce:animate-none">
-          <ProfileMenuItem
-            icon={theme() === "dark" ? Sun : Moon}
-            label={theme() === "dark" ? "Light theme" : "Dark theme"}
-            onSelect={toggleTheme}
-          />
-          <ProfileMenuItem
-            icon={Settings}
-            label="Settings"
-            onSelect={() => void navigate({ to: "/settings" })}
-          />
-        </DropdownMenu.Content>
-      </DropdownMenu.Portal>
-    </DropdownMenu>
+      </MenuTrigger>
+      <MenuContent
+        side="bottom"
+        align="start"
+        class="z-50 min-w-[180px] animate-toast-in rounded-lg border border-border bg-panel-raised p-1 text-text shadow-app outline-none motion-reduce:animate-none"
+      >
+        <ProfileMenuItem
+          icon={theme() === "dark" ? Sun : Moon}
+          label={theme() === "dark" ? "Light theme" : "Dark theme"}
+          onSelect={toggleTheme}
+        />
+        <ProfileMenuItem
+          icon={Settings}
+          label="Settings"
+          onSelect={() => void navigate({ to: "/settings" })}
+        />
+      </MenuContent>
+    </Menu>
   );
 }
 
 function ProfileMenuItem(props: { icon: LucideIcon; label: string; onSelect: () => void }) {
   return (
-    <DropdownMenu.Item
+    <MenuItem
       class="flex h-7 cursor-pointer items-center gap-2 rounded-[5px] px-2 text-[12.5px] text-text-soft outline-none data-highlighted:bg-panel-hover data-highlighted:text-text"
-      // Read on each choice: Kobalte binds a handler once.
+      // Read on each choice: a handler is bound once.
       onSelect={() => props.onSelect()}
     >
       <Dynamic component={props.icon} size={13} class="shrink-0" />
-      <DropdownMenu.ItemLabel class="truncate">{props.label}</DropdownMenu.ItemLabel>
-    </DropdownMenu.Item>
+      <span class="truncate">{props.label}</span>
+    </MenuItem>
   );
 }

@@ -1,6 +1,6 @@
 import type { ChangedFile } from "@gitto/git/types";
-import Undo2 from "lucide-solid/icons/undo-2";
-import type { JSX } from "solid-js";
+import Undo2 from "@lucide/solid/icons/undo-2";
+import type { JSX } from "@solidjs/web";
 
 import { ContextMenuItem } from "@/components/ui/context-menu";
 import { isNestedRepository } from "@/git/changes";

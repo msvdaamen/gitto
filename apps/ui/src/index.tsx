@@ -1,9 +1,9 @@
 /* @refresh reload */
 import "./index.css";
 import { captureException, initTelemetry } from "@gitto/telemetry-ui";
+import { render } from "@solidjs/web";
 import { QueryClientProvider } from "@tanstack/solid-query";
 import { RouterProvider, createRouter } from "@tanstack/solid-router";
-import { render } from "solid-js/web";
 
 import { queryClient } from "./lib/query-client";
 import { SCROLL_TO_TOP } from "./lib/scroll";

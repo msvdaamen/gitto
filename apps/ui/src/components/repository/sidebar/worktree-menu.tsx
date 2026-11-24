@@ -1,7 +1,8 @@
 import type { Worktree } from "@gitto/git/types";
-import FolderOpen from "lucide-solid/icons/folder-open";
-import FolderX from "lucide-solid/icons/folder-x";
-import { createSignal, type JSX } from "solid-js";
+import FolderOpen from "@lucide/solid/icons/folder-open";
+import FolderX from "@lucide/solid/icons/folder-x";
+import type { JSX } from "@solidjs/web";
+import { createSignal } from "solid-js";
 
 import { ContextMenuItem } from "@/components/ui/context-menu";
 import { FailurePopover } from "@/components/ui/failure-popover";

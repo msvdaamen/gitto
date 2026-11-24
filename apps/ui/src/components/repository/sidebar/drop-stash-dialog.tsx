@@ -1,5 +1,5 @@
 import type { Stash } from "@gitto/git/types";
-import Trash from "lucide-solid/icons/trash";
+import Trash from "@lucide/solid/icons/trash";
 
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";

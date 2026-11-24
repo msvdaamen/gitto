@@ -1,5 +1,5 @@
-import Pencil from "lucide-solid/icons/pencil";
-import { createSignal, onCleanup, onMount, Show } from "solid-js";
+import Pencil from "@lucide/solid/icons/pencil";
+import { createSignal, onCleanup, onSettled, Show } from "solid-js";
 
 import { Button, IconButton } from "@/components/ui/button";
 import { Notice } from "@/components/ui/notice";
@@ -113,13 +113,13 @@ export function useFileEditing(props: {
   };
   // Edits not saved yet as the window closes are saved as it does: sent before the page goes.
   const onUnload = () => autosave.flushNow();
-  onMount(() => {
+  onSettled(() => {
     window.addEventListener("keydown", onEscape, true);
     window.addEventListener("beforeunload", onUnload);
-    onCleanup(() => {
+    return () => {
       window.removeEventListener("keydown", onEscape, true);
       window.removeEventListener("beforeunload", onUnload);
-    });
+    };
   });
   // Edits made just before the file closed by itself (its row went, say) are saved all the same.
   onCleanup(() => void autosave.flush());

@@ -1,22 +1,34 @@
 import { useMutation, useQueryClient, type QueryClient } from "@tanstack/solid-query";
-import { createStore, produce } from "solid-js/store";
+import { createOptimisticStore, createStore, onFlush } from "solid-js";
 
 import { gitKeys } from "./keys";
 
-type Operations = Record<string, { running: boolean; error: Error | null }>;
-
 /**
- * Each repository's operations (a pull, say), by query client: whether one is running, and why the
- * last one failed, until that's dismissed or it's run again. Kept here rather than in a component,
+ * Each repository's operations (a pull, say), by query client: which are running, and why the last
+ * of each failed, until that's dismissed or it's run again. Kept here rather than in a component,
  * so it outlives the toolbar showing it: switching repositories shows another one's, and the same
  * one's again when switching back. Set by the mutation's own callbacks, which run whatever is on
  * show. (Not in the mutation cache: `useMutationState` doesn't follow a change of repository.)
+ * A mutation is a transition, whose writes only show once it's done: that it's running is an
+ * optimistic write, shown at once and undone as it ends.
  */
-const operationsByClient = new WeakMap<QueryClient, ReturnType<typeof createStore<Operations>>>();
+interface Operations {
+  running: Record<string, true>;
+  errors: Record<string, Error>;
+}
+
+function createOperations() {
+  return {
+    running: createOptimisticStore<Operations["running"]>({}),
+    errors: createStore<Operations["errors"]>({}),
+  };
+}
+
+const operationsByClient = new WeakMap<QueryClient, ReturnType<typeof createOperations>>();
 
 function operationsOf(client: QueryClient) {
   let operations = operationsByClient.get(client);
-  if (!operations) operationsByClient.set(client, (operations = createStore<Operations>({})));
+  if (!operations) operationsByClient.set(client, (operations = createOperations()));
   return operations;
 }
 
@@ -30,14 +42,24 @@ export function useRepositoryOperation<T = void, R = unknown>(
   repositoryId: () => string,
   run: (repositoryId: string, input: T) => Promise<R>,
 ) {
-  const [, setOperations] = operationsOf(useQueryClient());
+  const operations = operationsOf(useQueryClient());
+  const [, setRunning] = operations.running;
+  const [, setErrors] = operations.errors;
   const key = (id: string) => `${name}:${id}`;
   const mutation = useMutation(() => ({
     mutationFn: ({ id, input }: { id: string; input: T }) => run(id, input),
-    onMutate: ({ id }) => setOperations(key(id), { running: true, error: null }),
-    onError: (error, { id }) => setOperations(key(id), { running: false, error }),
-    // Nothing to keep for one that went through.
-    onSuccess: (_data, { id }) => setOperations(produce((all) => delete all[key(id)])),
+    onMutate: ({ id }) => {
+      setRunning((all) => {
+        all[key(id)] = true;
+      });
+      setErrors((all) => {
+        delete all[key(id)];
+      });
+    },
+    onError: (error, { id }) =>
+      setErrors((all) => {
+        all[key(id)] = error;
+      }),
   }));
 
   const state = useRepositoryOperationState(name, repositoryId);
@@ -48,10 +70,16 @@ export function useRepositoryOperation<T = void, R = unknown>(
      */
     run(input: T, options?: { onSuccess?: (result: R) => void }) {
       if (state.isPending()) return;
-      mutation.mutate(
-        { id: repositoryId(), input },
-        { onSuccess: (result) => options?.onSuccess?.(result) },
-      );
+      const id = repositoryId();
+      // Started once what the caller changed with it has landed, like a popover closing: a
+      // mutation holds every write made alongside it until it's done.
+      onFlush(() => {
+        void mutation.mutate({ id, input }).then(
+          (result) => options?.onSuccess?.(result),
+          // Kept as the operation's error, to show.
+          () => {},
+        );
+      });
     },
     ...state,
   };
@@ -94,15 +122,22 @@ export function oneAtATime<T, R>(
  * somewhere other than where it's run.
  */
 export function useRepositoryOperationState(name: string, repositoryId: () => string) {
-  const [operations, setOperations] = operationsOf(useQueryClient());
+  const operations = operationsOf(useQueryClient());
+  const [running] = operations.running;
+  const [errors, setErrors] = operations.errors;
   const key = () => `${name}:${repositoryId()}`;
   return {
-    isPending: () => !!operations[key()]?.running,
-    error: () => operations[key()]?.error ?? null,
+    isPending: () => !!running[key()],
+    // Not the last one's while it runs again: that it's gone is only written once it's done.
+    error: () => (running[key()] ? null : (errors[key()] ?? null)),
     /** Forgets why it last failed. */
     dismiss() {
       const id = key();
-      if (!operations[id]?.running) setOperations(produce((all) => delete all[id]));
+      if (!running[id]) {
+        setErrors((all) => {
+          delete all[id];
+        });
+      }
     },
   };
 }

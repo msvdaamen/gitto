@@ -1,8 +1,14 @@
-import { Dialog } from "@kobalte/core/dialog";
+import {
+  Dialog,
+  DialogBackdrop,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@ui-sdk/solid/dialog";
 import { cn } from "cn";
-import { createEffect, createSignal, on } from "solid-js";
+import { createEffect, createSignal } from "solid-js";
 
-import { DIALOG_BOX, DialogPortal } from "@/components/ui/dialog";
+import { DIALOG_BACKDROP, DIALOG_BOX } from "@/components/ui/dialog";
 import { useCreateBranchFrom } from "@/git/queries/branch";
 import { useStatus } from "@/git/queries/status";
 import { branchName, hasUncommittedChanges, headSha, isCheckedOut } from "@/git/status";
@@ -49,10 +55,10 @@ export function CreateBranchDialog(props: {
   );
   // Out of the way of the name, which is kept after a failure to fix it.
   createEffect(
-    on(
-      () => !!props.from,
-      (open) => open && create.dismiss(),
-    ),
+    () => !!props.from,
+    (open) => {
+      if (open) create.dismiss();
+    },
   );
 
   function submit(trimmed: string) {
@@ -66,21 +72,20 @@ export function CreateBranchDialog(props: {
   }
 
   return (
-    <Dialog open={!!props.from} onOpenChange={(open) => !open && props.onClose()} modal>
-      <DialogPortal>
-        <Dialog.Content class={cn(DIALOG_BOX, "max-w-[320px] p-4")}>
-          <BranchForm
-            title={Dialog.Title}
-            description={Dialog.Description}
-            summary={`From ${sourceLabel(from() ?? "")}${changes()}`}
-            // `run` does nothing while a switch or a merge is running.
-            disabled={create.isBlocked()}
-            name={name()}
-            onNameChange={setName}
-            onSubmit={submit}
-          />
-        </Dialog.Content>
-      </DialogPortal>
+    <Dialog open={!!props.from} onOpenChange={(open) => !open && props.onClose()}>
+      <DialogBackdrop class={DIALOG_BACKDROP} />
+      <DialogContent class={cn(DIALOG_BOX, "max-w-[320px] p-4")}>
+        <BranchForm
+          title={DialogTitle}
+          description={DialogDescription}
+          summary={`From ${sourceLabel(from() ?? "")}${changes()}`}
+          // `run` does nothing while a switch or a merge is running.
+          disabled={create.isBlocked()}
+          name={name()}
+          onNameChange={setName}
+          onSubmit={submit}
+        />
+      </DialogContent>
     </Dialog>
   );
 }

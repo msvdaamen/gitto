@@ -1,14 +1,13 @@
-import { ContextMenu } from "@kobalte/core/context-menu";
-import { useMenuContext } from "@kobalte/core/menu";
+import type { JSX } from "@solidjs/web";
+import { Menu, MenuContextTrigger } from "@ui-sdk/solid/menu";
 import {
   createContext,
   createEffect,
   createSignal,
-  on,
+  flush,
   onCleanup,
   Show,
   useContext,
-  type JSX,
 } from "solid-js";
 
 import { ContextMenuContent } from "@/components/ui/context-menu";
@@ -154,19 +153,36 @@ export function RowMenu<T>(props: {
         ? focused
         : (element?.closest("button") ?? undefined);
     setTarget(key !== undefined && item !== undefined ? { key, item, focus } : undefined);
+    // Applied now, for the menu to read as it handles the same event, right after this.
+    flush();
     return { element: item === undefined ? undefined : element, taken: found !== undefined };
   };
 
+  const [open, setOpen] = createSignal(false);
+  // Another repository's item isn't one of this one's.
+  createEffect(
+    () => props.repositoryId,
+    () => {
+      setOpen(false);
+    },
+    { defer: true },
+  );
+
   return (
-    <ContextMenu onOpenChange={(open) => props.onOpenFor(open ? target()?.key : undefined)}>
-      <ContextMenu.Trigger
-        as="div"
+    <Menu
+      open={open()}
+      onOpenChange={(isOpen) => {
+        setOpen(isOpen);
+        props.onOpenFor(isOpen ? target()?.key : undefined);
+      }}
+    >
+      <MenuContextTrigger
         // Laid out as if it weren't there, so what it holds is laid out as before.
         class="contents"
-        // Read by Kobalte after the handlers below, which aim it: nothing opens off an item, nor at
-        // a long press there.
+        // Read by the menu after the handlers below, which aim it: nothing opens off an item, nor
+        // at a long press there.
         disabled={!target()}
-        // Kobalte opens it where it was right-clicked, unless this is prevented.
+        // The menu opens where it was right-clicked, unless this is prevented.
         onContextMenu={(event) => {
           const { element, taken } = aim(event);
           if (element?.contains(event.target as Node)) return;
@@ -178,41 +194,20 @@ export function RowMenu<T>(props: {
           // outermost keeps the browser's own from opening.
           else if (!taken && nesting.around.length === 0) event.preventDefault();
         }}
-        // Kobalte opens it at a long press of a finger or pen.
+        // The menu opens at a long press of a finger or pen.
         onPointerDown={(event) => event.pointerType !== "mouse" && aim(event)}
       >
-        <Nesting.Provider value={{ around: [...nesting.around, self], join }}>
-          {props.children}
-        </Nesting.Provider>
-      </ContextMenu.Trigger>
+        <Nesting value={{ around: [...nesting.around, self], join }}>{props.children}</Nesting>
+      </MenuContextTrigger>
       <ContextMenuContent
         // Back to what had the focus, rather than to this, which can't take focus.
-        onCloseAutoFocus={(event) => {
+        finalFocus={() => {
           const focus = target()?.focus;
-          if (!focus?.isConnected) return;
-          event.preventDefault();
-          focus.focus({ preventScroll: true });
+          return focus?.isConnected ? focus : undefined;
         }}
       >
-        <CloseOnChange value={props.repositoryId} />
         <Show when={target()}>{(current) => props.actions(() => current().item)}</Show>
       </ContextMenuContent>
-    </ContextMenu>
+    </Menu>
   );
-}
-
-/**
- * Closes the menu it's in once `value` changes, like the repository: another repository's item
- * isn't one of this one's.
- */
-function CloseOnChange(props: { value: string }) {
-  const menu = useMenuContext();
-  createEffect(
-    on(
-      () => props.value,
-      () => menu.close(),
-      { defer: true },
-    ),
-  );
-  return null;
 }

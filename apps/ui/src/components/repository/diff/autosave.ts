@@ -26,7 +26,16 @@ export const AUTOSAVE_DELAY_MS = 600;
  * file is closed.
  */
 export function createAutosave(save: SaveFile, delayMs = AUTOSAVE_DELAY_MS) {
-  const [state, setState] = createSignal<SaveState>({ kind: "saved" });
+  const [state, setSavedState] = createSignal<SaveState>({ kind: "saved" });
+  /**
+   * The state as it was last set, for this to go by: what `state` reads only changes once Solid
+   * applies the write, after this has gone on.
+   */
+  let current: SaveState = { kind: "saved" };
+  const setState = (next: SaveState) => {
+    current = next;
+    setSavedState(next);
+  };
   let version: string | undefined;
   /** The edits to save; `undefined` once they're saved. */
   let unsaved: string | undefined;
@@ -45,7 +54,7 @@ export function createAutosave(save: SaveFile, delayMs = AUTOSAVE_DELAY_MS) {
   async function saveLatest(overwrite: boolean): Promise<void> {
     const text = unsaved;
     if (text === undefined || version === undefined) return;
-    if (!overwrite && state().kind === "changed-on-disk") return;
+    if (!overwrite && current.kind === "changed-on-disk") return;
     setState({ kind: "saving" });
     try {
       version = await save(text, version, overwrite);
@@ -83,14 +92,14 @@ export function createAutosave(save: SaveFile, delayMs = AUTOSAVE_DELAY_MS) {
     /** The file was edited to `text`: saved once the edits stop for a moment. */
     change(text: string) {
       unsaved = text;
-      if (state().kind === "changed-on-disk") return;
+      if (current.kind === "changed-on-disk") return;
       setState({ kind: "pending" });
       schedule();
     },
     /** Saves the edits that are left now; resolves to whether everything's saved. */
     async flush(): Promise<boolean> {
       await (unsaved === undefined ? saves : run(false));
-      return unsaved === undefined && state().kind === "saved";
+      return unsaved === undefined && current.kind === "saved";
     },
     /**
      * Sends the edits that are left at once, as the window closes: not after a save under way,
@@ -100,13 +109,13 @@ export function createAutosave(save: SaveFile, delayMs = AUTOSAVE_DELAY_MS) {
     flushNow() {
       clearTimeout(timer);
       if (unsaved === undefined || version === undefined) return;
-      if (state().kind === "changed-on-disk") return;
+      if (current.kind === "changed-on-disk") return;
       void save(unsaved, version, false).catch(() => undefined);
     },
     /** Saves the edits over the file whatever it is now; resolves to whether they're saved. */
     async overwrite(): Promise<boolean> {
       await run(true);
-      return unsaved === undefined && state().kind === "saved";
+      return unsaved === undefined && current.kind === "saved";
     },
     /** Forgets the edits that aren't saved, and stops saving. */
     stop() {

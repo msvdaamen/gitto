@@ -12,7 +12,7 @@ import { useUnsuspendedData } from "./unsuspended";
 
 /**
  * The files whose changes `source` has, to step through, kept up to date for uncommitted ones.
- * Read without Suspense (see `useUnsuspendedData`): the uncommitted ones are refetched while
+ * Read without Loading (see `useUnsuspendedData`): the uncommitted ones are refetched while
  * they're on show.
  */
 export function useDiffSourceFiles(repositoryId: () => string, source: () => DiffSource) {

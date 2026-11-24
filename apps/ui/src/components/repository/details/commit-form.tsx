@@ -1,7 +1,7 @@
+import GitCommitHorizontal from "@lucide/solid/icons/git-commit-horizontal";
+import PenLine from "@lucide/solid/icons/pen-line";
 import { useQuery } from "@tanstack/solid-query";
-import GitCommitHorizontal from "lucide-solid/icons/git-commit-horizontal";
-import PenLine from "lucide-solid/icons/pen-line";
-import { createEffect, createMemo, createSignal, on, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, Show } from "solid-js";
 
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/ui/form-field";
@@ -32,7 +32,7 @@ export function CommitForm(props: {
   // the amend, or when one is made or checked out elsewhere, so a stale message is never amended
   // onto it.
   const [amending, setAmending] = createSignal<string>();
-  createEffect(on(head, () => setAmending(undefined), { defer: true }));
+  createEffect(head, () => setAmending(undefined), { defer: true });
   // Checked against HEAD too, as the effect only runs once HEAD has moved.
   const amend = () => !!amending() && amending() === head();
   const [draft, setDraft] = createSignal(emptyMessage);
@@ -91,15 +91,14 @@ export function CommitForm(props: {
     if (!canCommit()) return;
     const amended = amend() ? props.lastCommit : undefined;
     const text = (amended && amendedMessage()) || joinMessage(message());
-    commit.mutate(
-      { message: text, amend: amended },
-      {
-        onSuccess: () => {
-          if (!amended) return setDraft(emptyMessage);
-          setAmending(undefined);
-          setEdits(undefined);
-        },
+    // Why it failed is shown from the mutation's error.
+    commit.mutate({ message: text, amend: amended }).then(
+      () => {
+        if (!amended) return setDraft(emptyMessage);
+        setAmending(undefined);
+        setEdits(undefined);
       },
+      () => {},
     );
   }
 

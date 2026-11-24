@@ -1,14 +1,14 @@
 import type { Ref } from "@gitto/git/types";
-import Archive from "lucide-solid/icons/archive";
-import Cloud from "lucide-solid/icons/cloud";
-import FolderGit2 from "lucide-solid/icons/folder-git-2";
-import GitBranch from "lucide-solid/icons/git-branch";
-import Inbox from "lucide-solid/icons/inbox";
-import LoaderCircle from "lucide-solid/icons/loader-circle";
-import Tag from "lucide-solid/icons/tag";
-import TriangleAlert from "lucide-solid/icons/triangle-alert";
+import Archive from "@lucide/solid/icons/archive";
+import Cloud from "@lucide/solid/icons/cloud";
+import FolderGit2 from "@lucide/solid/icons/folder-git-2";
+import GitBranch from "@lucide/solid/icons/git-branch";
+import Inbox from "@lucide/solid/icons/inbox";
+import LoaderCircle from "@lucide/solid/icons/loader-circle";
+import Tag from "@lucide/solid/icons/tag";
+import TriangleAlert from "@lucide/solid/icons/triangle-exclamation-point";
+import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, Match, Show, Switch } from "solid-js";
-import type { JSX } from "solid-js";
 
 import { EmptyState } from "@/components/ui/empty-state";
 import { useSwitchBranch } from "@/git/queries/branch";
@@ -40,7 +40,7 @@ import { WorktreeMenu } from "./worktree-menu";
  */
 export function RefList(props: { repositoryId: string }) {
   const refs = useRefs(() => props.repositoryId);
-  // Without Suspense: they're reloaded while they're on show, after a pull or a switch, say, and
+  // Without Loading: they're reloaded while they're on show, after a pull or a switch, say, and
   // the sections would be taken off the page and put back meanwhile, their lists scrolled to the
   // top but still showing the rows from where they were scrolled to (see `useUnsuspendedData`).
   const refList = useUnsuspendedData(refs);

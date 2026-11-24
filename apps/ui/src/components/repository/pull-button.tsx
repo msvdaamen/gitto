@@ -1,5 +1,5 @@
-import Download from "lucide-solid/icons/download";
-import { Suspense } from "solid-js";
+import Download from "@lucide/solid/icons/download";
+import { Loading } from "solid-js";
 
 import { FailurePopover } from "@/components/ui/failure-popover";
 import { usePull } from "@/git/queries/remote";
@@ -11,9 +11,9 @@ import { ToolbarButton } from "./toolbar-button";
 /** Pulls the current branch's upstream, and says why if that failed or was left to finish. */
 export function PullButton(props: { repositoryId: string }) {
   return (
-    <Suspense fallback={<ToolbarButton icon={Download} label="Pull" accent disabled />}>
+    <Loading fallback={<ToolbarButton icon={Download} label="Pull" accent disabled />}>
       <Pull repositoryId={props.repositoryId} />
-    </Suspense>
+    </Loading>
   );
 }
 

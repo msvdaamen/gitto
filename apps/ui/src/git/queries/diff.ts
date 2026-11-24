@@ -105,10 +105,13 @@ export function useWorkingTreeChanges(repositoryId: () => string) {
 
 /**
  * The lists in the uncommitted changes `query` loads (see `useUncommittedFiles`): what's staged
- * for the next commit and what isn't, and whether their lines were counted. Read without Suspense:
+ * for the next commit and what isn't, and whether their lines were counted. Read without Loading:
  * they're refetched while they're on show (see `useUnsuspendedData`).
  */
-export function useWorkingTreeLists(query: { data: Opaque<WorkingTreeFiles> | undefined }) {
+export function useWorkingTreeLists(query: {
+  data: Opaque<WorkingTreeFiles> | undefined;
+  status: string;
+}) {
   const changes = useUnsuspendedData(query);
   const staged = createMemo(() => stagedFiles(changes()?.value.staged ?? []));
   const unstaged = createMemo(() => changes()?.value.unstaged ?? []);

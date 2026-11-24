@@ -1,14 +1,15 @@
 import { remoteOf } from "@gitto/git/remote-name";
 import type { ChangedFile } from "@gitto/git/types";
+import Download from "@lucide/solid/icons/download";
+import FolderOpen from "@lucide/solid/icons/folder-open";
+import FolderPlus from "@lucide/solid/icons/folder-plus";
+import GitBranchPlus from "@lucide/solid/icons/git-branch-plus";
+import GitMerge from "@lucide/solid/icons/git-merge";
+import GitPullRequestArrow from "@lucide/solid/icons/git-pull-request-arrow";
+import Trash from "@lucide/solid/icons/trash";
+import type { JSX } from "@solidjs/web";
 import { useQueryClient } from "@tanstack/solid-query";
-import Download from "lucide-solid/icons/download";
-import FolderOpen from "lucide-solid/icons/folder-open";
-import FolderPlus from "lucide-solid/icons/folder-plus";
-import GitBranchPlus from "lucide-solid/icons/git-branch-plus";
-import GitMerge from "lucide-solid/icons/git-merge";
-import GitPullRequestArrow from "lucide-solid/icons/git-pull-request-arrow";
-import Trash from "lucide-solid/icons/trash";
-import { createContext, createSignal, Show, useContext, type Accessor, type JSX } from "solid-js";
+import { createContext, createSignal, Show, useContext, type Accessor } from "solid-js";
 
 import { ContextMenuItem } from "@/components/ui/context-menu";
 import {
@@ -63,7 +64,8 @@ interface BranchActions {
   openingWorktree: () => boolean;
 }
 
-const BranchActions = createContext<BranchActions>();
+// `null` outside a `BranchMenuProvider`: without one, there are no branch menus to share.
+const BranchActions = createContext<BranchActions | null>(null);
 
 /** The full ref name of the branch whose menu is open, if any. */
 const OpenFor = createContext<Accessor<string | undefined>>(() => undefined);
@@ -132,7 +134,7 @@ export function BranchMenuProvider(props: {
   };
 
   return (
-    <BranchActions.Provider
+    <BranchActions
       value={{
         createFrom: setFrom,
         merge: (ref, into) => void integrate(merging, { ref, into }),
@@ -166,7 +168,7 @@ export function BranchMenuProvider(props: {
           deleting.run(branch.ref);
         }}
       />
-    </BranchActions.Provider>
+    </BranchActions>
   );
 }
 
@@ -294,7 +296,7 @@ export function BranchMenu(props: { repositoryId: string; children: JSX.Element 
   };
 
   return (
-    <OpenFor.Provider value={openFor}>
+    <OpenFor value={openFor}>
       <RowMenu
         repositoryId={props.repositoryId}
         attribute="branch"
@@ -374,6 +376,6 @@ export function BranchMenu(props: { repositoryId: string; children: JSX.Element 
       >
         {props.children}
       </RowMenu>
-    </OpenFor.Provider>
+    </OpenFor>
   );
 }

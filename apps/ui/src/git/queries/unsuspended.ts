@@ -1,14 +1,23 @@
 import { createEffect, createSignal, untrack } from "solid-js";
 
 /**
- * A query's data, read without Suspense. solid-query reads it from a resource, and a computation
- * that does so before the resource first resolves (in the tick the query's made, say) is suspended
- * by every refetch after that, until it runs again. For data refetched while it's on show, like
- * the uncommitted changes, that takes everything under the nearest `Suspense` off the page and
- * puts it back, scrolled to the top. Effects never suspend, so the data is copied by one.
+ * A query's data, read without suspending: `undefined` until it's first loaded, and the last data
+ * it had while it's refetched. solid-query's `data` is an async value, whose read suspends the
+ * nearest `Loading` until it's loaded and holds whatever depends on it while it's refetched. For
+ * data refetched while it's on show, like the uncommitted changes, or shown outside a `Loading`,
+ * it's copied by an effect instead, which waits for it without holding anything else.
  */
-export function useUnsuspendedData<T>(query: { data: T }): () => T {
-  const [data, setData] = createSignal(untrack(() => query.data));
-  createEffect(() => setData(() => query.data));
-  return data;
+export function useUnsuspendedData<T>(query: { data: T; status: string }): () => T {
+  // What it already has, if anything, so it's there from the start: a read that can't suspend,
+  // once it has data, and deliberately not followed, as the effect below takes it from there.
+  const [data, setData] = createSignal({
+    value: untrack(() => (query.status === "success" ? query.data : undefined)) as T,
+  });
+  createEffect(
+    () => query.data,
+    (value) => {
+      setData({ value });
+    },
+  );
+  return () => data().value;
 }

@@ -129,7 +129,7 @@ export function useHistory(repositoryId: () => string, selectedId: () => string 
   const hasMore = () => log.data?.complete === false;
   /** Loads more of the log, unless it's loading, or reloading, which would leave that unused. */
   const loadMore = () => {
-    if (hasMore() && !log.isFetching && !more.isPending) more.mutate(repositoryId());
+    if (hasMore() && !log.isFetching && !more.isPending) void more.mutate(repositoryId());
   };
 
   return { log, more, hasMore, loadMore, rows, selected };

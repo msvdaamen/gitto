@@ -1,4 +1,6 @@
-import { TextField } from "@kobalte/core/text-field";
+import { Field, FieldLabel } from "@ui-sdk/solid/field";
+import { Input } from "@ui-sdk/solid/input";
+import { Textarea } from "@ui-sdk/solid/textarea";
 import { Show } from "solid-js";
 
 const controlClass =
@@ -16,28 +18,34 @@ export function FormField(props: {
   readOnly?: boolean;
 }) {
   return (
-    <TextField
-      class="mb-2.5 flex flex-col gap-[5px] text-[11.5px] text-muted"
-      value={props.value}
-      onChange={props.onChange}
-      readOnly={props.readOnly}
-    >
-      <TextField.Label class="flex justify-between">
+    <Field class="mb-2.5 flex flex-col gap-[5px] text-[11.5px] text-muted">
+      <FieldLabel class="flex justify-between">
         {props.label}
         <Show when={props.hint}>
           <small class="text-faint">{props.hint}</small>
         </Show>
-      </TextField.Label>
+      </FieldLabel>
       <Show
         when={props.rows}
-        fallback={<TextField.Input class={controlClass} placeholder={props.placeholder} />}
+        fallback={
+          <Input
+            class={controlClass}
+            placeholder={props.placeholder}
+            value={props.value}
+            onValueChange={(value) => props.onChange(value)}
+            readonly={props.readOnly}
+          />
+        }
       >
-        <TextField.TextArea
+        <Textarea
           class={controlClass}
           placeholder={props.placeholder}
           rows={props.rows}
+          value={props.value}
+          onValueChange={(value) => props.onChange(value)}
+          readonly={props.readOnly}
         />
       </Show>
-    </TextField>
+    </Field>
   );
 }

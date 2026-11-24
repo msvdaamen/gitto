@@ -1,6 +1,6 @@
 import { patchVersion } from "@gitto/git/patch-version";
 import type { ChangedFile } from "@gitto/git/types";
-import TriangleAlert from "lucide-solid/icons/triangle-alert";
+import TriangleAlert from "@lucide/solid/icons/triangle-exclamation-point";
 import { createSignal, Show } from "solid-js";
 
 import { Notice } from "@/components/ui/notice";
@@ -68,7 +68,7 @@ export function useFileStaging(
         setStagingError(undefined);
         let left: string;
         try {
-          left = await stageLines.mutateAsync({
+          left = await stageLines.mutate({
             repositoryId: props.repositoryId(),
             action,
             file: view.file(),
@@ -110,7 +110,7 @@ export function useFileStaging(
       const target = view.target();
       setStagingError(undefined);
       try {
-        await stageFile.mutateAsync({
+        await stageFile.mutate({
           repositoryId: props.repositoryId(),
           action,
           file: view.liveFile(),

@@ -8,6 +8,7 @@ import {
   RouterProvider,
 } from "@tanstack/solid-router";
 import userEvent from "@testing-library/user-event";
+import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { queryClient } from "@/lib/query-client";
@@ -117,11 +118,15 @@ describe("Tabs", () => {
     renderTabs();
 
     // Grabbed in its middle, and dragged until its middle's just past the next tab's.
+    // Each event is a task of its own in a browser, with Solid's updates applied in between.
     const a = await tab("repo-a");
     fireEvent.pointerDown(a, { button: 0, clientX: 150, pointerId: 1 });
+    flush();
     fireEvent.pointerMove(a, { clientX: 240, pointerId: 1 });
+    flush();
     expect(tabNames()).toEqual(["repo-a", "repo-b", "repo-c"]);
     fireEvent.pointerMove(a, { clientX: 260, pointerId: 1 });
+    flush();
     expect(tabNames()).toEqual(["repo-b", "repo-a", "repo-c"]);
     expect(rpc.repository.reorder).not.toHaveBeenCalled();
 

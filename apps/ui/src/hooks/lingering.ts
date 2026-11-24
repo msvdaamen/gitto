@@ -8,5 +8,5 @@ import { createMemo } from "solid-js";
 export function useLingering<T>(value: () => T | undefined, initial: T): () => T;
 export function useLingering<T>(value: () => T | undefined): () => T | undefined;
 export function useLingering<T>(value: () => T | undefined, initial?: T): () => T | undefined {
-  return createMemo((last: T | undefined) => value() ?? last, initial);
+  return createMemo((last: T | undefined) => value() ?? last ?? initial);
 }

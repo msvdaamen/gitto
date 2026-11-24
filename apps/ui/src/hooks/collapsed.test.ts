@@ -1,4 +1,4 @@
-import { createRoot, createSignal } from "solid-js";
+import { createRoot, createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { useCollapsed } from "./collapsed";
@@ -37,8 +37,10 @@ describe("useCollapsed", () => {
 
     collapsed.toggle("remotes");
     setRepositoryId("b");
+    flush();
     expect(collapsed.isCollapsed("remotes")).toBe(false);
     setRepositoryId("a");
+    flush();
     expect(collapsed.isCollapsed("remotes")).toBe(true);
     collapsed.dispose();
   });

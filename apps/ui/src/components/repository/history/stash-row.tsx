@@ -1,6 +1,6 @@
+import Archive from "@lucide/solid/icons/archive";
 import { cn } from "cn";
-import Archive from "lucide-solid/icons/archive";
-import { Show, Suspense } from "solid-js";
+import { Show, Loading } from "solid-js";
 
 import type { StashRow } from "@/git/rows";
 import { useRelativeTime } from "@/hooks/relative-time";
@@ -40,9 +40,9 @@ export function HistoryStashRow(
           {props.stash.message}
         </strong>
         <Show when={props.selected && props.detailed}>
-          <Suspense>
+          <Loading>
             <RowTotals repositoryId={props.stash.repositoryId} sha={props.stash.sha} kind="stash" />
-          </Suspense>
+          </Loading>
         </Show>
       </span>
       <span class="truncate text-[11.5px]">{ago(props.stash.createdAt)}</span>

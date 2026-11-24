@@ -1,8 +1,8 @@
 import type { ChangedFile } from "@gitto/git/types";
+import type { LucideIcon } from "@lucide/solid";
+import { Dynamic } from "@solidjs/web";
 import { cn } from "cn";
-import type { LucideIcon } from "lucide-solid";
 import { onCleanup, Show } from "solid-js";
-import { Dynamic } from "solid-js/web";
 
 import { FileStatusBadge } from "@/components/ui/file-status-badge";
 import { LineStats } from "@/components/ui/line-stats";
@@ -73,7 +73,7 @@ export function ChangedFileList(props: {
               props.onOpen && "cursor-pointer focus-ring-inset",
             )}
             aria-label={props.onOpen ? `Show changes in ${file().path}` : undefined}
-            aria-current={(props.onOpen && props.openPath === file().path) || undefined}
+            aria-current={props.onOpen && props.openPath === file().path ? "true" : undefined}
             onClick={props.onOpen && (() => props.onOpen?.(file()))}
             onPointerEnter={() => {
               clearTimeout(hover);

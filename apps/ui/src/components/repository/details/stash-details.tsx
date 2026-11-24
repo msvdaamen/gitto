@@ -1,4 +1,4 @@
-import Archive from "lucide-solid/icons/archive";
+import Archive from "@lucide/solid/icons/archive";
 import { createMemo, Show } from "solid-js";
 
 import { Badge } from "@/components/ui/badge";

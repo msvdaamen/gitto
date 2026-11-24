@@ -1,14 +1,7 @@
 import { renderHook } from "@solidjs/testing-library";
+import { createComponent, type JSX } from "@solidjs/web";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
-import {
-  createComponent,
-  createMemo,
-  createResource,
-  createSignal,
-  startTransition,
-  Suspense,
-  type JSX,
-} from "solid-js";
+import { createMemo, createSignal, flush, Loading } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { gitKeys } from "./keys";
@@ -112,11 +105,12 @@ describe("watching a repository", () => {
       () => {
         useRepositoryWatcher(id);
         // Like the page's queries: switching repositories is a transition, which waits for them.
-        const [data] = createResource(id, (repositoryId) =>
-          repositoryId === "repo"
+        const data = createMemo(() => {
+          const repositoryId = id();
+          return repositoryId === "repo"
             ? repositoryId
-            : new Promise<string>((resolve) => (load = () => resolve(repositoryId))),
-        );
+            : new Promise<string>((resolve) => (load = () => resolve(repositoryId)));
+        });
         createMemo(() => data());
       },
       {
@@ -124,7 +118,7 @@ describe("watching a repository", () => {
           createComponent(QueryClientProvider, {
             client,
             get children() {
-              return createComponent(Suspense, {
+              return createComponent(Loading, {
                 get children() {
                   return props.children;
                 },
@@ -135,11 +129,10 @@ describe("watching a repository", () => {
     );
     await vi.waitFor(() => expect(rpc.gitDir.open).toBe(1));
 
-    const switched = startTransition(() => setId("next"));
+    setId("next");
     await vi.advanceTimersByTimeAsync(100);
     client.setQueryData(gitKeys.log("next"), []);
     load?.();
-    await switched;
 
     await vi.waitFor(() =>
       expect(client.getQueryState(gitKeys.refs("next"))?.isInvalidated).toBe(true),
@@ -182,23 +175,29 @@ describe("watching a repository", () => {
 
     // Nothing changed: nothing to refetch, and no new watch.
     window.dispatchEvent(new Event("blur"));
+    flush();
     window.dispatchEvent(new Event("focus"));
+    flush();
     expect(invalidated()).toEqual([]);
     expect(rpc.workingTree.open).toBe(1);
 
     // Changes while unfocused are refetched once, when the window gets focus back.
     window.dispatchEvent(new Event("blur"));
+    flush();
     rpc.workingTree.push(null);
     await Promise.resolve();
     rpc.workingTree.push(null);
     await vi.advanceTimersByTimeAsync(UNWATCH_AFTER_MS - 1);
     expect(invalidated()).toEqual([]);
     window.dispatchEvent(new Event("focus"));
+    flush();
     expect(invalidated()).toEqual([gitKeys.uncommitted("repo")]);
 
     invalidate.mockClear();
     window.dispatchEvent(new Event("blur"));
+    flush();
     window.dispatchEvent(new Event("focus"));
+    flush();
     expect(invalidated()).toEqual([]);
 
     cleanup();
@@ -209,11 +208,13 @@ describe("watching a repository", () => {
     await vi.waitFor(() => expect(rpc.workingTree.open).toBe(1));
 
     window.dispatchEvent(new Event("blur"));
+    flush();
     await vi.advanceTimersByTimeAsync(UNWATCH_AFTER_MS);
     expect(rpc.workingTree.open).toBe(0);
     expect(rpc.gitDir.open).toBe(1);
 
     window.dispatchEvent(new Event("focus"));
+    flush();
     expect(invalidated()).toEqual([gitKeys.uncommitted("repo")]);
     await vi.waitFor(() => expect(rpc.workingTree.open).toBe(1));
 
@@ -226,6 +227,7 @@ describe("watching a repository", () => {
     expect(rpc.workingTree.open).toBe(0);
 
     window.dispatchEvent(new Event("focus"));
+    flush();
     await vi.waitFor(() => expect(rpc.workingTree.open).toBe(1));
     expect(invalidated()).toEqual([gitKeys.uncommitted("repo")]);
 
@@ -242,7 +244,9 @@ describe("watching a repository", () => {
     expect(rpc.workingTree.open).toBe(0);
 
     window.dispatchEvent(new Event("blur"));
+    flush();
     window.dispatchEvent(new Event("focus"));
+    flush();
     expect(invalidated()).toEqual([gitKeys.uncommitted("repo")]);
     await vi.waitFor(() => expect(rpc.workingTree.open).toBe(1));
 
@@ -256,7 +260,9 @@ describe("watching a repository", () => {
     rpc.workingTree.end();
     await vi.advanceTimersByTimeAsync(0);
     window.dispatchEvent(new Event("blur"));
+    flush();
     window.dispatchEvent(new Event("focus"));
+    flush();
     expect(invalidated()).toEqual([gitKeys.uncommitted("repo")]);
     await vi.waitFor(() => expect(rpc.workingTree.open).toBe(1));
 
@@ -273,7 +279,9 @@ describe("watching a repository", () => {
     expect(rpc.gitDir.open).toBe(0);
 
     window.dispatchEvent(new Event("blur"));
+    flush();
     window.dispatchEvent(new Event("focus"));
+    flush();
     expect(invalidated()).toEqual([gitKeys.repository("repo")]);
     await vi.waitFor(() => expect(rpc.gitDir.open).toBe(1));
 

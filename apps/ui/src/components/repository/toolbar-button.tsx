@@ -1,8 +1,8 @@
+import type { LucideIcon } from "@lucide/solid";
+import LoaderCircle from "@lucide/solid/icons/loader-circle";
+import { Dynamic, type JSX } from "@solidjs/web";
 import { cn } from "cn";
-import type { LucideIcon } from "lucide-solid";
-import LoaderCircle from "lucide-solid/icons/loader-circle";
-import { Show, splitProps, type JSX } from "solid-js";
-import { Dynamic } from "solid-js/web";
+import { Show, omit } from "solid-js";
 
 // Spelled out, so Tailwind finds the classes.
 const HIDDEN_BELOW = { sm: "max-sm:hidden", lg: "max-lg:hidden" };
@@ -29,7 +29,8 @@ export function ToolbarButton(
     onClick?: (event: MouseEvent) => void;
   },
 ) {
-  const [local, others] = splitProps(props, [
+  const others = omit(
+    props,
     "icon",
     "label",
     "title",
@@ -40,35 +41,35 @@ export function ToolbarButton(
     "class",
     "count",
     "onClick",
-  ]);
+  );
   return (
     <button
       type="button"
       {...others}
       class={cn(
         "relative flex h-[38px] min-w-[43px] cursor-pointer flex-col items-center justify-center gap-0.5 rounded-md border-0 bg-transparent px-1.5 text-muted enabled:hover:bg-panel-hover enabled:hover:text-text focus-ring disabled:cursor-default max-md:min-w-9 max-md:[&>span]:hidden",
-        local.accent && "text-blue",
-        local.hideBelow && HIDDEN_BELOW[local.hideBelow],
+        props.accent && "text-blue",
+        props.hideBelow && HIDDEN_BELOW[props.hideBelow],
         // Faded when it can't be used, but not while it's busy: that's still going on.
-        local.disabled && !local.busy && "opacity-50",
-        local.class,
+        props.disabled && !props.busy && "opacity-50",
+        props.class,
       )}
-      title={local.title ?? local.label}
-      aria-label={local.label}
-      aria-busy={local.busy}
-      disabled={local.disabled}
+      title={props.title ?? props.label}
+      aria-label={props.label}
+      aria-busy={props.busy ? "true" : undefined}
+      disabled={props.disabled}
       // Read on each click: Solid binds a handler once.
-      onClick={(event) => local.onClick?.(event)}
+      onClick={(event) => props.onClick?.(event)}
     >
       <Dynamic
-        component={local.busy ? LoaderCircle : local.icon}
+        component={props.busy ? LoaderCircle : props.icon}
         size={16}
-        class={cn(local.busy && "animate-spin motion-reduce:animate-none")}
+        class={cn(props.busy && "animate-spin motion-reduce:animate-none")}
       />
-      <span class="text-[10.5px]">{local.label}</span>
-      <Show when={local.count}>
+      <span class="text-[10.5px]">{props.label}</span>
+      <Show when={props.count}>
         <i class="absolute top-0.5 right-0.5 min-w-[15px] rounded-full bg-blue px-1 text-[9.5px] leading-[15px] font-[700] text-panel not-italic">
-          {local.count}
+          {props.count}
         </i>
       </Show>
     </button>

@@ -1,4 +1,4 @@
-import FolderOpen from "lucide-solid/icons/folder-open";
+import FolderOpen from "@lucide/solid/icons/folder-open";
 import { createMemo, createSignal, createUniqueId, Show } from "solid-js";
 
 import { inFolder, parentFolder } from "@/git/clone";

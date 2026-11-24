@@ -1,12 +1,13 @@
 import type { ChangedFile } from "@gitto/git/types";
-import type { LucideIcon } from "lucide-solid";
-import CircleCheck from "lucide-solid/icons/circle-check";
-import FilePen from "lucide-solid/icons/file-pen";
-import Minus from "lucide-solid/icons/minus";
-import Plus from "lucide-solid/icons/plus";
-import TriangleAlert from "lucide-solid/icons/triangle-alert";
-import Undo2 from "lucide-solid/icons/undo-2";
-import { createEffect, createMemo, createSignal, Show, type JSX } from "solid-js";
+import type { LucideIcon } from "@lucide/solid";
+import CircleCheck from "@lucide/solid/icons/circle-check";
+import FilePen from "@lucide/solid/icons/file-pen";
+import Minus from "@lucide/solid/icons/minus";
+import Plus from "@lucide/solid/icons/plus";
+import TriangleAlert from "@lucide/solid/icons/triangle-exclamation-point";
+import Undo2 from "@lucide/solid/icons/undo-2";
+import type { JSX } from "@solidjs/web";
+import { createEffect, createMemo, createSignal, Show } from "solid-js";
 
 import { Badge } from "@/components/ui/badge";
 import { IconButton, LinkButton } from "@/components/ui/button";
@@ -41,7 +42,7 @@ import { FileMenu } from "./file-menu";
 export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOpener }) {
   const changes = useWorkingTreeChanges(() => props.repositoryId);
   const status = useStatus(() => props.repositoryId);
-  // Without Suspense, like the changes: the status is refetched whenever a file is saved, and the
+  // Without Loading, like the changes: the status is refetched whenever a file is saved, and the
   // details would be taken off the page and put back meanwhile, their lists scrolled to the top.
   const summary = useUnsuspendedData(status);
   const stage = useStage(() => props.repositoryId);
@@ -88,9 +89,12 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
     return { ...target, file, alsoStaged };
   });
   // Gone, it isn't asked about again, should it come back.
-  createEffect(() => {
-    if (discarding() !== undefined && discardTarget() === undefined) setDiscarding(undefined);
-  });
+  createEffect(
+    () => discarding() !== undefined && discardTarget() === undefined,
+    (gone) => {
+      if (gone) setDiscarding(undefined);
+    },
+  );
   // Another repository's changes aren't this one's.
   useResetOn(
     () => props.repositoryId,

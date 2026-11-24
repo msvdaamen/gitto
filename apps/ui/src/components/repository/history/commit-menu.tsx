@@ -1,8 +1,9 @@
-import Copy from "lucide-solid/icons/copy";
-import GitBranchPlus from "lucide-solid/icons/git-branch-plus";
-import GitCommitHorizontal from "lucide-solid/icons/git-commit-horizontal";
-import PenLine from "lucide-solid/icons/pen-line";
-import { createContext, createSignal, Show, useContext, type Accessor, type JSX } from "solid-js";
+import Copy from "@lucide/solid/icons/copy";
+import GitBranchPlus from "@lucide/solid/icons/git-branch-plus";
+import GitCommitHorizontal from "@lucide/solid/icons/git-commit-horizontal";
+import PenLine from "@lucide/solid/icons/pen-line";
+import type { JSX } from "@solidjs/web";
+import { createContext, createSignal, Show, useContext, type Accessor } from "solid-js";
 
 import { ContextMenuItem } from "@/components/ui/context-menu";
 import { useBranchesChanging, useCheckoutCommit } from "@/git/queries/branch";
@@ -71,7 +72,7 @@ export function CommitMenu(props: {
   };
 
   return (
-    <OpenFor.Provider value={openFor}>
+    <OpenFor value={openFor}>
       <RowMenu
         repositoryId={props.repositoryId}
         attribute="commit"
@@ -120,6 +121,6 @@ export function CommitMenu(props: {
         onClose={() => setRewording(undefined)}
         onReworded={props.onReworded}
       />
-    </OpenFor.Provider>
+    </OpenFor>
   );
 }

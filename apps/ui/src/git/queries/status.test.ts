@@ -1,7 +1,8 @@
 import type { Uncommitted } from "@gitto/git/types";
 import { renderHook } from "@solidjs/testing-library";
+import type { JSX } from "@solidjs/web";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
-import { createComponent, type JSX } from "solid-js";
+import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { gitKeys } from "./keys";

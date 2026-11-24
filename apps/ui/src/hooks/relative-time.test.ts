@@ -1,4 +1,4 @@
-import { createEffect, createRoot } from "solid-js";
+import { createEffect, createRoot, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useRelativeTime } from "./relative-time";
@@ -12,9 +12,15 @@ describe("useRelativeTime", () => {
     let shown = "";
     const dispose = createRoot((disposeRoot) => {
       const ago = useRelativeTime();
-      createEffect(() => (shown = ago(made)));
+      createEffect(
+        () => ago(made),
+        (text) => {
+          shown = text;
+        },
+      );
       return disposeRoot;
     });
+    flush();
     expect(shown).toBe("Just now");
 
     await vi.advanceTimersByTimeAsync(60_000);

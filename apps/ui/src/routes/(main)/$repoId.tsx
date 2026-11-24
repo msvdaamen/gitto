@@ -2,7 +2,7 @@ import type { ChangedFile } from "@gitto/git/types";
 import { useQueryClient } from "@tanstack/solid-query";
 import { createFileRoute, useBlocker } from "@tanstack/solid-router";
 import { cn } from "cn";
-import { createEffect, createMemo, createSignal, Show, Suspense } from "solid-js";
+import { createEffect, createMemo, createSignal, Show, Loading } from "solid-js";
 
 import { BranchMenuProvider } from "@/components/repository/branch-menu";
 import { CommitDetails } from "@/components/repository/details/commit-details";
@@ -31,7 +31,7 @@ function RouteComponent() {
   // Not thrown on once the route is left: effects on this page can still run until it's removed.
   const params = Route.useParams({ shouldThrow: false });
   // The repository in the URL; the last one once the route is left.
-  const repositoryId = createMemo((last: string) => params()?.repoId ?? last, "");
+  const repositoryId = createMemo((last: string | undefined) => params()?.repoId ?? last ?? "");
   useRepositoryWatcher(repositoryId);
 
   const queryClient = useQueryClient();
@@ -66,9 +66,12 @@ function RouteComponent() {
       ? current
       : undefined;
   };
-  createEffect(() => {
-    if (openFile() && !shownFile()) setOpenFile(undefined);
-  });
+  createEffect(
+    () => openFile() !== undefined && !shownFile(),
+    (closed) => {
+      if (closed) setOpenFile(undefined);
+    },
+  );
   // What closing the file, or opening another, waits for: its edits saved (see `FileDiffView`).
   let leaveFile: (() => Promise<boolean>) | undefined;
   const mayLeaveFile = () => leaveFile?.() ?? Promise.resolve(true);
@@ -85,18 +88,20 @@ function RouteComponent() {
   // A conflicted file to open from the operation bar, once the uncommitted changes are the row
   // the details show: selecting them only reaches the details once the selection settles.
   const [resolving, setResolving] = createSignal<{ repositoryId: string; file: ChangedFile }>();
-  createEffect(() => {
-    const pending = resolving();
-    if (!pending) return;
-    // Not once another row, or another repository, was picked meanwhile: it was asked for there.
-    if (pending.repositoryId !== repositoryId() || selectedId() !== WIP_ID) {
+  createEffect(
+    () => {
+      const pending = resolving();
+      if (!pending) return undefined;
+      // Not once another row, or another repository, was picked meanwhile: it was asked for there.
+      if (pending.repositoryId !== repositoryId() || selectedId() !== WIP_ID) return "dropped";
+      return detailsId() === WIP_ID ? pending.file : undefined;
+    },
+    (next) => {
+      if (!next) return;
       setResolving(undefined);
-      return;
-    }
-    if (detailsId() !== WIP_ID) return;
-    setResolving(undefined);
-    void openFileOf(WIP_ID)({ kind: "unstaged" }, pending.file);
-  });
+      if (next !== "dropped") void openFileOf(WIP_ID)({ kind: "unstaged" }, next);
+    },
+  );
   const resolveConflicts = async (file: ChangedFile) => {
     if (!(await mayLeaveFile())) return;
     setSelection({ repositoryId: repositoryId(), id: WIP_ID });
@@ -188,7 +193,7 @@ function RouteComponent() {
                   {/* Its own boundary: one around the page would take the page off it while the
                     changes' queries start, even for a moment, and the history would lose its
                     scroll position with it. */}
-                  <Suspense>
+                  <Loading>
                     <FileDiffView
                       repositoryId={open().repositoryId}
                       source={open().source}
@@ -197,7 +202,7 @@ function RouteComponent() {
                       onClose={() => void closeFile()}
                       onGuard={(guard) => (leaveFile = guard)}
                     />
-                  </Suspense>
+                  </Loading>
                 </div>
               )}
             </Show>

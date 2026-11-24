@@ -1,8 +1,8 @@
+import type { LucideIcon } from "@lucide/solid";
+import LoaderCircle from "@lucide/solid/icons/loader-circle";
+import { Dynamic, type JSX } from "@solidjs/web";
 import { cn } from "cn";
-import type { LucideIcon } from "lucide-solid";
-import LoaderCircle from "lucide-solid/icons/loader-circle";
-import { Show, type JSX } from "solid-js";
-import { Dynamic } from "solid-js/web";
+import { Show } from "solid-js";
 
 import { useDelayed } from "@/hooks/delayed";
 

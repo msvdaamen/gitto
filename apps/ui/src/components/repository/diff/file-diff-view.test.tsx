@@ -3,7 +3,7 @@ import type { ChangedFile, Uncommitted, WorkingTreeFiles } from "@gitto/git/type
 import { render, screen } from "@solidjs/testing-library";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import userEvent from "@testing-library/user-event";
-import { createEffect, createSignal, on, Show, Suspense } from "solid-js";
+import { createEffect, createSignal, Loading, Show } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DiffSource } from "@/git/diff-source";
@@ -41,7 +41,12 @@ vi.mock("./patch-viewer", () => ({
   default: (props: ViewerProps) => {
     viewer.props = props;
     if (props.patch === "patch of broken.txt") throw new Error("The patch has no file in it.");
-    createEffect(on(() => props.patch, props.onShown));
+    createEffect(
+      () => props.patch,
+      () => {
+        props.onShown();
+      },
+    );
     return <pre>{props.patch}</pre>;
   },
   preparePatch: async () => undefined,
@@ -334,7 +339,7 @@ describe("an uncommitted file's changes", () => {
     client.setQueryDefaults(gitKeys.all, { staleTime: Infinity });
     render(() => (
       <QueryClientProvider client={client}>
-        <Suspense>
+        <Loading>
           <FileDiffView
             repositoryId="repo"
             source={{ kind: "unstaged" }}
@@ -342,7 +347,7 @@ describe("an uncommitted file's changes", () => {
             onOpen={() => {}}
             onClose={() => {}}
           />
-        </Suspense>
+        </Loading>
       </QueryClientProvider>
     ));
     const shown = await screen.findByText(/\+new a\.txt/);

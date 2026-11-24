@@ -1,4 +1,4 @@
-import { createRoot } from "solid-js";
+import { createRoot, flush } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { usePanelWidth } from "./panel-width";
@@ -24,8 +24,10 @@ describe("usePanelWidth", () => {
     const panel = mount();
 
     panel.setWidth(1000);
+    flush();
     expect(panel.width()).toBe(480);
     panel.setWidth(20);
+    flush();
     expect(panel.width()).toBe(160);
     panel.dispose();
   });
@@ -48,6 +50,7 @@ describe("usePanelWidth", () => {
   it("doesn't save a width that's still being dragged", () => {
     const first = mount();
     first.setWidth(300, false);
+    flush();
     expect(first.width()).toBe(300);
     first.dispose();
     expect(mount().width()).toBe(220);
