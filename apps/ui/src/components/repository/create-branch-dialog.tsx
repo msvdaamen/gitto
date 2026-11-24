@@ -10,6 +10,7 @@ import { createEffect, createSignal } from "solid-js";
 
 import { DIALOG_BACKDROP, DIALOG_BOX } from "@/components/ui/dialog";
 import { useCreateBranchFrom } from "@/git/queries/branch";
+import { loadedData } from "@/git/queries/loaded";
 import { useStatus } from "@/git/queries/status";
 import { branchName, hasUncommittedChanges, headSha, isCheckedOut } from "@/git/status";
 import { useLingering } from "@/hooks/lingering";
@@ -38,8 +39,8 @@ export function CreateBranchDialog(props: {
 
   /** Where the uncommitted changes go: from another commit than HEAD, they can conflict with it. */
   const changes = () => {
-    if (!hasUncommittedChanges(status.data)) return ".";
-    const head = status.data?.head;
+    if (!hasUncommittedChanges(loadedData(status))) return ".";
+    const head = loadedData(status)?.head;
     const source = from() ?? "";
     const atHead = isRefName(source)
       ? !!head && isCheckedOut(head, source)

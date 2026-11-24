@@ -71,7 +71,14 @@ export function useRepositoryOperation<T = void, R = unknown>(
       setErrors((all) => {
         delete all[key(id)];
       });
-      run(id, input).then(
+      // One that throws rather than rejecting fails as one that rejects, rather than running on.
+      let started: Promise<R>;
+      try {
+        started = run(id, input);
+      } catch (error) {
+        started = Promise.reject(error);
+      }
+      started.then(
         (result) => {
           settle(id);
           options?.onSuccess?.(result);

@@ -19,6 +19,7 @@ import { isNestedRepository, stagingPaths } from "@/git/changes";
 import { operationName } from "@/git/conflicts";
 import { shownPathIn, type FileOpener, type UncommittedSource } from "@/git/diff-source";
 import { useWorkingTreeChanges } from "@/git/queries/diff";
+import { isRefetching } from "@/git/queries/loaded";
 import { useOperationInProgress } from "@/git/queries/progress";
 import { useDiscard, useStage, useUnstage, type DiscardTarget } from "@/git/queries/staging";
 import { useHeadSha, useStatus } from "@/git/queries/status";
@@ -108,7 +109,7 @@ export function WorkingTreeDetails(props: { repositoryId: string; files?: FileOp
     return head && headLabel(head);
   };
   // The status is reloaded whenever a file changes, which takes a while in a big repository.
-  const updating = useDelayed(() => status.isRefetching);
+  const updating = useDelayed(() => isRefetching(status));
 
   return (
     <div class="flex min-h-0 flex-1 flex-col">

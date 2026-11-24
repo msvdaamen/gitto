@@ -100,6 +100,19 @@ describe("Tabs", () => {
     expect(screen.getByRole("link", { name: "repo-a" })).toHaveFocus();
   });
 
+  it("keeps a tab focused as it's moved left, which moves its own element", async () => {
+    const user = userEvent.setup();
+    renderTabs();
+
+    (await screen.findByRole("link", { name: "repo-c" })).focus();
+    await user.keyboard("{Alt>}{Shift>}{ArrowLeft}{/Shift}{/Alt}");
+
+    expect(tabNames()).toEqual(["repo-a", "repo-c", "repo-b"]);
+    expect(screen.getByRole("link", { name: "repo-c" })).toHaveFocus();
+    await vi.waitFor(() => expect(rpc.repository.list).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("link", { name: "repo-c" })).toHaveFocus();
+  });
+
   it("moves a dragged tab past the middle of each tab it's dragged over", async () => {
     // jsdom has no layout or pointer capture: each tab is 100px wide, the home tab first.
     HTMLElement.prototype.setPointerCapture = () => undefined;

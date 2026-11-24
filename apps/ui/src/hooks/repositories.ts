@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/solid-query";
 import { useNavigate } from "@tanstack/solid-router";
 import { createMemo, createSignal, onCleanup } from "solid-js";
 
+import { loadedData } from "@/git/queries/loaded";
 import { rpc } from "@/lib/rpc";
 
 export const REPOSITORIES_KEY = ["repositories"] as const;
@@ -25,7 +26,7 @@ export function useRepositories() {
 export function useRepository(repositoryId: () => string) {
   const repositories = useRepositories();
   return createMemo(() =>
-    repositories.data?.find((repository) => repository.id === repositoryId()),
+    loadedData(repositories)?.find((repository) => repository.id === repositoryId()),
   );
 }
 

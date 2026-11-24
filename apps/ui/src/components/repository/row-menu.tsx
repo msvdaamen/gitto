@@ -3,6 +3,7 @@ import { Menu, MenuContextTrigger } from "@ui-sdk/solid/menu";
 import { createContext, createSignal, flush, latest, onCleanup, Show, useContext } from "solid-js";
 
 import { ContextMenuContent } from "@/components/ui/context-menu";
+import { useResetOn } from "@/hooks/reset-on";
 
 /** A `RowMenu`'s items, as the menus around and in it see them, to tell whose an element is. */
 interface Layer {
@@ -158,6 +159,16 @@ export function RowMenu<T>(props: {
   // items aren't this one's, rather than once that one's loaded: `latest` is the repository being
   // switched to.
   const [openIn, setOpenIn] = createSignal<string>();
+  // The menu doesn't say it's closed when `open` closes it, so that's said here as well: not to
+  // open again on switching back, nor to go on showing which item it was open for.
+  useResetOn(
+    () => props.repositoryId,
+    () => {
+      setOpenIn(undefined);
+      setTarget(undefined);
+      props.onOpenFor(undefined);
+    },
+  );
 
   return (
     <Menu

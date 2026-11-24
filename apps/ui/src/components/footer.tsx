@@ -3,6 +3,7 @@ import GitBranch from "@lucide/solid/icons/git-branch";
 import { useParams } from "@tanstack/solid-router";
 import { Show, Loading } from "solid-js";
 
+import { loadedData } from "@/git/queries/loaded";
 import { useStatus } from "@/git/queries/status";
 import { headLabel, syncLabel } from "@/git/status";
 
@@ -40,7 +41,7 @@ function OpenRepositoryStatus(props: { repositoryId: string }) {
   const status = useStatus(() => props.repositoryId);
 
   return (
-    <Show when={status.data} keyed>
+    <Show when={loadedData(status)} keyed>
       {(data) => (
         <>
           <Divider />

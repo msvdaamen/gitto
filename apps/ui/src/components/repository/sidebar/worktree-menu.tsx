@@ -6,6 +6,7 @@ import { createSignal } from "solid-js";
 
 import { ContextMenuItem } from "@/components/ui/context-menu";
 import { FailurePopover } from "@/components/ui/failure-popover";
+import { loadedData } from "@/git/queries/loaded";
 import { useWorktreeActions, useWorktrees } from "@/git/queries/worktree";
 import { canOpenWorktree } from "@/git/worktree";
 import { useResetOn } from "@/hooks/reset-on";
@@ -67,7 +68,7 @@ export function WorktreeMenu(props: {
       <RowMenu
         repositoryId={props.repositoryId}
         attribute="worktree"
-        item={(path) => worktrees.data?.find((worktree) => worktree.path === path)}
+        item={(path) => loadedData(worktrees)?.find((worktree) => worktree.path === path)}
         onOpenFor={(path) => props.onOpenFor(path)}
         actions={(worktree) => (
           <>

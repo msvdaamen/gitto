@@ -12,6 +12,7 @@ import { createEffect, createSignal, Show } from "solid-js";
 import { Button } from "@/components/ui/button";
 import { DIALOG_BACKDROP, DIALOG_BOX } from "@/components/ui/dialog";
 import { FormField } from "@/components/ui/form-field";
+import { loadedData } from "@/git/queries/loaded";
 import { useRefs } from "@/git/queries/refs";
 import { useWorktreeActions, useWorktrees } from "@/git/queries/worktree";
 import { branchName } from "@/git/status";
@@ -47,7 +48,7 @@ export function AddWorktreeDialog(props: {
    * Where the branch (for a remote one, the local branch tracking it) is checked out already, if
    * anywhere: then a new branch has to be made.
    */
-  const clash = () => checkedOutIn(worktrees.data, refs.data, branch() ?? "");
+  const clash = () => checkedOutIn(loadedData(worktrees), loadedData(refs), branch() ?? "");
   const needsNewBranch = () => clash() !== undefined;
   const summary = () => {
     const where = clash();

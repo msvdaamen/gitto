@@ -10,6 +10,7 @@ import { rpc } from "@/lib/rpc";
 
 import { useDeferredData } from "./deferred";
 import { gitKeys } from "./keys";
+import { isFetching, loadedData } from "./loaded";
 import { Opaque } from "./opaque";
 import { useStashes } from "./stash";
 import { useHeadSha, useStatus } from "./status";
@@ -122,29 +123,32 @@ export function useHistory(repositoryId: () => string, selectedId: () => string 
   // rest of the status, which is refetched whenever a file changes. The log, the stashes and the
   // worktrees are reconciled when they're refetched, so they only change when there's something
   // new.
-  const hasChanges = createMemo(() => hasUncommittedChanges(status.data));
-  const head = useHeadSha(() => status.data);
+  // Without the status or the log if they couldn't be loaded (see `loadedData`): the history says
+  // why.
+  const hasChanges = createMemo(() => hasUncommittedChanges(loadedData(status)));
+  const head = useHeadSha(() => loadedData(status));
+  const loadedLog = () => loadedData(log);
   // Without the stashes until they've loaded, rather than holding up the history for them (reading
   // `data` before then would suspend it), and if they couldn't be: the Pop button says why.
-  const entries = createMemo(() =>
-    log.data ? withStashes(log.data.commits.value, stashes.isSuccess ? stashes.data : []) : [],
-  );
+  const entries = createMemo(() => {
+    const data = loadedLog();
+    return data ? withStashes(data.commits.value, stashes.isSuccess ? stashes.data : []) : [];
+  });
   const graph = createMemo(() => historyGraph(entries(), hasChanges(), head()));
   // Where the other worktrees are checked out, for the labels; without them until they've loaded,
   // and if they couldn't be, as with the stashes.
   const others = createMemo(() => checkouts(worktrees.isSuccess ? worktrees.data : []));
-  const rows = createMemo(() =>
-    log.data
-      ? toHistoryRows(log.data.repositoryId, entries(), hasChanges(), graph(), others())
-      : [],
-  );
+  const rows = createMemo(() => {
+    const data = loadedLog();
+    return data ? toHistoryRows(data.repositoryId, entries(), hasChanges(), graph(), others()) : [];
+  });
   const selected = createMemo(() => rows().find((row) => row.id === selectedId()) ?? rows()[0]);
 
   // Whether there's more of the log to load, once it's loaded.
-  const hasMore = () => log.data?.complete === false;
+  const hasMore = () => loadedLog()?.complete === false;
   /** Loads more of the log, unless it's loading, or reloading, which would leave that unused. */
   const loadMore = () => {
-    if (hasMore() && !log.isFetching && !more.isPending) void more.mutate(repositoryId());
+    if (hasMore() && !isFetching(log) && !more.isPending) void more.mutate(repositoryId());
   };
 
   return { log, more, hasMore, loadMore, rows, selected };

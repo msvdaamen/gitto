@@ -7,7 +7,7 @@ import {
   type VirtualItem,
   type VirtualizerOptions,
 } from "@tanstack/virtual-core";
-import { createEffect, createSignal, createStore, onSettled, reconcile, untrack } from "solid-js";
+import { createEffect, createSignal, createStore, onSettled, reconcile } from "solid-js";
 
 export { defaultRangeExtractor, type Range } from "@tanstack/virtual-core";
 
@@ -33,8 +33,16 @@ export function createVirtualizer<TScroll extends Element, TItem extends Element
     ...options,
   });
 
-  // Read again, tracked, by the effect below.
-  const instance = new Virtualizer<TScroll, TItem>(untrack(resolve));
+  // Made empty, and given the options by the effect below, where they're read tracked: read as it's
+  // made, untracked, what's still settling (like a list whose load just failed) reads as nothing.
+  const instance = new Virtualizer<TScroll, TItem>({
+    observeElementRect,
+    observeElementOffset,
+    scrollToFn: elementScroll,
+    count: 0,
+    getScrollElement: () => null,
+    estimateSize: () => 0,
+  });
   const [items, setItems] = createStore<VirtualItem[]>(instance.getVirtualItems());
   const [totalSize, setTotalSize] = createSignal(instance.getTotalSize());
 

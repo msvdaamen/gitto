@@ -6,6 +6,7 @@ import { Link, useLocation, useNavigate, useParams } from "@tanstack/solid-route
 import { cn } from "cn";
 import { createEffect, createSignal, For, Loading, omit, onCleanup, Show } from "solid-js";
 
+import { loadedData } from "@/git/queries/loaded";
 import {
   type Repository,
   useOpenRepository,
@@ -51,7 +52,7 @@ export function Tabs() {
   const reorderRepositories = useReorderRepositories();
   const selectedTab = () => params().repoId ?? (location().pathname === "/" ? HOME_TAB : undefined);
 
-  const savedOrder = () => repositories.data?.map((repository) => repository.id) ?? [];
+  const savedOrder = () => loadedData(repositories)?.map((repository) => repository.id) ?? [];
   /** The tabs' order while one is dragged, and once it's dropped until that's saved. */
   const [movedOrder, setMovedOrder] = createSignal<string[]>();
   /**
@@ -90,7 +91,10 @@ export function Tabs() {
   const resizeObserver = new ResizeObserver(() => updateUnderline(selectedTab(), dragged()));
   onCleanup(() => resizeObserver.disconnect());
 
-  /** The ref of the tab `id`'s element, which is measured while it's there. */
+  /**
+   * The ref of the tab `id`'s element, which is measured while it's there: called where the element
+   * is made, so it's let go of with it.
+   */
   function registerTab(id: string) {
     let tabElement: HTMLElement | undefined;
     onCleanup(() => {
@@ -146,10 +150,18 @@ export function Tabs() {
     const to = from + by;
     if (to < 0 || to >= order.length) return;
     order.splice(to, 0, ...order.splice(from, 1));
+    refocusing = id;
     reorder(id, order);
-    // Moving the tab's element took the focus off it.
-    tabElements.get(id)?.querySelector("a")?.focus();
   }
+
+  /** The tab moved with the keyboard, focused again once it's moved (see `move`). */
+  let refocusing: string | undefined;
+  // Moving the tab's element takes the focus off it. The order it's moved into is rendered later
+  // than it's written, held with saving it, so it's focused once that's rendered.
+  createEffect(ordered, () => {
+    if (refocusing) tabElements.get(refocusing)?.querySelector("a")?.focus();
+    refocusing = undefined;
+  });
 
   /** The tab pressed, until the pointer's let go of: dragged once it's moved far enough. */
   let pressed: { id: string; pointerId: number; x: number; grabOffset: number } | undefined;
@@ -230,11 +242,11 @@ export function Tabs() {
       {/* The home tab shows straight away; the repositories' tabs once they're loaded. */}
       <Loading>
         <For each={ordered()}>
-          {(id) => {
-            const tabRef = registerTab(id);
-            return (
-              <Show when={repositories.data?.find((repository) => repository.id === id)}>
-                {(repository) => (
+          {(id) => (
+            <Show when={loadedData(repositories)?.find((repository) => repository.id === id)}>
+              {(repository) => {
+                const tabRef = registerTab(id);
+                return (
                   <FailurePopover
                     title={`${moveError(id) ? "Move" : "Remove"} ${repository().name}`}
                     error={moveError(id) ?? removeError(id)}
@@ -258,10 +270,10 @@ export function Tabs() {
                       onClick={(event) => dropped && event.preventDefault()}
                     />
                   </FailurePopover>
-                )}
-              </Show>
-            );
-          }}
+                );
+              }}
+            </Show>
+          )}
         </For>
       </Loading>
       <FailurePopover
